@@ -207,7 +207,7 @@ public class LlmProvider {
 
 	private InferenceParameters createInferenceParameters(String numberedRecords, String question) {
 		String systemPrompt = getSystemPrompt();
-		String userMessage = "Patient records:\n" + numberedRecords + "\n\nQuestion: " + question;
+		String userMessage = "Patient records (most recent first):\n" + numberedRecords + "\n\nQuestion: " + question;
 		String templateValue = getChatTemplate();
 
 		String prompt = formatPrompt(templateValue, systemPrompt, userMessage);
