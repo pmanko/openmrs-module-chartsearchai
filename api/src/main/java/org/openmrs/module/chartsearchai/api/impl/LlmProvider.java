@@ -85,6 +85,9 @@ public class LlmProvider {
 		templates.put("chatml",
 				"<|im_start|>system\n{system}<|im_end|>\n"
 				+ "<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n");
+		templates.put("gemma",
+				"<start_of_turn>user\n{system}\n\n{user}<end_of_turn>\n"
+				+ "<start_of_turn>model\n");
 		PRESET_TEMPLATES = Collections.unmodifiableMap(templates);
 
 		Map<String, List<String>> stops = new LinkedHashMap<>();
@@ -92,6 +95,7 @@ public class LlmProvider {
 		stops.put("mistral", List.of("</s>"));
 		stops.put("phi3", List.of("<|end|>"));
 		stops.put("chatml", List.of("<|im_end|>"));
+		stops.put("gemma", List.of("<end_of_turn>"));
 		PRESET_STOP_STRINGS = Collections.unmodifiableMap(stops);
 	}
 

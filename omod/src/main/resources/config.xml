@@ -52,7 +52,7 @@
 	<globalProperty>
 		<property>chartsearchai.llm.chatTemplate</property>
 		<defaultValue>llama3</defaultValue>
-		<description>Chat template for formatting prompts sent to the LLM. Use a preset name (llama3, mistral, phi3, chatml) or a custom template string with {system} and {user} placeholders. Default: llama3.</description>
+		<description>Chat template for formatting prompts sent to the LLM. Use a preset name (llama3, mistral, phi3, chatml, gemma) or a custom template string with {system} and {user} placeholders. Default: llama3.</description>
 	</globalProperty>
 
 	<globalProperty>

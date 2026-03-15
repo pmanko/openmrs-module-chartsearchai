@@ -182,6 +182,18 @@ public class LlmProviderTest {
 	}
 
 	@Test
+	public void formatPrompt_shouldUseGemmaTemplate() {
+		String result = LlmProvider.formatPrompt("gemma", "sys", "usr");
+		assertTrue(result.contains("<start_of_turn>user\nsys\n\nusr<end_of_turn>"));
+		assertTrue(result.endsWith("<start_of_turn>model\n"));
+	}
+
+	@Test
+	public void resolveStopStrings_shouldReturnGemmaStops() {
+		assertArrayEquals(new String[]{"<end_of_turn>"}, LlmProvider.resolveStopStrings("gemma"));
+	}
+
+	@Test
 	public void resolveStopStrings_shouldReturnEmptyForCustomTemplate() {
 		assertArrayEquals(new String[0],
 				LlmProvider.resolveStopStrings("<<SYS>>{system}<</SYS>>"));
