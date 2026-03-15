@@ -44,7 +44,7 @@ public class LlmProvider {
 			+ "review a patient's chart. Answer ONLY the specific question asked. "
 			+ "Use only the patient records below. "
 			+ "Include the relevant details from the records in your answer and cite them by their label in brackets exactly as shown (e.g. [Obs #1], [Allergy #2]). "
-			+ "Do not list records that are irrelevant to the question. "
+			+ "Do not list records that are unrelated to the question. "
 			+ "If the records do not contain enough information to answer, respond with: "
 			+ "\"No relevant information was found in the patient's records.\" "
 			+ "Keep your answer concise — one to three sentences. "
