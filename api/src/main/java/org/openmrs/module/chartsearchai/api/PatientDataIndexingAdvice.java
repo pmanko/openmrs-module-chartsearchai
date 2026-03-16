@@ -16,6 +16,7 @@ import java.util.Set;
 
 import org.openmrs.Allergy;
 import org.openmrs.Condition;
+import org.openmrs.Diagnosis;
 import org.openmrs.Order;
 import org.openmrs.Patient;
 import org.openmrs.api.context.Context;
@@ -25,13 +26,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.aop.AfterReturningAdvice;
 
 /**
- * AOP advice that triggers a full patient re-index when conditions, allergies,
+ * AOP advice that triggers a full patient re-index when conditions, diagnoses, allergies,
  * or orders are modified outside of encounter saves. Complements the
  * {@link EncounterIndexingAdvice} which handles the more common encounter path.
  *
  * <p>Only active when {@code chartsearchai.embedding.preFilter} is {@code true}. Registered
- * in config.xml as advice on {@code ConditionService}, {@code PatientService},
- * and {@code OrderService}.</p>
+ * in config.xml as advice on {@code ConditionService}, {@code DiagnosisService},
+ * {@code PatientService}, and {@code OrderService}.</p>
  */
 public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 
@@ -39,6 +40,9 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 
 	private static final Set<String> CONDITION_METHODS = new HashSet<String>(
 			Arrays.asList("saveCondition", "voidCondition", "unvoidCondition"));
+
+	private static final Set<String> DIAGNOSIS_METHODS = new HashSet<String>(
+			Arrays.asList("save", "voidDiagnosis", "unvoidDiagnosis", "purgeDiagnosis"));
 
 	private static final Set<String> ALLERGY_METHODS = new HashSet<String>(
 			Arrays.asList("saveAllergy", "setAllergies", "removeAllergy", "voidAllergy"));
@@ -76,6 +80,8 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 	Patient extractPatient(String methodName, Object[] args) {
 		if (CONDITION_METHODS.contains(methodName) && args.length > 0 && args[0] instanceof Condition) {
 			return ((Condition) args[0]).getPatient();
+		} else if (DIAGNOSIS_METHODS.contains(methodName) && args.length > 0 && args[0] instanceof Diagnosis) {
+			return ((Diagnosis) args[0]).getPatient();
 		} else if (ALLERGY_METHODS.contains(methodName)) {
 			if (args.length > 0 && args[0] instanceof Patient) {
 				return (Patient) args[0];

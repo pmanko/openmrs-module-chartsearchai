@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import org.junit.jupiter.api.Test;
 import org.openmrs.Allergy;
 import org.openmrs.Condition;
+import org.openmrs.Diagnosis;
 import org.openmrs.Order;
 import org.openmrs.Patient;
 
@@ -79,6 +80,26 @@ public class PatientDataIndexingAdviceTest {
 		order.setPatient(patient);
 
 		Patient result = advice.extractPatient("voidOrder", new Object[] { order });
+		assertEquals(patient, result);
+	}
+
+	@Test
+	public void extractPatient_shouldExtractFromDiagnosisOnSave() {
+		Patient patient = new Patient(5);
+		Diagnosis diagnosis = new Diagnosis();
+		diagnosis.setPatient(patient);
+
+		Patient result = advice.extractPatient("save", new Object[] { diagnosis });
+		assertEquals(patient, result);
+	}
+
+	@Test
+	public void extractPatient_shouldExtractFromDiagnosisOnVoidDiagnosis() {
+		Patient patient = new Patient(5);
+		Diagnosis diagnosis = new Diagnosis();
+		diagnosis.setPatient(patient);
+
+		Patient result = advice.extractPatient("voidDiagnosis", new Object[] { diagnosis });
 		assertEquals(patient, result);
 	}
 

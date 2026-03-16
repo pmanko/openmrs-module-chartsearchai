@@ -140,6 +140,11 @@ Question: Does the patient have diabetes?
 	</advice>
 
 	<advice>
+		<point>org.openmrs.api.DiagnosisService</point>
+		<class>org.openmrs.module.chartsearchai.api.PatientDataIndexingAdvice</class>
+	</advice>
+
+	<advice>
 		<point>org.openmrs.api.PatientService</point>
 		<class>org.openmrs.module.chartsearchai.api.PatientDataIndexingAdvice</class>
 	</advice>
