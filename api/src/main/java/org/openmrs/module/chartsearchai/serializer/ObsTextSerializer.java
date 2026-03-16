@@ -12,6 +12,8 @@ package org.openmrs.module.chartsearchai.serializer;
 import org.openmrs.ConceptNumeric;
 import org.openmrs.Encounter;
 import org.openmrs.Obs;
+import org.openmrs.module.chartsearchai.util.ConceptNameUtil;
+import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.springframework.stereotype.Component;
 
 /**

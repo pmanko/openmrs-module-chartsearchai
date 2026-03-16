@@ -19,6 +19,7 @@ import java.util.Set;
 
 import org.openmrs.Allergy;
 import org.openmrs.Condition;
+import org.openmrs.Diagnosis;
 import org.openmrs.Obs;
 import org.openmrs.Order;
 import org.openmrs.Patient;
@@ -45,6 +46,9 @@ public class PatientRecordLoader {
 
 	@Autowired
 	private OrderTextSerializer orderSerializer;
+
+	@Autowired
+	private DiagnosisTextSerializer diagnosisSerializer;
 
 	/**
 	 * Load all clinical records for a patient and serialize each to text.
@@ -82,6 +86,16 @@ public class PatientRecordLoader {
 			String text = allergySerializer.toText(allergy);
 			if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
 				records.add(new SerializedRecord("allergy", allergy.getAllergyId(), text, allergy.getDateCreated()));
+			}
+		}
+
+		// Diagnoses
+		for (Diagnosis diagnosis : Context.getDiagnosisService().getDiagnoses(patient, null)) {
+			String text = diagnosisSerializer.toText(diagnosis);
+			if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
+				Date date = diagnosis.getEncounter() != null
+						? diagnosis.getEncounter().getEncounterDatetime() : diagnosis.getDateCreated();
+				records.add(new SerializedRecord("diagnosis", diagnosis.getDiagnosisId(), text, date));
 			}
 		}
 

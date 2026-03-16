@@ -10,6 +10,8 @@
 package org.openmrs.module.chartsearchai.serializer;
 
 import org.openmrs.Condition;
+import org.openmrs.module.chartsearchai.util.ConceptNameUtil;
+import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.springframework.stereotype.Component;
 
 /**

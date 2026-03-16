@@ -91,6 +91,20 @@ public class PatientRecordLoaderTest extends BaseModuleContextSensitiveTest {
 	}
 
 	@Test
+	public void loadAll_shouldReturnDiagnoses() {
+		List<SerializedRecord> records = recordLoader.loadAll(patient);
+
+		boolean hasDiagnosis = false;
+		for (SerializedRecord record : records) {
+			if ("diagnosis".equals(record.getResourceType())) {
+				hasDiagnosis = true;
+				break;
+			}
+		}
+		assertTrue(hasDiagnosis, "Should load diagnosis records");
+	}
+
+	@Test
 	public void loadAll_shouldIncludeResourceIds() {
 		List<SerializedRecord> records = recordLoader.loadAll(patient);
 

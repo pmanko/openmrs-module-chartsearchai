@@ -14,4 +14,8 @@
 	<obs obs_id="2002" person_id="2" concept_id="5497" encounter_id="100" obs_datetime="2024-01-15 10:00:00"
 		value_numeric="850.0" status="FINAL" creator="1" date_created="2024-01-15 10:00:00" voided="false"
 		uuid="b19ab2c5-878e-4905-b25d-5784167d0216" />
+	<encounter_diagnosis diagnosis_id="3001" encounter_id="100" patient_id="2"
+		diagnosis_coded="5089" certainty="CONFIRMED" dx_rank="1"
+		creator="1" date_created="2024-01-15 10:00:00" voided="false"
+		uuid="d19ab2c5-878e-4905-b25d-5784167d0216" />
 </dataset>

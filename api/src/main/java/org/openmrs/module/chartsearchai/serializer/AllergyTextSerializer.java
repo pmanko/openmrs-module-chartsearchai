@@ -13,6 +13,8 @@ import java.util.List;
 
 import org.openmrs.Allergy;
 import org.openmrs.AllergyReaction;
+import org.openmrs.module.chartsearchai.util.ConceptNameUtil;
+import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.springframework.stereotype.Component;
 
 /**
