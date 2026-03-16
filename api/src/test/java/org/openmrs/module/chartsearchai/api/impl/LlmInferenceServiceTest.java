@@ -84,6 +84,22 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void filterCitedReferences_shouldHandleCommaSeparatedCitations() {
+		List<RecordReference> all = Arrays.asList(
+				new RecordReference("Obs #1", "obs", 101),
+				new RecordReference("Obs #2", "obs", 102),
+				new RecordReference("Obs #3", "obs", 103));
+
+		List<RecordReference> result = LlmInferenceService.filterCitedReferences(
+				"Blood pressure is 133/57 mmHg [Obs #1, Obs #2, Obs #3].", all);
+
+		assertEquals(3, result.size());
+		assertEquals("Obs #1", result.get(0).getLabel());
+		assertEquals("Obs #2", result.get(1).getLabel());
+		assertEquals("Obs #3", result.get(2).getLabel());
+	}
+
+	@Test
 	public void filterCitedReferences_shouldHandleEmptyAnswer() {
 		List<RecordReference> all = Arrays.asList(
 				new RecordReference("Obs #1", "obs", 101));
