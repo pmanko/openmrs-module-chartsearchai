@@ -152,11 +152,10 @@ Embed at the **individual record level**. Each record is serialized to concise c
 
 ### Decision
 
-Use **all-MiniLM-L6-v2** via ONNX Runtime, running in-process in Java:
-- ~80MB model, runs on CPU, no GPU needed
-- Produces 384-dimensional vectors
-- No external service dependency
-- Falls back to term-frequency hashing when the ONNX model file is unavailable
+Two embedding providers are available, selected via the `chartsearchai.embedding.provider` global property:
+
+- **`term-frequency`** (default): Hash-based vectors using term frequency. No external model file needed. Provides keyword-overlap retrieval — effective for exact or near-exact term matches but cannot capture semantic similarity (e.g., "hypertension" and "high blood pressure" are unrelated in this model).
+- **`onnx`**: Semantic vectors via **all-MiniLM-L6-v2** running in-process through ONNX Runtime. ~90MB model file, runs on CPU, no GPU needed. Produces 384-dimensional vectors. Requires two additional files configured via `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. Captures semantic meaning — significantly better for clinical queries where synonyms and related concepts matter.
 
 ## Decision 7: Vector storage — MySQL, not a vector database
 
@@ -179,9 +178,17 @@ The `UNIQUE KEY (resource_type, resource_id)` constraint prevents duplicate embe
 
 ### Decision
 
-Two modes:
-- **Backfill**: A one-time scheduled task (`EmbeddingIndexTask`) indexes all patients that don't yet have embeddings. This handles initial population when the module is installed on a system with existing patient data. The task skips already-indexed patients, so it is safe to re-run and picks up where it left off if stopped. Admins trigger it from the scheduler UI; it does not run automatically.
-- **Incremental**: On encounter save (via AOP advice on `EncounterService`), index only the new/updated encounter's observations and diagnoses using upsert. Avoids re-indexing the entire patient for each data change.
+Three complementary strategies ensure embeddings stay current:
+
+- **On-demand**: When a clinician queries a patient's chart for the first time and no embeddings exist, `LlmInferenceService` triggers `EmbeddingIndexer.indexPatient()` before running the similarity search. This means embeddings are created lazily — no setup required.
+- **Incremental via AOP**: After-returning advice on six OpenMRS services triggers re-indexing when clinical data changes:
+  - `EncounterService` — incremental encounter indexing (upserts only the encounter's obs and diagnoses)
+  - `ObsService` — full patient re-index on save/void/unvoid/purge of standalone observations
+  - `ConditionService` — full patient re-index on save/void/unvoid/purge
+  - `DiagnosisService` — full patient re-index on save/void/unvoid/purge
+  - `PatientService` — full patient re-index on allergy changes; on `mergePatients`, re-indexes the preferred patient and deletes the non-preferred patient's embeddings
+  - `OrderService` — full patient re-index on save/void/unvoid/purge/discontinue
+- **Backfill**: A one-time scheduled task (`EmbeddingIndexTask`) indexes all patients that don't yet have embeddings. Handles initial population when the module is installed on a system with existing data. Skips already-indexed patients, so it is safe to re-run and picks up where it left off if stopped. Admins trigger it from the scheduler UI; it does not run automatically.
 
 ## Decision 9: Text serialization — ClinicalTextSerializer pattern
 
@@ -203,7 +210,7 @@ Key design choices:
 - Obs interpretation (`NORMAL`, `ABNORMAL`, `CRITICALLY_ABNORMAL`) and comments are included.
 - Units are extracted from `ConceptNumeric`, not `Concept` (which has no `getUnits()` in OpenMRS 2.6.x).
 
-## Decision 10: Direct LLM inference — simplified architecture without embeddings
+## Decision 10: Single LLM architecture with optional embedding pre-filter
 
 ### Context
 
@@ -383,21 +390,14 @@ The module works with any GGUF-format model. Larger models produce better respon
 
 **13B models** provide the best response quality but need 16–32GB of RAM and noticeably slower inference. Suitable for well-resourced deployments where response quality is prioritized over speed.
 
-A server running OpenMRS typically uses 1–2GB for the JVM heap. On a 4GB machine, only the embedding-based architecture (without LLM inference) is viable.
+A server running OpenMRS typically uses 1–2GB for the JVM heap. A 4GB machine is insufficient to run this module — the LLM alone requires at least 3–4GB for the smallest viable model.
 
-### When to use this approach
+### Hardware requirements
 
-This approach is viable when:
-- The deployment has sufficient RAM for the chosen model size.
-- Latency of a few seconds per query is acceptable (CPU inference on quantized models).
-- The patient chart fits within the model's context window after serialization.
-
-### When to fall back to embedding-based retrieval
-
-The embedding-based architecture (Decisions 3–9) remains necessary when:
-- Patient charts are too large for the LLM's context window (e.g., patients with decades of records at high-volume facilities).
-- The deployment hardware cannot support even the smallest viable LLM.
-- Sub-second response times are required (embedding similarity search completes in <10ms).
+The module requires sufficient RAM for both the OpenMRS JVM and the LLM model:
+- **Minimum**: ~6GB total (1–2GB JVM + 3–4GB for a 3B model). Latency of a few seconds per query is expected with CPU inference.
+- **Recommended**: ~10GB total for a 7B model, which provides significantly better response quality.
+- The embedding pre-filter (default: enabled) reduces the number of tokens sent to the LLM, which improves both response quality and latency for large patient charts.
 
 ### Decision
 
@@ -407,7 +407,7 @@ Embeddings are indexed on first patient chart access and kept up to date automat
 
 The embedding provider is switchable via `chartsearchai.embedding.provider`:
 - `term-frequency` (default): hash-based vectors for keyword-overlap retrieval.
-- `onnx`: semantic vectors via ONNX Runtime with all-MiniLM-L6-v2 (~90MB model file, configured via `chartsearchai.embedding.modelFilePath`).
+- `onnx`: semantic vectors via ONNX Runtime with all-MiniLM-L6-v2 (~90MB model file, configured via `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`).
 
 ### Medical imaging data (X-rays, scans, etc.)
 
@@ -430,14 +430,16 @@ Direct image interpretation is deferred to future work, pending either capable m
 
 ## Decision 11: REST API and guardrails
 
-### REST endpoint
+### REST endpoints
 
-The module exposes a single REST endpoint for chart search queries:
+The module exposes two REST endpoints for chart search queries. Both require the `AI Query Patient Data` privilege and are registered under the OpenMRS `webservices.rest` module namespace.
+
+#### Synchronous endpoint
 
 ```
 POST /ws/rest/v1/chartsearchai/search
 {
-  "patientUuid": "patient-uuid-here",
+  "patient": "patient-uuid-here",
   "question": "What medications is this patient on?"
 }
 ```
@@ -454,17 +456,31 @@ Response:
 }
 ```
 
-The endpoint requires the `AI Query Patient Data` privilege and is registered under the OpenMRS `webservices.rest` module namespace.
+#### Streaming endpoint (SSE)
+
+```
+POST /ws/rest/v1/chartsearchai/search/stream
+{
+  "patient": "patient-uuid-here",
+  "question": "What medications is this patient on?"
+}
+```
+
+Returns a `text/event-stream` with three event types:
+- `token` — a chunk of the answer text, streamed as generated
+- `done` — final JSON with the complete answer, references (with `index`, `resourceType`, `resourceId`), and disclaimer
+- `error` — an error message if something goes wrong
 
 ### Guardrails
 
 - **Input validation**: Patient UUID and question are required. Questions are limited to 1000 characters.
 - **AI disclaimer**: Every response includes a disclaimer stating the output is AI-generated and not a substitute for clinical judgment.
+- **Rate limiting**: Configurable per-user rate limit (`chartsearchai.rateLimitPerMinute`, default 10). Set to 0 to disable.
 - **Database audit logging**: Every query is recorded in the `chartsearchai_audit_log` table with:
   - The authenticated user and patient
   - The question asked and the LLM's response
   - The number of source references returned
-  - Whether the embedding pre-filter was used
+  - The search mode used (`pre-filter` or `full-chart`)
   - Response time in milliseconds
   - Timestamp
 
@@ -476,4 +492,3 @@ The endpoint requires the `AI Query Patient Data` privilege and is registered un
 - Add pre-computed summaries for common queries
 - Agent/tool-use pattern for complex multi-step questions (when better local models are available)
 - Unstructured data / image OCR (photos of paper forms)
-- Proper WordPiece tokenizer for OnnxEmbeddingProvider (currently uses hash-based token approximation)

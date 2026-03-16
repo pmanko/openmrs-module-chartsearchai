@@ -93,6 +93,17 @@ public class EmbeddingIndexer {
 	}
 
 	/**
+	 * Deletes all embeddings for a patient. Used after a patient merge to clean up
+	 * the non-preferred patient's stale embeddings.
+	 *
+	 * @param patient the patient whose embeddings to delete
+	 */
+	public void deletePatientEmbeddings(Patient patient) {
+		log.info("Deleting all embeddings for patient [id={}]", patient.getPatientId());
+		dao.deleteByPatient(patient);
+	}
+
+	/**
 	 * Incremental index of a single encounter. Upserts embeddings for the encounter's
 	 * observations and diagnoses without re-indexing the entire patient.
 	 *

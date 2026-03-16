@@ -41,6 +41,10 @@ public class EncounterIndexingAdvice implements AfterReturningAdvice {
 	public void afterReturning(Object returnValue, Method method, Object[] args, Object target) {
 		String methodName = method.getName();
 
+		if (!"saveEncounter".equals(methodName) && !REINDEX_METHODS.contains(methodName)) {
+			return;
+		}
+
 		String preFilter = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
 		if ("false".equalsIgnoreCase(preFilter.trim())) {

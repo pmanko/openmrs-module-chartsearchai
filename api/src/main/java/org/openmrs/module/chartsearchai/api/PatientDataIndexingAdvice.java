@@ -27,8 +27,9 @@ import org.springframework.aop.AfterReturningAdvice;
 
 /**
  * AOP advice that triggers a full patient re-index when conditions, diagnoses, allergies,
- * or orders are modified outside of encounter saves. Complements the
- * {@link EncounterIndexingAdvice} which handles the more common encounter path.
+ * or orders are modified outside of encounter saves. Also handles patient merges by
+ * re-indexing the preferred patient and deleting the non-preferred patient's embeddings.
+ * Complements the {@link EncounterIndexingAdvice} which handles the more common encounter path.
  *
  * <p>Only active when {@code chartsearchai.embedding.preFilter} is {@code true}. Registered
  * in config.xml as advice on {@code ConditionService}, {@code DiagnosisService},
@@ -55,15 +56,20 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 	public void afterReturning(Object returnValue, Method method, Object[] args, Object target) {
 		String methodName = method.getName();
 
-		Patient patient = extractPatient(methodName, args);
-
-		if (patient == null) {
+		boolean isMerge = "mergePatients".equals(methodName);
+		Patient patient = isMerge ? null : extractPatient(methodName, args);
+		if (!isMerge && patient == null) {
 			return;
 		}
 
 		String preFilter = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
 		if ("false".equalsIgnoreCase(preFilter.trim())) {
+			return;
+		}
+
+		if (isMerge) {
+			handleMergePatients(args);
 			return;
 		}
 
@@ -75,6 +81,24 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 		catch (Exception e) {
 			log.error("Failed to re-index patient [id={}] after {} call",
 					patient.getPatientId(), methodName, e);
+		}
+	}
+
+	private void handleMergePatients(Object[] args) {
+		if (args.length < 2 || !(args[0] instanceof Patient) || !(args[1] instanceof Patient)) {
+			return;
+		}
+		Patient preferred = (Patient) args[0];
+		Patient notPreferred = (Patient) args[1];
+		try {
+			EmbeddingIndexer indexer = Context.getRegisteredComponent(
+					"embeddingIndexer", EmbeddingIndexer.class);
+			indexer.indexPatient(preferred);
+			indexer.deletePatientEmbeddings(notPreferred);
+		}
+		catch (Exception e) {
+			log.error("Failed to re-index after mergePatients [preferred={}, notPreferred={}]",
+					preferred.getPatientId(), notPreferred.getPatientId(), e);
 		}
 	}
 

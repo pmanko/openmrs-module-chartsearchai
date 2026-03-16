@@ -320,6 +320,7 @@ public class ChartSearchAiRestController {
 					List<Map<String, Object>> refs = new ArrayList<Map<String, Object>>();
 					for (RecordReference ref : chartAnswer.getReferences()) {
 						Map<String, Object> refMap = new LinkedHashMap<String, Object>();
+						refMap.put("index", ref.getIndex());
 						refMap.put("resourceType", ref.getResourceType());
 						refMap.put("resourceId", ref.getResourceId());
 						refs.add(refMap);
