@@ -111,18 +111,25 @@ public class EmbeddingIndexer {
 	 */
 	public void indexEncounter(Encounter encounter) {
 		Patient patient = encounter.getPatient();
+		if (patient == null) {
+			log.warn("Skipping indexing for encounter [id={}] — no patient", encounter.getEncounterId());
+			return;
+		}
 		log.info("Incrementally indexing encounter [id={}] for patient [id={}]",
 				encounter.getEncounterId(), patient.getPatientId());
 		Date now = new Date();
 		Set<String> seenText = new HashSet<String>();
 
-		for (Obs obs : encounter.getAllObs()) {
-			if (obs.getObsGroup() != null) {
-				continue;
-			}
-			String text = obsSerializer.toText(obs);
-			if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
-				upsertEmbedding(patient, "obs", obs.getObsId(), text, now);
+		Set<Obs> allObs = encounter.getAllObs();
+		if (allObs != null) {
+			for (Obs obs : allObs) {
+				if (obs.getObsGroup() != null) {
+					continue;
+				}
+				String text = obsSerializer.toText(obs);
+				if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
+					upsertEmbedding(patient, "obs", obs.getObsId(), text, now);
+				}
 			}
 		}
 

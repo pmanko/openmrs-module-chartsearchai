@@ -99,7 +99,10 @@ public class ChartSearchServiceRouter implements ChartSearchService {
 	}
 
 	private String buildCacheKey(Patient patient, String question) {
-		return patient.getUuid() + "::" + question.trim().toLowerCase();
+		String preFilter = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
+		return patient.getUuid() + "::" + preFilter.trim().toLowerCase()
+				+ "::" + question.trim().toLowerCase();
 	}
 
 	private synchronized ChartAnswer getCachedAnswer(String key, int ttlMinutes) {

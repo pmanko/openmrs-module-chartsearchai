@@ -120,6 +120,10 @@ public class ChartSearchAiRestController {
 		}
 
 		question = CONTROL_CHARS.matcher(question).replaceAll("");
+		if (question.trim().isEmpty()) {
+			return new ResponseEntity<Object>(
+					errorResponse("question is required"), HttpStatus.BAD_REQUEST);
+		}
 
 		String sanitizationError = validateQuestion(question);
 		if (sanitizationError != null) {
@@ -237,6 +241,10 @@ public class ChartSearchAiRestController {
 		}
 
 		final String sanitizedQuestion = CONTROL_CHARS.matcher(question).replaceAll("");
+		if (sanitizedQuestion.trim().isEmpty()) {
+			sendErrorAndComplete(emitter, "question is required");
+			return emitter;
+		}
 
 		String sanitizationError = validateQuestion(sanitizedQuestion);
 		if (sanitizationError != null) {
