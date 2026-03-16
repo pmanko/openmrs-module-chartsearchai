@@ -272,7 +272,7 @@ Both the direct LLM inference and embedding-based RAG approaches carry hallucina
 
 #### Embedding-based RAG hallucinations
 
-With RAG, the LLM only sees ~15 retrieved records. This limits how much it can hallucinate *about*, but it introduces a different risk: hallucinating from *missing context*. Examples:
+With RAG, the LLM only sees the top-K retrieved records (default 15, configurable via `chartsearchai.embedding.topK`). This limits how much it can hallucinate *about*, but it introduces a different risk: hallucinating from *missing context*. Examples:
 
 - The retrieval step misses a relevant record (e.g., a resolved penicillin allergy) because the query and record text are semantically distant. The LLM confidently says "no known drug allergies" based on the records it received.
 - The LLM sees a single elevated blood pressure reading without the surrounding context of the patient exercising beforehand (that context is in a different obs comment that was not retrieved). It may overstate the clinical significance.
@@ -401,7 +401,7 @@ The embedding-based architecture (Decisions 3–9) remains necessary when:
 
 ### Decision
 
-A single architecture is used: all queries go through the LLM for reasoning and synthesis. An embedding pre-filter (`chartsearchai.embedding.preFilter`, default `true`) narrows the patient chart to the most relevant ~15 records before sending them to the LLM. This solves the "lost in the middle" problem where small LLMs struggle to find relevant information in large contexts. Set to `false` to send the full chart instead.
+A single architecture is used: all queries go through the LLM for reasoning and synthesis. An embedding pre-filter (`chartsearchai.embedding.preFilter`, default `true`) narrows the patient chart to the most relevant records before sending them to the LLM (default top 15, configurable via `chartsearchai.embedding.topK`). This solves the "lost in the middle" problem where small LLMs struggle to find relevant information in large contexts. Set to `false` to send the full chart instead.
 
 Embeddings are indexed on first patient chart access and kept up to date automatically via AOP hooks on data changes. A bulk backfill task is also available for pre-indexing all patients.
 
