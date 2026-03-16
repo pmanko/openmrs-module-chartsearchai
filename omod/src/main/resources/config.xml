@@ -100,6 +100,12 @@ Question: Does the patient have diabetes?
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.embedding.topK</property>
+		<defaultValue>15</defaultValue>
+		<description>Maximum number of records to retrieve via embedding similarity when pre-filtering is enabled. Lower values produce more focused LLM responses; higher values provide more context but may reduce reasoning quality. Default: 15.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.embedding.provider</property>
 		<defaultValue>term-frequency</defaultValue>
 		<description>Embedding provider used when pre-filtering is enabled: "term-frequency" (default hash-based vectors) or "onnx" (semantic vectors via all-MiniLM-L6-v2).</description>

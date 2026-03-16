@@ -36,6 +36,8 @@ public class ChartSearchAiConstants {
 
 	public static final int EMBEDDING_DIMENSIONS = 384;
 
+	public static final String GP_EMBEDDING_TOP_K = "chartsearchai.embedding.topK";
+
 	public static final int DEFAULT_RETRIEVAL_TOP_K = 15;
 
 	public static final String GP_AUDIT_LOG_RETENTION_DAYS = "chartsearchai.auditLogRetentionDays";

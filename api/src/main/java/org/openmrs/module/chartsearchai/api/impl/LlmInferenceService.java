@@ -96,15 +96,14 @@ public class LlmInferenceService implements ChartSearchService {
 			return chartSerializer.serialize(patient);
 		}
 
-		List<ChartEmbedding> similar = findSimilar(patient, question,
-				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+		int topK = getTopK();
+		List<ChartEmbedding> similar = findSimilar(patient, question, topK);
 
 		if (similar.isEmpty()) {
 			log.info("No embeddings found for patient [id={}], indexing now", patient.getPatientId());
 			try {
 				embeddingIndexer.indexPatient(patient);
-				similar = findSimilar(patient, question,
-						ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+				similar = findSimilar(patient, question, topK);
 			}
 			catch (Exception e) {
 				log.error("Failed to index patient [id={}], falling back to full chart",
@@ -139,6 +138,23 @@ public class LlmInferenceService implements ChartSearchService {
 		String mode = org.openmrs.api.context.Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER);
 		return !"false".equalsIgnoreCase(mode != null ? mode.trim() : "");
+	}
+
+	private int getTopK() {
+		String value = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_TOP_K);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				int parsed = Integer.parseInt(value.trim());
+				if (parsed > 0) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid topK value '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K;
 	}
 
 	private List<ChartEmbedding> findSimilar(Patient patient, String question, int topK) {
