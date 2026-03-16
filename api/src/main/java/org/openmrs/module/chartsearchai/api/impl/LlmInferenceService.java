@@ -10,7 +10,7 @@
 package org.openmrs.module.chartsearchai.api.impl;
 
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -41,54 +41,52 @@ public class LlmInferenceService implements ChartSearchService {
 	@Autowired
 	private LlmProvider llmProvider;
 
-	private static final Pattern CITATION_PATTERN = Pattern.compile("\\[([A-Z][a-z]+ #\\d+(?:,\\s*[A-Z][a-z]+ #\\d+)*)\\]");
+	private static final Pattern CITATION_PATTERN = Pattern.compile(
+			"\\[([A-Z][a-z]+ #\\d+(?:,\\s*[A-Z][a-z]+ #\\d+)*)\\]");
+
+	private static final Pattern SINGLE_CITATION_PATTERN = Pattern.compile(
+			"([A-Z][a-z]+) #(\\d+)");
 
 	@Override
 	public ChartAnswer search(Patient patient, String question) {
 		PatientChart chart = chartSerializer.serialize(patient);
-		log.debug("Sending full chart to LLM ({} records)", chart.getReferences().size());
 		if (log.isTraceEnabled()) {
 			log.trace("Serialized patient chart:\n{}", chart.getText());
 		}
 
 		String response = llmProvider.search(chart.getText(), question);
 
-		List<RecordReference> citedReferences = filterCitedReferences(
-				response, chart.getReferences());
-
-		return new ChartAnswer(response, citedReferences);
+		return new ChartAnswer(response, extractCitedReferences(response));
 	}
 
 	@Override
 	public ChartAnswer searchStreaming(Patient patient, String question,
 			Consumer<String> tokenConsumer) {
 		PatientChart chart = chartSerializer.serialize(patient);
-		log.debug("Streaming full chart to LLM ({} records)", chart.getReferences().size());
 
 		String response = llmProvider.searchStreaming(chart.getText(), question, tokenConsumer);
 
-		List<RecordReference> citedReferences = filterCitedReferences(
-				response, chart.getReferences());
-
-		return new ChartAnswer(response, citedReferences);
+		return new ChartAnswer(response, extractCitedReferences(response));
 	}
 
-	static List<RecordReference> filterCitedReferences(String answer,
-			List<RecordReference> allReferences) {
-		Set<String> citedLabels = new HashSet<String>();
+	static List<RecordReference> extractCitedReferences(String answer) {
+		Set<String> seen = new LinkedHashSet<String>();
 		Matcher matcher = CITATION_PATTERN.matcher(answer);
 		while (matcher.find()) {
 			for (String label : matcher.group(1).split(",")) {
-				citedLabels.add(label.trim());
+				seen.add(label.trim());
 			}
 		}
 
-		List<RecordReference> cited = new ArrayList<RecordReference>();
-		for (RecordReference ref : allReferences) {
-			if (citedLabels.contains(ref.getLabel())) {
-				cited.add(ref);
+		List<RecordReference> references = new ArrayList<RecordReference>();
+		for (String label : seen) {
+			Matcher m = SINGLE_CITATION_PATTERN.matcher(label);
+			if (m.matches()) {
+				String resourceType = m.group(1).toLowerCase();
+				Integer resourceId = Integer.valueOf(m.group(2));
+				references.add(new RecordReference(label, resourceType, resourceId));
 			}
 		}
-		return cited;
+		return references;
 	}
 }

@@ -12,9 +12,7 @@ package org.openmrs.module.chartsearchai.api.impl;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Consumer;
 
 import org.openmrs.Patient;
@@ -60,27 +58,11 @@ public class EmbeddingSearchService implements ChartSearchService {
 		List<ChartEmbedding> results = findSimilar(patient, question,
 				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
 
-		List<RecordReference> references = new ArrayList<RecordReference>();
-		StringBuilder sb = new StringBuilder();
-		Map<String, Integer> typeCounters = new HashMap<String, Integer>();
-		for (int i = 0; i < results.size(); i++) {
-			ChartEmbedding ce = results.get(i);
-			String type = ce.getResourceType();
-			String displayType = PatientChartSerializer.toDisplayType(type);
-			int count = typeCounters.containsKey(type) ? typeCounters.get(type) + 1 : 1;
-			typeCounters.put(type, count);
-			String label = displayType + " #" + count;
-			sb.append("[").append(label).append("] ").append(ce.getTextContent()).append("\n");
-			references.add(new RecordReference(label, type, ce.getResourceId()));
-		}
+		String records = serializeResults(results);
+		log.debug("Sending {} retrieved records to LLM", results.size());
+		String response = llmProvider.search(records, question);
 
-		log.debug("Sending {} retrieved records to LLM", references.size());
-		String response = llmProvider.search(sb.toString(), question);
-
-		List<RecordReference> citedReferences = LlmInferenceService.filterCitedReferences(
-				response, references);
-
-		return new ChartAnswer(response, citedReferences);
+		return new ChartAnswer(response, LlmInferenceService.extractCitedReferences(response));
 	}
 
 	@Override
@@ -89,27 +71,22 @@ public class EmbeddingSearchService implements ChartSearchService {
 		List<ChartEmbedding> results = findSimilar(patient, question,
 				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
 
-		List<RecordReference> references = new ArrayList<RecordReference>();
+		String records = serializeResults(results);
+		log.debug("Streaming {} retrieved records to LLM", results.size());
+		String response = llmProvider.searchStreaming(records, question, tokenConsumer);
+
+		return new ChartAnswer(response, LlmInferenceService.extractCitedReferences(response));
+	}
+
+	private String serializeResults(List<ChartEmbedding> results) {
 		StringBuilder sb = new StringBuilder();
-		Map<String, Integer> typeCounters = new HashMap<String, Integer>();
-		for (int i = 0; i < results.size(); i++) {
-			ChartEmbedding ce = results.get(i);
-			String type = ce.getResourceType();
-			String displayType = PatientChartSerializer.toDisplayType(type);
-			int count = typeCounters.containsKey(type) ? typeCounters.get(type) + 1 : 1;
-			typeCounters.put(type, count);
-			String label = displayType + " #" + count;
-			sb.append("[").append(label).append("] ").append(ce.getTextContent()).append("\n");
-			references.add(new RecordReference(label, type, ce.getResourceId()));
+		for (ChartEmbedding ce : results) {
+			String displayType = PatientChartSerializer.toDisplayType(ce.getResourceType());
+			sb.append("[").append(displayType).append(" #")
+					.append(ce.getResourceId()).append("] ")
+					.append(ce.getTextContent()).append("\n");
 		}
-
-		log.debug("Streaming {} retrieved records to LLM", references.size());
-		String response = llmProvider.searchStreaming(sb.toString(), question, tokenConsumer);
-
-		List<RecordReference> citedReferences = LlmInferenceService.filterCitedReferences(
-				response, references);
-
-		return new ChartAnswer(response, citedReferences);
+		return sb.toString();
 	}
 
 	/**

@@ -29,7 +29,7 @@ public class LlmProviderTest {
 
 	@Test
 	public void defaultSystemPrompt_shouldRequireCitations() {
-		assertTrue(LlmProvider.DEFAULT_SYSTEM_PROMPT.contains("[Obs #1]"));
+		assertTrue(LlmProvider.DEFAULT_SYSTEM_PROMPT.contains("[Obs #"));
 	}
 
 	@Test

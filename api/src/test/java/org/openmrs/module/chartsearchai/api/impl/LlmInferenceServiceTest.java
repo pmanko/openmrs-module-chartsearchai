@@ -12,8 +12,6 @@ package org.openmrs.module.chartsearchai.api.impl;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -22,90 +20,63 @@ import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
 public class LlmInferenceServiceTest {
 
 	@Test
-	public void filterCitedReferences_shouldReturnOnlyCitedReferences() {
-		List<RecordReference> all = Arrays.asList(
-				new RecordReference("Obs #1", "obs", 101),
-				new RecordReference("Obs #2", "obs", 102),
-				new RecordReference("Order #1", "order", 201),
-				new RecordReference("Condition #1", "condition", 301));
-
-		List<RecordReference> result = LlmInferenceService.filterCitedReferences(
-				"The patient is on Metformin [Obs #1] and has hypertension [Order #1].", all);
+	public void extractCitedReferences_shouldExtractReferencesFromCitations() {
+		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
+				"The patient is on Metformin [Obs #456] and has hypertension [Order #201].");
 
 		assertEquals(2, result.size());
-		assertEquals("Obs #1", result.get(0).getLabel());
-		assertEquals("Order #1", result.get(1).getLabel());
+		assertEquals("obs", result.get(0).getResourceType());
+		assertEquals(Integer.valueOf(456), result.get(0).getResourceId());
+		assertEquals("order", result.get(1).getResourceType());
+		assertEquals(Integer.valueOf(201), result.get(1).getResourceId());
 	}
 
 	@Test
-	public void filterCitedReferences_shouldReturnEmptyWhenNoCitations() {
-		List<RecordReference> all = Arrays.asList(
-				new RecordReference("Obs #1", "obs", 101),
-				new RecordReference("Obs #2", "obs", 102));
-
-		List<RecordReference> result = LlmInferenceService.filterCitedReferences(
-				"I could not find relevant information in the records.", all);
+	public void extractCitedReferences_shouldReturnEmptyWhenNoCitations() {
+		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
+				"I could not find relevant information in the records.");
 
 		assertTrue(result.isEmpty());
 	}
 
 	@Test
-	public void filterCitedReferences_shouldHandleMultipleCitationsOfSameLabel() {
-		List<RecordReference> all = Arrays.asList(
-				new RecordReference("Obs #1", "obs", 101),
-				new RecordReference("Obs #2", "obs", 102));
-
-		List<RecordReference> result = LlmInferenceService.filterCitedReferences(
-				"Blood pressure was 120/80 [Obs #1]. This is within normal range [Obs #1].", all);
+	public void extractCitedReferences_shouldDeduplicateRepeatedCitations() {
+		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
+				"Blood pressure was 120/80 [Obs #456]. This is within normal range [Obs #456].");
 
 		assertEquals(1, result.size());
-		assertEquals("Obs #1", result.get(0).getLabel());
+		assertEquals(Integer.valueOf(456), result.get(0).getResourceId());
 	}
 
 	@Test
-	public void filterCitedReferences_shouldIgnoreCitationsWithNoMatchingReference() {
-		List<RecordReference> all = Arrays.asList(
-				new RecordReference("Obs #1", "obs", 101),
-				new RecordReference("Obs #2", "obs", 102));
-
-		List<RecordReference> result = LlmInferenceService.filterCitedReferences(
-				"The patient takes Metformin [Obs #1] and Lisinopril [Order #5].", all);
-
-		assertEquals(1, result.size());
-		assertEquals("Obs #1", result.get(0).getLabel());
-	}
-
-	@Test
-	public void filterCitedReferences_shouldHandleEmptyReferenceList() {
-		List<RecordReference> result = LlmInferenceService.filterCitedReferences(
-				"Some answer [Obs #1] [Obs #2].", Collections.<RecordReference>emptyList());
-
-		assertTrue(result.isEmpty());
-	}
-
-	@Test
-	public void filterCitedReferences_shouldHandleCommaSeparatedCitations() {
-		List<RecordReference> all = Arrays.asList(
-				new RecordReference("Obs #1", "obs", 101),
-				new RecordReference("Obs #2", "obs", 102),
-				new RecordReference("Obs #3", "obs", 103));
-
-		List<RecordReference> result = LlmInferenceService.filterCitedReferences(
-				"Blood pressure is 133/57 mmHg [Obs #1, Obs #2, Obs #3].", all);
+	public void extractCitedReferences_shouldHandleCommaSeparatedCitations() {
+		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
+				"Blood pressure is 133/57 mmHg [Obs #101, Obs #102, Obs #103].");
 
 		assertEquals(3, result.size());
-		assertEquals("Obs #1", result.get(0).getLabel());
-		assertEquals("Obs #2", result.get(1).getLabel());
-		assertEquals("Obs #3", result.get(2).getLabel());
+		assertEquals(Integer.valueOf(101), result.get(0).getResourceId());
+		assertEquals(Integer.valueOf(102), result.get(1).getResourceId());
+		assertEquals(Integer.valueOf(103), result.get(2).getResourceId());
 	}
 
 	@Test
-	public void filterCitedReferences_shouldHandleEmptyAnswer() {
-		List<RecordReference> all = Arrays.asList(
-				new RecordReference("Obs #1", "obs", 101));
-
-		List<RecordReference> result = LlmInferenceService.filterCitedReferences("", all);
+	public void extractCitedReferences_shouldHandleEmptyAnswer() {
+		List<RecordReference> result = LlmInferenceService.extractCitedReferences("");
 
 		assertTrue(result.isEmpty());
+	}
+
+	@Test
+	public void extractCitedReferences_shouldPreserveOrder() {
+		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
+				"The patient has [Condition #50] and takes [Order #30] with labs [Obs #999].");
+
+		assertEquals(3, result.size());
+		assertEquals("condition", result.get(0).getResourceType());
+		assertEquals(Integer.valueOf(50), result.get(0).getResourceId());
+		assertEquals("order", result.get(1).getResourceType());
+		assertEquals(Integer.valueOf(30), result.get(1).getResourceId());
+		assertEquals("obs", result.get(2).getResourceType());
+		assertEquals(Integer.valueOf(999), result.get(2).getResourceId());
 	}
 }

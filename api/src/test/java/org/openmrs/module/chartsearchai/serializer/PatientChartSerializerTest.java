@@ -17,7 +17,6 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.Patient;
-import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -25,33 +24,27 @@ import org.springframework.test.util.ReflectionTestUtils;
 public class PatientChartSerializerTest {
 
 	@Test
-	public void serialize_shouldLabelRecordsByType() {
+	public void serialize_shouldLabelRecordsWithResourceId() {
 		PatientChartSerializer serializer = createSerializer(
 				new SerializedRecord("obs", 101, "Blood pressure 120/80", null),
 				new SerializedRecord("obs", 102, "Weight 72 kg", null));
 
 		PatientChart chart = serializer.serialize(new Patient());
 
-		assertTrue(chart.getText().startsWith("[Obs #1] Blood pressure 120/80\n"));
-		assertTrue(chart.getText().contains("[Obs #2] Weight 72 kg\n"));
+		assertTrue(chart.getText().contains("[Obs #101] Blood pressure 120/80\n"));
+		assertTrue(chart.getText().contains("[Obs #102] Weight 72 kg\n"));
 	}
 
 	@Test
-	public void serialize_shouldBuildMatchingReferences() {
+	public void serialize_shouldLabelDifferentTypesWithResourceId() {
 		PatientChartSerializer serializer = createSerializer(
-				new SerializedRecord("obs", 101, "Blood pressure", null),
+				new SerializedRecord("obs", 456, "Blood pressure", null),
 				new SerializedRecord("order", 201, "Metformin", null));
 
 		PatientChart chart = serializer.serialize(new Patient());
-		List<RecordReference> refs = chart.getReferences();
 
-		assertEquals(2, refs.size());
-		assertEquals("Obs #1", refs.get(0).getLabel());
-		assertEquals("obs", refs.get(0).getResourceType());
-		assertEquals(101, refs.get(0).getResourceId());
-		assertEquals("Order #1", refs.get(1).getLabel());
-		assertEquals("order", refs.get(1).getResourceType());
-		assertEquals(201, refs.get(1).getResourceId());
+		assertTrue(chart.getText().contains("[Obs #456] Blood pressure\n"));
+		assertTrue(chart.getText().contains("[Order #201] Metformin\n"));
 	}
 
 	@Test
@@ -61,7 +54,6 @@ public class PatientChartSerializerTest {
 		PatientChart chart = serializer.serialize(new Patient());
 
 		assertEquals("", chart.getText());
-		assertTrue(chart.getReferences().isEmpty());
 	}
 
 	private PatientChartSerializer createSerializer(final SerializedRecord... records) {
