@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
  * Serializes a {@link Condition} into embedding-friendly text.
  *
  * <p>Example output: {@code "Condition: Type 2 Diabetes Mellitus. Status: ACTIVE. Verification:
- * CONFIRMED. Onset: 2019-03-10"}</p>
+ * CONFIRMED"}</p>
  */
 @Component
 public class ConditionTextSerializer implements ClinicalTextSerializer<Condition> {

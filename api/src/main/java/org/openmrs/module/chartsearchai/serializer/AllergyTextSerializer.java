@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component;
 /**
  * Serializes an {@link Allergy} into embedding-friendly text.
  *
- * <p>Example output: {@code "Allergy: Penicillin (DRUG). Date: 2024-03-15. Severity: Severe.
+ * <p>Example output: {@code "Allergy: Penicillin (DRUG). Severity: Severe.
  * Reactions: Anaphylaxis, Rash"}</p>
  */
 @Component

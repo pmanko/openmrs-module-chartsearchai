@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
  * Serializes an {@link Order} into embedding-friendly text.
  *
  * <p>Example output: {@code "Order: Complete Blood Count. Action: NEW. Urgency: STAT.
- * Reason: Suspected anemia. Date: 2024-01-15"}</p>
+ * Reason: Suspected anemia"}</p>
  */
 @Component
 public class OrderTextSerializer implements ClinicalTextSerializer<Order> {

@@ -131,7 +131,7 @@ Use FHIR as the retrieval layer, not the LLM input format. A compression step (`
 Example:
 ```
 FHIR JSON: ~800 tokens
-Serialized: "Outpatient Visit (2024-01-15) - Systolic Blood Pressure: 120 mmHg (ABNORMAL)"  ~15 tokens
+Serialized: "Systolic Blood Pressure: 120 mmHg (ABNORMAL)"  ~10 tokens
 ```
 
 ## Decision 5: Embedding granularity
@@ -146,7 +146,7 @@ Serialized: "Outpatient Visit (2024-01-15) - Systolic Blood Pressure: 120 mmHg (
 
 ### Decision
 
-Embed at the **individual record level**, but enrich each record with encounter context. Instead of just `"120 mmHg"`, the serialized text includes `"Outpatient Visit (2024-01-15) - Systolic Blood Pressure: 120 mmHg (ABNORMAL)"`. This keeps embeddings small and precise while giving the similarity search enough context to work with.
+Embed at the **individual record level**. Each record is serialized to concise clinical text (e.g., `"Systolic Blood Pressure: 120 mmHg (ABNORMAL)"`). This keeps embeddings small and precise while giving the similarity search enough context to work with.
 
 ## Decision 6: Embedding model
 
@@ -191,15 +191,14 @@ A generic `ClinicalTextSerializer<T>` interface with one implementation per Open
 
 | Serializer | Output example |
 |---|---|
-| `ObsTextSerializer` | `"Outpatient Visit (2024-01-15) - Systolic Blood Pressure: 120 mmHg (ABNORMAL). Note: Taken after exercise"` |
-| `ConditionTextSerializer` | `"Condition: Type 2 Diabetes Mellitus. Status: ACTIVE. Verification: CONFIRMED. Onset: 2019-03-10"` |
+| `ObsTextSerializer` | `"Systolic Blood Pressure: 120 mmHg (ABNORMAL). Note: Taken after exercise"` |
+| `ConditionTextSerializer` | `"Condition: Type 2 Diabetes Mellitus. Status: ACTIVE. Verification: CONFIRMED"` |
 | `AllergyTextSerializer` | `"Allergy: Penicillin (DRUG). Severity: Severe. Reactions: Anaphylaxis, Rash"` |
-| `DiagnosisTextSerializer` | `"Diagnosis: Malaria. Certainty: CONFIRMED. Rank: Primary. Date: 2024-01-15"` |
-| `OrderTextSerializer` | `"Order: Complete Blood Count. Action: NEW. Urgency: STAT. Reason: Suspected anemia. Date: 2024-01-15"` |
-| `EncounterTextSerializer` | Composes obs + diagnosis serializers into a full encounter summary |
+| `DiagnosisTextSerializer` | `"Diagnosis: Malaria. Certainty: CONFIRMED. Rank: Primary"` |
+| `OrderTextSerializer` | `"Order: Complete Blood Count. Action: NEW. Urgency: STAT. Reason: Suspected anemia"` |
 
 Key design choices:
-- Each serializer enriches its output with encounter context (type, date) for better embedding quality.
+- Serializers produce concise text without dates (dates are redundant with the record's sort order in the prompt).
 - `ObsTextSerializer` flattens group members into the parent obs text.
 - Obs interpretation (`NORMAL`, `ABNORMAL`, `CRITICALLY_ABNORMAL`) and comments are included.
 - Units are extracted from `ConceptNumeric`, not `Concept` (which has no `getUnits()` in OpenMRS 2.6.x).
@@ -293,13 +292,13 @@ The mitigation is the same for both approaches: **never present LLM output as cl
 
 ### Source citations
 
-With direct LLM inference, source citations are straightforward because we control exactly what the LLM sees. Each serialized record is numbered before being included in the prompt:
+Source citations are straightforward because we control exactly what the LLM sees. Each serialized record is numbered sequentially before being included in the prompt (sorted most recent first):
 
 ```
-[1] Outpatient Visit (2024-01-15) - Systolic Blood Pressure: 120 mmHg (ABNORMAL)
-[2] Condition: Type 2 Diabetes Mellitus. Status: ACTIVE. Onset: 2019-03-10
-[3] Order: Metformin. Action: NEW. Date: 2019-03-10
-[4] Outpatient Visit (2024-02-12) - HbA1c: 8.2%
+[1] Systolic Blood Pressure: 120 mmHg (ABNORMAL)
+[2] Condition: Type 2 Diabetes Mellitus. Status: ACTIVE
+[3] Order: Metformin. Action: NEW
+[4] HbA1c: 8.2%
 ```
 
 The system prompt instructs the LLM to cite record numbers in its answer:
@@ -416,7 +415,7 @@ The recommended Llama 3.2 3B model is text-only. Multimodal variants that can in
 
 #### Current approach: rely on text reports
 
-For v1, the module relies on the text reports that accompany imaging studies. In OpenMRS, imaging results typically have an associated obs with the radiologist's interpretation (e.g., `"Obs: Chest X-ray findings: bilateral infiltrates consistent with pneumonia"`). This text is already captured by `ObsTextSerializer` and flows through the existing pipeline — both the embedding-based and direct LLM inference architectures can search and reason over it.
+For v1, the module relies on the text reports that accompany imaging studies. In OpenMRS, imaging results typically have an associated obs with the radiologist's interpretation (e.g., `"Obs: Chest X-ray findings: bilateral infiltrates consistent with pneumonia"`). This text is already captured by `ObsTextSerializer` and flows through the existing pipeline — the embedding pre-filter can match it by similarity, and the LLM can reason over it.
 
 #### Future options for direct image interpretation
 
