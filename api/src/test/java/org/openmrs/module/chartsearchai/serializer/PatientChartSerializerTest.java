@@ -13,50 +13,45 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
-import java.util.GregorianCalendar;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
+import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
 import org.springframework.test.util.ReflectionTestUtils;
 
 public class PatientChartSerializerTest {
 
 	@Test
-	public void serialize_shouldLabelRecordsWithResourceId() {
+	public void serialize_shouldLabelRecordsWithSequentialNumbers() {
 		PatientChartSerializer serializer = createSerializer(
 				new SerializedRecord("obs", 101, "Blood pressure 120/80", null),
 				new SerializedRecord("obs", 102, "Weight 72 kg", null));
 
 		PatientChart chart = serializer.serialize(new Patient());
 
-		assertTrue(chart.getText().contains("[Obs #101] Blood pressure 120/80\n"));
-		assertTrue(chart.getText().contains("[Obs #102] Weight 72 kg\n"));
+		assertTrue(chart.getText().contains("[1] Blood pressure 120/80\n"));
+		assertTrue(chart.getText().contains("[2] Weight 72 kg\n"));
 	}
 
 	@Test
-	public void serialize_shouldLabelDifferentTypesWithResourceId() {
+	public void serialize_shouldReturnMappingsFromIndexToResource() {
 		PatientChartSerializer serializer = createSerializer(
 				new SerializedRecord("obs", 456, "Blood pressure", null),
 				new SerializedRecord("order", 201, "Metformin", null));
 
 		PatientChart chart = serializer.serialize(new Patient());
 
-		assertTrue(chart.getText().contains("[Obs #456] Blood pressure\n"));
-		assertTrue(chart.getText().contains("[Order #201] Metformin\n"));
-	}
-
-	@Test
-	public void serialize_shouldIncludeDateInLabelWhenPresent() {
-		PatientChartSerializer serializer = createSerializer(
-				new SerializedRecord("condition", 191, "Female infertility",
-						new GregorianCalendar(2024, 0, 15).getTime()));
-
-		PatientChart chart = serializer.serialize(new Patient());
-
-		assertTrue(chart.getText().contains("[Condition #191, 2024-01-15] Female infertility\n"));
+		List<RecordMapping> mappings = chart.getMappings();
+		assertEquals(2, mappings.size());
+		assertEquals(1, mappings.get(0).getIndex());
+		assertEquals("obs", mappings.get(0).getResourceType());
+		assertEquals(Integer.valueOf(456), mappings.get(0).getResourceId());
+		assertEquals(2, mappings.get(1).getIndex());
+		assertEquals("order", mappings.get(1).getResourceType());
+		assertEquals(Integer.valueOf(201), mappings.get(1).getResourceId());
 	}
 
 	@Test
@@ -66,6 +61,7 @@ public class PatientChartSerializerTest {
 		PatientChart chart = serializer.serialize(new Patient());
 
 		assertEquals("", chart.getText());
+		assertTrue(chart.getMappings().isEmpty());
 	}
 
 	private PatientChartSerializer createSerializer(final SerializedRecord... records) {

@@ -21,7 +21,7 @@ import org.slf4j.LoggerFactory;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
-import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer;
+import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -58,11 +58,12 @@ public class EmbeddingSearchService implements ChartSearchService {
 		List<ChartEmbedding> results = findSimilar(patient, question,
 				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
 
-		String records = serializeResults(results);
+		List<RecordMapping> mappings = new ArrayList<RecordMapping>();
+		String records = serializeResults(results, mappings);
 		log.debug("Sending {} retrieved records to LLM", results.size());
 		String response = llmProvider.search(records, question);
 
-		return new ChartAnswer(response, LlmInferenceService.extractCitedReferences(response));
+		return new ChartAnswer(response, LlmInferenceService.extractCitedReferences(response, mappings));
 	}
 
 	@Override
@@ -71,19 +72,21 @@ public class EmbeddingSearchService implements ChartSearchService {
 		List<ChartEmbedding> results = findSimilar(patient, question,
 				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
 
-		String records = serializeResults(results);
+		List<RecordMapping> mappings = new ArrayList<RecordMapping>();
+		String records = serializeResults(results, mappings);
 		log.debug("Streaming {} retrieved records to LLM", results.size());
 		String response = llmProvider.searchStreaming(records, question, tokenConsumer);
 
-		return new ChartAnswer(response, LlmInferenceService.extractCitedReferences(response));
+		return new ChartAnswer(response, LlmInferenceService.extractCitedReferences(response, mappings));
 	}
 
-	private String serializeResults(List<ChartEmbedding> results) {
+	private String serializeResults(List<ChartEmbedding> results, List<RecordMapping> mappings) {
 		StringBuilder sb = new StringBuilder();
-		for (ChartEmbedding ce : results) {
-			String displayType = PatientChartSerializer.toDisplayType(ce.getResourceType());
-			sb.append("[").append(displayType).append(" #")
-					.append(ce.getResourceId()).append("] ")
+		for (int i = 0; i < results.size(); i++) {
+			ChartEmbedding ce = results.get(i);
+			int index = i + 1;
+			mappings.add(new RecordMapping(index, ce.getResourceType(), ce.getResourceId()));
+			sb.append("[").append(index).append("] ")
 					.append(ce.getTextContent()).append("\n");
 		}
 		return sb.toString();

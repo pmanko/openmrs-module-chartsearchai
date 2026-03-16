@@ -62,8 +62,8 @@ public interface ChartSearchService {
 		}
 
 		/**
-		 * The response text, which may contain typed citation labels in brackets
-		 * (e.g. [Allergy #1], [Obs #3]).
+		 * The response text, which may contain numbered citation labels in brackets
+		 * (e.g. [1], [3]).
 		 */
 		public String getAnswer() {
 			return answer;
@@ -82,13 +82,20 @@ public interface ChartSearchService {
 	 */
 	class RecordReference {
 
+		private final int index;
+
 		private final String resourceType;
 
 		private final Integer resourceId;
 
-		public RecordReference(String resourceType, Integer resourceId) {
+		public RecordReference(int index, String resourceType, Integer resourceId) {
+			this.index = index;
 			this.resourceType = resourceType;
 			this.resourceId = resourceId;
+		}
+
+		public int getIndex() {
+			return index;
 		}
 
 		public String getResourceType() {

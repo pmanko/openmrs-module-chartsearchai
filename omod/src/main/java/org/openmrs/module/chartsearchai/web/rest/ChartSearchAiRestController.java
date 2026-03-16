@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -182,7 +183,8 @@ public class ChartSearchAiRestController {
 
 		List<Map<String, Object>> refs = new ArrayList<Map<String, Object>>();
 		for (RecordReference ref : chartAnswer.getReferences()) {
-			Map<String, Object> refMap = new HashMap<String, Object>();
+			Map<String, Object> refMap = new LinkedHashMap<String, Object>();
+			refMap.put("index", ref.getIndex());
 			refMap.put("resourceType", ref.getResourceType());
 			refMap.put("resourceId", ref.getResourceId());
 			refs.add(refMap);
@@ -319,7 +321,7 @@ public class ChartSearchAiRestController {
 
 					List<Map<String, Object>> refs = new ArrayList<Map<String, Object>>();
 					for (RecordReference ref : chartAnswer.getReferences()) {
-						Map<String, Object> refMap = new HashMap<String, Object>();
+						Map<String, Object> refMap = new LinkedHashMap<String, Object>();
 						refMap.put("resourceType", ref.getResourceType());
 						refMap.put("resourceId", ref.getResourceId());
 						refs.add(refMap);

@@ -12,6 +12,8 @@ package org.openmrs.module.chartsearchai.api.impl;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -21,6 +23,7 @@ import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
+import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,11 +44,7 @@ public class LlmInferenceService implements ChartSearchService {
 	@Autowired
 	private LlmProvider llmProvider;
 
-	private static final Pattern CITATION_PATTERN = Pattern.compile(
-			"\\[([A-Z][a-z]+ #\\d+(?:,\\s*\\d{4}-\\d{2}-\\d{2})?(?:,\\s*[A-Z][a-z]+ #\\d+(?:,\\s*\\d{4}-\\d{2}-\\d{2})?)*)\\]");
-
-	private static final Pattern SINGLE_CITATION_PATTERN = Pattern.compile(
-			"([A-Z][a-z]+) #(\\d+)(?:,\\s*\\d{4}-\\d{2}-\\d{2})?");
+	private static final Pattern CITATION_PATTERN = Pattern.compile("\\[(\\d+(?:,\\s*\\d+)*)\\]");
 
 	@Override
 	public ChartAnswer search(Patient patient, String question) {
@@ -56,7 +55,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 		String response = llmProvider.search(chart.getText(), question);
 
-		return new ChartAnswer(response, extractCitedReferences(response));
+		return new ChartAnswer(response, extractCitedReferences(response, chart.getMappings()));
 	}
 
 	@Override
@@ -66,25 +65,34 @@ public class LlmInferenceService implements ChartSearchService {
 
 		String response = llmProvider.searchStreaming(chart.getText(), question, tokenConsumer);
 
-		return new ChartAnswer(response, extractCitedReferences(response));
+		return new ChartAnswer(response, extractCitedReferences(response, chart.getMappings()));
 	}
 
-	static List<RecordReference> extractCitedReferences(String answer) {
-		Set<String> seen = new LinkedHashSet<String>();
+	static List<RecordReference> extractCitedReferences(String answer, List<RecordMapping> mappings) {
+		Map<Integer, RecordMapping> indexMap = new HashMap<Integer, RecordMapping>();
+		for (RecordMapping mapping : mappings) {
+			indexMap.put(mapping.getIndex(), mapping);
+		}
+
+		Set<Integer> seen = new LinkedHashSet<Integer>();
 		Matcher matcher = CITATION_PATTERN.matcher(answer);
 		while (matcher.find()) {
-			for (String label : matcher.group(1).split(",")) {
-				seen.add(label.trim());
+			for (String part : matcher.group(1).split(",")) {
+				String trimmed = part.trim();
+				try {
+					seen.add(Integer.valueOf(trimmed));
+				}
+				catch (NumberFormatException e) {
+					// skip non-numeric parts (e.g. dates)
+				}
 			}
 		}
 
 		List<RecordReference> references = new ArrayList<RecordReference>();
-		for (String label : seen) {
-			Matcher m = SINGLE_CITATION_PATTERN.matcher(label);
-			if (m.matches()) {
-				String resourceType = m.group(1).toLowerCase();
-				Integer resourceId = Integer.valueOf(m.group(2));
-				references.add(new RecordReference(resourceType, resourceId));
+		for (Integer index : seen) {
+			RecordMapping mapping = indexMap.get(index);
+			if (mapping != null) {
+				references.add(new RecordReference(index, mapping.getResourceType(), mapping.getResourceId()));
 			}
 		}
 		return references;
