@@ -61,15 +61,11 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 	}
 
 	private void validateConfiguration() {
-		String searchMode = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_SEARCH_MODE);
-		if (searchMode == null || searchMode.trim().isEmpty()) {
-			searchMode = ChartSearchAiConstants.SEARCH_MODE_LLM;
-		}
-
 		validateModelFile(ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH, "LLM");
 
-		if (ChartSearchAiConstants.SEARCH_MODE_EMBEDDING.equals(searchMode)) {
+		String preFilter = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
+		if (!"false".equalsIgnoreCase(preFilter.trim())) {
 			String embeddingProvider = Context.getAdministrationService()
 					.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PROVIDER);
 			if (ChartSearchAiConstants.EMBEDDING_PROVIDER_ONNX.equals(embeddingProvider)) {

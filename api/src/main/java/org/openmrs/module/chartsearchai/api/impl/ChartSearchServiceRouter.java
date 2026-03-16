@@ -25,13 +25,12 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 /**
- * Routes chart search queries to either the direct LLM inference service or the
- * embedding-based search service based on the {@code chartsearchai.searchMode} global
- * property. Defaults to {@code llm} if the property is not set.
+ * Delegates chart search queries to the LLM inference service and provides an
+ * optional answer cache.
  *
  * <p>Caches answers by (patient UUID, question) with a configurable TTL to avoid
  * recomputing identical queries. Cache TTL is controlled by the
- * {@code chartsearchai.cacheTtlMinutes} global property (default 5 minutes, 0 to disable).</p>
+ * {@code chartsearchai.cacheTtlMinutes} global property (default 0 = disabled).</p>
  */
 @Service("chartSearchAi.chartSearchServiceRouter")
 public class ChartSearchServiceRouter implements ChartSearchService {
@@ -41,10 +40,6 @@ public class ChartSearchServiceRouter implements ChartSearchService {
 	@Autowired
 	@Qualifier("chartSearchAi.llmInferenceService")
 	private ChartSearchService llmService;
-
-	@Autowired
-	@Qualifier("chartSearchAi.embeddingSearchService")
-	private ChartSearchService embeddingService;
 
 	private final Map<String, CachedAnswer> cache = new LinkedHashMap<String, CachedAnswer>(
 			ChartSearchAiConstants.DEFAULT_CACHE_MAX_SIZE + 1, 0.75f, true) {
@@ -70,7 +65,7 @@ public class ChartSearchServiceRouter implements ChartSearchService {
 			}
 		}
 
-		ChartAnswer answer = getDelegate().search(patient, question);
+		ChartAnswer answer = llmService.search(patient, question);
 
 		if (ttlMinutes > 0) {
 			putCache(cacheKey, answer);
@@ -94,26 +89,13 @@ public class ChartSearchServiceRouter implements ChartSearchService {
 			}
 		}
 
-		ChartAnswer answer = getDelegate().searchStreaming(patient, question, tokenConsumer);
+		ChartAnswer answer = llmService.searchStreaming(patient, question, tokenConsumer);
 
 		if (ttlMinutes > 0) {
 			putCache(cacheKey, answer);
 		}
 
 		return answer;
-	}
-
-	protected ChartSearchService getDelegate() {
-		String mode = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_SEARCH_MODE);
-
-		if (ChartSearchAiConstants.SEARCH_MODE_EMBEDDING.equalsIgnoreCase(mode)) {
-			log.debug("Using embedding search mode");
-			return embeddingService;
-		}
-
-		log.debug("Using LLM inference search mode");
-		return llmService;
 	}
 
 	private String buildCacheKey(Patient patient, String question) {

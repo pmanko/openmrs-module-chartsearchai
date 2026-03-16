@@ -35,32 +35,19 @@ public class ChartSearchServiceRouterTest {
 	}
 
 	@Test
-	public void search_shouldDelegateToLlmByDefault() {
+	public void search_shouldDelegateToLlmService() {
 		StubService llmStub = new StubService("llm answer");
-		StubService embeddingStub = new StubService("embedding answer");
-		ChartSearchServiceRouter router = createRouter(llmStub, embeddingStub, "llm", 0);
+		ChartSearchServiceRouter router = createRouter(llmStub, 0);
 
 		ChartAnswer answer = router.search(patient, "What medications?");
 		assertEquals("llm answer", answer.getAnswer());
 		assertEquals(1, llmStub.callCount);
-		assertEquals(0, embeddingStub.callCount);
-	}
-
-	@Test
-	public void search_shouldDelegateToEmbeddingWhenConfigured() {
-		StubService llmStub = new StubService("llm answer");
-		StubService embeddingStub = new StubService("embedding answer");
-		ChartSearchServiceRouter router = createRouter(llmStub, embeddingStub, "embedding", 0);
-
-		ChartAnswer answer = router.search(patient, "What medications?");
-		assertEquals("embedding answer", answer.getAnswer());
-		assertEquals(1, embeddingStub.callCount);
 	}
 
 	@Test
 	public void search_shouldCacheAnswers() {
 		StubService llmStub = new StubService("llm answer");
-		ChartSearchServiceRouter router = createRouter(llmStub, new StubService(""), "llm", 5);
+		ChartSearchServiceRouter router = createRouter(llmStub, 5);
 
 		router.search(patient, "What medications?");
 		router.search(patient, "What medications?");
@@ -71,7 +58,7 @@ public class ChartSearchServiceRouterTest {
 	@Test
 	public void search_shouldNotCacheWhenTtlIsZero() {
 		StubService llmStub = new StubService("llm answer");
-		ChartSearchServiceRouter router = createRouter(llmStub, new StubService(""), "llm", 0);
+		ChartSearchServiceRouter router = createRouter(llmStub, 0);
 
 		router.search(patient, "What medications?");
 		router.search(patient, "What medications?");
@@ -82,7 +69,7 @@ public class ChartSearchServiceRouterTest {
 	@Test
 	public void search_shouldBeCaseInsensitiveForCacheKey() {
 		StubService llmStub = new StubService("llm answer");
-		ChartSearchServiceRouter router = createRouter(llmStub, new StubService(""), "llm", 5);
+		ChartSearchServiceRouter router = createRouter(llmStub, 5);
 
 		router.search(patient, "What Medications?");
 		router.search(patient, "what medications?");
@@ -94,7 +81,7 @@ public class ChartSearchServiceRouterTest {
 	public void searchStreaming_shouldDelegateAndPassTokens() {
 		final StringBuilder received = new StringBuilder();
 		StubService llmStub = new StubService("streamed answer");
-		ChartSearchServiceRouter router = createRouter(llmStub, new StubService(""), "llm", 0);
+		ChartSearchServiceRouter router = createRouter(llmStub, 0);
 
 		ChartAnswer answer = router.searchStreaming(patient, "What medications?",
 				new java.util.function.Consumer<String>() {
@@ -112,7 +99,7 @@ public class ChartSearchServiceRouterTest {
 	@Test
 	public void searchStreaming_shouldCacheAnswers() {
 		StubService llmStub = new StubService("streamed");
-		ChartSearchServiceRouter router = createRouter(llmStub, new StubService(""), "llm", 5);
+		ChartSearchServiceRouter router = createRouter(llmStub, 5);
 
 		router.searchStreaming(patient, "What medications?",
 				new java.util.function.Consumer<String>() {
@@ -135,7 +122,7 @@ public class ChartSearchServiceRouterTest {
 	@Test
 	public void search_shouldUseSeparateCacheKeysForDifferentQuestions() {
 		StubService llmStub = new StubService("answer");
-		ChartSearchServiceRouter router = createRouter(llmStub, new StubService(""), "llm", 5);
+		ChartSearchServiceRouter router = createRouter(llmStub, 5);
 
 		router.search(patient, "What medications?");
 		router.search(patient, "What allergies?");
@@ -143,17 +130,8 @@ public class ChartSearchServiceRouterTest {
 		assertEquals(2, llmStub.callCount);
 	}
 
-	private ChartSearchServiceRouter createRouter(ChartSearchService llm, ChartSearchService embedding,
-			final String mode, final int cacheTtl) {
+	private ChartSearchServiceRouter createRouter(ChartSearchService llm, final int cacheTtl) {
 		ChartSearchServiceRouter router = new ChartSearchServiceRouter() {
-
-			@Override
-			protected ChartSearchService getDelegate() {
-				if ("embedding".equalsIgnoreCase(mode)) {
-					return embedding;
-				}
-				return llm;
-			}
 
 			@Override
 			protected int getCacheTtlMinutes() {
@@ -161,7 +139,6 @@ public class ChartSearchServiceRouterTest {
 			}
 		};
 		ReflectionTestUtils.setField(router, "llmService", llm);
-		ReflectionTestUtils.setField(router, "embeddingService", embedding);
 		return router;
 	}
 

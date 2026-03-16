@@ -26,6 +26,7 @@ import java.util.Comparator;
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
+import org.openmrs.module.chartsearchai.api.EmbeddingIndexer;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
@@ -64,6 +65,9 @@ public class LlmInferenceService implements ChartSearchService {
 	private ChartSearchAiDAO dao;
 
 	@Autowired
+	private EmbeddingIndexer embeddingIndexer;
+
+	@Autowired
 	private LlmProvider llmProvider;
 
 	private static final Pattern CITATION_PATTERN = Pattern.compile("\\[(\\d+(?:,\\s*\\d+)*)\\]");
@@ -96,7 +100,20 @@ public class LlmInferenceService implements ChartSearchService {
 				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
 
 		if (similar.isEmpty()) {
-			log.debug("No embeddings found, falling back to full chart");
+			log.info("No embeddings found for patient [id={}], indexing now", patient.getPatientId());
+			try {
+				embeddingIndexer.indexPatient(patient);
+				similar = findSimilar(patient, question,
+						ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+			}
+			catch (Exception e) {
+				log.error("Failed to index patient [id={}], falling back to full chart",
+						patient.getPatientId(), e);
+			}
+		}
+
+		if (similar.isEmpty()) {
+			log.debug("Still no embeddings after indexing attempt, falling back to full chart");
 			return chartSerializer.serialize(patient);
 		}
 
@@ -120,7 +137,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 	private boolean usePreFilter() {
 		String mode = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_PRE_FILTER);
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER);
 		return !"false".equalsIgnoreCase(mode != null ? mode.trim() : "");
 	}
 

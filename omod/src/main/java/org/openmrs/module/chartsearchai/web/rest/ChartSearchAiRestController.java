@@ -141,11 +141,9 @@ public class ChartSearchAiRestController {
 			return rateLimitError;
 		}
 
-		String searchMode = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_SEARCH_MODE);
-		if (searchMode == null || searchMode.trim().isEmpty()) {
-			searchMode = ChartSearchAiConstants.SEARCH_MODE_LLM;
-		}
+		String preFilter = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
+		boolean preFilterEnabled = !"false".equalsIgnoreCase(preFilter.trim());
 
 		ChartAnswer chartAnswer;
 		long responseTimeMs;
@@ -172,7 +170,7 @@ public class ChartSearchAiRestController {
 		auditLog.setQuestion(question);
 		auditLog.setAnswer(chartAnswer.getAnswer());
 		auditLog.setReferenceCount(chartAnswer.getReferences().size());
-		auditLog.setSearchMode(searchMode);
+		auditLog.setSearchMode(preFilterEnabled ? "pre-filter" : "full-chart");
 		auditLog.setResponseTimeMs(responseTimeMs);
 		auditLog.setDateCreated(new Date());
 		dao.saveAuditLog(auditLog);
@@ -259,10 +257,10 @@ public class ChartSearchAiRestController {
 			return emitter;
 		}
 
-		String searchModeProp = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_SEARCH_MODE);
-		final String searchMode = (searchModeProp == null || searchModeProp.trim().isEmpty())
-				? ChartSearchAiConstants.SEARCH_MODE_LLM : searchModeProp;
+		String preFilterProp = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
+		final String searchMode = !"false".equalsIgnoreCase(preFilterProp.trim())
+				? "pre-filter" : "full-chart";
 
 		final Integer patientId = patient.getPatientId();
 		final Integer userId = user.getUserId();

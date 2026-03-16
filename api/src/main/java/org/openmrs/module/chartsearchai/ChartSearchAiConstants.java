@@ -24,11 +24,7 @@ public class ChartSearchAiConstants {
 
 	public static final String GP_LLM_MODEL_FILE_PATH = "chartsearchai.llm.modelFilePath";
 
-	public static final String GP_SEARCH_MODE = "chartsearchai.searchMode";
-
-	public static final String SEARCH_MODE_LLM = "llm";
-
-	public static final String SEARCH_MODE_EMBEDDING = "embedding";
+	public static final String GP_EMBEDDING_PRE_FILTER = "chartsearchai.embedding.preFilter";
 
 	public static final String GP_EMBEDDING_VOCAB_FILE_PATH = "chartsearchai.embedding.vocabFilePath";
 
@@ -45,8 +41,6 @@ public class ChartSearchAiConstants {
 	public static final String GP_AUDIT_LOG_RETENTION_DAYS = "chartsearchai.auditLogRetentionDays";
 
 	public static final int DEFAULT_AUDIT_LOG_RETENTION_DAYS = 90;
-
-	public static final String GP_LLM_PRE_FILTER = "chartsearchai.llm.preFilter";
 
 	public static final String GP_LLM_CHAT_TEMPLATE = "chartsearchai.llm.chatTemplate";
 

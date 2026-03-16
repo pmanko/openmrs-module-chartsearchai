@@ -402,15 +402,13 @@ The embedding-based architecture (Decisions 3–9) remains necessary when:
 
 ### Decision
 
-Both architectures are implemented and switchable at runtime via global properties. The direct LLM inference approach is the default, as it provides better clinical reasoning with a simpler architecture. The embedding-based RAG approach is available as an alternative for comparison or for deployments where the full chart exceeds the LLM's context window.
+A single architecture is used: all queries go through the LLM for reasoning and synthesis. An embedding pre-filter (`chartsearchai.embedding.preFilter`, default `true`) narrows the patient chart to the most relevant ~15 records before sending them to the LLM. This solves the "lost in the middle" problem where small LLMs struggle to find relevant information in large contexts. Set to `false` to send the full chart instead.
 
-Both modes send records to the LLM for reasoning and synthesis — the difference is what the LLM sees:
-- **LLM mode** (`chartsearchai.searchMode = llm`): the LLM receives the full serialized patient chart.
-- **Embedding mode** (`chartsearchai.searchMode = embedding`): vector similarity retrieval narrows the chart to the top ~15 records, which are then sent to the LLM for synthesis (a full RAG pipeline).
+Embeddings are indexed on first patient chart access and kept up to date automatically via AOP hooks on data changes. A bulk backfill task is also available for pre-indexing all patients.
 
-The embedding mode additionally supports switchable embedding providers via `chartsearchai.embedding.provider`:
-- `term-frequency` (default): placeholder hash-based vectors for basic keyword-overlap retrieval.
-- `onnx`: real semantic vectors via ONNX Runtime with all-MiniLM-L6-v2 (~90MB model file, configured via `chartsearchai.embedding.modelFilePath`).
+The embedding provider is switchable via `chartsearchai.embedding.provider`:
+- `term-frequency` (default): hash-based vectors for keyword-overlap retrieval.
+- `onnx`: semantic vectors via ONNX Runtime with all-MiniLM-L6-v2 (~90MB model file, configured via `chartsearchai.embedding.modelFilePath`).
 
 ### Medical imaging data (X-rays, scans, etc.)
 
@@ -467,11 +465,11 @@ The endpoint requires the `AI Query Patient Data` privilege and is registered un
   - The authenticated user and patient
   - The question asked and the LLM's response
   - The number of source references returned
-  - The search mode used (`llm` or `embedding`)
+  - Whether the embedding pre-filter was used
   - Response time in milliseconds
   - Timestamp
 
-  This audit trail supports compliance review (who queried which patient's data and what the AI responded) and performance comparison between search modes.
+  This audit trail supports compliance review (who queried which patient's data and what the AI responded) and performance analysis.
 
 ## Planned future work
 
@@ -480,4 +478,3 @@ The endpoint requires the `AI Query Patient Data` privilege and is registered un
 - Agent/tool-use pattern for complex multi-step questions (when better local models are available)
 - Unstructured data / image OCR (photos of paper forms)
 - Proper WordPiece tokenizer for OnnxEmbeddingProvider (currently uses hash-based token approximation)
-- Evaluate whether to keep both search modes or drop one after comparison testing

@@ -15,15 +15,10 @@ import java.util.function.Consumer;
 import org.openmrs.Patient;
 
 /**
- * Answers natural language questions about a patient's chart. Two implementations are
- * available, switchable via the {@code chartsearchai.searchMode} global property:
- *
- * <ul>
- *   <li>{@code llm} (default) — sends the full patient chart to a local LLM for direct
- *       inference with clinical reasoning across all records.</li>
- *   <li>{@code embedding} — uses vector embedding similarity search to retrieve the most
- *       relevant records, then returns them as the answer.</li>
- * </ul>
+ * Answers natural language questions about a patient's chart using a local LLM.
+ * When {@code chartsearchai.embedding.preFilter} is {@code true} (default), uses
+ * embedding similarity to narrow records to the most relevant ones before sending
+ * them to the LLM. Set to {@code false} to send the full patient chart instead.
  */
 public interface ChartSearchService {
 

@@ -42,12 +42,8 @@ public class EncounterIndexingAdvice implements AfterReturningAdvice {
 		String methodName = method.getName();
 
 		String preFilter = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_PRE_FILTER, "true");
-		String mode = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_SEARCH_MODE);
-		boolean needsEmbeddings = ChartSearchAiConstants.SEARCH_MODE_EMBEDDING.equalsIgnoreCase(mode)
-				|| !"false".equalsIgnoreCase(preFilter.trim());
-		if (!needsEmbeddings) {
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
+		if ("false".equalsIgnoreCase(preFilter.trim())) {
 			return;
 		}
 

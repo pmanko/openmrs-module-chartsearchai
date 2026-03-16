@@ -26,11 +26,11 @@ Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<op
 
 ### 3. Download the embedding model (optional)
 
-If you plan to use the embedding search mode with ONNX semantic vectors, download the all-MiniLM-L6-v2 ONNX model (~90MB) from [Hugging Face](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2). You need both `model.onnx` and `vocab.txt` from the repository.
+If you plan to use ONNX semantic embeddings for pre-filtering, download the all-MiniLM-L6-v2 ONNX model (~90MB) from [Hugging Face](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2). You need both `model.onnx` and `vocab.txt` from the repository.
 
 Place them alongside the LLM model (e.g., `<openmrs-application-data-directory>/chartsearchai/`).
 
-This is not required if you use the default `llm` search mode or the `term-frequency` embedding provider.
+This is not required if you use the default `term-frequency` embedding provider.
 
 ### 4. Install
 
@@ -46,11 +46,11 @@ Set these global properties in **Admin > Settings**:
 |----------|-------------|
 | `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/Llama-3.2-3B-Instruct-Q4_K_M.gguf` |
 
-#### Search mode
+#### Embedding pre-filter
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `chartsearchai.searchMode` | `llm` | `llm` (sends full chart to LLM) or `embedding` (RAG: retrieves relevant records first, then sends to LLM) |
+| `chartsearchai.embedding.preFilter` | `true` | When `true`, uses embedding similarity to narrow patient records to the most relevant ones before sending to the LLM. Set to `false` to send the full chart instead |
 | `chartsearchai.embedding.provider` | `term-frequency` | `term-frequency` (keyword-based) or `onnx` (semantic with all-MiniLM-L6-v2) |
 | `chartsearchai.embedding.modelFilePath` | — | Required if using `onnx` provider. Relative path to the ONNX model file |
 | `chartsearchai.embedding.vocabFilePath` | — | Required if using `onnx` provider. Relative path to the WordPiece `vocab.txt` file |
@@ -83,9 +83,9 @@ Set these global properties in **Admin > Settings**:
 | **AI Query Patient Data** | Execute chart search queries |
 | **View AI Audit Logs** | Access the audit log endpoint |
 
-### 7. Backfill embeddings (embedding mode only)
+### 7. Embeddings
 
-If you set `chartsearchai.searchMode` to `embedding` on a system with existing patient data, you need to build the initial embedding index. Go to **Admin > Scheduler > Manage Scheduler** and run the **"Chart Search AI - Embedding Backfill"** task. It indexes only patients that don't have embeddings yet, so it's safe to re-run. After the initial backfill, new data is indexed automatically via AOP hooks on encounter, obs, condition, allergy, and order saves.
+When `chartsearchai.embedding.preFilter` is `true` (default), patient records are automatically indexed on first chart access. Subsequent data changes are indexed incrementally via AOP hooks on encounter, obs, condition, allergy, and order saves. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is also available in **Admin > Scheduler > Manage Scheduler** if you prefer to pre-index all patients at once.
 
 ## API
 
