@@ -450,8 +450,8 @@ Response:
   "answer": "The patient is currently on...[1]...[3]",
   "disclaimer": "This response is AI-generated and may not be accurate...",
   "references": [
-    { "index": 1, "resourceType": "obs", "resourceId": 456 },
-    { "index": 3, "resourceType": "order", "resourceId": 789 }
+    { "index": 3, "resourceType": "order", "resourceId": 789, "date": "2025-03-15" },
+    { "index": 1, "resourceType": "obs", "resourceId": 456, "date": "2025-01-10" }
   ]
 }
 ```

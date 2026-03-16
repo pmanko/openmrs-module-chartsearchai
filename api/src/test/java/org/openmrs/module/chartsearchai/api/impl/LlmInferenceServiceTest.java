@@ -10,9 +10,12 @@
 package org.openmrs.module.chartsearchai.api.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Date;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -24,8 +27,8 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void extractCitedReferences_shouldExtractReferencesFromCitations() {
 		List<RecordMapping> mappings = Arrays.asList(
-				new RecordMapping(1, "obs", 456),
-				new RecordMapping(2, "order", 201));
+				new RecordMapping(1, "obs", 456, null),
+				new RecordMapping(2, "order", 201, null));
 
 		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
 				"The patient is on Metformin [1] and has hypertension [2].", mappings);
@@ -42,7 +45,7 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void extractCitedReferences_shouldReturnEmptyWhenNoCitations() {
 		List<RecordMapping> mappings = Arrays.asList(
-				new RecordMapping(1, "obs", 456));
+				new RecordMapping(1, "obs", 456, null));
 
 		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
 				"I could not find relevant information in the records.", mappings);
@@ -53,7 +56,7 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void extractCitedReferences_shouldDeduplicateRepeatedCitations() {
 		List<RecordMapping> mappings = Arrays.asList(
-				new RecordMapping(1, "obs", 456));
+				new RecordMapping(1, "obs", 456, null));
 
 		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
 				"Blood pressure was 120/80 [1]. This is within normal range [1].", mappings);
@@ -65,9 +68,9 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void extractCitedReferences_shouldHandleCommaSeparatedCitations() {
 		List<RecordMapping> mappings = Arrays.asList(
-				new RecordMapping(1, "obs", 101),
-				new RecordMapping(2, "obs", 102),
-				new RecordMapping(3, "obs", 103));
+				new RecordMapping(1, "obs", 101, null),
+				new RecordMapping(2, "obs", 102, null),
+				new RecordMapping(3, "obs", 103, null));
 
 		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
 				"Blood pressure is 133/57 mmHg [1, 2, 3].", mappings);
@@ -81,7 +84,7 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void extractCitedReferences_shouldHandleEmptyAnswer() {
 		List<RecordMapping> mappings = Arrays.asList(
-				new RecordMapping(1, "obs", 456));
+				new RecordMapping(1, "obs", 456, null));
 
 		List<RecordReference> result = LlmInferenceService.extractCitedReferences("", mappings);
 
@@ -89,21 +92,50 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void extractCitedReferences_shouldPreserveOrder() {
+	public void extractCitedReferences_shouldSortByDateMostRecentFirst() {
+		Date jan = makeDate(2025, 1, 10);
+		Date mar = makeDate(2025, 3, 15);
+		Date feb = makeDate(2025, 2, 20);
+
 		List<RecordMapping> mappings = Arrays.asList(
-				new RecordMapping(1, "condition", 50),
-				new RecordMapping(2, "order", 30),
-				new RecordMapping(3, "obs", 999));
+				new RecordMapping(1, "condition", 50, jan),
+				new RecordMapping(2, "order", 30, mar),
+				new RecordMapping(3, "obs", 999, feb));
 
 		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
 				"The patient has [1] and takes [2] with labs [3].", mappings);
 
 		assertEquals(3, result.size());
-		assertEquals("condition", result.get(0).getResourceType());
-		assertEquals(Integer.valueOf(50), result.get(0).getResourceId());
-		assertEquals("order", result.get(1).getResourceType());
-		assertEquals(Integer.valueOf(30), result.get(1).getResourceId());
-		assertEquals("obs", result.get(2).getResourceType());
-		assertEquals(Integer.valueOf(999), result.get(2).getResourceId());
+		assertEquals(Integer.valueOf(30), result.get(0).getResourceId());
+		assertEquals(mar, result.get(0).getDate());
+		assertEquals(Integer.valueOf(999), result.get(1).getResourceId());
+		assertEquals(feb, result.get(1).getDate());
+		assertEquals(Integer.valueOf(50), result.get(2).getResourceId());
+		assertEquals(jan, result.get(2).getDate());
+	}
+
+	@Test
+	public void extractCitedReferences_shouldPutNullDatesLast() {
+		Date recent = makeDate(2025, 3, 1);
+
+		List<RecordMapping> mappings = Arrays.asList(
+				new RecordMapping(1, "obs", 100, null),
+				new RecordMapping(2, "obs", 200, recent));
+
+		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
+				"Values are [1] and [2].", mappings);
+
+		assertEquals(2, result.size());
+		assertEquals(Integer.valueOf(200), result.get(0).getResourceId());
+		assertEquals(recent, result.get(0).getDate());
+		assertEquals(Integer.valueOf(100), result.get(1).getResourceId());
+		assertNull(result.get(1).getDate());
+	}
+
+	private static Date makeDate(int year, int month, int day) {
+		Calendar cal = Calendar.getInstance();
+		cal.set(year, month - 1, day, 0, 0, 0);
+		cal.set(Calendar.MILLISECOND, 0);
+		return cal.getTime();
 	}
 }

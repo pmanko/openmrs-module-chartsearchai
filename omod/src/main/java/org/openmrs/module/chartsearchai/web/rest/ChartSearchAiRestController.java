@@ -26,6 +26,7 @@ import org.openmrs.api.context.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.ChartAnswer;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
@@ -69,6 +70,10 @@ public class ChartSearchAiRestController {
 	private static final int MAX_QUESTION_LENGTH = 1000;
 
 	private static final Pattern CONTROL_CHARS = Pattern.compile("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]");
+
+	private static String formatDate(Date date) {
+		return date != null ? DateFormatUtil.formatDate(date) : null;
+	}
 
 	private static final Pattern PROMPT_INJECTION = Pattern.compile(
 			"(?i)(ignore (previous|above|all) (instructions|prompts|rules)"
@@ -185,6 +190,7 @@ public class ChartSearchAiRestController {
 			refMap.put("index", ref.getIndex());
 			refMap.put("resourceType", ref.getResourceType());
 			refMap.put("resourceId", ref.getResourceId());
+			refMap.put("date", formatDate(ref.getDate()));
 			refs.add(refMap);
 		}
 		response.put("references", refs);
@@ -323,6 +329,7 @@ public class ChartSearchAiRestController {
 						refMap.put("index", ref.getIndex());
 						refMap.put("resourceType", ref.getResourceType());
 						refMap.put("resourceId", ref.getResourceId());
+						refMap.put("date", formatDate(ref.getDate()));
 						refs.add(refMap);
 					}
 					doneData.put("references", refs);

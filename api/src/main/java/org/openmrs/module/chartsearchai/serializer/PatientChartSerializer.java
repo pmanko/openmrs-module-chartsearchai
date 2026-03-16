@@ -11,6 +11,7 @@ package org.openmrs.module.chartsearchai.serializer;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
 
 import org.openmrs.Patient;
@@ -53,7 +54,7 @@ public class PatientChartSerializer {
 		for (int i = 0; i < records.size(); i++) {
 			SerializedRecord record = records.get(i);
 			int index = i + 1;
-			mappings.add(new RecordMapping(index, record.getResourceType(), record.getResourceId()));
+			mappings.add(new RecordMapping(index, record.getResourceType(), record.getResourceId(), record.getDate()));
 
 			sb.append("[").append(index).append("] ").append(record.getText()).append("\n");
 		}
@@ -95,10 +96,13 @@ public class PatientChartSerializer {
 
 		private final Integer resourceId;
 
-		public RecordMapping(int index, String resourceType, Integer resourceId) {
+		private final Date date;
+
+		public RecordMapping(int index, String resourceType, Integer resourceId, Date date) {
 			this.index = index;
 			this.resourceType = resourceType;
 			this.resourceId = resourceId;
+			this.date = date;
 		}
 
 		public int getIndex() {
@@ -111,6 +115,10 @@ public class PatientChartSerializer {
 
 		public Integer getResourceId() {
 			return resourceId;
+		}
+
+		public Date getDate() {
+			return date;
 		}
 	}
 }

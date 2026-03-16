@@ -9,6 +9,7 @@
  */
 package org.openmrs.module.chartsearchai.api;
 
+import java.util.Date;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -83,10 +84,13 @@ public interface ChartSearchService {
 
 		private final Integer resourceId;
 
-		public RecordReference(int index, String resourceType, Integer resourceId) {
+		private final Date date;
+
+		public RecordReference(int index, String resourceType, Integer resourceId, Date date) {
 			this.index = index;
 			this.resourceType = resourceType;
 			this.resourceId = resourceId;
+			this.date = date;
 		}
 
 		public int getIndex() {
@@ -99,6 +103,10 @@ public interface ChartSearchService {
 
 		public Integer getResourceId() {
 			return resourceId;
+		}
+
+		public Date getDate() {
+			return date;
 		}
 	}
 }

@@ -6,7 +6,7 @@ An OpenMRS module that lets clinicians ask natural language questions about a pa
 
 - OpenMRS Platform 2.6.9+
 - Webservices REST module 2.44.0+
-- 8GB+ RAM (for LLM inference)
+- 6GB+ RAM recommended (for LLM inference with a 3B model)
 
 ## Setup
 
@@ -69,7 +69,7 @@ Set these global properties in **Admin > Settings**:
 | Property | Default | Description |
 |----------|---------|-------------|
 | `chartsearchai.rateLimitPerMinute` | `10` | Maximum queries per user per minute. Set to `0` to disable |
-| `chartsearchai.cacheTtlMinutes` | `5` | How long to cache identical (patient, question) answers. Set to `0` to disable |
+| `chartsearchai.cacheTtlMinutes` | `0` | Minutes to cache identical (patient, question) answers. Set to `0` to disable (default) |
 
 #### Audit
 
@@ -86,7 +86,7 @@ Set these global properties in **Admin > Settings**:
 
 ### 7. Embeddings
 
-When `chartsearchai.embedding.preFilter` is `true` (default), patient records are automatically indexed on first chart access. Subsequent data changes are indexed incrementally via AOP hooks on encounter, obs, condition, allergy, and order saves. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is also available in **Admin > Scheduler > Manage Scheduler** if you prefer to pre-index all patients at once.
+When `chartsearchai.embedding.preFilter` is `true` (default), patient records are automatically indexed on first chart access. Subsequent data changes are indexed incrementally via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, and patient merge operations. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is also available in **Admin > Scheduler > Manage Scheduler** if you prefer to pre-index all patients at once.
 
 ## API
 
@@ -109,8 +109,8 @@ Response:
   "answer": "The patient is currently on Metformin [1] and Lisinopril [3]...",
   "disclaimer": "This response is AI-generated and may not be accurate...",
   "references": [
-    { "index": 1, "resourceType": "order", "resourceId": 456 },
-    { "index": 3, "resourceType": "order", "resourceId": 789 }
+    { "index": 3, "resourceType": "order", "resourceId": 789, "date": "2025-03-15" },
+    { "index": 1, "resourceType": "order", "resourceId": 456, "date": "2025-01-10" }
   ]
 }
 ```
@@ -135,7 +135,7 @@ SSE events:
 | Event | Description |
 |-------|-------------|
 | `token` | A chunk of the answer text as it is generated |
-| `done` | Final JSON with the complete answer, references, and disclaimer |
+| `done` | Final JSON with the complete answer, references (sorted most recent first, with `index`, `resourceType`, `resourceId`, `date`), and disclaimer |
 | `error` | Error message if something goes wrong |
 
 ### Audit log

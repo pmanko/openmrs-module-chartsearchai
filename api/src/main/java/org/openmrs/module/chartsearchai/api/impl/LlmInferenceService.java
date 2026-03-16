@@ -240,9 +240,11 @@ public class LlmInferenceService implements ChartSearchService {
 		for (Integer index : seen) {
 			RecordMapping mapping = indexMap.get(index);
 			if (mapping != null) {
-				references.add(new RecordReference(index, mapping.getResourceType(), mapping.getResourceId()));
+				references.add(new RecordReference(index, mapping.getResourceType(), mapping.getResourceId(), mapping.getDate()));
 			}
 		}
+		Collections.sort(references, Comparator.comparing(RecordReference::getDate,
+				Comparator.nullsLast(Comparator.reverseOrder())));
 		return references;
 	}
 }
