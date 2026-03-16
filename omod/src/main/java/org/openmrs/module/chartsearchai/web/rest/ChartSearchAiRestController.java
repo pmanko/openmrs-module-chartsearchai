@@ -183,7 +183,6 @@ public class ChartSearchAiRestController {
 		List<Map<String, Object>> refs = new ArrayList<Map<String, Object>>();
 		for (RecordReference ref : chartAnswer.getReferences()) {
 			Map<String, Object> refMap = new HashMap<String, Object>();
-			refMap.put("label", ref.getLabel());
 			refMap.put("resourceType", ref.getResourceType());
 			refMap.put("resourceId", ref.getResourceId());
 			refs.add(refMap);
@@ -321,7 +320,6 @@ public class ChartSearchAiRestController {
 					List<Map<String, Object>> refs = new ArrayList<Map<String, Object>>();
 					for (RecordReference ref : chartAnswer.getReferences()) {
 						Map<String, Object> refMap = new HashMap<String, Object>();
-						refMap.put("label", ref.getLabel());
 						refMap.put("resourceType", ref.getResourceType());
 						refMap.put("resourceId", ref.getResourceId());
 						refs.add(refMap);

@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
+import java.util.GregorianCalendar;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -45,6 +46,17 @@ public class PatientChartSerializerTest {
 
 		assertTrue(chart.getText().contains("[Obs #456] Blood pressure\n"));
 		assertTrue(chart.getText().contains("[Order #201] Metformin\n"));
+	}
+
+	@Test
+	public void serialize_shouldIncludeDateInLabelWhenPresent() {
+		PatientChartSerializer serializer = createSerializer(
+				new SerializedRecord("condition", 191, "Female infertility",
+						new GregorianCalendar(2024, 0, 15).getTime()));
+
+		PatientChart chart = serializer.serialize(new Patient());
+
+		assertTrue(chart.getText().contains("[Condition #191, 2024-01-15] Female infertility\n"));
 	}
 
 	@Test

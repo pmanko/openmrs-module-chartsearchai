@@ -42,10 +42,10 @@ public class LlmInferenceService implements ChartSearchService {
 	private LlmProvider llmProvider;
 
 	private static final Pattern CITATION_PATTERN = Pattern.compile(
-			"\\[([A-Z][a-z]+ #\\d+(?:,\\s*[A-Z][a-z]+ #\\d+)*)\\]");
+			"\\[([A-Z][a-z]+ #\\d+(?:,\\s*\\d{4}-\\d{2}-\\d{2})?(?:,\\s*[A-Z][a-z]+ #\\d+(?:,\\s*\\d{4}-\\d{2}-\\d{2})?)*)\\]");
 
 	private static final Pattern SINGLE_CITATION_PATTERN = Pattern.compile(
-			"([A-Z][a-z]+) #(\\d+)");
+			"([A-Z][a-z]+) #(\\d+)(?:,\\s*\\d{4}-\\d{2}-\\d{2})?");
 
 	@Override
 	public ChartAnswer search(Patient patient, String question) {
@@ -84,7 +84,7 @@ public class LlmInferenceService implements ChartSearchService {
 			if (m.matches()) {
 				String resourceType = m.group(1).toLowerCase();
 				Integer resourceId = Integer.valueOf(m.group(2));
-				references.add(new RecordReference(label, resourceType, resourceId));
+				references.add(new RecordReference(resourceType, resourceId));
 			}
 		}
 		return references;

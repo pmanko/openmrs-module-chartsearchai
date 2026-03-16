@@ -70,8 +70,7 @@ public interface ChartSearchService {
 		}
 
 		/**
-		 * The ordered list of record references. Citation labels from the answer map to
-		 * entries in this list for linking to the source record in OpenMRS.
+		 * The ordered list of record references cited in the answer.
 		 */
 		public List<RecordReference> getReferences() {
 			return references;
@@ -79,24 +78,17 @@ public interface ChartSearchService {
 	}
 
 	/**
-	 * Maps a citation label back to a source record in OpenMRS.
+	 * Identifies a source record in OpenMRS cited by the LLM answer.
 	 */
 	class RecordReference {
-
-		private final String label;
 
 		private final String resourceType;
 
 		private final Integer resourceId;
 
-		public RecordReference(String label, String resourceType, Integer resourceId) {
-			this.label = label;
+		public RecordReference(String resourceType, Integer resourceId) {
 			this.resourceType = resourceType;
 			this.resourceId = resourceId;
-		}
-
-		public String getLabel() {
-			return label;
 		}
 
 		public String getResourceType() {

@@ -60,6 +60,16 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void extractCitedReferences_shouldExtractReferencesWithDates() {
+		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
+				"The patient has Female infertility [Condition #191, 2024-01-15].");
+
+		assertEquals(1, result.size());
+		assertEquals("condition", result.get(0).getResourceType());
+		assertEquals(Integer.valueOf(191), result.get(0).getResourceId());
+	}
+
+	@Test
 	public void extractCitedReferences_shouldHandleEmptyAnswer() {
 		List<RecordReference> result = LlmInferenceService.extractCitedReferences("");
 
