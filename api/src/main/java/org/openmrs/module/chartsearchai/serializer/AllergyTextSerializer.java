@@ -14,7 +14,6 @@ import java.util.List;
 import org.openmrs.Allergy;
 import org.openmrs.AllergyReaction;
 import org.openmrs.module.chartsearchai.util.ConceptNameUtil;
-import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.springframework.stereotype.Component;
 
 /**
@@ -36,9 +35,6 @@ public class AllergyTextSerializer implements ClinicalTextSerializer<Allergy> {
 
 		if (allergy.getAllergen().getAllergenType() != null) {
 			sb.append(" (").append(allergy.getAllergen().getAllergenType()).append(")");
-		}
-		if (allergy.getDateCreated() != null) {
-			sb.append(". Date: ").append(DateFormatUtil.formatDate(allergy.getDateCreated()));
 		}
 		if (allergy.getSeverity() != null) {
 			sb.append(". Severity: ").append(ConceptNameUtil.getName(allergy.getSeverity()));

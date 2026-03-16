@@ -127,7 +127,7 @@ public class AllergyTextSerializerTest extends BaseModuleContextSensitiveTest {
 	}
 
 	@Test
-	public void toText_shouldIncludeDateCreated() {
+	public void toText_shouldNotIncludeDateCreated() {
 		Concept codedAllergen = new Concept();
 		codedAllergen.addName(conceptName("Penicillin"));
 		Allergen allergen = new Allergen(AllergenType.DRUG, codedAllergen, null);
@@ -138,7 +138,7 @@ public class AllergyTextSerializerTest extends BaseModuleContextSensitiveTest {
 		allergy.setDateCreated(cal.getTime());
 
 		String result = serializer.toText(allergy);
-		assertTrue(result.contains("Date: 2024-03-15"));
+		assertTrue(!result.contains("Date:"), "Date should not be in text (it is in the citation label)");
 	}
 
 	private ConceptName conceptName(String name) {

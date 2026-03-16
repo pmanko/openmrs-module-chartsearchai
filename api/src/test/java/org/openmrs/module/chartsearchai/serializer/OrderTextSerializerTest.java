@@ -45,7 +45,6 @@ public class OrderTextSerializerTest extends BaseModuleContextSensitiveTest {
 		assertTrue(result.contains("Order: Complete Blood Count"));
 		assertTrue(result.contains("Action: NEW"));
 		assertTrue(result.contains("Urgency: ROUTINE"));
-		assertTrue(result.contains("Date:"));
 	}
 
 	@Test

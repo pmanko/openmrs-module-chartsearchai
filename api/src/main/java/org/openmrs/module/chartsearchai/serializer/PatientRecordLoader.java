@@ -67,7 +67,7 @@ public class PatientRecordLoader {
 			}
 			String text = obsSerializer.toText(obs);
 			if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
-				Date date = obs.getEncounter() != null ? obs.getEncounter().getEncounterDatetime() : obs.getDateCreated();
+				Date date = obs.getObsDatetime() != null ? obs.getObsDatetime() : obs.getDateCreated();
 				records.add(new SerializedRecord("obs", obs.getObsId(), text, date));
 			}
 		}

@@ -70,7 +70,7 @@ public class ConditionTextSerializerTest extends BaseModuleContextSensitiveTest 
 	}
 
 	@Test
-	public void toText_shouldIncludeOnsetDate() {
+	public void toText_shouldNotIncludeOnsetDate() {
 		Condition condition = new Condition();
 		Concept concept = new Concept();
 		concept.addName(conceptName("Hypertension"));
@@ -79,7 +79,7 @@ public class ConditionTextSerializerTest extends BaseModuleContextSensitiveTest 
 		condition.setOnsetDate(new Date());
 
 		String result = serializer.toText(condition);
-		assertTrue(result.contains("Onset:"));
+		assertTrue(!result.contains("Onset:"), "Onset date should not be in text (it is in the citation label)");
 	}
 
 	@Test

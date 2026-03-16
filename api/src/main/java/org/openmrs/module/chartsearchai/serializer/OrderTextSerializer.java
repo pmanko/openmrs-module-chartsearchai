@@ -42,8 +42,6 @@ public class OrderTextSerializer implements ClinicalTextSerializer<Order> {
 				&& !order.getOrderReasonNonCoded().trim().isEmpty()) {
 			sb.append(". Reason: ").append(order.getOrderReasonNonCoded().trim());
 		}
-		sb.append(". Date: ").append(DateFormatUtil.formatDate(order.getDateActivated()));
-
 		if (order.getDateStopped() != null) {
 			sb.append(". Stopped: ").append(DateFormatUtil.formatDate(order.getDateStopped()));
 		}

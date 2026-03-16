@@ -35,7 +35,7 @@ public class ObsTextSerializerTest extends BaseModuleContextSensitiveTest {
 	}
 
 	@Test
-	public void toText_shouldIncludeEncounterContext() {
+	public void toText_shouldSerializeObsWithEncounter() {
 		Obs obs = new Obs();
 		Encounter enc = new Encounter();
 		EncounterType type = new EncounterType();
@@ -50,7 +50,6 @@ public class ObsTextSerializerTest extends BaseModuleContextSensitiveTest {
 		obs.setValueNumeric(70.0);
 
 		String result = serializer.toText(obs);
-		assertTrue(result.startsWith("Outpatient Visit ("));
 		assertTrue(result.contains("Weight: 70.0"));
 	}
 
@@ -177,7 +176,7 @@ public class ObsTextSerializerTest extends BaseModuleContextSensitiveTest {
 		obs.setValueNumeric(70.0);
 
 		String result = serializer.toText(obs);
-		assertTrue(result.startsWith("Encounter ("));
+		assertTrue(result.contains("Weight: 70.0"));
 	}
 
 	@Test

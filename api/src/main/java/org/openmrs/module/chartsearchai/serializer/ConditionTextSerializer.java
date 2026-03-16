@@ -35,9 +35,6 @@ public class ConditionTextSerializer implements ClinicalTextSerializer<Condition
 		if (condition.getVerificationStatus() != null) {
 			sb.append(". Verification: ").append(condition.getVerificationStatus());
 		}
-		if (condition.getOnsetDate() != null) {
-			sb.append(". Onset: ").append(DateFormatUtil.formatDate(condition.getOnsetDate()));
-		}
 		if (condition.getAdditionalDetail() != null && !condition.getAdditionalDetail().trim().isEmpty()) {
 			sb.append(". Detail: ").append(condition.getAdditionalDetail().trim());
 		}

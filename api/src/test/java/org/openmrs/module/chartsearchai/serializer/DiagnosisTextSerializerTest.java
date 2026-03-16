@@ -60,7 +60,7 @@ public class DiagnosisTextSerializerTest extends BaseModuleContextSensitiveTest 
 	}
 
 	@Test
-	public void toText_shouldIncludeEncounterDate() {
+	public void toText_shouldNotIncludeEncounterDate() {
 		Diagnosis diagnosis = new Diagnosis();
 		Concept concept = new Concept();
 		concept.addName(conceptName("Pneumonia"));
@@ -72,7 +72,7 @@ public class DiagnosisTextSerializerTest extends BaseModuleContextSensitiveTest 
 		diagnosis.setEncounter(enc);
 
 		String result = serializer.toText(diagnosis);
-		assertTrue(result.contains("Date:"));
+		assertTrue(!result.contains("Date:"), "Date should not be in text (it is in the citation label)");
 	}
 
 	@Test

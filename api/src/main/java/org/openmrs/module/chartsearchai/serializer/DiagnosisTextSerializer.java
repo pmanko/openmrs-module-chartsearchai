@@ -11,14 +11,12 @@ package org.openmrs.module.chartsearchai.serializer;
 
 import org.openmrs.Diagnosis;
 import org.openmrs.module.chartsearchai.util.ConceptNameUtil;
-import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.springframework.stereotype.Component;
 
 /**
  * Serializes a {@link Diagnosis} into embedding-friendly text.
  *
- * <p>Example output: {@code "Diagnosis: Malaria. Certainty: CONFIRMED. Rank: Primary.
- * Date: 2024-01-15"}</p>
+ * <p>Example output: {@code "Diagnosis: Malaria. Certainty: CONFIRMED. Rank: Primary."}</p>
  */
 @Component
 public class DiagnosisTextSerializer implements ClinicalTextSerializer<Diagnosis> {
@@ -35,10 +33,6 @@ public class DiagnosisTextSerializer implements ClinicalTextSerializer<Diagnosis
 			sb.append(". Certainty: ").append(diagnosis.getCertainty());
 		}
 		sb.append(". Rank: ").append(diagnosis.getRank() == 1 ? "Primary" : "Secondary");
-
-		if (diagnosis.getEncounter() != null && diagnosis.getEncounter().getEncounterDatetime() != null) {
-			sb.append(". Date: ").append(DateFormatUtil.formatDate(diagnosis.getEncounter().getEncounterDatetime()));
-		}
 
 		return sb.toString();
 	}

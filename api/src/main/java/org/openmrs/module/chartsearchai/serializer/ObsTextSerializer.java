@@ -10,18 +10,16 @@
 package org.openmrs.module.chartsearchai.serializer;
 
 import org.openmrs.ConceptNumeric;
-import org.openmrs.Encounter;
 import org.openmrs.Obs;
 import org.openmrs.module.chartsearchai.util.ConceptNameUtil;
 import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.springframework.stereotype.Component;
 
 /**
- * Serializes an {@link Obs} into embedding-friendly text. Enriches with encounter context
- * (type and date) so embeddings capture when and where the observation was recorded.
+ * Serializes an {@link Obs} into embedding-friendly text.
  *
- * <p>Example output: {@code "Outpatient Visit (2024-01-15) - Systolic Blood Pressure: 120 mmHg
- * (ABNORMAL). Note: Taken after exercise"}</p>
+ * <p>Example output: {@code "Systolic Blood Pressure: 120 mmHg (ABNORMAL).
+ * Note: Taken after exercise"}</p>
  */
 @Component
 public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {
@@ -29,17 +27,6 @@ public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {
 	@Override
 	public String toText(Obs obs) {
 		StringBuilder sb = new StringBuilder();
-
-		// Enrich with encounter context
-		Encounter enc = obs.getEncounter();
-		if (enc != null) {
-			if (enc.getEncounterType() != null) {
-				sb.append(enc.getEncounterType().getName());
-			} else {
-				sb.append("Encounter");
-			}
-			sb.append(" (").append(DateFormatUtil.formatDate(enc.getEncounterDatetime())).append(") - ");
-		}
 
 		String conceptName = ConceptNameUtil.getName(obs.getConcept());
 		if (!conceptName.isEmpty()) {
