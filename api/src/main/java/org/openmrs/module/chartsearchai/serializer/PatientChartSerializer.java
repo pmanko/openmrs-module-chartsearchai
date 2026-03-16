@@ -37,7 +37,16 @@ public class PatientChartSerializer {
 	 * @return the serialized chart with numbered records and index mapping
 	 */
 	public PatientChart serialize(Patient patient) {
-		List<SerializedRecord> records = recordLoader.loadAll(patient);
+		return serialize(recordLoader.loadAll(patient));
+	}
+
+	/**
+	 * Serialize a pre-filtered list of records into numbered text lines.
+	 *
+	 * @param records the records to serialize
+	 * @return the serialized chart with numbered records and index mapping
+	 */
+	public PatientChart serialize(List<SerializedRecord> records) {
 		StringBuilder sb = new StringBuilder();
 		List<RecordMapping> mappings = new ArrayList<RecordMapping>();
 

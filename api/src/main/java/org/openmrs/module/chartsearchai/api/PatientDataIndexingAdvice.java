@@ -56,9 +56,13 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 			return;
 		}
 
+		String preFilter = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_PRE_FILTER, "true");
 		String mode = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_SEARCH_MODE);
-		if (!ChartSearchAiConstants.SEARCH_MODE_EMBEDDING.equalsIgnoreCase(mode)) {
+		boolean needsEmbeddings = ChartSearchAiConstants.SEARCH_MODE_EMBEDDING.equalsIgnoreCase(mode)
+				|| !"false".equalsIgnoreCase(preFilter.trim());
+		if (!needsEmbeddings) {
 			return;
 		}
 

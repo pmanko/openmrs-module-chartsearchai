@@ -56,11 +56,16 @@ public class EmbeddingIndexTask extends AbstractTask {
 	}
 
 	private void doExecute() {
+		String preFilter = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_PRE_FILTER, "true");
 		String searchMode = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_SEARCH_MODE, ChartSearchAiConstants.SEARCH_MODE_LLM);
 
-		if (!ChartSearchAiConstants.SEARCH_MODE_EMBEDDING.equals(searchMode)) {
-			log.info("Search mode is '{}', skipping embedding backfill", searchMode);
+		boolean needsEmbeddings = ChartSearchAiConstants.SEARCH_MODE_EMBEDDING.equals(searchMode)
+				|| !"false".equalsIgnoreCase(preFilter.trim());
+		if (!needsEmbeddings) {
+			log.info("Embeddings not needed (searchMode={}, preFilter={}), skipping backfill",
+					searchMode, preFilter);
 			return;
 		}
 

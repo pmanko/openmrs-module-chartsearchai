@@ -50,6 +50,12 @@
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.llm.preFilter</property>
+		<defaultValue>true</defaultValue>
+		<description>When true, uses embedding similarity to pre-filter patient records to the most relevant ones before sending to the LLM. Set to false to send the full patient chart instead. Default: true.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.llm.chatTemplate</property>
 		<defaultValue>llama3</defaultValue>
 		<description>Chat template for formatting prompts sent to the LLM. Use a preset name (llama3, mistral, phi3, chatml, gemma) or a custom template string with {system} and {user} placeholders. Default: llama3.</description>
