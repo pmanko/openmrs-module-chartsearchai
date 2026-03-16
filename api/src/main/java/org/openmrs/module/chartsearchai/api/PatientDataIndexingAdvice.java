@@ -29,7 +29,7 @@ import org.springframework.aop.AfterReturningAdvice;
  * or orders are modified outside of encounter saves. Complements the
  * {@link EncounterIndexingAdvice} which handles the more common encounter path.
  *
- * <p>Only active when the search mode is set to {@code embedding}. Registered
+ * <p>Only active when {@code chartsearchai.embedding.preFilter} is {@code true}. Registered
  * in config.xml as advice on {@code ConditionService}, {@code PatientService},
  * and {@code OrderService}.</p>
  */

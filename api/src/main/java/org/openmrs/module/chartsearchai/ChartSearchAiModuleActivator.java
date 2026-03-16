@@ -116,7 +116,7 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 		task.setName(TASK_NAME);
 		task.setDescription("Indexes patients that do not yet have embeddings. "
 				+ "Handles initial population when the module is installed on a system "
-				+ "with existing patient data. Only runs when search mode is 'embedding'. "
+				+ "with existing patient data. Only runs when embedding pre-filter is enabled. "
 				+ "Can be disabled from the scheduler UI once backfill is complete.");
 		task.setTaskClass(EmbeddingIndexTask.class.getName());
 		task.setRepeatInterval(0L);

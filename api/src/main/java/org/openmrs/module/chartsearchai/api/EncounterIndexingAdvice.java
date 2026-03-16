@@ -26,7 +26,7 @@ import org.springframework.aop.AfterReturningAdvice;
  * AOP advice that triggers embedding indexing after encounters are saved, voided, or unvoided.
  * On save, does an incremental index of the encounter. On void/unvoid, does a full patient
  * re-index to remove orphaned embeddings from voided encounters.
- * Only active when the search mode is set to {@code embedding}.
+ * Only active when {@code chartsearchai.embedding.preFilter} is {@code true}.
  *
  * <p>Registered in config.xml as advice on {@code org.openmrs.api.EncounterService}.</p>
  */
