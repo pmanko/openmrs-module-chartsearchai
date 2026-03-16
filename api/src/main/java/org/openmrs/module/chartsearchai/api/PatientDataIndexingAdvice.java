@@ -39,7 +39,7 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 	private static final Logger log = LoggerFactory.getLogger(PatientDataIndexingAdvice.class);
 
 	private static final Set<String> CONDITION_METHODS = new HashSet<String>(
-			Arrays.asList("saveCondition", "voidCondition", "unvoidCondition"));
+			Arrays.asList("saveCondition", "voidCondition", "unvoidCondition", "purgeCondition"));
 
 	private static final Set<String> DIAGNOSIS_METHODS = new HashSet<String>(
 			Arrays.asList("save", "voidDiagnosis", "unvoidDiagnosis", "purgeDiagnosis"));
@@ -48,7 +48,8 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 			Arrays.asList("saveAllergy", "setAllergies", "removeAllergy", "voidAllergy"));
 
 	private static final Set<String> ORDER_METHODS = new HashSet<String>(
-			Arrays.asList("saveOrder", "saveRetrospectiveOrder", "voidOrder", "unvoidOrder"));
+			Arrays.asList("saveOrder", "saveRetrospectiveOrder", "voidOrder", "unvoidOrder",
+					"purgeOrder", "discontinueOrder"));
 
 	@Override
 	public void afterReturning(Object returnValue, Method method, Object[] args, Object target) {

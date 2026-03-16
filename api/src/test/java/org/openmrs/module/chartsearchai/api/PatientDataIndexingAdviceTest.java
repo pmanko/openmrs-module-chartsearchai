@@ -104,6 +104,36 @@ public class PatientDataIndexingAdviceTest {
 	}
 
 	@Test
+	public void extractPatient_shouldExtractFromConditionOnPurgeCondition() {
+		Patient patient = new Patient(1);
+		Condition condition = new Condition();
+		condition.setPatient(patient);
+
+		Patient result = advice.extractPatient("purgeCondition", new Object[] { condition });
+		assertEquals(patient, result);
+	}
+
+	@Test
+	public void extractPatient_shouldExtractFromOrderOnDiscontinueOrder() {
+		Patient patient = new Patient(4);
+		Order order = new Order();
+		order.setPatient(patient);
+
+		Patient result = advice.extractPatient("discontinueOrder", new Object[] { order });
+		assertEquals(patient, result);
+	}
+
+	@Test
+	public void extractPatient_shouldExtractFromOrderOnPurgeOrder() {
+		Patient patient = new Patient(4);
+		Order order = new Order();
+		order.setPatient(patient);
+
+		Patient result = advice.extractPatient("purgeOrder", new Object[] { order });
+		assertEquals(patient, result);
+	}
+
+	@Test
 	public void extractPatient_shouldReturnNullForUnrecognizedMethod() {
 		Patient result = advice.extractPatient("getCondition", new Object[] { new Condition() });
 		assertNull(result);

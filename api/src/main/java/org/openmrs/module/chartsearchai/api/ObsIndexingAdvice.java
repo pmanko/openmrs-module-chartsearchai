@@ -23,8 +23,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.aop.AfterReturningAdvice;
 
 /**
- * AOP advice that triggers a full patient re-index when observations are voided or purged
- * directly (outside of an encounter save). This removes orphaned embeddings for voided obs.
+ * AOP advice that triggers a full patient re-index when observations are saved, voided,
+ * unvoided, or purged directly (outside of an encounter save).
  *
  * <p>Registered in config.xml as advice on {@code org.openmrs.api.ObsService}.</p>
  */
@@ -33,7 +33,7 @@ public class ObsIndexingAdvice implements AfterReturningAdvice {
 	private static final Logger log = LoggerFactory.getLogger(ObsIndexingAdvice.class);
 
 	private static final Set<String> REINDEX_METHODS = new HashSet<String>(
-			Arrays.asList("voidObs", "unvoidObs", "purgeObs"));
+			Arrays.asList("saveObs", "voidObs", "unvoidObs", "purgeObs"));
 
 	@Override
 	public void afterReturning(Object returnValue, Method method, Object[] args, Object target) {
