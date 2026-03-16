@@ -20,7 +20,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * Serializes an entire patient chart into numbered records for direct LLM inference.
- * Each record is prefixed with a sequential number (e.g. [1, 2024-01-15]) to minimize
+ * Each record is prefixed with a sequential number (e.g. [1]) to minimize
  * token usage. The mapping from number back to resource type and ID is returned
  * alongside the text.
  */
