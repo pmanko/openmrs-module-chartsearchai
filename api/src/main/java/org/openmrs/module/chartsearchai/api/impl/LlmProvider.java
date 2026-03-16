@@ -10,6 +10,8 @@
 package org.openmrs.module.chartsearchai.api.impl;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -59,16 +61,19 @@ public class LlmProvider {
 			+ "Question: Does the patient have diabetes?\n"
 			+ "{\"answer\": \"No relevant information was found in the patient's records.\"}";
 
-	// GBNF grammar that constrains output to: {"answer": "..."}
-	// Allows any characters inside the string value including escaped quotes
-	private static final String JSON_ANSWER_GRAMMAR =
-			"root   ::= \"{\" ws \"\\\"answer\\\"\" ws \":\" ws string ws \"}\"\n"
-			+ "string ::= \"\\\"\" chars \"\\\"\"\n"
-			+ "chars  ::= char*\n"
-			+ "char   ::= [^\"\\\\] | \"\\\\\" escape\n"
-			+ "escape ::= [\"\\\\/bfnrt] | \"u\" hex hex hex hex\n"
-			+ "hex    ::= [0-9a-fA-F]\n"
-			+ "ws     ::= [ \\t\\n]*\n";
+	private static final String JSON_ANSWER_GRAMMAR = loadGrammar("json-answer.gbnf");
+
+	private static String loadGrammar(String resourceName) {
+		try (InputStream is = LlmProvider.class.getClassLoader().getResourceAsStream(resourceName)) {
+			if (is == null) {
+				throw new IllegalStateException("Grammar resource not found: " + resourceName);
+			}
+			return new String(is.readAllBytes(), StandardCharsets.UTF_8);
+		}
+		catch (IOException e) {
+			throw new IllegalStateException("Failed to load grammar: " + resourceName, e);
+		}
+	}
 
 	static final Map<String, String> PRESET_TEMPLATES;
 
@@ -217,6 +222,7 @@ public class LlmProvider {
 
 		return new InferenceParameters(prompt)
 				.setTemperature(0.0f)
+				.setSeed(42)
 				.setNPredict(ChartSearchAiConstants.DEFAULT_MAX_TOKENS)
 				.setGrammar(JSON_ANSWER_GRAMMAR)
 				.setRepeatPenalty(1.1f)

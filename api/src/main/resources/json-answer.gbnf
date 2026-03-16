@@ -1,0 +1,7 @@
+root   ::= "{" ws "\"answer\"" ws ":" ws string ws "}"
+string ::= "\"" chars "\""
+chars  ::= char*
+char   ::= [^"\\\n\r] | "\\" escape
+escape ::= ["\\/bfnrt] | "u" hex hex hex hex
+hex    ::= [0-9a-fA-F]
+ws     ::= [ \t]*
