@@ -32,7 +32,7 @@
 		<dependency>
 			<groupId>com.microsoft.onnxruntime</groupId>
 			<artifactId>onnxruntime</artifactId>
-			<version>1.23.2</version>
+			<version>1.24.3</version>
 		</dependency>
 		<dependency>
 			<groupId>org.openmrs.api</groupId>

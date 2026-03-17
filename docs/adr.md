@@ -611,6 +611,7 @@ For the initial release targeting small clinics with low concurrent usage, the s
 
 ## Planned future work
 
+- **Incremental embedding indexing**: Currently, `indexPatient()` deletes all embeddings for a patient and recomputes them from scratch on every data change. This is simple and guarantees consistency, but recomputes embeddings for records that haven't changed. An incremental approach would track which record maps to which embedding row and only add, update, or delete the specific embeddings affected. This matters for patients with large charts where AOP hooks fire frequently.
 - Add concept graph traversal as a complement to embedding search
 - Add pre-computed summaries for common queries
 - Agent/tool-use pattern for complex multi-step questions (when better local models are available)
