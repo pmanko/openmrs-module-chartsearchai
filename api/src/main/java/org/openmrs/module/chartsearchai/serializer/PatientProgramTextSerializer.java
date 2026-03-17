@@ -58,10 +58,6 @@ public class PatientProgramTextSerializer implements ClinicalTextSerializer<Pati
 			}
 		}
 
-		if (patientProgram.getLocation() != null && patientProgram.getLocation().getName() != null) {
-			sb.append(". Location: ").append(patientProgram.getLocation().getName());
-		}
-
 		return sb.toString();
 	}
 }

@@ -208,6 +208,7 @@ Key design choices:
 - `ObsTextSerializer` flattens group members into the parent obs text.
 - Obs interpretation (`NORMAL`, `ABNORMAL`, `CRITICALLY_ABNORMAL`) and comments are included.
 - Units are extracted from `ConceptNumeric`, not `Concept` (which has no `getUnits()` in OpenMRS 2.6.x).
+- `PatientProgramTextSerializer` includes program name, enrollment/completion dates, active status, outcome, and current workflow state. Location is omitted — it is administrative metadata rarely part of a clinical question about a program enrollment.
 - `MedicationDispenseTextSerializer` includes only the fields clinicians commonly ask about: drug name, quantity, dose/route/frequency, dosing instructions, and handover date. Status and substitution info are omitted — status adds little value since presence in the dispense list already implies it was dispensed, and substitution is a niche edge case that wastes tokens on almost every record.
 
 ## Decision 10: Single LLM architecture with optional embedding pre-filter
