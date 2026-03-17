@@ -137,6 +137,11 @@ public class ChartSearchServiceRouterTest {
 			protected int getCacheTtlMinutes() {
 				return cacheTtl;
 			}
+
+			@Override
+			protected String buildCacheKey(Patient p, String question) {
+				return p.getUuid() + "::" + question.trim().toLowerCase();
+			}
 		};
 		ReflectionTestUtils.setField(router, "llmService", llm);
 		return router;

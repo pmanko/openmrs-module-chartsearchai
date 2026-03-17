@@ -206,7 +206,7 @@ A generic `ClinicalTextSerializer<T>` interface with one implementation per Open
 Key design choices:
 - Serializers produce concise text without dates. Dates are omitted for three reasons: (1) records are sorted most-recent-first in the prompt, so relative recency is conveyed by position; (2) the actual date is included in the API response's `references` array for the UI to display alongside each citation; and (3) small LLMs (1.5B–14B parameters) are unreliable at date arithmetic and temporal reasoning. Date arithmetic is a known weakness across small models — even 7B models struggle with questions like "How many days between March 15 and June 2?" or "Was this before or after that?" when given raw dates. It improves noticeably around 13B+ parameters, but is still not reliable until much larger models. Including dates invites errors like miscalculating durations or confusing date formats, while the sorted order gives the model a simpler positional signal it handles well. Exception: `PatientProgramTextSerializer` includes enrollment and completion dates because both are intrinsic clinical facts about the enrollment — the LLM has no other way to see them, since citation labels only carry the record's position, not the actual date.
 - `ObsTextSerializer` includes concept name, value (coded/numeric/text/datetime/drug), value modifier (e.g., `>`, `<` for lab results like ">200 copies/mL"), units, interpretation, comments, and flattened group members. Omitted: location (administrative), accession number (lab logistics), order linkage (structural reference, not clinical text), and status (PRELIMINARY/FINAL/AMENDED — adds tokens for a distinction small LLMs are unlikely to reason about meaningfully).
-- Units are extracted from `ConceptNumeric`, not `Concept` (which has no `getUnits()` in OpenMRS 2.6.x).
+- Units are extracted from `ConceptNumeric`, not `Concept` (which has no `getUnits()` in OpenMRS 2.8.x).
 - `ConditionTextSerializer` includes condition name, clinical status, verification status, additional detail, end date, and end reason. Omitted: onset date (handled by record sort position, same reasoning as other dates).
 - `AllergyTextSerializer` includes allergen name, allergen type, severity, reactions, and comments. No clinically meaningful fields are omitted — allergy serialization is comprehensive.
 - `DiagnosisTextSerializer` includes diagnosis name, certainty, and rank. Omitted: linked condition (structural reference — the condition itself is serialized separately), and custom attributes (deployment-specific, may be empty).
@@ -216,7 +216,7 @@ Key design choices:
 
 ### Resource type coverage analysis
 
-The seven resource types above (Obs, Condition, Allergy, Diagnosis, Order, PatientProgram, MedicationDispense) were chosen after a systematic review of every patient-facing domain class in OpenMRS core 2.6.9. The following data types were considered and intentionally excluded:
+The seven resource types above (Obs, Condition, Allergy, Diagnosis, Order, PatientProgram, MedicationDispense) were chosen after a systematic review of every patient-facing domain class in OpenMRS core 2.8.0. The following data types were considered and intentionally excluded:
 
 | Data type | Reason for exclusion |
 |-----------|---------------------|

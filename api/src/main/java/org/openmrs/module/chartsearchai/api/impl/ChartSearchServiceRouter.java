@@ -54,51 +54,47 @@ public class ChartSearchServiceRouter implements ChartSearchService {
 
 	@Override
 	public ChartAnswer search(Patient patient, String question) {
-		String cacheKey = buildCacheKey(patient, question);
 		int ttlMinutes = getCacheTtlMinutes();
 
 		if (ttlMinutes > 0) {
+			String cacheKey = buildCacheKey(patient, question);
 			ChartAnswer cached = getCachedAnswer(cacheKey, ttlMinutes);
 			if (cached != null) {
 				log.debug("Cache hit for patient [id={}]", patient.getPatientId());
 				return cached;
 			}
-		}
 
-		ChartAnswer answer = llmService.search(patient, question);
-
-		if (ttlMinutes > 0) {
+			ChartAnswer answer = llmService.search(patient, question);
 			putCache(cacheKey, answer);
+			return answer;
 		}
 
-		return answer;
+		return llmService.search(patient, question);
 	}
 
 	@Override
 	public ChartAnswer searchStreaming(Patient patient, String question,
 			Consumer<String> tokenConsumer) {
-		String cacheKey = buildCacheKey(patient, question);
 		int ttlMinutes = getCacheTtlMinutes();
 
 		if (ttlMinutes > 0) {
+			String cacheKey = buildCacheKey(patient, question);
 			ChartAnswer cached = getCachedAnswer(cacheKey, ttlMinutes);
 			if (cached != null) {
 				log.debug("Cache hit for patient [id={}] (streaming)", patient.getPatientId());
 				tokenConsumer.accept(cached.getAnswer());
 				return cached;
 			}
-		}
 
-		ChartAnswer answer = llmService.searchStreaming(patient, question, tokenConsumer);
-
-		if (ttlMinutes > 0) {
+			ChartAnswer answer = llmService.searchStreaming(patient, question, tokenConsumer);
 			putCache(cacheKey, answer);
+			return answer;
 		}
 
-		return answer;
+		return llmService.searchStreaming(patient, question, tokenConsumer);
 	}
 
-	private String buildCacheKey(Patient patient, String question) {
+	protected String buildCacheKey(Patient patient, String question) {
 		String preFilter = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
 		return patient.getUuid() + "::" + preFilter.trim().toLowerCase()
