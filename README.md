@@ -52,8 +52,8 @@ Set these global properties in **Admin > Settings**:
 |----------|---------|-------------|
 | `chartsearchai.embedding.preFilter` | `true` | When `true`, uses embedding similarity to narrow patient records to the most relevant ones before sending to the LLM. Set to `false` to send the full chart instead |
 | `chartsearchai.embedding.topK` | `15` | Maximum number of records to retrieve via embedding similarity when pre-filtering is enabled |
-| `chartsearchai.embedding.modelFilePath` | — | Required when pre-filtering is enabled. Relative path to the ONNX model file (all-MiniLM-L6-v2) |
-| `chartsearchai.embedding.vocabFilePath` | — | Required when pre-filtering is enabled. Relative path to the WordPiece `vocab.txt` file |
+| `chartsearchai.embedding.modelFilePath` | — | Required when pre-filtering is enabled. Relative path to the ONNX model file (all-MiniLM-L6-v2), e.g. `chartsearchai/all-MiniLM-L6-v2.onnx` |
+| `chartsearchai.embedding.vocabFilePath` | — | Required when pre-filtering is enabled. Relative path to the WordPiece `vocab.txt` file, e.g. `chartsearchai/vocab.txt` |
 
 #### LLM tuning
 
