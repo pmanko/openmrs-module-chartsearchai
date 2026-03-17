@@ -570,6 +570,41 @@ Requires the `View AI Audit Logs` privilege. All query parameters are optional. 
   This audit trail supports compliance review (who queried which patient's data and what the AI responded) and performance analysis. A scheduled task purges entries older than `chartsearchai.auditLogRetentionDays` (default 90 days, set to 0 to retain all).
 - **Patient access control**: A `PatientAccessCheck` interface controls whether a user can query a specific patient's chart. The default implementation (`DefaultPatientAccessCheck`) permits all access — any user with the `AI Query Patient Data` privilege can query any patient. Deployments requiring patient-level restrictions (e.g., location-based or care-team-based) can override this by registering a custom Spring bean with id `chartSearchAi.patientAccessCheck`. This separates privilege-based access (handled by OpenMRS) from patient-level access (handled by the module).
 
+## Decision 12: Concurrency model
+
+### Constraint
+
+Both the LLM (llama.cpp via jllama) and the embedding model (ONNX Runtime) use native memory that is **not thread-safe**. To prevent memory corruption:
+
+- `LlmProvider.search()` and `searchStreaming()` are `synchronized` — only one LLM inference runs at a time.
+- `OnnxEmbeddingProvider.embed()` is `synchronized` — only one embedding computation runs at a time.
+
+### Impact on concurrent users
+
+When multiple users submit queries simultaneously, requests are serialized:
+
+1. The first request acquires the LLM lock and begins inference.
+2. Subsequent requests queue on the `synchronized` block and wait.
+3. Each request times out after `chartsearchai.llm.timeoutSeconds` (default 120s).
+
+With a 3B model on CPU, a single query typically takes 10–30 seconds. This means roughly **2–4 concurrent users** can be served before requests start timing out. Larger models (8B, 12B) have slower inference and reduce this further.
+
+Embedding computation is faster (~50–200ms per patient) so the embedding lock is rarely a bottleneck.
+
+### Existing mitigations
+
+- **Answer cache** (`chartsearchai.cacheTtlMinutes`): Identical (patient, question) pairs return cached results without acquiring the LLM lock.
+- **Rate limiter** (`chartsearchai.rateLimitPerMinute`): Limits per-user query frequency, reducing queue depth.
+- **Configurable timeout**: Prevents requests from waiting indefinitely.
+
+### Future options (not yet implemented)
+
+- **Multiple model instances**: Load the LLM into separate native contexts and round-robin across them. Trades RAM for throughput (each 3B instance adds ~3–4GB).
+- **Request queuing with position feedback**: Return queue position to the client via SSE so the UI can show "you are #3 in queue" instead of hanging silently.
+- **External inference server**: Offload to a dedicated inference server (e.g., llama.cpp server mode, vLLM, Ollama) that manages its own concurrency. This decouples the module from native memory constraints but adds an external dependency.
+
+For the initial release targeting small clinics with low concurrent usage, the serialized approach is acceptable and avoids the complexity of managing multiple native contexts.
+
 ## Planned future work
 
 - Add concept graph traversal as a complement to embedding search
