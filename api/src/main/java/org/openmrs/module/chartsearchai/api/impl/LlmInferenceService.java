@@ -185,6 +185,8 @@ public class LlmInferenceService implements ChartSearchService {
 		for (ChartEmbedding ce : allEmbeddings) {
 			float[] vector = ce.getEmbeddingVector();
 			if (vector.length != queryVector.length) {
+				log.warn("Skipping embedding [id={}] with mismatched dimensions ({} vs expected {})",
+						ce.getEmbeddingId(), vector.length, queryVector.length);
 				continue;
 			}
 			double dot = 0, normA = 0, normB = 0;
