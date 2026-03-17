@@ -27,6 +27,16 @@ Download Llama 3.2 3B (Q4_K_M quantization) in GGUF format (~2GB) from [Hugging 
 
 Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<openmrs-application-data-directory>/chartsearchai/`). Model paths are resolved relative to this directory for security.
 
+**Upgrade models for servers with more RAM:**
+
+| Model | RAM Needed | Chat Template | Download |
+|-------|-----------|---------------|----------|
+| Llama 3.2 3B *(default)* | ~6GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) |
+| Llama 3.3 8B | ~10GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF) |
+| Mistral Nemo 12B | ~12GB total | `mistral` | [GGUF](https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF) |
+
+Larger models produce more accurate answers with better instruction following. To switch models, update `chartsearchai.llm.modelFilePath` and `chartsearchai.llm.chatTemplate` — no rebuild needed.
+
 ### 3. Download the embedding model
 
 If embedding pre-filtering is enabled (default), download the all-MiniLM-L6-v2 ONNX model (~90MB) from [Hugging Face](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2). You need both `model.onnx` and `vocab.txt` from the repository.

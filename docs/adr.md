@@ -369,22 +369,34 @@ As a safety net, any slash-separated citations that small LLMs occasionally prod
 | Llama 3.2 3B | ~2GB | ~4GB | 128K tokens | ~20–30 tok/s |
 | Phi-3 Mini 3.8B | ~2GB | ~4GB | 4K tokens (128K variant available) | ~15–25 tok/s |
 | Mistral 7B | ~4GB | ~8GB | 32K tokens | ~10–15 tok/s |
+| Llama 3.3 8B | ~4.5GB | ~8GB | 128K tokens | ~8–12 tok/s |
 | Qwen 2.5 7B | ~4GB | ~8GB | 128K tokens | ~8–12 tok/s |
 | Gemma 2 9B Instruct | ~5GB | ~10GB | 8K tokens | ~5–10 tok/s |
+| Mistral Nemo 12B | ~7GB | ~12GB | 128K tokens | ~4–8 tok/s |
 | Qwen 2.5 14B | ~8GB | ~14GB | 128K tokens | ~3–6 tok/s |
 
 ### Recommended model: Llama 3.2 3B
 
-Llama 3.2 3B is the best fit for this use case. Its 128K token context window can hold approximately 6,000 serialized patient records (~15 tokens each), which comfortably accommodates even the largest patient charts. At 3B parameters with Q4_K_M quantization, it is ~2GB on disk and runs at ~20–30 tokens per second on CPU — fast enough for acceptable clinical use.
+Llama 3.2 3B is the default recommendation for low-resource deployments. Its 128K token context window can hold approximately 6,000 serialized patient records (~15 tokens each), which comfortably accommodates even the largest patient charts. At 3B parameters with Q4_K_M quantization, it is ~2GB on disk and runs at ~20–30 tokens per second on CPU — fast enough for acceptable clinical use.
 
-The alternatives each have a significant limitation for this use case:
+### Recommended upgrade models
+
+For servers with more RAM, these models offer significantly better answer quality (more accurate, better instruction following, fewer hallucinations):
+
+| Model | RAM Needed | Chat Template | Why |
+|-------|-----------|---------------|-----|
+| **Llama 3.3 8B** | ~10GB total | `llama3` | Best all-around upgrade from 3B. Strong instruction following and medical text comprehension. Same Llama template — only the model file path changes. |
+| **Mistral Nemo 12B** | ~12GB total | `mistral` | Best sub-15B option for clinical Q&A. Strong medical text comprehension and 128K context window. Requires changing both model path and chat template. |
+
+These are the recommended upgrade paths because they are from US/EU organizations (Meta and Mistral AI respectively), have strong performance on medical benchmarks, and use chat templates already supported by the module. Switching requires only two global property changes (`modelFilePath` and `chatTemplate`) — no code changes or module rebuild.
+
+### Other alternatives
 
 - **Qwen 2.5 1.5B** is faster and smaller but its 32K context window limits it to ~2,000 records, and its reasoning capability is weaker at 1.5B parameters.
-- **Phi-3 Mini 3.8B** has slightly better reasoning per parameter than Llama 3.2 3B, but its default 4K context window is far too small for full patient charts. The 128K variant exists but is slower on CPU due to the longer context handling.
-- **Mistral 7B** has strong reasoning but at 7B parameters it is noticeably slower on CPU (~10–15 tok/s) and requires ~8GB RAM, which may be prohibitive in low-resource deployments.
-- **Qwen 2.5 7B** offers strong instruction following and a 128K context window at 7B parameters. A good upgrade path from 3B models for servers with 8–10GB RAM.
-- **Gemma 2 9B Instruct** has excellent reasoning and instruction following at 9B parameters, but its 8K context window limits it to ~500 records without embedding pre-filtering. Requires ~10GB RAM.
-- **Qwen 2.5 14B** provides the best reasoning of the CPU-viable options with a 128K context window, but requires ~14GB RAM and runs at ~3–6 tok/s on CPU. Best for well-resourced deployments.
+- **Phi-3 Mini 3.8B** (Microsoft) has slightly better reasoning per parameter than Llama 3.2 3B, but its default 4K context window is far too small for full patient charts. The 128K variant exists but is slower on CPU due to the longer context handling. Phi models are trained primarily on synthetic/textbook data and tend to be weaker on messy, real-world clinical text compared to Llama and Mistral models at similar sizes.
+- **Mistral 7B** has strong reasoning but at 7B parameters it is noticeably slower on CPU (~10–15 tok/s) and requires ~8GB RAM. Superseded by Llama 3.3 8B which offers better quality at a similar resource cost.
+- **Qwen 2.5 7B/14B** (Alibaba) offers strong instruction following and large context windows. However, Qwen is developed by a Chinese company subject to China's data laws — while GGUF models run locally with no data leaving the machine, US healthcare organizations may face compliance or perception concerns. Consider Llama or Mistral alternatives first.
+- **Gemma 2 9B Instruct** (Google) has excellent reasoning and instruction following at 9B parameters, but its 8K context window limits it to ~500 records without embedding pre-filtering. Requires ~10GB RAM.
 
 All models run via java-llama.cpp with Q4_K_M quantization in GGUF format.
 
