@@ -214,6 +214,37 @@ Key design choices:
 - `PatientProgramTextSerializer` includes program name, enrollment/completion dates, active status, outcome, and current workflow state. Location is omitted — it is administrative metadata rarely part of a clinical question about a program enrollment.
 - `MedicationDispenseTextSerializer` includes drug name, quantity, dose/route/frequency, dosing instructions, and handover date. Status and substitution info are omitted — status adds little value since presence in the dispense list already implies it was dispensed, and substitution is a niche edge case that wastes tokens on almost every record.
 
+### Resource type coverage analysis
+
+The seven resource types above (Obs, Condition, Allergy, Diagnosis, Order, PatientProgram, MedicationDispense) were chosen after a systematic review of every patient-facing domain class in OpenMRS core 2.6.9. The following data types were considered and intentionally excluded:
+
+| Data type | Reason for exclusion |
+|-----------|---------------------|
+| Visit | Pure metadata grouper for encounters. Clinical content lives in the encounters' obs and diagnoses, which are already embedded. |
+| Encounter | Container for obs and diagnoses, which are already captured individually. Encounter type (e.g., "Admission") is implicit in the obs recorded during that encounter. |
+| PersonAttribute | Deployment-specific custom fields (phone, occupation, next of kin). Too variable to serialize generically — may be empty or administrative. |
+| Patient demographics | Age, gender, and birthdate are always visible on the patient dashboard and not chart records in the traditional sense. |
+| Relationship | Administrative (e.g., "Mother of Patient X", "Emergency contact"), not clinical. |
+| OrderGroup | Groups related orders (e.g., chemotherapy regimen). The individual orders within the group are already serialized; the group itself is structural. |
+| VisitAttribute | Deployment-specific custom fields on visits. Too variable to serialize generically. |
+| PatientIdentifier | Administrative identifiers, not clinical content. |
+
+Cross-checked against FHIR clinical resources to verify completeness:
+
+| FHIR resource | OpenMRS mapping | Status |
+|---------------|----------------|--------|
+| Observation | Obs | Embedded |
+| Condition | Condition | Embedded |
+| AllergyIntolerance | Allergy | Embedded |
+| MedicationRequest | DrugOrder | Embedded |
+| MedicationDispense | MedicationDispense | Embedded |
+| ServiceRequest | ServiceOrder / TestOrder / ReferralOrder | Embedded |
+| DiagnosticReport | Obs (text reports from imaging/labs) | Embedded |
+| EpisodeOfCare | PatientProgram | Embedded |
+| Immunization | Not in OpenMRS core (separate module) | N/A |
+| CarePlan | Not in OpenMRS core | N/A |
+| Appointment | Not in OpenMRS core (separate module) | N/A |
+
 ## Decision 10: Single LLM architecture with optional embedding pre-filter
 
 ### Context
