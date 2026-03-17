@@ -70,11 +70,9 @@ Retrieve relevant records first using deterministic search, then use the LLM onl
 
 ### Decision
 
-Use RAG with a layered approach:
-1. **Query understanding**: Small local LLM translates natural language to search parameters.
-2. **Deterministic retrieval**: Java code queries OpenMRS via existing services + embedding similarity search.
-3. **Response synthesis**: LLM formats retrieved records into a coherent answer with citations.
-4. **Validation**: Every claim is verified against the retrieved data before returning to the user.
+Use RAG with a two-step approach:
+1. **Deterministic retrieval**: Java code queries OpenMRS via existing services + embedding similarity search to find the most relevant records.
+2. **Response synthesis**: LLM receives the retrieved records and the clinician's question, then produces a concise answer with citations.
 
 ## Decision 3: Embedding approach — semantic search index
 
@@ -308,24 +306,16 @@ Source citations are straightforward because we control exactly what the LLM see
 [4] HbA1c: 8.2%
 ```
 
-The system prompt instructs the LLM to cite record numbers in its answer:
+The system prompt instructs the LLM to cite record numbers in brackets and respond with a JSON object. A GBNF grammar (`json-answer.gbnf`) constrains the LLM output to the exact format `{"answer": "...", "citations": [1, 2]}`, making it structurally impossible for the LLM to produce malformed citations. The `citations` array is parsed directly as structured data — no regex parsing of free text is needed.
 
+Example LLM output:
+```json
+{"answer": "The patient's diabetes appears poorly controlled. Their most recent HbA1c was 8.2% [4], above the target of 7%, despite being on Metformin [3].", "citations": [4, 3]}
 ```
-Answer the question using only the patient records below. Cite records
-by number in brackets. If the records do not contain enough information
-to answer, say so.
-```
 
-The LLM responds with inline citations:
+On the Java side, each citation number maps back to a `resource_type` + `resource_id` pair maintained in an ordered list (`RecordMapping`) during prompt construction. The UI can then link each citation directly to the source record in OpenMRS, allowing the clinician to verify every claim with one click.
 
-> The patient's diabetes appears poorly controlled. Their most recent HbA1c was 8.2% [4],
-> above the target of 7%, despite being on Metformin since 2019 [3]. They also had an
-> abnormal blood pressure reading [1], which may indicate cardiovascular risk associated
-> with their diabetes [2].
-
-On the Java side, each number maps back to a `resource_type` + `resource_id` pair maintained in an ordered list during prompt construction. The UI can then link each citation directly to the source record in OpenMRS, allowing the clinician to verify every claim with one click.
-
-This is simpler and more reliable than citations with RAG. With RAG, the clinician must trust two things: that the retrieval step found the right records, and that the LLM cited them correctly. With direct inference, the first concern is eliminated — the LLM saw everything, so a missing citation means the LLM chose not to cite it, not that retrieval failed to find it.
+As a safety net, any slash-separated citations that small LLMs occasionally produce in the answer text (e.g., `[5/12]`) are normalized to `[5], [12]` before returning to the user. This is cosmetic only — the authoritative citations come from the structured `citations` array.
 
 ### Candidate models
 
@@ -468,7 +458,7 @@ POST /ws/rest/v1/chartsearchai/search/stream
 
 Returns a `text/event-stream` with three event types:
 - `token` — a chunk of the answer text, streamed as generated
-- `done` — final JSON with the complete answer, references (with `index`, `resourceType`, `resourceId`), and disclaimer
+- `done` — final JSON with the complete answer, references (with `index`, `resourceType`, `resourceId`, `date`), and disclaimer
 - `error` — an error message if something goes wrong
 
 ### Guardrails
