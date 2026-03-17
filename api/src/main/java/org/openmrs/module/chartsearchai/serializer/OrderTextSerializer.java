@@ -11,19 +11,22 @@ package org.openmrs.module.chartsearchai.serializer;
 
 import org.openmrs.DrugOrder;
 import org.openmrs.Order;
+import org.openmrs.ServiceOrder;
 import org.openmrs.module.chartsearchai.util.ConceptNameUtil;
 import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.springframework.stereotype.Component;
 
 /**
- * Serializes an {@link Order} into embedding-friendly text. For {@link DrugOrder}s, includes
- * prescription details (drug name, dose, route, frequency, duration).
+ * Serializes an {@link Order} into embedding-friendly text. Handles three order hierarchies:
+ * {@link DrugOrder} (prescription details), {@link ServiceOrder} and its subclasses
+ * ({@code TestOrder}, {@code ReferralOrder}) with laterality/specimen/clinical history,
+ * and base {@link Order} for everything else.
  *
  * <p>Example output for a drug order: {@code "Drug order: Metformin 500mg. Dose: 1.0 Tablet(s)
  * Oral twice daily. Duration: 30 Day(s). Action: NEW. Urgency: ROUTINE"}</p>
  *
- * <p>Example output for a non-drug order: {@code "Order: Complete Blood Count. Action: NEW.
- * Urgency: STAT. Reason: Suspected anemia"}</p>
+ * <p>Example output for a service/test/referral order: {@code "Order: X-Ray Chest. Laterality:
+ * LEFT. Clinical history: Persistent cough for 3 weeks. Action: NEW. Urgency: STAT"}</p>
  */
 @Component
 public class OrderTextSerializer implements ClinicalTextSerializer<Order> {
@@ -38,6 +41,9 @@ public class OrderTextSerializer implements ClinicalTextSerializer<Order> {
 			String name = ConceptNameUtil.getName(order.getConcept());
 			if (!name.isEmpty()) {
 				sb.append("Order: ").append(name);
+			}
+			if (order instanceof ServiceOrder) {
+				appendServiceOrderFields(sb, (ServiceOrder) order);
 			}
 		}
 
@@ -58,6 +64,22 @@ public class OrderTextSerializer implements ClinicalTextSerializer<Order> {
 		}
 
 		return sb.toString();
+	}
+
+	private void appendServiceOrderFields(StringBuilder sb, ServiceOrder serviceOrder) {
+		if (serviceOrder.getLaterality() != null) {
+			sb.append(". Laterality: ").append(serviceOrder.getLaterality());
+		}
+		if (serviceOrder.getSpecimenSource() != null) {
+			String specimen = ConceptNameUtil.getName(serviceOrder.getSpecimenSource());
+			if (!specimen.isEmpty()) {
+				sb.append(". Specimen: ").append(specimen);
+			}
+		}
+		if (serviceOrder.getClinicalHistory() != null
+				&& !serviceOrder.getClinicalHistory().trim().isEmpty()) {
+			sb.append(". Clinical history: ").append(serviceOrder.getClinicalHistory().trim());
+		}
 	}
 
 	private void appendDrugOrderFields(StringBuilder sb, DrugOrder drugOrder) {

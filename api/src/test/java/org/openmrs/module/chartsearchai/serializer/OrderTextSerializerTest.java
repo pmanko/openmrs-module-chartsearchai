@@ -20,6 +20,9 @@ import org.openmrs.ConceptName;
 import org.openmrs.Drug;
 import org.openmrs.DrugOrder;
 import org.openmrs.Order;
+import org.openmrs.ServiceOrder;
+import org.openmrs.TestOrder;
+import org.openmrs.ReferralOrder;
 import java.util.Locale;
 import org.openmrs.test.jupiter.BaseModuleContextSensitiveTest;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -227,6 +230,71 @@ public class OrderTextSerializerTest extends BaseModuleContextSensitiveTest {
 
 		String result = serializer.toText(drugOrder);
 		assertTrue(result.contains("Dosing: Monitor INR weekly"));
+	}
+
+	@Test
+	public void toText_shouldIncludeLateralityForServiceOrder() {
+		ServiceOrder serviceOrder = new TestOrder();
+		Concept concept = new Concept();
+		concept.addName(conceptName("X-Ray Knee"));
+		serviceOrder.setConcept(concept);
+		serviceOrder.setAction(Order.Action.NEW);
+		serviceOrder.setUrgency(Order.Urgency.STAT);
+		serviceOrder.setDateActivated(new Date());
+		serviceOrder.setLaterality(ServiceOrder.Laterality.LEFT);
+
+		String result = serializer.toText(serviceOrder);
+		assertTrue(result.contains("Order: X-Ray Knee"));
+		assertTrue(result.contains("Laterality: LEFT"));
+	}
+
+	@Test
+	public void toText_shouldIncludeSpecimenSourceForServiceOrder() {
+		ServiceOrder serviceOrder = new TestOrder();
+		Concept concept = new Concept();
+		concept.addName(conceptName("Blood Culture"));
+		serviceOrder.setConcept(concept);
+		serviceOrder.setAction(Order.Action.NEW);
+		serviceOrder.setUrgency(Order.Urgency.ROUTINE);
+		serviceOrder.setDateActivated(new Date());
+
+		Concept specimen = new Concept();
+		specimen.addName(conceptName("Venous blood"));
+		serviceOrder.setSpecimenSource(specimen);
+
+		String result = serializer.toText(serviceOrder);
+		assertTrue(result.contains("Specimen: Venous blood"));
+	}
+
+	@Test
+	public void toText_shouldIncludeClinicalHistoryForServiceOrder() {
+		ServiceOrder serviceOrder = new TestOrder();
+		Concept concept = new Concept();
+		concept.addName(conceptName("Chest X-Ray"));
+		serviceOrder.setConcept(concept);
+		serviceOrder.setAction(Order.Action.NEW);
+		serviceOrder.setUrgency(Order.Urgency.STAT);
+		serviceOrder.setDateActivated(new Date());
+		serviceOrder.setClinicalHistory("Persistent cough for 3 weeks");
+
+		String result = serializer.toText(serviceOrder);
+		assertTrue(result.contains("Clinical history: Persistent cough for 3 weeks"));
+	}
+
+	@Test
+	public void toText_shouldHandleReferralOrder() {
+		ReferralOrder referralOrder = new ReferralOrder();
+		Concept concept = new Concept();
+		concept.addName(conceptName("Cardiology Consultation"));
+		referralOrder.setConcept(concept);
+		referralOrder.setAction(Order.Action.NEW);
+		referralOrder.setUrgency(Order.Urgency.ROUTINE);
+		referralOrder.setDateActivated(new Date());
+		referralOrder.setClinicalHistory("Chest pain on exertion");
+
+		String result = serializer.toText(referralOrder);
+		assertTrue(result.contains("Order: Cardiology Consultation"));
+		assertTrue(result.contains("Clinical history: Chest pain on exertion"));
 	}
 
 	private ConceptName conceptName(String name) {
