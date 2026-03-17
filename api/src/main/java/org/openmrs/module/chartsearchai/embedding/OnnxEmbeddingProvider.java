@@ -66,6 +66,13 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 			// Mean pooling over token embeddings (masked by attention)
 			float[][][] output = (float[][][]) result.get(0).getValue();
+			int modelDimensions = output[0][0].length;
+			if (modelDimensions != ChartSearchAiConstants.EMBEDDING_DIMENSIONS) {
+				throw new OrtException("ONNX model output dimensions (" + modelDimensions
+						+ ") do not match expected dimensions ("
+						+ ChartSearchAiConstants.EMBEDDING_DIMENSIONS
+						+ "). Ensure the correct embedding model is configured.");
+			}
 			float[] embedding = new float[ChartSearchAiConstants.EMBEDDING_DIMENSIONS];
 			long[] attentionMask = tokenized.getAttentionMask();
 			int tokenCount = 0;
