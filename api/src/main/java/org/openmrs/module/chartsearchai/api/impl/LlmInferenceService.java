@@ -68,9 +68,15 @@ public class LlmInferenceService implements ChartSearchService {
 	@Autowired
 	private LlmProvider llmProvider;
 
+	private static final String NO_RECORDS_ANSWER = "No clinical records found for this patient.";
+
 	@Override
 	public ChartAnswer search(Patient patient, String question) {
 		PatientChart chart = buildChart(patient, question);
+
+		if (chart.getText().isEmpty()) {
+			return new ChartAnswer(NO_RECORDS_ANSWER, Collections.emptyList());
+		}
 
 		LlmResponse response = llmProvider.search(chart.getText(), question);
 
@@ -82,6 +88,11 @@ public class LlmInferenceService implements ChartSearchService {
 	public ChartAnswer searchStreaming(Patient patient, String question,
 			Consumer<String> tokenConsumer) {
 		PatientChart chart = buildChart(patient, question);
+
+		if (chart.getText().isEmpty()) {
+			tokenConsumer.accept(NO_RECORDS_ANSWER);
+			return new ChartAnswer(NO_RECORDS_ANSWER, Collections.emptyList());
+		}
 
 		LlmResponse response = llmProvider.searchStreaming(chart.getText(), question, tokenConsumer);
 
