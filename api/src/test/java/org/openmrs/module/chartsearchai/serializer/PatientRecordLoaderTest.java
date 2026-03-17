@@ -79,15 +79,16 @@ public class PatientRecordLoaderTest extends BaseModuleContextSensitiveTest {
 	}
 
 	@Test
-	public void loadAll_shouldNotReturnDuplicateTextContent() {
+	public void loadAll_shouldNotReturnDuplicateResourceKeys() {
 		List<SerializedRecord> records = recordLoader.loadAll(patient);
 
-		Set<String> seenText = new HashSet<String>();
+		Set<String> seenKeys = new HashSet<String>();
 		for (SerializedRecord record : records) {
-			assertTrue(seenText.add(record.getText()),
-					"Duplicate text found: " + record.getText());
+			String key = record.getResourceType() + ":" + record.getResourceId();
+			assertTrue(seenKeys.add(key),
+					"Duplicate resource key found: " + key);
 		}
-		assertEquals(records.size(), seenText.size());
+		assertEquals(records.size(), seenKeys.size());
 	}
 
 	@Test
