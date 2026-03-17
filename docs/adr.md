@@ -362,6 +362,24 @@ The model path is configured via the `chartsearchai.llm.modelFilePath` global pr
 
 Inference uses temperature 0.0 and a fixed seed for deterministic output. This ensures that identical inputs produce consistent answers, which is important for clinical trust and for the answer cache to be meaningful.
 
+Model file paths are resolved relative to the OpenMRS application data directory. Path traversal (`..`) is rejected and the resolved path is verified to stay within the data directory, preventing an admin from accidentally (or maliciously) pointing the module at arbitrary files on the filesystem.
+
+### Chat template configurability
+
+Different GGUF models require different prompt formats. The `chartsearchai.llm.chatTemplate` global property accepts either a **preset name** or a **custom template string**:
+
+| Preset | Format |
+|--------|--------|
+| `llama3` (default) | `<\|begin_of_text\|><\|start_header_id\|>system<\|end_header_id\|>...` |
+| `mistral` | `[INST] {system}\n\n{user} [/INST]` |
+| `phi3` | `<\|system\|>\n{system}<\|end\|>\n<\|user\|>\n{user}<\|end\|>\n<\|assistant\|>\n` |
+| `chatml` | `<\|im_start\|>system\n{system}<\|im_end\|>\n<\|im_start\|>user\n...` |
+| `gemma` | `<start_of_turn>user\n{system}\n\n{user}<end_of_turn>\n<start_of_turn>model\n` |
+
+For models not covered by a preset, set the property to a custom template string with `{system}` and `{user}` placeholders. Stop strings are resolved automatically from the preset; custom templates use no stop strings (the model's own EOS token terminates generation).
+
+This means switching LLM models requires only two global property changes (`modelFilePath` and `chatTemplate`) — no code changes or module rebuild.
+
 ```
 OpenMRS JVM
   └── chartsearchai module
@@ -493,6 +511,7 @@ Requires the `View AI Audit Logs` privilege. All query parameters are optional. 
   - Timestamp
 
   This audit trail supports compliance review (who queried which patient's data and what the AI responded) and performance analysis. A scheduled task purges entries older than `chartsearchai.auditLogRetentionDays` (default 90 days, set to 0 to retain all).
+- **Patient access control**: A `PatientAccessCheck` interface controls whether a user can query a specific patient's chart. The default implementation (`DefaultPatientAccessCheck`) permits all access — any user with the `AI Query Patient Data` privilege can query any patient. Deployments requiring patient-level restrictions (e.g., location-based or care-team-based) can override this by registering a custom Spring bean with id `chartSearchAi.patientAccessCheck`. This separates privilege-based access (handled by OpenMRS) from patient-level access (handled by the module).
 
 ## Planned future work
 
