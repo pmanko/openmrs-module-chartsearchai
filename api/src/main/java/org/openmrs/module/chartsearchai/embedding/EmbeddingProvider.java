@@ -10,8 +10,7 @@
 package org.openmrs.module.chartsearchai.embedding;
 
 /**
- * Computes vector embeddings from text. Implementations may use local models (ONNX Runtime),
- * external APIs (Ollama), or simple heuristics (term-frequency hashing).
+ * Computes vector embeddings from text using ONNX Runtime with all-MiniLM-L6-v2.
  */
 public interface EmbeddingProvider {
 

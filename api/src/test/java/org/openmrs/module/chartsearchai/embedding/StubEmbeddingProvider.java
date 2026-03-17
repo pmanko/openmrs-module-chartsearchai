@@ -10,15 +10,12 @@
 package org.openmrs.module.chartsearchai.embedding;
 
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
-import org.springframework.stereotype.Component;
 
 /**
- * Embedding provider using term-frequency hashing. Produces a deterministic vector that enables
- * basic keyword-overlap retrieval. This is a placeholder; replace with ONNX Runtime +
- * all-MiniLM-L6-v2 for semantic similarity.
+ * Stub embedding provider for tests. Uses hash-based vectors so tests
+ * do not require ONNX model files.
  */
-@Component("chartSearchAi.termFrequencyEmbeddingProvider")
-public class TermFrequencyEmbeddingProvider implements EmbeddingProvider {
+public class StubEmbeddingProvider implements EmbeddingProvider {
 
 	@Override
 	public float[] embed(String text) {
@@ -34,7 +31,6 @@ public class TermFrequencyEmbeddingProvider implements EmbeddingProvider {
 			embedding[index] += 1.0f;
 		}
 
-		// L2 normalize
 		double norm = 0;
 		for (float v : embedding) {
 			norm += v * v;

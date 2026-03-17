@@ -30,7 +30,7 @@ import org.springframework.stereotype.Component;
  * 384-dimensional vectors for semantic similarity search. The ONNX model file path
  * is configured via the {@code chartsearchai.embedding.modelFilePath} global property.
  */
-@Component("chartSearchAi.onnxEmbeddingProvider")
+@Component("chartSearchAi.embeddingProvider")
 public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 	private static final Logger log = LoggerFactory.getLogger(OnnxEmbeddingProvider.class);

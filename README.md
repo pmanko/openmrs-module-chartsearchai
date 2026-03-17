@@ -24,13 +24,11 @@ Download Llama 3.2 3B (Q4_K_M quantization) in GGUF format (~2GB) from [Hugging 
 
 Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<openmrs-application-data-directory>/chartsearchai/`). Model paths are resolved relative to this directory for security.
 
-### 3. Download the embedding model (optional)
+### 3. Download the embedding model
 
-If you plan to use ONNX semantic embeddings for pre-filtering, download the all-MiniLM-L6-v2 ONNX model (~90MB) from [Hugging Face](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2). You need both `model.onnx` and `vocab.txt` from the repository.
+If embedding pre-filtering is enabled (default), download the all-MiniLM-L6-v2 ONNX model (~90MB) from [Hugging Face](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2). You need both `model.onnx` and `vocab.txt` from the repository.
 
 Place them alongside the LLM model (e.g., `<openmrs-application-data-directory>/chartsearchai/`).
-
-This is not required if you use the default `term-frequency` embedding provider.
 
 ### 4. Install
 
@@ -52,9 +50,8 @@ Set these global properties in **Admin > Settings**:
 |----------|---------|-------------|
 | `chartsearchai.embedding.preFilter` | `true` | When `true`, uses embedding similarity to narrow patient records to the most relevant ones before sending to the LLM. Set to `false` to send the full chart instead |
 | `chartsearchai.embedding.topK` | `15` | Maximum number of records to retrieve via embedding similarity when pre-filtering is enabled |
-| `chartsearchai.embedding.provider` | `term-frequency` | `term-frequency` (keyword-based) or `onnx` (semantic with all-MiniLM-L6-v2) |
-| `chartsearchai.embedding.modelFilePath` | — | Required if using `onnx` provider. Relative path to the ONNX model file |
-| `chartsearchai.embedding.vocabFilePath` | — | Required if using `onnx` provider. Relative path to the WordPiece `vocab.txt` file |
+| `chartsearchai.embedding.modelFilePath` | — | Required when pre-filtering is enabled. Relative path to the ONNX model file (all-MiniLM-L6-v2) |
+| `chartsearchai.embedding.vocabFilePath` | — | Required when pre-filtering is enabled. Relative path to the WordPiece `vocab.txt` file |
 
 #### LLM tuning
 

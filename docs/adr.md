@@ -150,10 +150,9 @@ Embed at the **individual record level**. Each record is serialized to concise c
 
 ### Decision
 
-Two embedding providers are available, selected via the `chartsearchai.embedding.provider` global property:
+Semantic vectors via **all-MiniLM-L6-v2** running in-process through ONNX Runtime. ~90MB model file, runs on CPU, no GPU needed. Produces 384-dimensional vectors. Requires two files configured via `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. Captures semantic meaning — effective for clinical queries where synonyms and related concepts matter (e.g., "hypertension" and "high blood pressure" are recognized as related).
 
-- **`term-frequency`** (default): Hash-based vectors using term frequency. No external model file needed. Provides keyword-overlap retrieval — effective for exact or near-exact term matches but cannot capture semantic similarity (e.g., "hypertension" and "high blood pressure" are unrelated in this model).
-- **`onnx`**: Semantic vectors via **all-MiniLM-L6-v2** running in-process through ONNX Runtime. ~90MB model file, runs on CPU, no GPU needed. Produces 384-dimensional vectors. Requires two additional files configured via `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. Captures semantic meaning — significantly better for clinical queries where synonyms and related concepts matter.
+A term-frequency hashing approach was considered as a simpler alternative (no model file needed, keyword-overlap retrieval). It was rejected because it cannot capture semantic similarity — for a clinical question like "any infections?", it would find records containing the word "infection" but miss "tuberculosis", "malaria", or "UTI". This defeats the purpose of pre-filtering, since the LLM with the full chart would catch all of these.
 
 ## Decision 7: Vector storage — MySQL, not a vector database
 
@@ -395,9 +394,7 @@ A single architecture is used: all queries go through the LLM for reasoning and 
 
 Embeddings are indexed on first patient chart access and kept up to date automatically via AOP hooks on data changes. A bulk backfill task is also available for pre-indexing all patients.
 
-The embedding provider is switchable via `chartsearchai.embedding.provider`:
-- `term-frequency` (default): hash-based vectors for keyword-overlap retrieval.
-- `onnx`: semantic vectors via ONNX Runtime with all-MiniLM-L6-v2 (~90MB model file, configured via `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`).
+Embeddings use all-MiniLM-L6-v2 via ONNX Runtime (~90MB model file, configured via `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`).
 
 ### Medical imaging data (X-rays, scans, etc.)
 

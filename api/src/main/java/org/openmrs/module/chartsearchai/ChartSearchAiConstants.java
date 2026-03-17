@@ -28,11 +28,6 @@ public class ChartSearchAiConstants {
 
 	public static final String GP_EMBEDDING_VOCAB_FILE_PATH = "chartsearchai.embedding.vocabFilePath";
 
-	public static final String GP_EMBEDDING_PROVIDER = "chartsearchai.embedding.provider";
-
-	public static final String EMBEDDING_PROVIDER_ONNX = "onnx";
-
-	public static final String EMBEDDING_PROVIDER_TERM_FREQUENCY = "term-frequency";
 
 	public static final int EMBEDDING_DIMENSIONS = 384;
 

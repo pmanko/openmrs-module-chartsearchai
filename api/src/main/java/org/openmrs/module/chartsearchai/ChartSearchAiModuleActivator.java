@@ -51,7 +51,7 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 			log.warn("Error closing LLM provider", e);
 		}
 		try {
-			Context.getRegisteredComponent("chartSearchAi.onnxEmbeddingProvider",
+			Context.getRegisteredComponent("chartSearchAi.embeddingProvider",
 					OnnxEmbeddingProvider.class).close();
 		}
 		catch (Exception e) {
@@ -66,14 +66,10 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 		String preFilter = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
 		if (!"false".equalsIgnoreCase(preFilter.trim())) {
-			String embeddingProvider = Context.getAdministrationService()
-					.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PROVIDER);
-			if (ChartSearchAiConstants.EMBEDDING_PROVIDER_ONNX.equals(embeddingProvider)) {
-				validateModelFile(ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH,
-						"ONNX embedding");
-				validateModelFile(ChartSearchAiConstants.GP_EMBEDDING_VOCAB_FILE_PATH,
-						"WordPiece vocabulary");
-			}
+			validateModelFile(ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH,
+					"ONNX embedding");
+			validateModelFile(ChartSearchAiConstants.GP_EMBEDDING_VOCAB_FILE_PATH,
+					"WordPiece vocabulary");
 		}
 	}
 
