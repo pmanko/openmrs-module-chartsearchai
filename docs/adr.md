@@ -612,6 +612,7 @@ For the initial release targeting small clinics with low concurrent usage, the s
 ## Planned future work
 
 - **Incremental embedding indexing**: Currently, `indexPatient()` deletes all embeddings for a patient and recomputes them from scratch on every data change. This is simple and guarantees consistency, but recomputes embeddings for records that haven't changed. An incremental approach would track which record maps to which embedding row and only add, update, or delete the specific embeddings affected. This matters for patients with large charts where AOP hooks fire frequently.
+- **Reranking**: A cross-encoder reranking step between embedding retrieval and LLM inference could improve relevance. Currently deferred because: individual records are short (embedding similarity works well), the LLM itself reasons over all 15 retrieved records (acting as an implicit reranker), and adding another model increases RAM usage, latency, and concurrency bottlenecks. Worth revisiting if real-world usage reveals relevance gaps, if top-K is increased significantly (50+), or if patient charts grow very large with thousands of records.
 - Add concept graph traversal as a complement to embedding search
 - Add pre-computed summaries for common queries
 - Agent/tool-use pattern for complex multi-step questions (when better local models are available)
