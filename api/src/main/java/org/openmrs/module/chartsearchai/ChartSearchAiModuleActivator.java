@@ -45,14 +45,20 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 	public void stopped() {
 		log.info("Chart Search AI Module stopping");
 		try {
-			Context.getRegisteredComponent("llmProvider", LlmProvider.class).close();
+			LlmProvider llmProvider = Context.getRegisteredComponent("llmProvider", LlmProvider.class);
+			if (llmProvider != null) {
+				llmProvider.close();
+			}
 		}
 		catch (Exception e) {
 			log.warn("Error closing LLM provider", e);
 		}
 		try {
-			Context.getRegisteredComponent("chartSearchAi.embeddingProvider",
-					OnnxEmbeddingProvider.class).close();
+			OnnxEmbeddingProvider embeddingProvider = Context.getRegisteredComponent(
+					"chartSearchAi.embeddingProvider", OnnxEmbeddingProvider.class);
+			if (embeddingProvider != null) {
+				embeddingProvider.close();
+			}
 		}
 		catch (Exception e) {
 			log.warn("Error closing ONNX embedding provider", e);
