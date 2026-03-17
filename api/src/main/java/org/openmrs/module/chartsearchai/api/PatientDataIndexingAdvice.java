@@ -35,7 +35,8 @@ import org.springframework.aop.AfterReturningAdvice;
  *
  * <p>Only active when {@code chartsearchai.embedding.preFilter} is {@code true}. Registered
  * in config.xml as advice on {@code ConditionService}, {@code DiagnosisService},
- * {@code PatientService}, and {@code OrderService}.</p>
+ * {@code PatientService}, {@code OrderService}, {@code ProgramWorkflowService},
+ * and {@code MedicationDispenseService}.</p>
  */
 public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 

@@ -195,7 +195,12 @@ public class ChartSearchAiRestController {
 		auditLog.setSearchMode(preFilterEnabled ? "pre-filter" : "full-chart");
 		auditLog.setResponseTimeMs(responseTimeMs);
 		auditLog.setDateCreated(new Date());
-		dao.saveAuditLog(auditLog);
+		try {
+			dao.saveAuditLog(auditLog);
+		}
+		catch (Exception e) {
+			log.warn("Failed to save audit log for search query", e);
+		}
 
 		Map<String, Object> response = new HashMap<String, Object>();
 		response.put("answer", chartAnswer.getAnswer());
