@@ -75,10 +75,16 @@ public class ChartSearchAiRestController {
 		return date != null ? DateFormatUtil.formatDate(date) : null;
 	}
 
+	// Defense-in-depth: catches common prompt injection phrases. This is a blocklist
+	// and can be bypassed with paraphrasing. The primary defense is the GBNF grammar
+	// which constrains LLM output to a fixed JSON structure regardless of prompt content.
 	private static final Pattern PROMPT_INJECTION = Pattern.compile(
 			"(?i)(ignore (previous|above|all) (instructions|prompts|rules)"
 			+ "|disregard (your|the|all) (instructions|rules|prompt)"
-			+ "|you are now|new instructions:|system prompt:)");
+			+ "|override (your|the|all) (instructions|rules|prompt)"
+			+ "|bypass (your|the|all) (instructions|rules|prompt)"
+			+ "|you are now|new instructions:|system prompt:"
+			+ "|forget (your|the|all|previous) (instructions|rules|prompt))");
 
 	private static final String DISCLAIMER = "This response is AI-generated and may not be "
 			+ "accurate. It is not a substitute for clinical judgment. Always verify against "
