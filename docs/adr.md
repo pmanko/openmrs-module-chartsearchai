@@ -80,8 +80,8 @@ Use RAG with a layered approach:
 
 ### Options evaluated for retrieval
 
-#### Option A: Targeted FHIR queries with manual concept mapping
-Map each query type to specific FHIR resource types and SNOMED codes.
+#### Option A: Targeted queries with manual concept mapping
+Map each query type to specific OpenMRS resource types and concept codes.
 
 **Weakness:** Requires manually mapping every possible query pattern to the right resources. Misses things you wouldn't think to query — e.g., a free-text visit note mentioning "mother had breast cancer."
 
@@ -114,11 +114,11 @@ Split patient chart into time-based segments, classify each for relevance, only 
 
 Semantic search index as the primary retrieval mechanism, with concept graph traversal as a complement for structured data.
 
-## Decision 4: FHIR as LLM input format
+## Decision 4: Concise text as LLM input format
 
 ### Analysis
 
-FHIR is a good retrieval API but a poor serialization format for LLM context windows:
+Standard serialization formats (FHIR JSON, full OpenMRS domain objects) are poor formats for LLM context windows:
 
 - **Extremely verbose**: A single blood pressure observation is ~800 tokens in FHIR JSON vs. ~15 tokens in compressed form. On a small model with 4-8K context, this matters enormously.
 - **Deeply nested**: `coding` inside `code` inside `component` inside `Observation`. Small LLMs are worse at extracting information from nested structures.
@@ -126,7 +126,7 @@ FHIR is a good retrieval API but a poor serialization format for LLM context win
 
 ### Decision
 
-Use FHIR as the retrieval layer, not the LLM input format. A compression step (`ClinicalTextSerializer`) converts FHIR-style resources into flat, concise clinical text. This gives ~10x token efficiency while preserving clinical meaning.
+Retrieve data via OpenMRS service APIs (ObsService, ConditionService, PatientService, OrderService, DiagnosisService) and convert records into flat, concise clinical text using `ClinicalTextSerializer` implementations. This gives ~10x token efficiency while preserving clinical meaning.
 
 Example:
 ```
