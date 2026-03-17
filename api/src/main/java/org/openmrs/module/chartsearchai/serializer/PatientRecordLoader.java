@@ -20,10 +20,13 @@ import java.util.Set;
 import org.openmrs.Allergy;
 import org.openmrs.Condition;
 import org.openmrs.Diagnosis;
+import org.openmrs.MedicationDispense;
 import org.openmrs.Obs;
 import org.openmrs.Order;
 import org.openmrs.Patient;
+import org.openmrs.PatientProgram;
 import org.openmrs.api.context.Context;
+import org.openmrs.parameter.MedicationDispenseCriteria;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -50,6 +53,12 @@ public class PatientRecordLoader {
 
 	@Autowired
 	private DiagnosisTextSerializer diagnosisSerializer;
+
+	@Autowired
+	private PatientProgramTextSerializer programSerializer;
+
+	@Autowired
+	private MedicationDispenseTextSerializer medicationDispenseSerializer;
 
 	/**
 	 * Load all clinical records for a patient and serialize each to text.
@@ -108,6 +117,30 @@ public class PatientRecordLoader {
 			String text = orderSerializer.toText(order);
 			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_ORDER, order.getOrderId(), seenKeys)) {
 				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_ORDER, order.getOrderId(), text, order.getDateActivated()));
+			}
+		}
+
+		// Program enrollments
+		for (PatientProgram pp : Context.getProgramWorkflowService()
+				.getPatientPrograms(patient, null, null, null, null, null, false)) {
+			String text = programSerializer.toText(pp);
+			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_PROGRAM, pp.getPatientProgramId(), seenKeys)) {
+				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_PROGRAM, pp.getPatientProgramId(), text, pp.getDateEnrolled()));
+			}
+		}
+
+		// Medication dispenses
+		MedicationDispenseCriteria dispenseCriteria = new MedicationDispenseCriteria();
+		dispenseCriteria.setPatient(patient);
+		for (MedicationDispense dispense : Context.getMedicationDispenseService()
+				.getMedicationDispenseByCriteria(dispenseCriteria)) {
+			String text = medicationDispenseSerializer.toText(dispense);
+			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_MEDICATION_DISPENSE,
+					dispense.getMedicationDispenseId(), seenKeys)) {
+				Date date = dispense.getDateHandedOver() != null
+						? dispense.getDateHandedOver() : dispense.getDateCreated();
+				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_MEDICATION_DISPENSE,
+						dispense.getMedicationDispenseId(), text, date));
 			}
 		}
 

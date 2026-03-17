@@ -16,8 +16,10 @@ import org.junit.jupiter.api.Test;
 import org.openmrs.Allergy;
 import org.openmrs.Condition;
 import org.openmrs.Diagnosis;
+import org.openmrs.MedicationDispense;
 import org.openmrs.Order;
 import org.openmrs.Patient;
+import org.openmrs.PatientProgram;
 
 /**
  * Pure unit tests for {@link PatientDataIndexingAdvice} patient extraction logic.
@@ -155,5 +157,45 @@ public class PatientDataIndexingAdviceTest {
 	public void extractPatient_shouldReturnNullForAllergyMethodWithWrongArgType() {
 		Patient result = advice.extractPatient("saveAllergy", new Object[] { "not an allergy" });
 		assertNull(result);
+	}
+
+	@Test
+	public void extractPatient_shouldExtractFromPatientProgramOnSave() {
+		Patient patient = new Patient(6);
+		PatientProgram pp = new PatientProgram();
+		pp.setPatient(patient);
+
+		Patient result = advice.extractPatient("savePatientProgram", new Object[] { pp });
+		assertEquals(patient, result);
+	}
+
+	@Test
+	public void extractPatient_shouldExtractFromPatientProgramOnVoid() {
+		Patient patient = new Patient(6);
+		PatientProgram pp = new PatientProgram();
+		pp.setPatient(patient);
+
+		Patient result = advice.extractPatient("voidPatientProgram", new Object[] { pp });
+		assertEquals(patient, result);
+	}
+
+	@Test
+	public void extractPatient_shouldExtractFromMedicationDispenseOnSave() {
+		Patient patient = new Patient(7);
+		MedicationDispense dispense = new MedicationDispense();
+		dispense.setPatient(patient);
+
+		Patient result = advice.extractPatient("saveMedicationDispense", new Object[] { dispense });
+		assertEquals(patient, result);
+	}
+
+	@Test
+	public void extractPatient_shouldExtractFromMedicationDispenseOnVoid() {
+		Patient patient = new Patient(7);
+		MedicationDispense dispense = new MedicationDispense();
+		dispense.setPatient(patient);
+
+		Patient result = advice.extractPatient("voidMedicationDispense", new Object[] { dispense });
+		assertEquals(patient, result);
 	}
 }

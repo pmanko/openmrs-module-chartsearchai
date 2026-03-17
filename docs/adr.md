@@ -122,7 +122,7 @@ Standard serialization formats (FHIR JSON, full OpenMRS domain objects) are poor
 
 ### Decision
 
-Retrieve data via OpenMRS service APIs (ObsService, ConditionService, PatientService, OrderService, DiagnosisService) and convert records into flat, concise clinical text using `ClinicalTextSerializer` implementations. This gives ~10x token efficiency while preserving clinical meaning.
+Retrieve data via OpenMRS service APIs (ObsService, ConditionService, PatientService, OrderService, DiagnosisService, ProgramWorkflowService, MedicationDispenseService) and convert records into flat, concise clinical text using `ClinicalTextSerializer` implementations. This gives ~10x token efficiency while preserving clinical meaning.
 
 Example:
 ```
@@ -176,13 +176,15 @@ The `UNIQUE KEY (resource_type, resource_id)` constraint prevents duplicate embe
 Three complementary strategies ensure embeddings stay current:
 
 - **On-demand**: When a clinician queries a patient's chart for the first time and no embeddings exist, `LlmInferenceService` triggers `EmbeddingIndexer.indexPatient()` before running the similarity search. This means embeddings are created lazily — no setup required.
-- **Incremental via AOP**: After-returning advice on six OpenMRS services triggers re-indexing when clinical data changes:
+- **Incremental via AOP**: After-returning advice on eight OpenMRS services triggers re-indexing when clinical data changes:
   - `EncounterService` — incremental encounter indexing (upserts only the encounter's obs and diagnoses)
   - `ObsService` — full patient re-index on save/void/unvoid/purge of standalone observations
   - `ConditionService` — full patient re-index on save/void/unvoid/purge
   - `DiagnosisService` — full patient re-index on save/void/unvoid/purge
   - `PatientService` — full patient re-index on allergy changes; on `mergePatients`, re-indexes the preferred patient and deletes the non-preferred patient's embeddings
   - `OrderService` — full patient re-index on save/void/unvoid/purge/discontinue
+  - `ProgramWorkflowService` — full patient re-index on save/void/unvoid/purge of program enrollments
+  - `MedicationDispenseService` — full patient re-index on save/void/unvoid/delete of medication dispenses
 - **Backfill**: A one-time scheduled task (`EmbeddingIndexTask`) indexes all patients that don't yet have embeddings. Handles initial population when the module is installed on a system with existing data. Skips already-indexed patients, so it is safe to re-run and picks up where it left off if stopped. Admins trigger it from the scheduler UI; it does not run automatically.
 
 ## Decision 9: Text serialization — ClinicalTextSerializer pattern
@@ -198,6 +200,8 @@ A generic `ClinicalTextSerializer<T>` interface with one implementation per Open
 | `AllergyTextSerializer` | `"Allergy: Penicillin (DRUG). Severity: Severe. Reactions: Anaphylaxis, Rash"` |
 | `DiagnosisTextSerializer` | `"Diagnosis: Malaria. Certainty: CONFIRMED. Rank: Primary"` |
 | `OrderTextSerializer` | `"Order: Complete Blood Count. Action: NEW. Urgency: STAT. Reason: Suspected anemia"` |
+| `PatientProgramTextSerializer` | `"Program: HIV Treatment. Enrolled: 2024-01-15. Status: Active. Current state: On ART"` |
+| `MedicationDispenseTextSerializer` | `"Dispensed: Metformin 500mg. Quantity: 30 Tablet(s). Dose: 1 Tablet(s) Oral twice daily"` |
 
 Key design choices:
 - Serializers produce concise text without dates (dates are redundant with the record's sort order in the prompt).

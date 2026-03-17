@@ -17,8 +17,10 @@ import java.util.Set;
 import org.openmrs.Allergy;
 import org.openmrs.Condition;
 import org.openmrs.Diagnosis;
+import org.openmrs.MedicationDispense;
 import org.openmrs.Order;
 import org.openmrs.Patient;
+import org.openmrs.PatientProgram;
 import org.openmrs.api.context.Context;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.slf4j.Logger;
@@ -51,6 +53,14 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 	private static final Set<String> ORDER_METHODS = new HashSet<String>(
 			Arrays.asList("saveOrder", "saveRetrospectiveOrder", "voidOrder", "unvoidOrder",
 					"purgeOrder", "discontinueOrder"));
+
+	private static final Set<String> PROGRAM_METHODS = new HashSet<String>(
+			Arrays.asList("savePatientProgram", "voidPatientProgram", "unvoidPatientProgram",
+					"purgePatientProgram"));
+
+	private static final Set<String> MEDICATION_DISPENSE_METHODS = new HashSet<String>(
+			Arrays.asList("saveMedicationDispense", "voidMedicationDispense",
+					"unvoidMedicationDispense", "deleteMedicationDispense"));
 
 	@Override
 	public void afterReturning(Object returnValue, Method method, Object[] args, Object target) {
@@ -115,6 +125,11 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 			}
 		} else if (ORDER_METHODS.contains(methodName) && args.length > 0 && args[0] instanceof Order) {
 			return ((Order) args[0]).getPatient();
+		} else if (PROGRAM_METHODS.contains(methodName) && args.length > 0 && args[0] instanceof PatientProgram) {
+			return ((PatientProgram) args[0]).getPatient();
+		} else if (MEDICATION_DISPENSE_METHODS.contains(methodName) && args.length > 0
+				&& args[0] instanceof MedicationDispense) {
+			return ((MedicationDispense) args[0]).getPatient();
 		}
 		return null;
 	}

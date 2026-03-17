@@ -70,6 +70,10 @@ public class ChartSearchAiConstants {
 
 	public static final String RESOURCE_TYPE_ORDER = "order";
 
+	public static final String RESOURCE_TYPE_PROGRAM = "program";
+
+	public static final String RESOURCE_TYPE_MEDICATION_DISPENSE = "medication_dispense";
+
 	/**
 	 * Resolves a model path relative to the OpenMRS application data directory.
 	 * Rejects paths containing ".." to prevent path traversal and verifies the

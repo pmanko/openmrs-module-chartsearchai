@@ -85,7 +85,7 @@ Set these global properties in **Admin > Settings**:
 
 ### 7. Embeddings
 
-When `chartsearchai.embedding.preFilter` is `true` (default), patient records are automatically indexed on first chart access. Subsequent data changes are indexed incrementally via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, and patient merge operations. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is also available in **Admin > Scheduler > Manage Scheduler** if you prefer to pre-index all patients at once.
+When `chartsearchai.embedding.preFilter` is `true` (default), patient records are automatically indexed on first chart access. Subsequent data changes are indexed incrementally via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, program enrollment, medication dispense, and patient merge operations. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is also available in **Admin > Scheduler > Manage Scheduler** if you prefer to pre-index all patients at once.
 
 ## API
 
