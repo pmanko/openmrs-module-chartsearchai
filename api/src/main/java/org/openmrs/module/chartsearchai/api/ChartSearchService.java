@@ -54,7 +54,8 @@ public interface ChartSearchService {
 
 		public ChartAnswer(String answer, List<RecordReference> references) {
 			this.answer = answer;
-			this.references = references;
+			this.references = java.util.Collections.unmodifiableList(
+					new java.util.ArrayList<>(references));
 		}
 
 		/**

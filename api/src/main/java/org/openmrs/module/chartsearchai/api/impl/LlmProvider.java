@@ -128,7 +128,7 @@ public class LlmProvider {
 		LlamaModel llm = getModel();
 
 		int timeoutSeconds = getTimeoutSeconds();
-		InferenceParameters params = createInferenceParameters(numberedRecords, question);
+		InferenceParameters params = createInferenceParameters(llm, numberedRecords, question);
 
 		long deadline = System.currentTimeMillis() + (timeoutSeconds * 1000L);
 		StringBuilder result = new StringBuilder();
@@ -161,7 +161,7 @@ public class LlmProvider {
 		LlamaModel llm = getModel();
 
 		int timeoutSeconds = getTimeoutSeconds();
-		InferenceParameters params = createInferenceParameters(numberedRecords, question);
+		InferenceParameters params = createInferenceParameters(llm, numberedRecords, question);
 
 		long deadline = System.currentTimeMillis() + (timeoutSeconds * 1000L);
 		StringBuilder result = new StringBuilder();
@@ -256,7 +256,7 @@ public class LlmProvider {
 
 		LlmResponse(String answer, List<Integer> citations) {
 			this.answer = answer;
-			this.citations = citations;
+			this.citations = Collections.unmodifiableList(new ArrayList<>(citations));
 		}
 
 		String getAnswer() {
@@ -277,13 +277,14 @@ public class LlmProvider {
 		loadedModelPath = null;
 	}
 
-	private InferenceParameters createInferenceParameters(String numberedRecords, String question) {
+	private InferenceParameters createInferenceParameters(LlamaModel llm, String numberedRecords,
+			String question) {
 		String systemPrompt = getSystemPrompt();
 		String userMessage = "Patient records (most recent first):\n" + numberedRecords + "\n\nQuestion: " + question;
 		String templateValue = getChatTemplate();
 
 		String prompt = formatPrompt(templateValue, systemPrompt, userMessage);
-		log.debug("LLM prompt size: {} tokens", model.encode(prompt).length);
+		log.debug("LLM prompt size: {} tokens", llm.encode(prompt).length);
 		String[] stopStrings = resolveStopStrings(templateValue);
 
 		return new InferenceParameters(prompt)

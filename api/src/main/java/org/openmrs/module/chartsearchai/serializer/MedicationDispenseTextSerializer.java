@@ -33,7 +33,10 @@ public class MedicationDispenseTextSerializer implements ClinicalTextSerializer<
 		}
 
 		if (dispense.getQuantity() != null) {
-			sb.append(". Quantity: ").append(dispense.getQuantity());
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Quantity: ").append(dispense.getQuantity());
 			if (dispense.getQuantityUnits() != null) {
 				String units = ConceptNameUtil.getName(dispense.getQuantityUnits());
 				if (!units.isEmpty()) {
@@ -43,7 +46,10 @@ public class MedicationDispenseTextSerializer implements ClinicalTextSerializer<
 		}
 
 		if (dispense.getDose() != null) {
-			sb.append(". Dose: ").append(dispense.getDose());
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Dose: ").append(dispense.getDose());
 			if (dispense.getDoseUnits() != null) {
 				String units = ConceptNameUtil.getName(dispense.getDoseUnits());
 				if (!units.isEmpty()) {

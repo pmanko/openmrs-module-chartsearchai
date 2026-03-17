@@ -10,8 +10,10 @@
 package org.openmrs.module.chartsearchai.embedding;
 
 import java.io.BufferedReader;
-import java.io.FileReader;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -140,7 +142,8 @@ public class WordPieceTokenizer {
 
 	private Map<String, Integer> loadVocab(String filePath) throws IOException {
 		Map<String, Integer> vocabMap = new HashMap<String, Integer>();
-		BufferedReader reader = new BufferedReader(new FileReader(filePath));
+		BufferedReader reader = new BufferedReader(
+				new InputStreamReader(new FileInputStream(filePath), StandardCharsets.UTF_8));
 		try {
 			String line;
 			int index = 0;

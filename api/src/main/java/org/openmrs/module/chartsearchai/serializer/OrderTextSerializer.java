@@ -47,7 +47,10 @@ public class OrderTextSerializer implements ClinicalTextSerializer<Order> {
 			}
 		}
 
-		sb.append(". Action: ").append(order.getAction());
+		if (sb.length() > 0) {
+			sb.append(". ");
+		}
+		sb.append("Action: ").append(order.getAction());
 		sb.append(". Urgency: ").append(order.getUrgency());
 
 		if (order.getInstructions() != null && !order.getInstructions().trim().isEmpty()) {

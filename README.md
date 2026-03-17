@@ -6,6 +6,7 @@ For project background, community discussion, and roadmap, see the [wiki project
 
 ## Requirements
 
+- Java 11+
 - OpenMRS Platform 2.8.0+
 - Webservices REST module 2.44.0+
 - 6GB+ RAM recommended (for LLM inference with a 3B model)

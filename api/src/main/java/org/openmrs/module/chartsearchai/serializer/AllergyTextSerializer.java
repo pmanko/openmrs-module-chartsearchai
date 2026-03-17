@@ -31,18 +31,23 @@ public class AllergyTextSerializer implements ClinicalTextSerializer<Allergy> {
 		String name = getAllergenName(allergy);
 		if (!name.isEmpty()) {
 			sb.append("Allergy: ").append(name);
-		}
-
-		if (allergy.getAllergen().getAllergenType() != null) {
-			sb.append(" (").append(allergy.getAllergen().getAllergenType()).append(")");
+			if (allergy.getAllergen() != null && allergy.getAllergen().getAllergenType() != null) {
+				sb.append(" (").append(allergy.getAllergen().getAllergenType()).append(")");
+			}
 		}
 		if (allergy.getSeverity() != null) {
-			sb.append(". Severity: ").append(ConceptNameUtil.getName(allergy.getSeverity()));
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Severity: ").append(ConceptNameUtil.getName(allergy.getSeverity()));
 		}
 
 		List<AllergyReaction> reactions = allergy.getReactions();
 		if (reactions != null && !reactions.isEmpty()) {
-			sb.append(". Reactions: ");
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Reactions: ");
 			for (int i = 0; i < reactions.size(); i++) {
 				if (i > 0) {
 					sb.append(", ");
@@ -57,7 +62,10 @@ public class AllergyTextSerializer implements ClinicalTextSerializer<Allergy> {
 			}
 		}
 		if (allergy.getComments() != null && !allergy.getComments().trim().isEmpty()) {
-			sb.append(". Comments: ").append(allergy.getComments().trim());
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Comments: ").append(allergy.getComments().trim());
 		}
 
 		return sb.toString();
@@ -74,6 +82,6 @@ public class AllergyTextSerializer implements ClinicalTextSerializer<Allergy> {
 				&& !allergy.getAllergen().getNonCodedAllergen().trim().isEmpty()) {
 			return allergy.getAllergen().getNonCodedAllergen().trim();
 		}
-		return allergy.getAllergen().toString();
+		return "";
 	}
 }

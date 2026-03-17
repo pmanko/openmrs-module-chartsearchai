@@ -86,7 +86,7 @@ public class PatientRecordLoader {
 		}
 
 		// Conditions
-		for (Condition condition : Context.getConditionService().getActiveConditions(patient)) {
+		for (Condition condition : Context.getConditionService().getAllConditions(patient)) {
 			String text = conditionSerializer.toText(condition);
 			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_CONDITION, condition.getConditionId(), seenKeys)) {
 				Date date = condition.getOnsetDate() != null ? condition.getOnsetDate() : condition.getDateCreated();

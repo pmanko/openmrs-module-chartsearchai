@@ -30,7 +30,10 @@ public class ConditionTextSerializer implements ClinicalTextSerializer<Condition
 		if (!name.isEmpty()) {
 			sb.append("Condition: ").append(name);
 		}
-		sb.append(". Status: ").append(condition.getClinicalStatus());
+		if (sb.length() > 0) {
+			sb.append(". ");
+		}
+		sb.append("Status: ").append(condition.getClinicalStatus());
 
 		if (condition.getVerificationStatus() != null) {
 			sb.append(". Verification: ").append(condition.getVerificationStatus());

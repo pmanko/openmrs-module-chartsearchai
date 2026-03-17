@@ -40,7 +40,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -100,6 +103,9 @@ public class ChartSearchAiRestController {
 
 	@Autowired
 	private ChartSearchAiDAO dao;
+
+	@Autowired
+	private PlatformTransactionManager transactionManager;
 
 	@Transactional
 	@RequestMapping(value = "/search", method = RequestMethod.POST)
@@ -170,7 +176,8 @@ public class ChartSearchAiRestController {
 		catch (IllegalStateException e) {
 			log.error("Chart search configuration error", e);
 			return new ResponseEntity<Object>(
-					errorResponse(e.getMessage()), HttpStatus.SERVICE_UNAVAILABLE);
+					errorResponse("Chart search is not properly configured. Contact your administrator."),
+					HttpStatus.SERVICE_UNAVAILABLE);
 		}
 		catch (Exception e) {
 			log.error("Chart search failed for patient [id={}]", patient.getPatientId(), e);
@@ -332,7 +339,16 @@ public class ChartSearchAiRestController {
 					auditLog.setSearchMode(searchMode);
 					auditLog.setResponseTimeMs(responseTimeMs);
 					auditLog.setDateCreated(new Date());
-					dao.saveAuditLog(auditLog);
+					TransactionStatus tx = transactionManager.getTransaction(
+							new DefaultTransactionDefinition());
+					try {
+						dao.saveAuditLog(auditLog);
+						transactionManager.commit(tx);
+					}
+					catch (Exception txEx) {
+						transactionManager.rollback(tx);
+						log.warn("Failed to save audit log for streaming query", txEx);
+					}
 
 					Map<String, Object> doneData = new HashMap<String, Object>();
 					doneData.put("answer", chartAnswer.getAnswer());
@@ -357,10 +373,15 @@ public class ChartSearchAiRestController {
 				}
 				catch (IllegalStateException e) {
 					log.error("Chart search configuration error during streaming", e);
-					sendErrorAndComplete(emitter, e.getMessage());
+					sendErrorAndComplete(emitter,
+							"Chart search is not properly configured. Contact your administrator.");
 				}
 				catch (Exception e) {
-					if (e.getCause() instanceof IOException) {
+					if (Thread.interrupted() || e instanceof InterruptedException) {
+						log.warn("Streaming timed out for patient [id={}]", patientId);
+						sendErrorAndComplete(emitter,
+								"Request timed out. Try a shorter question.");
+					} else if (e.getCause() instanceof IOException) {
 						log.debug("Streaming ended due to client disconnect");
 					} else {
 						log.error("Chart search streaming failed for patient [id={}]",
@@ -416,7 +437,7 @@ public class ChartSearchAiRestController {
 			user = Context.getUserService().getUserByUuid(userUuid);
 			if (user == null) {
 				return new ResponseEntity<Object>(
-						errorResponse("User not found: " + userUuid), HttpStatus.NOT_FOUND);
+						errorResponse("User not found"), HttpStatus.NOT_FOUND);
 			}
 		}
 

@@ -30,10 +30,16 @@ public class DiagnosisTextSerializer implements ClinicalTextSerializer<Diagnosis
 		}
 
 		if (diagnosis.getCertainty() != null) {
-			sb.append(". Certainty: ").append(diagnosis.getCertainty());
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Certainty: ").append(diagnosis.getCertainty());
 		}
 		if (diagnosis.getRank() != null) {
-			sb.append(". Rank: ").append(diagnosis.getRank() == 1 ? "Primary" : "Secondary");
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Rank: ").append(diagnosis.getRank() == 1 ? "Primary" : "Secondary");
 		}
 
 		return sb.toString();

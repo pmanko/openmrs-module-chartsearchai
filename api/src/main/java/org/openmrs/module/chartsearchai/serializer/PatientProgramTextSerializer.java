@@ -33,13 +33,22 @@ public class PatientProgramTextSerializer implements ClinicalTextSerializer<Pati
 		}
 
 		if (patientProgram.getDateEnrolled() != null) {
-			sb.append(". Enrolled: ").append(DateFormatUtil.formatDate(patientProgram.getDateEnrolled()));
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Enrolled: ").append(DateFormatUtil.formatDate(patientProgram.getDateEnrolled()));
 		}
 
 		if (patientProgram.getDateCompleted() != null) {
-			sb.append(". Completed: ").append(DateFormatUtil.formatDate(patientProgram.getDateCompleted()));
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Completed: ").append(DateFormatUtil.formatDate(patientProgram.getDateCompleted()));
 		} else {
-			sb.append(". Status: Active");
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Status: Active");
 		}
 
 		if (patientProgram.getOutcome() != null) {
