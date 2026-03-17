@@ -60,7 +60,7 @@ Set these global properties in **Admin > Settings**:
 | Property | Default | Description |
 |----------|---------|-------------|
 | `chartsearchai.llm.chatTemplate` | `llama3` | Chat template for formatting prompts. Presets: `llama3`, `mistral`, `phi3`, `chatml`, `gemma`. Or a custom template string with `{system}` and `{user}` placeholders |
-| `chartsearchai.llm.systemPrompt` | *(built-in clinical prompt)* | System prompt sent to the LLM. Instructs it to cite records by number |
+| `chartsearchai.llm.systemPrompt` | *(built-in clinical prompt)* | System prompt that guides how the LLM responds — e.g. answering only the question asked, using only the provided patient records, citing records by number, declining to answer when records lack relevant information, keeping answers concise, and returning structured JSON |
 | `chartsearchai.llm.timeoutSeconds` | `120` | Maximum seconds to wait for LLM inference before timing out |
 
 #### Rate limiting and caching
