@@ -96,22 +96,6 @@ public class MedicationDispenseTextSerializerTest extends BaseModuleContextSensi
 	}
 
 	@Test
-	public void toText_shouldIncludeSubstitution() {
-		MedicationDispense dispense = new MedicationDispense();
-		Drug drug = new Drug();
-		drug.setName("Generic Atorvastatin");
-		dispense.setDrug(drug);
-		dispense.setWasSubstituted(true);
-
-		Concept subType = new Concept();
-		subType.addName(conceptName("Generic substitution"));
-		dispense.setSubstitutionType(subType);
-
-		String result = serializer.toText(dispense);
-		assertTrue(result.contains("Substituted: Generic substitution"));
-	}
-
-	@Test
 	public void toText_shouldFallBackToConceptName() {
 		MedicationDispense dispense = new MedicationDispense();
 		Concept concept = new Concept();
@@ -120,21 +104,6 @@ public class MedicationDispenseTextSerializerTest extends BaseModuleContextSensi
 
 		String result = serializer.toText(dispense);
 		assertTrue(result.contains("Dispensed: Paracetamol"));
-	}
-
-	@Test
-	public void toText_shouldIncludeStatus() {
-		MedicationDispense dispense = new MedicationDispense();
-		Drug drug = new Drug();
-		drug.setName("Aspirin 100mg");
-		dispense.setDrug(drug);
-
-		Concept status = new Concept();
-		status.addName(conceptName("Completed"));
-		dispense.setStatus(status);
-
-		String result = serializer.toText(dispense);
-		assertTrue(result.contains("Status: Completed"));
 	}
 
 	private ConceptName conceptName(String name) {

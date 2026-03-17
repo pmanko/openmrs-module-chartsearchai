@@ -69,25 +69,8 @@ public class MedicationDispenseTextSerializer implements ClinicalTextSerializer<
 			sb.append(". Instructions: ").append(dispense.getDosingInstructions().trim());
 		}
 
-		if (dispense.getStatus() != null) {
-			String statusName = ConceptNameUtil.getName(dispense.getStatus());
-			if (!statusName.isEmpty()) {
-				sb.append(". Status: ").append(statusName);
-			}
-		}
-
 		if (dispense.getDateHandedOver() != null) {
 			sb.append(". Handed over: ").append(DateFormatUtil.formatDate(dispense.getDateHandedOver()));
-		}
-
-		if (dispense.getWasSubstituted() != null && dispense.getWasSubstituted()) {
-			sb.append(". Substituted");
-			if (dispense.getSubstitutionType() != null) {
-				String subType = ConceptNameUtil.getName(dispense.getSubstitutionType());
-				if (!subType.isEmpty()) {
-					sb.append(": ").append(subType);
-				}
-			}
 		}
 
 		return sb.toString();
