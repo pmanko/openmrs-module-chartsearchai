@@ -24,6 +24,7 @@ import org.openmrs.Obs;
 import org.openmrs.Order;
 import org.openmrs.Patient;
 import org.openmrs.api.context.Context;
+import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -69,44 +70,44 @@ public class PatientRecordLoader {
 				continue;
 			}
 			String text = obsSerializer.toText(obs);
-			if (addIfValid(text, "obs", obs.getObsId(), seenKeys)) {
+			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_OBS, obs.getObsId(), seenKeys)) {
 				Date date = obs.getObsDatetime() != null ? obs.getObsDatetime() : obs.getDateCreated();
-				records.add(new SerializedRecord("obs", obs.getObsId(), text, date));
+				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_OBS, obs.getObsId(), text, date));
 			}
 		}
 
 		// Conditions
 		for (Condition condition : Context.getConditionService().getActiveConditions(patient)) {
 			String text = conditionSerializer.toText(condition);
-			if (addIfValid(text, "condition", condition.getConditionId(), seenKeys)) {
+			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_CONDITION, condition.getConditionId(), seenKeys)) {
 				Date date = condition.getOnsetDate() != null ? condition.getOnsetDate() : condition.getDateCreated();
-				records.add(new SerializedRecord("condition", condition.getConditionId(), text, date));
+				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION, condition.getConditionId(), text, date));
 			}
 		}
 
 		// Allergies
 		for (Allergy allergy : Context.getPatientService().getAllergies(patient)) {
 			String text = allergySerializer.toText(allergy);
-			if (addIfValid(text, "allergy", allergy.getAllergyId(), seenKeys)) {
-				records.add(new SerializedRecord("allergy", allergy.getAllergyId(), text, allergy.getDateCreated()));
+			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_ALLERGY, allergy.getAllergyId(), seenKeys)) {
+				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_ALLERGY, allergy.getAllergyId(), text, allergy.getDateCreated()));
 			}
 		}
 
 		// Diagnoses
 		for (Diagnosis diagnosis : Context.getDiagnosisService().getDiagnoses(patient, null)) {
 			String text = diagnosisSerializer.toText(diagnosis);
-			if (addIfValid(text, "diagnosis", diagnosis.getDiagnosisId(), seenKeys)) {
+			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS, diagnosis.getDiagnosisId(), seenKeys)) {
 				Date date = diagnosis.getEncounter() != null
 						? diagnosis.getEncounter().getEncounterDatetime() : diagnosis.getDateCreated();
-				records.add(new SerializedRecord("diagnosis", diagnosis.getDiagnosisId(), text, date));
+				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS, diagnosis.getDiagnosisId(), text, date));
 			}
 		}
 
 		// Orders
 		for (Order order : Context.getOrderService().getAllOrdersByPatient(patient)) {
 			String text = orderSerializer.toText(order);
-			if (addIfValid(text, "order", order.getOrderId(), seenKeys)) {
-				records.add(new SerializedRecord("order", order.getOrderId(), text, order.getDateActivated()));
+			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_ORDER, order.getOrderId(), seenKeys)) {
+				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_ORDER, order.getOrderId(), text, order.getDateActivated()));
 			}
 		}
 

@@ -18,6 +18,7 @@ import org.openmrs.Diagnosis;
 import org.openmrs.Encounter;
 import org.openmrs.Obs;
 import org.openmrs.Patient;
+import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
@@ -141,7 +142,7 @@ public class EmbeddingIndexer {
 				}
 				String text = obsSerializer.toText(obs);
 				if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
-					upsertEmbedding(patient, "obs", obs.getObsId(), text, now);
+					upsertEmbedding(patient, ChartSearchAiConstants.RESOURCE_TYPE_OBS, obs.getObsId(), text, now);
 				}
 			}
 		}
@@ -150,7 +151,7 @@ public class EmbeddingIndexer {
 			for (Diagnosis diagnosis : encounter.getDiagnoses()) {
 				String text = diagnosisSerializer.toText(diagnosis);
 				if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
-					upsertEmbedding(patient, "diagnosis", diagnosis.getDiagnosisId(), text, now);
+					upsertEmbedding(patient, ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS, diagnosis.getDiagnosisId(), text, now);
 				}
 			}
 		}

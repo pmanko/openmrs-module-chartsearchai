@@ -59,6 +59,17 @@ public class ChartSearchAiConstants {
 
 	public static final int DEFAULT_CACHE_MAX_SIZE = 100;
 
+	// Resource type identifiers used in embeddings and citations
+	public static final String RESOURCE_TYPE_OBS = "obs";
+
+	public static final String RESOURCE_TYPE_CONDITION = "condition";
+
+	public static final String RESOURCE_TYPE_ALLERGY = "allergy";
+
+	public static final String RESOURCE_TYPE_DIAGNOSIS = "diagnosis";
+
+	public static final String RESOURCE_TYPE_ORDER = "order";
+
 	/**
 	 * Resolves a model path relative to the OpenMRS application data directory.
 	 * Rejects paths containing ".." to prevent path traversal and verifies the
