@@ -217,59 +217,60 @@ public class ChartSearchAiRestController {
 	@RequestMapping(value = "/search/stream", method = RequestMethod.POST,
 			produces = MediaType.TEXT_EVENT_STREAM_VALUE)
 	@ResponseBody
-	public SseEmitter searchStream(@RequestBody Map<String, String> body) {
+	public Object searchStream(@RequestBody Map<String, String> body) {
 		Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA);
-
-		long timeoutMs = getStreamTimeoutMs();
-		final SseEmitter emitter = new SseEmitter(timeoutMs);
 
 		String patientUuid = body.get("patient");
 		String question = body.get("question");
 
 		if (patientUuid == null || patientUuid.trim().isEmpty()) {
-			sendErrorAndComplete(emitter, "patient is required");
-			return emitter;
+			return new ResponseEntity<Object>(
+					errorResponse("patient is required"), HttpStatus.BAD_REQUEST);
 		}
 		if (question == null || question.trim().isEmpty()) {
-			sendErrorAndComplete(emitter, "question is required");
-			return emitter;
+			return new ResponseEntity<Object>(
+					errorResponse("question is required"), HttpStatus.BAD_REQUEST);
 		}
 		if (question.length() > MAX_QUESTION_LENGTH) {
-			sendErrorAndComplete(emitter, "question exceeds maximum length of "
-					+ MAX_QUESTION_LENGTH + " characters");
-			return emitter;
+			return new ResponseEntity<Object>(
+					errorResponse("question exceeds maximum length of "
+							+ MAX_QUESTION_LENGTH + " characters"),
+					HttpStatus.BAD_REQUEST);
 		}
 
 		final String sanitizedQuestion = CONTROL_CHARS.matcher(question).replaceAll("");
 		if (sanitizedQuestion.trim().isEmpty()) {
-			sendErrorAndComplete(emitter, "question is required");
-			return emitter;
+			return new ResponseEntity<Object>(
+					errorResponse("question is required"), HttpStatus.BAD_REQUEST);
 		}
 
 		String sanitizationError = validateQuestion(sanitizedQuestion);
 		if (sanitizationError != null) {
-			sendErrorAndComplete(emitter, sanitizationError);
-			return emitter;
+			return new ResponseEntity<Object>(
+					errorResponse(sanitizationError), HttpStatus.BAD_REQUEST);
 		}
 
 		final Patient patient = Context.getPatientService().getPatientByUuid(patientUuid);
 		if (patient == null) {
-			sendErrorAndComplete(emitter, "Patient not found");
-			return emitter;
+			return new ResponseEntity<Object>(
+					errorResponse("Patient not found"), HttpStatus.NOT_FOUND);
 		}
 
 		final User user = Context.getAuthenticatedUser();
 
 		if (!patientAccessCheck.canAccess(user, patient)) {
-			sendErrorAndComplete(emitter, "You do not have access to this patient's chart");
-			return emitter;
+			return new ResponseEntity<Object>(
+					errorResponse("You do not have access to this patient's chart"),
+					HttpStatus.FORBIDDEN);
 		}
 
 		ResponseEntity<Object> rateLimitError = checkRateLimit(user);
 		if (rateLimitError != null) {
-			sendErrorAndComplete(emitter, "Rate limit exceeded");
-			return emitter;
+			return rateLimitError;
 		}
+
+		long timeoutMs = getStreamTimeoutMs();
+		final SseEmitter emitter = new SseEmitter(timeoutMs);
 
 		String preFilterProp = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
