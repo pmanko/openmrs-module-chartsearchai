@@ -2,6 +2,8 @@
 
 An OpenMRS module that lets clinicians ask natural language questions about a patient's chart and get answers with source citations.
 
+For project background, community discussion, and roadmap, see the [wiki project page](https://openmrs.atlassian.net/wiki/spaces/projects/pages/373325839/Chart+Search+aka+ChartSearchAI).
+
 ## Requirements
 
 - OpenMRS Platform 2.6.9+
