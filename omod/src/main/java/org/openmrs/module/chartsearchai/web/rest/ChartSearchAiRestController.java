@@ -286,7 +286,7 @@ public class ChartSearchAiRestController {
 		final Integer patientId = patient.getPatientId();
 		final Integer userId = user.getUserId();
 
-		Thread streamThread = new Thread(new Runnable() {
+		final Thread streamThread = new Thread(new Runnable() {
 			@Override
 			public void run() {
 				Context.openSession();
@@ -376,6 +376,15 @@ public class ChartSearchAiRestController {
 			}
 		}, "chartsearchai-stream");
 		streamThread.setDaemon(true);
+
+		emitter.onTimeout(new Runnable() {
+			@Override
+			public void run() {
+				log.warn("SSE stream timed out for patient [id={}], interrupting thread", patientId);
+				streamThread.interrupt();
+			}
+		});
+
 		streamThread.start();
 
 		return emitter;
