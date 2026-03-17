@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
 import java.util.Calendar;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 
@@ -31,13 +32,11 @@ public class LlmInferenceServiceTest {
 				new RecordMapping(2, "order", 201, null));
 
 		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
-				"The patient is on Metformin [1] and has hypertension [2].", mappings);
+				Arrays.asList(1, 2), mappings);
 
 		assertEquals(2, result.size());
-		assertEquals(1, result.get(0).getIndex());
 		assertEquals("obs", result.get(0).getResourceType());
 		assertEquals(Integer.valueOf(456), result.get(0).getResourceId());
-		assertEquals(2, result.get(1).getIndex());
 		assertEquals("order", result.get(1).getResourceType());
 		assertEquals(Integer.valueOf(201), result.get(1).getResourceId());
 	}
@@ -48,7 +47,7 @@ public class LlmInferenceServiceTest {
 				new RecordMapping(1, "obs", 456, null));
 
 		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
-				"I could not find relevant information in the records.", mappings);
+				Collections.emptyList(), mappings);
 
 		assertTrue(result.isEmpty());
 	}
@@ -59,21 +58,21 @@ public class LlmInferenceServiceTest {
 				new RecordMapping(1, "obs", 456, null));
 
 		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
-				"Blood pressure was 120/80 [1]. This is within normal range [1].", mappings);
+				Arrays.asList(1, 1), mappings);
 
 		assertEquals(1, result.size());
 		assertEquals(Integer.valueOf(456), result.get(0).getResourceId());
 	}
 
 	@Test
-	public void extractCitedReferences_shouldHandleCommaSeparatedCitations() {
+	public void extractCitedReferences_shouldHandleMultipleCitations() {
 		List<RecordMapping> mappings = Arrays.asList(
 				new RecordMapping(1, "obs", 101, null),
 				new RecordMapping(2, "obs", 102, null),
 				new RecordMapping(3, "obs", 103, null));
 
 		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
-				"Blood pressure is 133/57 mmHg [1, 2, 3].", mappings);
+				Arrays.asList(1, 2, 3), mappings);
 
 		assertEquals(3, result.size());
 		assertEquals(Integer.valueOf(101), result.get(0).getResourceId());
@@ -82,13 +81,15 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void extractCitedReferences_shouldHandleEmptyAnswer() {
+	public void extractCitedReferences_shouldIgnoreNumbersNotInMappings() {
 		List<RecordMapping> mappings = Arrays.asList(
-				new RecordMapping(1, "obs", 456, null));
+				new RecordMapping(1, "obs", 10, null));
 
-		List<RecordReference> result = LlmInferenceService.extractCitedReferences("", mappings);
+		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
+				Arrays.asList(1, 99), mappings);
 
-		assertTrue(result.isEmpty());
+		assertEquals(1, result.size());
+		assertEquals(Integer.valueOf(10), result.get(0).getResourceId());
 	}
 
 	@Test
@@ -103,7 +104,7 @@ public class LlmInferenceServiceTest {
 				new RecordMapping(3, "obs", 999, feb));
 
 		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
-				"The patient has [1] and takes [2] with labs [3].", mappings);
+				Arrays.asList(1, 2, 3), mappings);
 
 		assertEquals(3, result.size());
 		assertEquals(Integer.valueOf(30), result.get(0).getResourceId());
@@ -123,7 +124,7 @@ public class LlmInferenceServiceTest {
 				new RecordMapping(2, "obs", 200, recent));
 
 		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
-				"Values are [1] and [2].", mappings);
+				Arrays.asList(1, 2), mappings);
 
 		assertEquals(2, result.size());
 		assertEquals(Integer.valueOf(200), result.get(0).getResourceId());

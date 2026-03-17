@@ -10,6 +10,8 @@
 package org.openmrs.module.chartsearchai.api.impl;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -17,11 +19,6 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.function.Consumer;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
-import java.util.Collections;
-import java.util.Comparator;
 
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
@@ -33,6 +30,7 @@ import org.openmrs.module.chartsearchai.model.ChartEmbedding;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
+import org.openmrs.module.chartsearchai.api.impl.LlmProvider.LlmResponse;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
 import org.slf4j.Logger;
@@ -70,15 +68,14 @@ public class LlmInferenceService implements ChartSearchService {
 	@Autowired
 	private LlmProvider llmProvider;
 
-	private static final Pattern CITATION_PATTERN = Pattern.compile("\\[(\\d+(?:,\\s*\\d+)*)\\]");
-
 	@Override
 	public ChartAnswer search(Patient patient, String question) {
 		PatientChart chart = buildChart(patient, question);
 
-		String response = llmProvider.search(chart.getText(), question);
+		LlmResponse response = llmProvider.search(chart.getText(), question);
 
-		return new ChartAnswer(response, extractCitedReferences(response, chart.getMappings()));
+		return new ChartAnswer(response.getAnswer(),
+				extractCitedReferences(response.getCitations(), chart.getMappings()));
 	}
 
 	@Override
@@ -86,9 +83,10 @@ public class LlmInferenceService implements ChartSearchService {
 			Consumer<String> tokenConsumer) {
 		PatientChart chart = buildChart(patient, question);
 
-		String response = llmProvider.searchStreaming(chart.getText(), question, tokenConsumer);
+		LlmResponse response = llmProvider.searchStreaming(chart.getText(), question, tokenConsumer);
 
-		return new ChartAnswer(response, extractCitedReferences(response, chart.getMappings()));
+		return new ChartAnswer(response.getAnswer(),
+				extractCitedReferences(response.getCitations(), chart.getMappings()));
 	}
 
 	private PatientChart buildChart(Patient patient, String question) {
@@ -216,31 +214,24 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 	}
 
-	static List<RecordReference> extractCitedReferences(String answer, List<RecordMapping> mappings) {
+	static List<RecordReference> extractCitedReferences(List<Integer> citations,
+			List<RecordMapping> mappings) {
 		Map<Integer, RecordMapping> indexMap = new HashMap<Integer, RecordMapping>();
 		for (RecordMapping mapping : mappings) {
 			indexMap.put(mapping.getIndex(), mapping);
 		}
 
 		Set<Integer> seen = new LinkedHashSet<Integer>();
-		Matcher matcher = CITATION_PATTERN.matcher(answer);
-		while (matcher.find()) {
-			for (String part : matcher.group(1).split(",")) {
-				String trimmed = part.trim();
-				try {
-					seen.add(Integer.valueOf(trimmed));
-				}
-				catch (NumberFormatException e) {
-					// skip non-numeric parts
-				}
-			}
+		for (Integer index : citations) {
+			seen.add(index);
 		}
 
 		List<RecordReference> references = new ArrayList<RecordReference>();
 		for (Integer index : seen) {
 			RecordMapping mapping = indexMap.get(index);
 			if (mapping != null) {
-				references.add(new RecordReference(index, mapping.getResourceType(), mapping.getResourceId(), mapping.getDate()));
+				references.add(new RecordReference(index, mapping.getResourceType(),
+						mapping.getResourceId(), mapping.getDate()));
 			}
 		}
 		Collections.sort(references, Comparator.comparing(RecordReference::getDate,

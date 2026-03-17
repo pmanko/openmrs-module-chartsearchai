@@ -29,22 +29,18 @@ public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {
 		StringBuilder sb = new StringBuilder();
 
 		String conceptName = ConceptNameUtil.getName(obs.getConcept());
-		if (!conceptName.isEmpty()) {
-			sb.append(conceptName).append(": ");
-		}
-		sb.append(formatValue(obs));
 
-		if (obs.getInterpretation() != null) {
-			sb.append(" (").append(obs.getInterpretation()).append(")");
-		}
-		if (obs.getComment() != null && !obs.getComment().trim().isEmpty()) {
-			sb.append(". Note: ").append(obs.getComment().trim());
-		}
-
-		// Flatten group members into parent text
+		// Flatten group members into parent text, skipping the parent's own value
 		if (obs.hasGroupMembers()) {
+			if (!conceptName.isEmpty()) {
+				sb.append(conceptName).append(": ");
+			}
+			boolean first = true;
 			for (Obs member : obs.getGroupMembers()) {
-				sb.append("; ");
+				if (!first) {
+					sb.append("; ");
+				}
+				first = false;
 				String memberName = ConceptNameUtil.getName(member.getConcept());
 				if (!memberName.isEmpty()) {
 					sb.append(memberName).append(": ");
@@ -54,6 +50,19 @@ public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {
 					sb.append(" (").append(member.getInterpretation()).append(")");
 				}
 			}
+		} else {
+			if (!conceptName.isEmpty()) {
+				sb.append(conceptName).append(": ");
+			}
+			sb.append(formatValue(obs));
+
+			if (obs.getInterpretation() != null) {
+				sb.append(" (").append(obs.getInterpretation()).append(")");
+			}
+		}
+
+		if (obs.getComment() != null && !obs.getComment().trim().isEmpty()) {
+			sb.append(". Note: ").append(obs.getComment().trim());
 		}
 
 		return sb.toString();

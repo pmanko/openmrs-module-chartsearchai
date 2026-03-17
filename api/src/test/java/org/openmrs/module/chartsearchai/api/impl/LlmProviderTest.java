@@ -14,6 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Arrays;
+
 import org.junit.jupiter.api.Test;
 
 /**
@@ -63,56 +65,110 @@ public class LlmProviderTest {
 	}
 
 	@Test
-	public void extractAnswer_shouldParseJsonResponse() {
-		String response = "{\"answer\": \"The patient has Hypertension [48] and Diabetes [49].\"}";
-		assertEquals("The patient has Hypertension [48] and Diabetes [49].",
-				LlmProvider.extractAnswer(response));
+	public void extractResponse_shouldParseJsonWithCitations() {
+		String response = "{\"answer\": \"The patient has Hypertension [48] and Diabetes [49].\", \"citations\": [48, 49]}";
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
+		assertEquals("The patient has Hypertension [48] and Diabetes [49].", result.getAnswer());
+		assertEquals(Arrays.asList(48, 49), result.getCitations());
 	}
 
 	@Test
-	public void extractAnswer_shouldHandleEscapedQuotes() {
-		String response = "{\"answer\": \"The patient said \\\"I feel fine\\\" during the visit.\"}";
+	public void extractResponse_shouldHandleEmptyCitations() {
+		String response = "{\"answer\": \"No relevant information was found.\", \"citations\": []}";
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
+		assertEquals("No relevant information was found.", result.getAnswer());
+		assertTrue(result.getCitations().isEmpty());
+	}
+
+	@Test
+	public void extractResponse_shouldHandleEscapedQuotes() {
+		String response = "{\"answer\": \"The patient said \\\"I feel fine\\\" during the visit.\", \"citations\": []}";
 		assertEquals("The patient said \"I feel fine\" during the visit.",
-				LlmProvider.extractAnswer(response));
+				LlmProvider.extractResponse(response).getAnswer());
 	}
 
 	@Test
-	public void extractAnswer_shouldHandleEscapedBackslashes() {
-		String response = "{\"answer\": \"Path: C:\\\\Users\\\\data\"}";
+	public void extractResponse_shouldHandleEscapedBackslashes() {
+		String response = "{\"answer\": \"Path: C:\\\\Users\\\\data\", \"citations\": []}";
 		assertEquals("Path: C:\\Users\\data",
-				LlmProvider.extractAnswer(response));
+				LlmProvider.extractResponse(response).getAnswer());
 	}
 
 	@Test
-	public void extractAnswer_shouldHandleEscapedNewlines() {
-		String response = "{\"answer\": \"Line 1\\nLine 2\"}";
+	public void extractResponse_shouldHandleEscapedNewlines() {
+		String response = "{\"answer\": \"Line 1\\nLine 2\", \"citations\": []}";
 		assertEquals("Line 1\nLine 2",
-				LlmProvider.extractAnswer(response));
+				LlmProvider.extractResponse(response).getAnswer());
 	}
 
 	@Test
-	public void extractAnswer_shouldHandleEmptyString() {
-		assertEquals("", LlmProvider.extractAnswer(""));
+	public void extractResponse_shouldHandleEmptyString() {
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse("");
+		assertEquals("", result.getAnswer());
+		assertTrue(result.getCitations().isEmpty());
 	}
 
 	@Test
-	public void extractAnswer_shouldFallBackToRawResponseWhenNotJson() {
+	public void extractResponse_shouldFallBackToRawResponseWhenNotJson() {
 		String response = "The patient has Diabetes [1].";
-		assertEquals(response, LlmProvider.extractAnswer(response));
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
+		assertEquals(response, result.getAnswer());
+		assertTrue(result.getCitations().isEmpty());
 	}
 
 	@Test
-	public void extractAnswer_shouldDecodeUnicodeEscapes() {
-		String response = "{\"answer\": \"Temperature is 38.9\\u00b0C\"}";
-		assertEquals("Temperature is 38.9\u00b0C",
-				LlmProvider.extractAnswer(response));
+	public void extractResponse_shouldDecodeUnicodeEscapes() {
+		String response = "{\"answer\": \"Temperature is 38.9\\u00b0C\", \"citations\": [1]}";
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
+		assertEquals("Temperature is 38.9\u00b0C", result.getAnswer());
+		assertEquals(Arrays.asList(1), result.getCitations());
 	}
 
 	@Test
-	public void extractAnswer_shouldHandleWhitespaceInJson() {
-		String response = "{ \"answer\" : \"No relevant information was found.\" }";
+	public void extractResponse_shouldHandleWhitespaceInJson() {
+		String response = "{ \"answer\" : \"No relevant information was found.\" , \"citations\" : [] }";
 		assertEquals("No relevant information was found.",
-				LlmProvider.extractAnswer(response));
+				LlmProvider.extractResponse(response).getAnswer());
+	}
+
+	@Test
+	public void extractResponse_shouldHandleMissingCitationsField() {
+		String response = "{\"answer\": \"Some answer.\"}";
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
+		assertEquals("Some answer.", result.getAnswer());
+		assertTrue(result.getCitations().isEmpty());
+	}
+
+	@Test
+	public void normalizeSlashCitations_shouldConvertSlashesToSeparateBrackets() {
+		assertEquals("Tuberculosis [1], [2] and Malaria [3], [4]",
+				LlmProvider.normalizeSlashCitations("Tuberculosis [1/2] and Malaria [3/4]"));
+	}
+
+	@Test
+	public void normalizeSlashCitations_shouldHandleTripleSlash() {
+		assertEquals("Infections [5], [12], [15]",
+				LlmProvider.normalizeSlashCitations("Infections [5/12/15]"));
+	}
+
+	@Test
+	public void normalizeSlashCitations_shouldLeaveNormalCitationsUnchanged() {
+		assertEquals("Has condition [1], [2].",
+				LlmProvider.normalizeSlashCitations("Has condition [1], [2]."));
+	}
+
+	@Test
+	public void normalizeSlashCitations_shouldLeaveTextWithNoCitationsUnchanged() {
+		assertEquals("No citations here.",
+				LlmProvider.normalizeSlashCitations("No citations here."));
+	}
+
+	@Test
+	public void extractResponse_shouldNormalizeSlashCitationsInAnswer() {
+		String response = "{\"answer\": \"Infections [7/13] and HIV [4/11].\", \"citations\": [7, 13, 4, 11]}";
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
+		assertEquals("Infections [7], [13] and HIV [4], [11].", result.getAnswer());
+		assertEquals(Arrays.asList(7, 13, 4, 11), result.getCitations());
 	}
 
 	@Test

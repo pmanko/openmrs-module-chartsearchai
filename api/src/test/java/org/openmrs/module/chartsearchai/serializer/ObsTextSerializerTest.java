@@ -124,7 +124,8 @@ public class ObsTextSerializerTest extends BaseModuleContextSensitiveTest {
 
 		String result = serializer.toText(parent);
 		assertTrue(result.contains("Vitals:"));
-		assertTrue(result.contains("; Pulse: 80.0"));
+		assertTrue(result.contains("Pulse: 80.0"));
+		assertTrue(!result.contains("group"), "Parent value should be skipped for group obs");
 	}
 
 	@Test
