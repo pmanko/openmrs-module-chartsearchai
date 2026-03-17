@@ -72,15 +72,28 @@ public class EmbeddingIndexer {
 		// Build all embeddings first so the patient is never without data
 		List<SerializedRecord> records = recordLoader.loadAll(patient);
 		List<ChartEmbedding> newEmbeddings = new java.util.ArrayList<ChartEmbedding>(records.size());
+		int failed = 0;
 		for (SerializedRecord record : records) {
-			ChartEmbedding ce = new ChartEmbedding();
-			ce.setPatient(patient);
-			ce.setResourceType(record.getResourceType());
-			ce.setResourceId(record.getResourceId());
-			ce.setTextContent(record.getText());
-			ce.setEmbeddingVector(embeddingProvider.embed(record.getText()));
-			ce.setDateCreated(now);
-			newEmbeddings.add(ce);
+			try {
+				ChartEmbedding ce = new ChartEmbedding();
+				ce.setPatient(patient);
+				ce.setResourceType(record.getResourceType());
+				ce.setResourceId(record.getResourceId());
+				ce.setTextContent(record.getText());
+				ce.setEmbeddingVector(embeddingProvider.embed(record.getText()));
+				ce.setDateCreated(now);
+				newEmbeddings.add(ce);
+			}
+			catch (Exception e) {
+				failed++;
+				log.warn("Failed to embed {} [id={}] for patient [id={}]: {}",
+						record.getResourceType(), record.getResourceId(),
+						patient.getPatientId(), e.getMessage());
+			}
+		}
+		if (failed > 0) {
+			log.warn("Skipped {} of {} records during indexing of patient [id={}]",
+					failed, records.size(), patient.getPatientId());
 		}
 
 		// Delete old and insert new within the same transaction
