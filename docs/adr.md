@@ -324,6 +324,9 @@ As a safety net, any slash-separated citations that small LLMs occasionally prod
 | Llama 3.2 3B | ~2GB | ~4GB | 128K tokens | ~20–30 tok/s |
 | Phi-3 Mini 3.8B | ~2GB | ~4GB | 4K tokens (128K variant available) | ~15–25 tok/s |
 | Mistral 7B | ~4GB | ~8GB | 32K tokens | ~10–15 tok/s |
+| Qwen 2.5 7B | ~4GB | ~8GB | 128K tokens | ~8–12 tok/s |
+| Gemma 2 9B Instruct | ~5GB | ~10GB | 8K tokens | ~5–10 tok/s |
+| Qwen 2.5 14B | ~8GB | ~14GB | 128K tokens | ~3–6 tok/s |
 
 ### Recommended model: Llama 3.2 3B
 
@@ -334,6 +337,9 @@ The alternatives each have a significant limitation for this use case:
 - **Qwen 2.5 1.5B** is faster and smaller but its 32K context window limits it to ~2,000 records, and its reasoning capability is weaker at 1.5B parameters.
 - **Phi-3 Mini 3.8B** has slightly better reasoning per parameter than Llama 3.2 3B, but its default 4K context window is far too small for full patient charts. The 128K variant exists but is slower on CPU due to the longer context handling.
 - **Mistral 7B** has strong reasoning but at 7B parameters it is noticeably slower on CPU (~10–15 tok/s) and requires ~8GB RAM, which may be prohibitive in low-resource deployments.
+- **Qwen 2.5 7B** offers strong instruction following and a 128K context window at 7B parameters. A good upgrade path from 3B models for servers with 8–10GB RAM.
+- **Gemma 2 9B Instruct** has excellent reasoning and instruction following at 9B parameters, but its 8K context window limits it to ~500 records without embedding pre-filtering. Requires ~10GB RAM.
+- **Qwen 2.5 14B** provides the best reasoning of the CPU-viable options with a 128K context window, but requires ~14GB RAM and runs at ~3–6 tok/s on CPU. Best for well-resourced deployments.
 
 All models run via java-llama.cpp with Q4_K_M quantization in GGUF format.
 
@@ -352,7 +358,9 @@ The model runs **in-process** inside the OpenMRS JVM via [java-llama.cpp](https:
 1. The `.omod` module file (includes the java-llama.cpp dependency)
 2. The `.gguf` model file (placed in the OpenMRS application data directory)
 
-The model path is configured via the `chartsearchai.llm.modelFilePath` global property. The model loads into memory on first query and stays resident for subsequent requests.
+The model path is configured via the `chartsearchai.llm.modelFilePath` global property. The model loads into memory on first query and stays resident for subsequent requests. If the model path global property is changed, the model is automatically unloaded and the new model is loaded on the next query — no restart required.
+
+Inference uses temperature 0.0 and a fixed seed for deterministic output. This ensures that identical inputs produce consistent answers, which is important for clinical trust and for the answer cache to be meaningful.
 
 ```
 OpenMRS JVM
@@ -370,14 +378,17 @@ The module works with any GGUF-format model. Larger models produce better respon
 | Model | File Size | RAM (model + KV cache) | Total with OpenMRS JVM | CPU Inference Speed |
 |-------|-----------|------------------------|------------------------|---------------------|
 | **3B** (e.g. Llama 3.2 3B) | ~2GB | ~3–4GB | ~5–6GB | ~5–15 tokens/sec |
-| **7B** (e.g. Llama 3.1 8B) | ~4GB | ~6–8GB | ~8–10GB | ~3–8 tokens/sec |
-| **13B** (e.g. Llama 2 13B) | ~7–8GB | ~10–14GB | ~12–16GB | ~1–4 tokens/sec |
+| **7B** (e.g. Qwen 2.5 7B, Mistral 7B) | ~4GB | ~6–8GB | ~8–10GB | ~3–8 tokens/sec |
+| **9B** (e.g. Gemma 2 9B Instruct) | ~5GB | ~8–10GB | ~10–12GB | ~3–6 tokens/sec |
+| **14B** (e.g. Qwen 2.5 14B) | ~8GB | ~12–14GB | ~14–16GB | ~2–4 tokens/sec |
 
 **3B models** are the most deployable in low-resource settings but struggle with strict instruction following — they tend to produce verbose responses, add unsolicited commentary, and hedge when they should give a direct "not found" answer. Few-shot examples in the system prompt help but do not fully solve this.
 
-**7B models** are the recommended middle ground — significantly better instruction following and clinical reasoning, while still feasible on a 16GB server.
+**7B models** are the recommended middle ground — significantly better instruction following and clinical reasoning, while still feasible on a server with 10GB RAM.
 
-**13B models** provide the best response quality but need 16–32GB of RAM and noticeably slower inference. Suitable for well-resourced deployments where response quality is prioritized over speed.
+**9B models** (e.g. Gemma 2 9B Instruct) offer excellent reasoning and instruction following. Note that Gemma 2's 8K context window is smaller than Llama or Qwen models, so embedding pre-filtering is strongly recommended.
+
+**14B models** (e.g. Qwen 2.5 14B) provide the best response quality among CPU-viable options, with strong reasoning and a 128K context window. They require 14–16GB total RAM and produce slower inference (~2–4 tok/s). Suitable for well-resourced deployments where response quality is prioritized over speed.
 
 A server running OpenMRS typically uses 1–2GB for the JVM heap. A 4GB machine is insufficient to run this module — the LLM alone requires at least 3–4GB for the smallest viable model.
 
@@ -458,10 +469,20 @@ Returns a `text/event-stream` with three event types:
 - `done` — final JSON with the complete answer, references (with `index`, `resourceType`, `resourceId`, `date`), and disclaimer
 - `error` — an error message if something goes wrong
 
+#### Audit log endpoint
+
+```
+GET /ws/rest/v1/chartsearchai/auditlog?patient=...&user=...&fromDate=...&toDate=...&startIndex=0&limit=50
+```
+
+Requires the `View AI Audit Logs` privilege. All query parameters are optional. `fromDate` and `toDate` are epoch milliseconds. Returns paginated results ordered by most recent first, with a `totalCount` for pagination.
+
 ### Guardrails
 
 - **Input validation**: Patient UUID and question are required. Questions are limited to 1000 characters.
+- **Prompt injection detection**: Questions are checked against a regex pattern that rejects common prompt injection phrases (e.g., "ignore previous instructions", "you are now", "system prompt:"). Rejected questions return a 400 error without reaching the LLM.
 - **AI disclaimer**: Every response includes a disclaimer stating the output is AI-generated and not a substitute for clinical judgment.
+- **Answer caching**: An in-memory LRU cache stores recent answers keyed by (patient UUID, question, pre-filter mode). Configurable TTL via `chartsearchai.cacheTtlMinutes` (default 0 = disabled). When enabled, identical queries within the TTL window return the cached answer without invoking the LLM. The cache key includes the pre-filter setting to prevent cross-contamination between pre-filtered and full-chart results.
 - **Rate limiting**: Configurable per-user rate limit (`chartsearchai.rateLimitPerMinute`, default 10). Set to 0 to disable.
 - **Database audit logging**: Every query is recorded in the `chartsearchai_audit_log` table with:
   - The authenticated user and patient
@@ -471,7 +492,7 @@ Returns a `text/event-stream` with three event types:
   - Response time in milliseconds
   - Timestamp
 
-  This audit trail supports compliance review (who queried which patient's data and what the AI responded) and performance analysis.
+  This audit trail supports compliance review (who queried which patient's data and what the AI responded) and performance analysis. A scheduled task purges entries older than `chartsearchai.auditLogRetentionDays` (default 90 days, set to 0 to retain all).
 
 ## Planned future work
 
