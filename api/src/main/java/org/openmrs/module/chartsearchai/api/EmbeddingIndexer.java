@@ -103,7 +103,8 @@ public class EmbeddingIndexer {
 			dao.saveChartEmbedding(ce);
 		}
 
-		log.info("Finished indexing patient [id={}] ({} records)", patient.getPatientId(), records.size());
+		log.info("Finished indexing patient [id={}] ({} of {} records)",
+				patient.getPatientId(), newEmbeddings.size(), records.size());
 	}
 
 	/**
