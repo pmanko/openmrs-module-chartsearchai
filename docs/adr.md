@@ -20,7 +20,7 @@ An LLM adds no value for structured data lookup, concept synonym matching (OpenM
 
 ### Decision
 
-Use an LLM only as a fallback for hard cases. The primary search path should be deterministic and fast. The LLM earns its compute cost only when simpler approaches cannot solve the problem.
+This analysis initially suggested using the LLM only as a fallback, with a deterministic primary search path. In practice, the single-LLM approach (Decision 10) proved simpler and more effective — all queries go through the LLM, which handles both the "easy" structured lookups and the "hard" synthesis cases uniformly. The embedding pre-filter narrows the input, and the LLM does the rest. The value analysis above still holds: the LLM earns its cost primarily through natural language understanding and cross-record synthesis.
 
 ## Decision 2: Overall architecture — RAG vs. alternatives
 
@@ -47,7 +47,7 @@ Fine-tune a small model to generate SQL or API calls from natural language.
 #### Option C: Traditional search (no LLM at all)
 Full-text search index (Lucene/Solr/Elasticsearch) over patient data.
 
-**Kept as fallback layer.** Solves 70% of the problem with 20% of the complexity. No hallucination risk, no compute requirements, works offline. Weakness: no natural language understanding or synthesis.
+**Deferred.** Solves 70% of the problem with 20% of the complexity. No hallucination risk, no compute requirements, works offline. Weakness: no natural language understanding or synthesis. Could serve as a fallback for environments that cannot run the LLM.
 
 #### Option D: Agent/tool-use pattern
 Give the LLM access to OpenMRS APIs as tools and let it autonomously decide what to call.
@@ -57,12 +57,12 @@ Give the LLM access to OpenMRS APIs as tools and let it autonomously decide what
 #### Option E: Pre-computed summaries (batch processing)
 Generate patient summaries offline ahead of time. Search summaries at query time.
 
-**Kept as complement.** Good for common queries (active meds, allergies, problem list). Weakness: stale data, doesn't handle unexpected/novel questions. Best combined with real-time retrieval.
+**Deferred.** Good for common queries (active meds, allergies, problem list). Weakness: stale data, doesn't handle unexpected/novel questions. Best combined with real-time retrieval.
 
-#### Option F: RAG (Retrieval Augmented Generation) — CHOSEN
+#### Option F: RAG (Retrieval Augmented Generation)
 Retrieve relevant records first using deterministic search, then use the LLM only for query understanding and response formatting.
 
-**Chosen because:**
+**Strengths:**
 - Retrieval is deterministic and auditable — every piece of data has a traceable source.
 - LLM never invents facts; it only works with data explicitly provided.
 - Minimal hallucination surface area.
@@ -70,9 +70,7 @@ Retrieve relevant records first using deterministic search, then use the LLM onl
 
 ### Decision
 
-Use RAG with a two-step approach:
-1. **Deterministic retrieval**: Java code queries OpenMRS via existing services + embedding similarity search to find the most relevant records.
-2. **Response synthesis**: LLM receives the retrieved records and the clinician's question, then produces a concise answer with citations.
+The initial plan was full RAG with a deterministic retrieval layer feeding a small subset of records to the LLM. Decision 10 refined this into the current architecture: a **single LLM approach** where all patient records are sent to the LLM (or narrowed by an optional embedding pre-filter). The two-step structure remains — retrieval then synthesis — but the LLM handles all queries, not just "hard" ones. See Decision 10 for the full rationale.
 
 ## Decision 3: Embedding approach — semantic search index
 
