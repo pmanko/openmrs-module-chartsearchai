@@ -9,16 +9,21 @@
  */
 package org.openmrs.module.chartsearchai.serializer;
 
+import org.openmrs.DrugOrder;
 import org.openmrs.Order;
 import org.openmrs.module.chartsearchai.util.ConceptNameUtil;
 import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.springframework.stereotype.Component;
 
 /**
- * Serializes an {@link Order} into embedding-friendly text.
+ * Serializes an {@link Order} into embedding-friendly text. For {@link DrugOrder}s, includes
+ * prescription details (drug name, dose, route, frequency, duration).
  *
- * <p>Example output: {@code "Order: Complete Blood Count. Action: NEW. Urgency: STAT.
- * Reason: Suspected anemia"}</p>
+ * <p>Example output for a drug order: {@code "Drug order: Metformin 500mg. Dose: 1.0 Tablet(s)
+ * Oral twice daily. Duration: 30 Day(s). Action: NEW. Urgency: ROUTINE"}</p>
+ *
+ * <p>Example output for a non-drug order: {@code "Order: Complete Blood Count. Action: NEW.
+ * Urgency: STAT. Reason: Suspected anemia"}</p>
  */
 @Component
 public class OrderTextSerializer implements ClinicalTextSerializer<Order> {
@@ -26,10 +31,16 @@ public class OrderTextSerializer implements ClinicalTextSerializer<Order> {
 	@Override
 	public String toText(Order order) {
 		StringBuilder sb = new StringBuilder();
-		String name = ConceptNameUtil.getName(order.getConcept());
-		if (!name.isEmpty()) {
-			sb.append("Order: ").append(name);
+
+		if (order instanceof DrugOrder) {
+			appendDrugOrderFields(sb, (DrugOrder) order);
+		} else {
+			String name = ConceptNameUtil.getName(order.getConcept());
+			if (!name.isEmpty()) {
+				sb.append("Order: ").append(name);
+			}
 		}
+
 		sb.append(". Action: ").append(order.getAction());
 		sb.append(". Urgency: ").append(order.getUrgency());
 
@@ -49,4 +60,66 @@ public class OrderTextSerializer implements ClinicalTextSerializer<Order> {
 		return sb.toString();
 	}
 
+	private void appendDrugOrderFields(StringBuilder sb, DrugOrder drugOrder) {
+		String drugName = getDrugName(drugOrder);
+		if (!drugName.isEmpty()) {
+			sb.append("Drug order: ").append(drugName);
+		}
+
+		if (drugOrder.getDose() != null) {
+			sb.append(". Dose: ").append(drugOrder.getDose());
+			if (drugOrder.getDoseUnits() != null) {
+				String units = ConceptNameUtil.getName(drugOrder.getDoseUnits());
+				if (!units.isEmpty()) {
+					sb.append(" ").append(units);
+				}
+			}
+			if (drugOrder.getRoute() != null) {
+				String route = ConceptNameUtil.getName(drugOrder.getRoute());
+				if (!route.isEmpty()) {
+					sb.append(" ").append(route);
+				}
+			}
+			if (drugOrder.getFrequency() != null && drugOrder.getFrequency().getConcept() != null) {
+				String freq = ConceptNameUtil.getName(drugOrder.getFrequency().getConcept());
+				if (!freq.isEmpty()) {
+					sb.append(" ").append(freq);
+				}
+			}
+		}
+
+		if (drugOrder.getDuration() != null) {
+			sb.append(". Duration: ").append(drugOrder.getDuration());
+			if (drugOrder.getDurationUnits() != null) {
+				String units = ConceptNameUtil.getName(drugOrder.getDurationUnits());
+				if (!units.isEmpty()) {
+					sb.append(" ").append(units);
+				}
+			}
+		}
+
+		if (drugOrder.getAsNeeded() != null && drugOrder.getAsNeeded()) {
+			sb.append(". As needed");
+			if (drugOrder.getAsNeededCondition() != null
+					&& !drugOrder.getAsNeededCondition().trim().isEmpty()) {
+				sb.append(" (").append(drugOrder.getAsNeededCondition().trim()).append(")");
+			}
+		}
+
+		if (drugOrder.getDosingInstructions() != null
+				&& !drugOrder.getDosingInstructions().trim().isEmpty()) {
+			sb.append(". Dosing: ").append(drugOrder.getDosingInstructions().trim());
+		}
+	}
+
+	private String getDrugName(DrugOrder drugOrder) {
+		if (drugOrder.getDrug() != null && drugOrder.getDrug().getName() != null) {
+			return drugOrder.getDrug().getName();
+		}
+		if (drugOrder.getDrugNonCoded() != null
+				&& !drugOrder.getDrugNonCoded().trim().isEmpty()) {
+			return drugOrder.getDrugNonCoded().trim();
+		}
+		return ConceptNameUtil.getName(drugOrder.getConcept());
+	}
 }

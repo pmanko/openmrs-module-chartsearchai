@@ -17,6 +17,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.openmrs.Concept;
 import org.openmrs.ConceptName;
+import org.openmrs.Drug;
+import org.openmrs.DrugOrder;
 import org.openmrs.Order;
 import java.util.Locale;
 import org.openmrs.test.jupiter.BaseModuleContextSensitiveTest;
@@ -139,6 +141,92 @@ public class OrderTextSerializerTest extends BaseModuleContextSensitiveTest {
 
 		String result = serializer.toText(order);
 		assertTrue(!result.contains("Stopped:"));
+	}
+
+	@Test
+	public void toText_shouldSerializeDrugOrderWithDoseAndRoute() {
+		DrugOrder drugOrder = new DrugOrder();
+		Drug drug = new Drug();
+		drug.setName("Metformin 500mg");
+		drugOrder.setDrug(drug);
+		drugOrder.setDose(1.0);
+		drugOrder.setAction(Order.Action.NEW);
+		drugOrder.setUrgency(Order.Urgency.ROUTINE);
+		drugOrder.setDateActivated(new Date());
+
+		Concept doseUnits = new Concept();
+		doseUnits.addName(conceptName("Tablet(s)"));
+		drugOrder.setDoseUnits(doseUnits);
+
+		Concept route = new Concept();
+		route.addName(conceptName("Oral"));
+		drugOrder.setRoute(route);
+
+		String result = serializer.toText(drugOrder);
+		assertTrue(result.contains("Drug order: Metformin 500mg"));
+		assertTrue(result.contains("Dose: 1.0 Tablet(s) Oral"));
+	}
+
+	@Test
+	public void toText_shouldIncludeDrugOrderDuration() {
+		DrugOrder drugOrder = new DrugOrder();
+		Drug drug = new Drug();
+		drug.setName("Amoxicillin 250mg");
+		drugOrder.setDrug(drug);
+		drugOrder.setAction(Order.Action.NEW);
+		drugOrder.setUrgency(Order.Urgency.ROUTINE);
+		drugOrder.setDateActivated(new Date());
+		drugOrder.setDuration(7);
+
+		Concept durationUnits = new Concept();
+		durationUnits.addName(conceptName("Day(s)"));
+		drugOrder.setDurationUnits(durationUnits);
+
+		String result = serializer.toText(drugOrder);
+		assertTrue(result.contains("Duration: 7 Day(s)"));
+	}
+
+	@Test
+	public void toText_shouldIncludeAsNeeded() {
+		DrugOrder drugOrder = new DrugOrder();
+		Drug drug = new Drug();
+		drug.setName("Ibuprofen 400mg");
+		drugOrder.setDrug(drug);
+		drugOrder.setAction(Order.Action.NEW);
+		drugOrder.setUrgency(Order.Urgency.ROUTINE);
+		drugOrder.setDateActivated(new Date());
+		drugOrder.setAsNeeded(true);
+		drugOrder.setAsNeededCondition("for pain");
+
+		String result = serializer.toText(drugOrder);
+		assertTrue(result.contains("As needed (for pain)"));
+	}
+
+	@Test
+	public void toText_shouldFallBackToNonCodedDrugName() {
+		DrugOrder drugOrder = new DrugOrder();
+		drugOrder.setDrugNonCoded("Custom herbal remedy");
+		drugOrder.setAction(Order.Action.NEW);
+		drugOrder.setUrgency(Order.Urgency.ROUTINE);
+		drugOrder.setDateActivated(new Date());
+
+		String result = serializer.toText(drugOrder);
+		assertTrue(result.contains("Drug order: Custom herbal remedy"));
+	}
+
+	@Test
+	public void toText_shouldIncludeDosingInstructions() {
+		DrugOrder drugOrder = new DrugOrder();
+		Drug drug = new Drug();
+		drug.setName("Warfarin 5mg");
+		drugOrder.setDrug(drug);
+		drugOrder.setAction(Order.Action.NEW);
+		drugOrder.setUrgency(Order.Urgency.ROUTINE);
+		drugOrder.setDateActivated(new Date());
+		drugOrder.setDosingInstructions("Monitor INR weekly");
+
+		String result = serializer.toText(drugOrder);
+		assertTrue(result.contains("Dosing: Monitor INR weekly"));
 	}
 
 	private ConceptName conceptName(String name) {

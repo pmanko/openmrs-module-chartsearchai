@@ -73,8 +73,10 @@ public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {
 			return ConceptNameUtil.getName(obs.getValueCoded());
 		}
 		if (obs.getValueNumeric() != null) {
+			String modifier = obs.getValueModifier();
 			String units = getUnits(obs.getConcept());
-			return obs.getValueNumeric() + (units != null ? " " + units : "");
+			return (modifier != null ? modifier : "") + obs.getValueNumeric()
+					+ (units != null ? " " + units : "");
 		}
 		if (obs.getValueText() != null) {
 			return obs.getValueText();

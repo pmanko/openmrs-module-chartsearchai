@@ -192,6 +192,34 @@ public class ObsTextSerializerTest extends BaseModuleContextSensitiveTest {
 		assertTrue(result.startsWith("Temperature: 37.0"));
 	}
 
+	@Test
+	public void toText_shouldIncludeValueModifier() {
+		Obs obs = new Obs();
+		ConceptNumeric concept = new ConceptNumeric();
+		concept.addName(conceptName("Viral Load"));
+		concept.setUnits("copies/mL");
+		obs.setConcept(concept);
+		obs.setValueNumeric(200.0);
+		obs.setValueModifier(">");
+
+		String result = serializer.toText(obs);
+		assertTrue(result.contains(">200.0 copies/mL"));
+	}
+
+	@Test
+	public void toText_shouldOmitModifierWhenNull() {
+		Obs obs = new Obs();
+		ConceptNumeric concept = new ConceptNumeric();
+		concept.addName(conceptName("Hemoglobin"));
+		concept.setUnits("g/dL");
+		obs.setConcept(concept);
+		obs.setValueNumeric(12.5);
+
+		String result = serializer.toText(obs);
+		assertTrue(result.contains("12.5 g/dL"));
+		assertTrue(!result.contains(">") && !result.contains("<"));
+	}
+
 	private ConceptName conceptName(String name) {
 		ConceptName cn = new ConceptName();
 		cn.setName(name);
