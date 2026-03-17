@@ -41,6 +41,8 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 	private OrtSession session;
 
+	private String loadedModelPath;
+
 	private WordPieceTokenizer tokenizer;
 
 	@Override
@@ -142,25 +144,34 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 				log.warn("Error closing ONNX session", e);
 			}
 			session = null;
+			loadedModelPath = null;
 			tokenizer = null;
 			env = null;
 		}
 	}
 
 	private synchronized OrtSession getSession() throws OrtException {
+		String configuredPath = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
+		if (configuredPath == null || configuredPath.trim().isEmpty()) {
+			throw new IllegalStateException(
+					"Embedding model path not configured. Set the global property: "
+							+ ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
+		}
+		String modelPath = ChartSearchAiConstants.resolveModelPath(
+				configuredPath.trim(), ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
+
+		if (session != null && !modelPath.equals(loadedModelPath)) {
+			log.info("Embedding model path changed from {} to {}, reloading",
+					loadedModelPath, modelPath);
+			close();
+		}
+
 		if (session == null) {
-			String configuredPath = Context.getAdministrationService()
-					.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
-			if (configuredPath == null || configuredPath.trim().isEmpty()) {
-				throw new IllegalStateException(
-						"Embedding model path not configured. Set the global property: "
-								+ ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
-			}
-			String modelPath = ChartSearchAiConstants.resolveModelPath(
-					configuredPath.trim(), ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
 			log.info("Loading ONNX embedding model from {}", modelPath);
 			env = OrtEnvironment.getEnvironment();
 			session = env.createSession(modelPath);
+			loadedModelPath = modelPath;
 			log.info("ONNX embedding model loaded successfully");
 		}
 		return session;
