@@ -204,7 +204,7 @@ A generic `ClinicalTextSerializer<T>` interface with one implementation per Open
 | `MedicationDispenseTextSerializer` | `"Dispensed: Metformin 500mg. Quantity: 30 Tablet(s). Dose: 1 Tablet(s) Oral twice daily"` |
 
 Key design choices:
-- Serializers produce concise text without dates (dates are redundant with the record's sort order in the prompt). Exception: `PatientProgramTextSerializer` includes enrollment and completion dates because both are intrinsic clinical facts about the enrollment — the LLM has no other way to see them, since citation labels only carry the record's position, not the actual date.
+- Serializers produce concise text without dates. Dates are omitted for three reasons: (1) records are sorted most-recent-first in the prompt, so relative recency is conveyed by position; (2) the actual date is included in the API response's `references` array for the UI to display alongside each citation; and (3) small LLMs (1.5B–3B parameters) are unreliable at date arithmetic and temporal reasoning — including dates invites errors like miscalculating durations or confusing date formats, while the sorted order gives the model a simpler positional signal it handles well. Exception: `PatientProgramTextSerializer` includes enrollment and completion dates because both are intrinsic clinical facts about the enrollment — the LLM has no other way to see them, since citation labels only carry the record's position, not the actual date.
 - `ObsTextSerializer` flattens group members into the parent obs text.
 - Obs interpretation (`NORMAL`, `ABNORMAL`, `CRITICALLY_ABNORMAL`) and comments are included.
 - Units are extracted from `ConceptNumeric`, not `Concept` (which has no `getUnits()` in OpenMRS 2.6.x).
