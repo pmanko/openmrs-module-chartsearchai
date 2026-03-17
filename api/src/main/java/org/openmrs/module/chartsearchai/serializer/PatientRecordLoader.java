@@ -58,7 +58,10 @@ public class PatientRecordLoader {
 	 */
 	public List<SerializedRecord> loadAll(Patient patient) {
 		List<SerializedRecord> records = new ArrayList<SerializedRecord>();
-		Set<String> seenText = new HashSet<String>();
+		// Deduplicate by resource key (type:id) to avoid re-processing the same record,
+		// but allow distinct records with identical text (e.g. two separate BP readings
+		// that happen to have the same value).
+		Set<String> seenKeys = new HashSet<String>();
 
 		// Observations (top-level only — group members are inlined by serializer)
 		for (Obs obs : Context.getObsService().getObservationsByPerson(patient)) {
@@ -66,7 +69,7 @@ public class PatientRecordLoader {
 				continue;
 			}
 			String text = obsSerializer.toText(obs);
-			if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
+			if (addIfValid(text, "obs", obs.getObsId(), seenKeys)) {
 				Date date = obs.getObsDatetime() != null ? obs.getObsDatetime() : obs.getDateCreated();
 				records.add(new SerializedRecord("obs", obs.getObsId(), text, date));
 			}
@@ -75,7 +78,7 @@ public class PatientRecordLoader {
 		// Conditions
 		for (Condition condition : Context.getConditionService().getActiveConditions(patient)) {
 			String text = conditionSerializer.toText(condition);
-			if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
+			if (addIfValid(text, "condition", condition.getConditionId(), seenKeys)) {
 				Date date = condition.getOnsetDate() != null ? condition.getOnsetDate() : condition.getDateCreated();
 				records.add(new SerializedRecord("condition", condition.getConditionId(), text, date));
 			}
@@ -84,7 +87,7 @@ public class PatientRecordLoader {
 		// Allergies
 		for (Allergy allergy : Context.getPatientService().getAllergies(patient)) {
 			String text = allergySerializer.toText(allergy);
-			if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
+			if (addIfValid(text, "allergy", allergy.getAllergyId(), seenKeys)) {
 				records.add(new SerializedRecord("allergy", allergy.getAllergyId(), text, allergy.getDateCreated()));
 			}
 		}
@@ -92,7 +95,7 @@ public class PatientRecordLoader {
 		// Diagnoses
 		for (Diagnosis diagnosis : Context.getDiagnosisService().getDiagnoses(patient, null)) {
 			String text = diagnosisSerializer.toText(diagnosis);
-			if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
+			if (addIfValid(text, "diagnosis", diagnosis.getDiagnosisId(), seenKeys)) {
 				Date date = diagnosis.getEncounter() != null
 						? diagnosis.getEncounter().getEncounterDatetime() : diagnosis.getDateCreated();
 				records.add(new SerializedRecord("diagnosis", diagnosis.getDiagnosisId(), text, date));
@@ -102,7 +105,7 @@ public class PatientRecordLoader {
 		// Orders
 		for (Order order : Context.getOrderService().getAllOrdersByPatient(patient)) {
 			String text = orderSerializer.toText(order);
-			if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
+			if (addIfValid(text, "order", order.getOrderId(), seenKeys)) {
 				records.add(new SerializedRecord("order", order.getOrderId(), text, order.getDateActivated()));
 			}
 		}
@@ -111,6 +114,14 @@ public class PatientRecordLoader {
 				Comparator.nullsLast(Comparator.reverseOrder())));
 
 		return records;
+	}
+
+	private static boolean addIfValid(String text, String resourceType, Integer resourceId,
+			Set<String> seenKeys) {
+		if (text == null || text.trim().isEmpty()) {
+			return false;
+		}
+		return seenKeys.add(resourceType + ":" + resourceId);
 	}
 
 	/**
