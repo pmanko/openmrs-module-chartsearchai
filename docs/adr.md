@@ -84,7 +84,7 @@ Map each query type to specific OpenMRS resource types and concept codes.
 #### Option B: Concept graph traversal
 Use the OpenMRS concept dictionary as a knowledge graph. Map query terms to SNOMED concepts, traverse the hierarchy, query matching records.
 
-**Kept as complement.** Fast (milliseconds), deterministic, leverages existing concept dictionary. Weakness: only works for structured/coded data, misses free-text entirely.
+**Deferred.** Fast (milliseconds), deterministic, leverages existing concept dictionary. Weakness: only works for structured/coded data, misses free-text entirely. Could complement embedding search in a future version.
 
 #### Option C: Semantic search index with embeddings — CHOSEN
 Pre-index all patient data with vector embeddings. At query time, find relevant records by embedding similarity.
@@ -108,7 +108,7 @@ Split patient chart into time-based segments, classify each for relevance, only 
 
 ### Decision
 
-Semantic search index as the primary retrieval mechanism, with concept graph traversal as a complement for structured data.
+Semantic search index as the primary retrieval mechanism. Concept graph traversal is deferred to future work as a potential complement for structured data lookups.
 
 ## Decision 4: Concise text as LLM input format
 
