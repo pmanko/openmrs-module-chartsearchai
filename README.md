@@ -34,7 +34,7 @@ Place them alongside the LLM model (e.g., `<openmrs-application-data-directory>/
 
 ### 4. Install
 
-Upload the `.omod` file via **Admin > Manage Modules** in OpenMRS.
+Copy the `.omod` file into the `modules` folder of the OpenMRS application data directory (e.g., `<openmrs-application-data-directory>/modules/`). The module will be loaded on the next OpenMRS startup.
 
 ### 5. Configure
 
