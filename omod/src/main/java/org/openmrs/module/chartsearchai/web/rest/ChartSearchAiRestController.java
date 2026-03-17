@@ -226,60 +226,50 @@ public class ChartSearchAiRestController {
 	 *   <li>{@code error} — an error message if something goes wrong</li>
 	 * </ul>
 	 */
-	@Transactional
 	@RequestMapping(value = "/search/stream", method = RequestMethod.POST,
 			produces = MediaType.TEXT_EVENT_STREAM_VALUE)
 	@ResponseBody
-	public Object searchStream(@RequestBody Map<String, String> body) {
+	public SseEmitter searchStream(@RequestBody Map<String, String> body) {
 		Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA);
 
 		String patientUuid = body.get("patient");
 		String question = body.get("question");
 
 		if (patientUuid == null || patientUuid.trim().isEmpty()) {
-			return new ResponseEntity<Object>(
-					errorResponse("patient is required"), HttpStatus.BAD_REQUEST);
+			return sseError("patient is required");
 		}
 		if (question == null || question.trim().isEmpty()) {
-			return new ResponseEntity<Object>(
-					errorResponse("question is required"), HttpStatus.BAD_REQUEST);
+			return sseError("question is required");
 		}
 		if (question.length() > MAX_QUESTION_LENGTH) {
-			return new ResponseEntity<Object>(
-					errorResponse("question exceeds maximum length of "
-							+ MAX_QUESTION_LENGTH + " characters"),
-					HttpStatus.BAD_REQUEST);
+			return sseError("question exceeds maximum length of "
+					+ MAX_QUESTION_LENGTH + " characters");
 		}
 
 		final String sanitizedQuestion = CONTROL_CHARS.matcher(question).replaceAll("");
 		if (sanitizedQuestion.trim().isEmpty()) {
-			return new ResponseEntity<Object>(
-					errorResponse("question is required"), HttpStatus.BAD_REQUEST);
+			return sseError("question is required");
 		}
 
 		String sanitizationError = validateQuestion(sanitizedQuestion);
 		if (sanitizationError != null) {
-			return new ResponseEntity<Object>(
-					errorResponse(sanitizationError), HttpStatus.BAD_REQUEST);
+			return sseError(sanitizationError);
 		}
 
 		final Patient patient = Context.getPatientService().getPatientByUuid(patientUuid);
 		if (patient == null) {
-			return new ResponseEntity<Object>(
-					errorResponse("Patient not found"), HttpStatus.NOT_FOUND);
+			return sseError("Patient not found");
 		}
 
 		final User user = Context.getAuthenticatedUser();
 
 		if (!patientAccessCheck.canAccess(user, patient)) {
-			return new ResponseEntity<Object>(
-					errorResponse("You do not have access to this patient's chart"),
-					HttpStatus.FORBIDDEN);
+			return sseError("You do not have access to this patient's chart");
 		}
 
 		ResponseEntity<Object> rateLimitError = checkRateLimit(user);
 		if (rateLimitError != null) {
-			return rateLimitError;
+			return sseError("Rate limit exceeded");
 		}
 
 		long timeoutMs = getStreamTimeoutMs();
@@ -555,6 +545,18 @@ public class ChartSearchAiRestController {
 			log.debug("Failed to send SSE error event", e);
 			emitter.completeWithError(e);
 		}
+	}
+
+	private SseEmitter sseError(String message) {
+		SseEmitter emitter = new SseEmitter();
+		try {
+			emitter.send(SseEmitter.event().name("error").data(message));
+			emitter.complete();
+		}
+		catch (IOException e) {
+			emitter.completeWithError(e);
+		}
+		return emitter;
 	}
 
 	private Map<String, String> errorResponse(String message) {

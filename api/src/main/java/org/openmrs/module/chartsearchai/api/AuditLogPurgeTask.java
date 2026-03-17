@@ -49,9 +49,17 @@ public class AuditLogPurgeTask extends AbstractTask {
 				deleted, retentionDays);
 	}
 
-	private int getRetentionDays() {
+	int getRetentionDays() {
 		String value = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_AUDIT_LOG_RETENTION_DAYS);
+		return parseRetentionDays(value);
+	}
+
+	/**
+	 * Parses the retention days from the global property value. Returns the default
+	 * if the value is null, empty, or not a valid integer.
+	 */
+	static int parseRetentionDays(String value) {
 		if (value != null && !value.trim().isEmpty()) {
 			try {
 				return Integer.parseInt(value.trim());

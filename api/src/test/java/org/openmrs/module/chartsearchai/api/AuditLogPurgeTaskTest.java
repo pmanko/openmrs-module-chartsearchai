@@ -13,39 +13,53 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
-import org.springframework.test.util.ReflectionTestUtils;
 
 /**
- * Pure unit tests for {@link AuditLogPurgeTask} retention day parsing.
+ * Unit tests for {@link AuditLogPurgeTask} retention day parsing.
  */
 public class AuditLogPurgeTaskTest {
 
 	@Test
-	public void getRetentionDays_shouldReturnDefaultWhenNotConfigured() {
-		// Uses BaseModuleContextSensitiveTest for Context access
-		// Since getRetentionDays is private and requires Context, we verify the
-		// default constant is reasonable
-		assertEquals(90, ChartSearchAiConstants.DEFAULT_AUDIT_LOG_RETENTION_DAYS);
+	public void parseRetentionDays_shouldReturnDefaultWhenNull() {
+		assertEquals(ChartSearchAiConstants.DEFAULT_AUDIT_LOG_RETENTION_DAYS,
+				AuditLogPurgeTask.parseRetentionDays(null));
 	}
 
 	@Test
-	public void defaultRetentionDays_shouldBePositive() {
-		int days = ChartSearchAiConstants.DEFAULT_AUDIT_LOG_RETENTION_DAYS;
-		assertEquals(90, days);
+	public void parseRetentionDays_shouldReturnDefaultWhenEmpty() {
+		assertEquals(ChartSearchAiConstants.DEFAULT_AUDIT_LOG_RETENTION_DAYS,
+				AuditLogPurgeTask.parseRetentionDays(""));
 	}
 
 	@Test
-	public void cutoffCalculation_shouldConvertDaysToMilliseconds() {
-		int retentionDays = 30;
-		long expectedMs = retentionDays * 24L * 60L * 60L * 1000L;
-		assertEquals(2592000000L, expectedMs);
+	public void parseRetentionDays_shouldReturnDefaultWhenBlank() {
+		assertEquals(ChartSearchAiConstants.DEFAULT_AUDIT_LOG_RETENTION_DAYS,
+				AuditLogPurgeTask.parseRetentionDays("   "));
 	}
 
 	@Test
-	public void cutoffCalculation_shouldNotOverflowForLargeRetentionDays() {
-		int retentionDays = 3650; // 10 years
-		long cutoffMs = retentionDays * 24L * 60L * 60L * 1000L;
-		// Should be positive (no overflow with long arithmetic)
-		assertEquals(315360000000L, cutoffMs);
+	public void parseRetentionDays_shouldReturnDefaultWhenInvalid() {
+		assertEquals(ChartSearchAiConstants.DEFAULT_AUDIT_LOG_RETENTION_DAYS,
+				AuditLogPurgeTask.parseRetentionDays("not-a-number"));
+	}
+
+	@Test
+	public void parseRetentionDays_shouldParseValidValue() {
+		assertEquals(30, AuditLogPurgeTask.parseRetentionDays("30"));
+	}
+
+	@Test
+	public void parseRetentionDays_shouldTrimWhitespace() {
+		assertEquals(60, AuditLogPurgeTask.parseRetentionDays("  60  "));
+	}
+
+	@Test
+	public void parseRetentionDays_shouldReturnZeroWhenSetToZero() {
+		assertEquals(0, AuditLogPurgeTask.parseRetentionDays("0"));
+	}
+
+	@Test
+	public void parseRetentionDays_shouldHandleNegativeValue() {
+		assertEquals(-1, AuditLogPurgeTask.parseRetentionDays("-1"));
 	}
 }
