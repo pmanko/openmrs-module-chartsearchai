@@ -23,7 +23,8 @@ import org.springframework.stereotype.Component;
  * and base {@link Order} for everything else.
  *
  * <p>Example output for a drug order: {@code "Drug order: Metformin 500mg. Dose: 1.0 Tablet(s)
- * Oral twice daily. Duration: 30 Day(s). Action: NEW. Urgency: ROUTINE"}</p>
+ * Oral twice daily. Duration: 30 Day(s). Quantity: 60.0 Tablet(s). Action: NEW.
+ * Urgency: ROUTINE"}</p>
  *
  * <p>Example output for a service/test/referral order: {@code "Order: X-Ray Chest. Laterality:
  * LEFT. Clinical history: Persistent cough for 3 weeks. Action: NEW. Urgency: STAT"}</p>
@@ -117,6 +118,16 @@ public class OrderTextSerializer implements ClinicalTextSerializer<Order> {
 			sb.append(". Duration: ").append(drugOrder.getDuration());
 			if (drugOrder.getDurationUnits() != null) {
 				String units = ConceptNameUtil.getName(drugOrder.getDurationUnits());
+				if (!units.isEmpty()) {
+					sb.append(" ").append(units);
+				}
+			}
+		}
+
+		if (drugOrder.getQuantity() != null) {
+			sb.append(". Quantity: ").append(drugOrder.getQuantity());
+			if (drugOrder.getQuantityUnits() != null) {
+				String units = ConceptNameUtil.getName(drugOrder.getQuantityUnits());
 				if (!units.isEmpty()) {
 					sb.append(" ").append(units);
 				}

@@ -190,6 +190,25 @@ public class OrderTextSerializerTest extends BaseModuleContextSensitiveTest {
 	}
 
 	@Test
+	public void toText_shouldIncludeDrugOrderQuantity() {
+		DrugOrder drugOrder = new DrugOrder();
+		Drug drug = new Drug();
+		drug.setName("Metformin 500mg");
+		drugOrder.setDrug(drug);
+		drugOrder.setAction(Order.Action.NEW);
+		drugOrder.setUrgency(Order.Urgency.ROUTINE);
+		drugOrder.setDateActivated(new Date());
+		drugOrder.setQuantity(60.0);
+
+		Concept quantityUnits = new Concept();
+		quantityUnits.addName(conceptName("Tablet(s)"));
+		drugOrder.setQuantityUnits(quantityUnits);
+
+		String result = serializer.toText(drugOrder);
+		assertTrue(result.contains("Quantity: 60.0 Tablet(s)"));
+	}
+
+	@Test
 	public void toText_shouldIncludeAsNeeded() {
 		DrugOrder drugOrder = new DrugOrder();
 		Drug drug = new Drug();
