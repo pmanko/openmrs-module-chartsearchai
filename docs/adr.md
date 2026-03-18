@@ -247,7 +247,7 @@ The seven resource types above (Obs, Condition, Allergy, Diagnosis, Order, Patie
 | Visit | Pure metadata grouper for encounters. Clinical content lives in the encounters' obs and diagnoses, which are already embedded. |
 | Encounter | Container for obs and diagnoses, which are already captured individually. Encounter type (e.g., "Admission") is implicit in the obs recorded during that encounter. |
 | PersonAttribute | Deployment-specific custom fields (phone, occupation, next of kin). Too variable to serialize generically — may be empty or administrative. |
-| Patient demographics | Age, gender, and birthdate are always visible on the patient dashboard and not chart records in the traditional sense. |
+| Patient demographics | Not embedded as individual records, but age and gender are included as a header line in the LLM prompt (e.g., `Patient: 45-year-old Male`). This gives the LLM context for age- and sex-dependent clinical reasoning without inflating the record count or embedding index. For example: blood pressure 130/85 is concerning for a 25-year-old but unremarkable for a 75-year-old; cancer screening recommendations depend on sex and age (cervical vs prostate); and medication dosing may vary by age. |
 | Relationship | Administrative (e.g., "Mother of Patient X", "Emergency contact"), not clinical. |
 | OrderGroup | Groups related orders (e.g., chemotherapy regimen). The individual orders within the group are already serialized; the group itself is structural. |
 | VisitAttribute | Deployment-specific custom fields on visits. Too variable to serialize generically. |
@@ -365,6 +365,8 @@ The mitigation is the same for both modes: **never present LLM output as clinica
 Source citations are straightforward because we control exactly what the LLM sees. Each serialized record is numbered sequentially before being included in the prompt (sorted most recent first):
 
 ```
+Patient: 45-year-old Male
+
 [1] (2025-10-30) Systolic Blood Pressure: 120 mmHg (ABNORMAL)
 [2] (2018-03-10) Condition: Type 2 Diabetes Mellitus. Status: ACTIVE
 [3] (2025-01-10) Order: Metformin. Action: NEW

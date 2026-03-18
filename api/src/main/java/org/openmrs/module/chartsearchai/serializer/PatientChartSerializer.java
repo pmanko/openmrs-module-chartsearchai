@@ -39,18 +39,21 @@ public class PatientChartSerializer {
 	 * @return the serialized chart with numbered records and index mapping
 	 */
 	public PatientChart serialize(Patient patient) {
-		return serialize(recordLoader.loadAll(patient));
+		return serialize(patient, recordLoader.loadAll(patient));
 	}
 
 	/**
 	 * Serialize a pre-filtered list of records into numbered text lines.
 	 *
+	 * @param patient the patient whose demographics to include
 	 * @param records the records to serialize
 	 * @return the serialized chart with numbered records and index mapping
 	 */
-	public PatientChart serialize(List<SerializedRecord> records) {
+	public PatientChart serialize(Patient patient, List<SerializedRecord> records) {
 		StringBuilder sb = new StringBuilder();
 		List<RecordMapping> mappings = new ArrayList<RecordMapping>();
+
+		appendDemographics(sb, patient);
 
 		for (int i = 0; i < records.size(); i++) {
 			SerializedRecord record = records.get(i);
@@ -65,6 +68,25 @@ public class PatientChartSerializer {
 		}
 
 		return new PatientChart(sb.toString(), Collections.unmodifiableList(mappings));
+	}
+
+	private void appendDemographics(StringBuilder sb, Patient patient) {
+		if (patient == null) {
+			return;
+		}
+		Integer age = patient.getAge();
+		String gender = patient.getGender();
+		if (age == null && gender == null) {
+			return;
+		}
+		sb.append("Patient: ");
+		if (age != null) {
+			sb.append(age).append("-year-old ");
+		}
+		if (gender != null) {
+			sb.append("M".equals(gender) ? "Male" : "F".equals(gender) ? "Female" : gender);
+		}
+		sb.append("\n\n");
 	}
 
 	/**

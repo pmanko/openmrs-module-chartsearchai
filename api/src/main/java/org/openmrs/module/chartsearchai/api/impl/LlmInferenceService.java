@@ -140,7 +140,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 		log.debug("Pre-filtered {} records to {} using embeddings", allRecords.size(), filtered.size());
 
-		return chartSerializer.serialize(filtered);
+		return chartSerializer.serialize(patient, filtered);
 	}
 
 	private boolean usePreFilter() {
