@@ -84,7 +84,7 @@ public class PatientChartSerializer {
 			sb.append(age).append("-year-old ");
 		}
 		if (gender != null) {
-			sb.append("M".equals(gender) ? "Male" : "F".equals(gender) ? "Female" : gender);
+			sb.append("M".equalsIgnoreCase(gender) ? "Male" : "F".equalsIgnoreCase(gender) ? "Female" : gender);
 		}
 		sb.append("\n\n");
 	}
