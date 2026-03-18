@@ -30,7 +30,7 @@ This analysis initially suggested using the LLM only as a fallback, with a deter
 Send a complete FHIR bundle with all patient resources to an LLM for processing.
 
 **Rejected because:**
-- A patient with 5 years of visits could have thousands of resources, producing 500K-2M tokens — far exceeding any local model's context window (4-8K typical).
+- A patient with 5 years of visits could have thousands of resources, producing 500K-2M tokens in FHIR JSON — far exceeding even 128K-token context windows, and massively wasteful due to FHIR's verbose structure (see Decision 4).
 - LLMs lose information buried in the middle of long contexts ("lost in the middle" problem).
 - Processing a massive bundle on a local model would take minutes, not seconds.
 - Maximizes hallucination risk — the model sees lots of clinical terminology and confidently connects dots that don't exist.
@@ -182,7 +182,11 @@ The `UNIQUE KEY (resource_type, resource_id)` constraint prevents duplicate embe
 Three complementary strategies ensure embeddings stay current:
 
 - **On-demand**: When a clinician queries a patient's chart for the first time and no embeddings exist, `LlmInferenceService` triggers `EmbeddingIndexer.indexPatient()` before running the similarity search. This means embeddings are created lazily — no setup required.
-- **Incremental via AOP**: After-returning advice on eight OpenMRS services triggers re-indexing when clinical data changes. The current implementation uses a **delete-and-recompute** strategy: when any record changes, all embeddings for that patient are deleted and recomputed from scratch. This is simpler than tracking which specific embedding corresponds to which record, and guarantees consistency — there is no risk of stale or orphaned embeddings. The cost is re-embedding unchanged records, but this is acceptable because: (a) embedding computation is fast (~50–200ms per patient), (b) most patients have hundreds, not thousands, of records, and (c) the AOP hooks fire on clinical data saves, which happen infrequently relative to reads. A future incremental approach (see Planned future work) would avoid this redundancy for patients with very large charts. The advised services are:
+- **Incremental via AOP**: After-returning advice on eight OpenMRS services triggers re-indexing when clinical data changes. Most services use a **delete-and-recompute** strategy: when any record changes, all embeddings for that patient are deleted and recomputed from scratch. This is simpler than tracking which specific embedding corresponds to which record, and guarantees consistency — there is no risk of stale or orphaned embeddings. The cost is re-embedding unchanged records, but this is acceptable because: (a) embedding computation is fast (~50–200ms per patient), (b) most patients have hundreds, not thousands, of records, and (c) the AOP hooks fire on clinical data saves, which happen infrequently relative to reads. A future incremental approach (see Planned future work) would avoid this redundancy for patients with very large charts.
+
+  The one exception is `EncounterService`, which uses an **incremental** strategy: it upserts only the encounter's obs and diagnoses rather than re-indexing the entire patient. This is a pragmatic optimization because encounters are the most frequent write path (every clinical visit creates one), and an encounter's obs/diagnoses are self-contained enough to update in isolation.
+
+  The advised services are:
   - `EncounterService` — incremental encounter indexing (upserts only the encounter's obs and diagnoses)
   - `ObsService` — full patient re-index on save/void/unvoid/purge of standalone observations
   - `ConditionService` — full patient re-index on save/void/unvoid/purge
@@ -207,7 +211,7 @@ A generic `ClinicalTextSerializer<T>` interface with one implementation per Open
 | `DiagnosisTextSerializer` | `"Diagnosis: Malaria. Certainty: CONFIRMED. Rank: Primary"` |
 | `OrderTextSerializer` | `"Drug order: Metformin 500mg. Dose: 1.0 Tablet(s) Oral twice daily. Duration: 30 Day(s). Action: NEW. Urgency: ROUTINE"` |
 | `PatientProgramTextSerializer` | `"Program: HIV Treatment. Enrolled: 2024-01-15. Status: Active. Current state: On ART"` |
-| `MedicationDispenseTextSerializer` | `"Dispensed: Metformin 500mg. Quantity: 30 Tablet(s). Dose: 1 Tablet(s) Oral twice daily"` |
+| `MedicationDispenseTextSerializer` | `"Dispensed: Metformin 500mg. Status: Completed. Quantity: 30 Tablet(s). Dose: 1 Tablet(s) Oral twice daily"` |
 
 Key design choices:
 - The **record date** (when it was observed/created) is not produced by the serializer itself. Instead, `PatientChartSerializer` prepends it as a citation label when constructing the LLM prompt (e.g., `[1] (2025-10-30) Systolic Blood Pressure: 120 mmHg`). This means the **LLM does see every record's date** — it is just added at the prompt assembly level rather than the serializer level. The date is also included in the API response's `references` array for the UI to display. Records are sorted most-recent-first, giving the LLM a positional recency signal in addition to the explicit date.
@@ -279,7 +283,7 @@ The current architecture (Decisions 3–9) uses a two-model pipeline: an embeddi
 However, if two conditions are met, this complexity can be eliminated entirely:
 
 1. **The full patient chart fits within the LLM's context window.** A patient with 2000 records, each serialized to ~15 tokens by the `ClinicalTextSerializer`, produces ~30K tokens. Models like Mistral 7B (32K context) and Llama 3.2 3B (128K context) can accommodate this.
-2. **A local LLM is available with acceptable latency.** Small quantized models (1.5B–3.8B parameters) can run on CPU via [java-llama.cpp](https://github.com/kherud/java-llama.cpp), which provides Java JNI bindings to llama.cpp and is available on Maven (`de.kherud:llama`). This keeps the module self-contained with no external service dependency.
+2. **A local LLM is available with acceptable latency.** Quantized models (3B–14B parameters) can run on CPU via [java-llama.cpp](https://github.com/kherud/java-llama.cpp), which provides Java JNI bindings to llama.cpp and is available on Maven (`de.kherud:llama`). The recommended 8B model requires ~10GB RAM and produces ~8–12 tokens/sec on CPU. This keeps the module self-contained with no external service dependency.
 
 ### Simplified architecture
 
@@ -362,10 +366,10 @@ The mitigation is the same for both approaches: **never present LLM output as cl
 Source citations are straightforward because we control exactly what the LLM sees. Each serialized record is numbered sequentially before being included in the prompt (sorted most recent first):
 
 ```
-[1] Systolic Blood Pressure: 120 mmHg (ABNORMAL)
-[2] Condition: Type 2 Diabetes Mellitus. Status: ACTIVE
-[3] Order: Metformin. Action: NEW
-[4] HbA1c: 8.2%
+[1] (2025-10-30) Systolic Blood Pressure: 120 mmHg (ABNORMAL)
+[2] (2018-03-10) Condition: Type 2 Diabetes Mellitus. Status: ACTIVE
+[3] (2025-01-10) Order: Metformin. Action: NEW
+[4] (2025-09-15) HbA1c: 8.2%
 ```
 
 The system prompt instructs the LLM to cite record numbers in brackets and respond with a JSON object. A GBNF grammar (`json-answer.gbnf`) constrains the LLM output to the exact format `{"answer": "...", "citations": [1, 2]}`, making it structurally impossible for the LLM to produce malformed citations. The `citations` array is parsed directly as structured data — no regex parsing of free text is needed.
