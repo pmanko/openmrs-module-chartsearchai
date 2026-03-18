@@ -210,12 +210,11 @@ A generic `ClinicalTextSerializer<T>` interface with one implementation per Open
 | `MedicationDispenseTextSerializer` | `"Dispensed: Metformin 500mg. Quantity: 30 Tablet(s). Dose: 1 Tablet(s) Oral twice daily"` |
 
 Key design choices:
-- Serializers omit the **record date** (when it was observed/created) from the serialized text. The record date is instead placed in the citation label (e.g., `[1] (2025-10-30) Systolic Blood Pressure: 120 mmHg`) and included in the API response's `references` array. This avoids three problems:
-  1. **Position conveys recency**: Records are sorted most-recent-first in the prompt, so the LLM gets a simple positional signal it handles well.
-  2. **Dates are in the API response**: The UI displays the actual date alongside each citation without it needing to be in the serialized text.
-  3. **Small LLMs are bad at date math**: Models in the 1.5B–14B range are unreliable at date arithmetic — even 7B models struggle with "How many days between March 15 and June 2?" or "Was this before or after that?" Including dates invites errors like miscalculating durations or confusing date formats. This improves around 13B+ parameters but remains unreliable until much larger models.
+- The **record date** (when it was observed/created) is not produced by the serializer itself. Instead, `PatientChartSerializer` prepends it as a citation label when constructing the LLM prompt (e.g., `[1] (2025-10-30) Systolic Blood Pressure: 120 mmHg`). This means the **LLM does see every record's date** — it is just added at the prompt assembly level rather than the serializer level. The date is also included in the API response's `references` array for the UI to display. Records are sorted most-recent-first, giving the LLM a positional recency signal in addition to the explicit date.
 
-  However, **clinically significant dates within a record** are included when they represent intrinsic facts the LLM cannot infer from position alone:
+  Note that small LLMs (1.5B–14B) are unreliable at date arithmetic — even 7B models struggle with "How many days between March 15 and June 2?" or "Was this before or after that?" This improves around 13B+ parameters but remains unreliable until much larger models. The dates are still included because they are clinically important (e.g., "when was the last blood pressure taken?"), but users should be aware that date-based reasoning may be inaccurate.
+
+  In addition to the citation label date, serializers include **clinically significant dates within a record** when they represent facts distinct from the record date:
   - `ConditionTextSerializer`: end date (`Resolved: 2023-02-01`) — when a condition resolved is a clinical fact distinct from when it was recorded.
   - `OrderTextSerializer`: date stopped (`Stopped: 2024-06-20`) — when an order was discontinued.
   - `MedicationDispenseTextSerializer`: date handed over (`Handed over: 2025-01-10`) — when the patient actually received the medication.
