@@ -63,6 +63,7 @@ Set these global properties in **Admin > Settings**:
 |----------|---------|-------------|
 | `chartsearchai.embedding.preFilter` | `true` | When `true`, uses embedding similarity to narrow patient records to the most relevant ones before sending to the LLM. Set to `false` to send the full chart instead |
 | `chartsearchai.embedding.topK` | `15` | Maximum number of records to retrieve via embedding similarity when pre-filtering is enabled |
+| `chartsearchai.embedding.similarityRatio` | `0.80` | Minimum similarity score as a fraction of the top result's score. Records scoring below this ratio are excluded even if within the topK limit. Must be between 0 and 1 |
 | `chartsearchai.embedding.modelFilePath` | — | Required when pre-filtering is enabled. Relative path to the ONNX model file (all-MiniLM-L6-v2), e.g. `chartsearchai/all-MiniLM-L6-v2.onnx` |
 | `chartsearchai.embedding.vocabFilePath` | — | Required when pre-filtering is enabled. Relative path to the WordPiece `vocab.txt` file, e.g. `chartsearchai/vocab.txt` |
 
@@ -97,6 +98,8 @@ Set these global properties in **Admin > Settings**:
 ### 7. Embeddings
 
 When `chartsearchai.embedding.preFilter` is `true` (default), patient records are automatically indexed on first chart access. Subsequent data changes are indexed incrementally via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, program enrollment, medication dispense, and patient merge operations. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is also available in **Admin > Scheduler > Manage Scheduler** if you prefer to pre-index all patients at once.
+
+**Switching embedding models:** The default model is all-MiniLM-L6-v2 (general-purpose). For better clinical text retrieval, you can switch to a clinical-domain model such as [MedEmbed-small-v1](https://huggingface.co/abhinand/MedEmbed-small-v0.1) (Apache 2.0, 384 dimensions, ~130MB) by updating `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. Any model with 384 dimensions works without code changes. After switching models, existing embeddings are incompatible — run the **"Chart Search AI - Embedding Backfill"** task to re-index all patients with the new model.
 
 ## API
 

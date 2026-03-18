@@ -32,8 +32,8 @@ public class PatientChartSerializerTest {
 
 		PatientChart chart = serializer.serialize(new Patient());
 
-		assertTrue(chart.getText().contains("[1] Blood pressure 120/80\n"));
-		assertTrue(chart.getText().contains("[2] Weight 72 kg\n"));
+		assertTrue(chart.getText().contains("[1] (unknown) Blood pressure 120/80\n"));
+		assertTrue(chart.getText().contains("[2] (unknown) Weight 72 kg\n"));
 	}
 
 	@Test

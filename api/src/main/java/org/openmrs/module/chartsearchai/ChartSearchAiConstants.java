@@ -35,6 +35,10 @@ public class ChartSearchAiConstants {
 
 	public static final int DEFAULT_RETRIEVAL_TOP_K = 15;
 
+	public static final String GP_EMBEDDING_SIMILARITY_RATIO = "chartsearchai.embedding.similarityRatio";
+
+	public static final double DEFAULT_SIMILARITY_RATIO = 0.80;
+
 	public static final String GP_AUDIT_LOG_RETENTION_DAYS = "chartsearchai.auditLogRetentionDays";
 
 	public static final int DEFAULT_AUDIT_LOG_RETENTION_DAYS = 90;

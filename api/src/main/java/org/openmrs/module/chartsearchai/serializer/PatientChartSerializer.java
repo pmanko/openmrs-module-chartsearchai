@@ -16,6 +16,7 @@ import java.util.List;
 
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
+import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -56,7 +57,9 @@ public class PatientChartSerializer {
 			int index = i + 1;
 			mappings.add(new RecordMapping(index, record.getResourceType(), record.getResourceId(), record.getDate()));
 
-			sb.append("[").append(index).append("] ").append(record.getText()).append("\n");
+			sb.append("[").append(index).append("] (")
+					.append(DateFormatUtil.formatDate(record.getDate())).append(") ")
+					.append(record.getText()).append("\n");
 		}
 
 		return new PatientChart(sb.toString(), Collections.unmodifiableList(mappings));

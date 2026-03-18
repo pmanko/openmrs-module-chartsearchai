@@ -166,6 +166,23 @@ public class LlmInferenceService implements ChartSearchService {
 		return ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K;
 	}
 
+	private double getSimilarityRatio() {
+		String value = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_SIMILARITY_RATIO);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				double parsed = Double.parseDouble(value.trim());
+				if (parsed > 0 && parsed < 1) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid similarityRatio value '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO;
+	}
+
 	private List<ChartEmbedding> findSimilar(Patient patient, String question, int topK) {
 		float[] queryVector;
 		try {
@@ -207,11 +224,34 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		});
 
-		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
 		int limit = Math.min(topK, scored.size());
+		double similarityRatio = getSimilarityRatio();
+		double topScore = scored.get(0).score;
+		double minScore = topScore * similarityRatio;
+
+		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
 		for (int i = 0; i < limit; i++) {
-			results.add(scored.get(i).embedding);
+			if (scored.get(i).score >= minScore) {
+				results.add(scored.get(i).embedding);
+			} else {
+				break;
+			}
 		}
+
+		if (log.isDebugEnabled()) {
+			StringBuilder scores = new StringBuilder();
+			for (int i = 0; i < limit; i++) {
+				if (i > 0) {
+					scores.append(", ");
+				}
+				scores.append(String.format("%.4f", scored.get(i).score));
+			}
+			log.debug("Similarity scores: [{}], threshold: {}", scores,
+					String.format("%.4f", minScore));
+		}
+		log.debug("Returning {} of {} candidates (topScore={}, minScore={}, max={})",
+				results.size(), scored.size(),
+				String.format("%.4f", topScore), String.format("%.4f", minScore), topK);
 		return results;
 	}
 

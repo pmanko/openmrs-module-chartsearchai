@@ -106,6 +106,12 @@ Question: Does the patient have diabetes?
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.embedding.similarityRatio</property>
+		<defaultValue>0.80</defaultValue>
+		<description>Minimum similarity score as a fraction of the top result's score. Records scoring below this ratio are excluded even if within the topK limit. For example, 0.80 means a record must have at least 80% of the best match's similarity score. Lower values include more records; higher values are more selective. Must be between 0 and 1. Default: 0.80.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.embedding.modelFilePath</property>
 		<defaultValue></defaultValue>
 		<description>Relative path, including the filename, within the OpenMRS application data directory to the ONNX embedding model file. Required when embedding pre-filtering is enabled (chartsearchai.embedding.preFilter is true, the default). Example: chartsearchai/all-MiniLM-L6-v2.onnx (resolves to &lt;application-data-directory&gt;/chartsearchai/all-MiniLM-L6-v2.onnx). Download the model.onnx file from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 and rename it. Path traversal (e.g. "..") is not allowed.</description>

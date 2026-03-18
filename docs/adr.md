@@ -482,6 +482,14 @@ Embeddings are indexed on first patient chart access and kept up to date automat
 
 Embeddings use all-MiniLM-L6-v2 via ONNX Runtime (~90MB model file, configured via `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`).
 
+### Embedding model selection
+
+The default embedding model (all-MiniLM-L6-v2) is general-purpose. For clinical text, it produces narrow similarity score ranges (e.g., 0.20–0.31) with poor separation between relevant and irrelevant records. A clinical-domain model like [MedEmbed-small-v1](https://huggingface.co/abhinand/MedEmbed-small-v0.1) (Apache 2.0, 384 dimensions, ~130MB), fine-tuned on PubMed clinical notes, is expected to produce wider score separation and better retrieval quality.
+
+Any ONNX model with 384 embedding dimensions can be used as a drop-in replacement by updating `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. After switching models, all existing embeddings must be recomputed by running the backfill task, since embeddings from different models are not compatible.
+
+A `chartsearchai.embedding.similarityRatio` setting (default 0.80) filters out low-relevance records by requiring each record to score at least 80% of the top result's similarity score. This works alongside `topK` as a quality floor — `topK` sets the maximum number of records, while `similarityRatio` drops noise within that cap.
+
 ### Chunking strategy
 
 No chunking is used. Each patient record (obs, condition, diagnosis, allergy, order, program enrollment, medication dispense) is serialized as a single text string and embedded as one unit. This is possible because individual clinical records are naturally short — typically a sentence or two — so they fit well within the embedding model's 256-token window without splitting. This avoids the complexity of chunk boundary management, overlap strategies, and reassembly that document-oriented RAG systems require.

@@ -20,6 +20,7 @@ import java.util.Date;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 
@@ -131,6 +132,12 @@ public class LlmInferenceServiceTest {
 		assertEquals(recent, result.get(0).getDate());
 		assertEquals(Integer.valueOf(100), result.get(1).getResourceId());
 		assertNull(result.get(1).getDate());
+	}
+
+	@Test
+	public void defaultSimilarityRatio_shouldBeBetweenZeroAndOne() {
+		assertTrue(ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO > 0);
+		assertTrue(ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO < 1);
 	}
 
 	private static Date makeDate(int year, int month, int day) {
