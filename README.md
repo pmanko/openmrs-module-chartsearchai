@@ -27,7 +27,7 @@ Download Llama 3.3 8B (Q4_K_M quantization) in GGUF format (~5GB) from [Hugging 
 
 Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<openmrs-application-data-directory>/chartsearchai/`). Model paths are resolved relative to this directory for security.
 
-**Upgrade models for servers with more RAM:**
+**Available models:**
 
 | Model | RAM Needed | Chat Template | Download |
 |-------|-----------|---------------|----------|
@@ -55,7 +55,7 @@ Set these global properties in **Admin > Settings**:
 
 | Property | Description |
 |----------|-------------|
-| `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/Llama-3.2-3B-Instruct-Q4_K_M.gguf` |
+| `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf` |
 
 #### Embedding pre-filter
 
@@ -97,9 +97,9 @@ Set these global properties in **Admin > Settings**:
 
 ### 7. Embeddings
 
-When `chartsearchai.embedding.preFilter` is `true` (default), patient records are automatically indexed on first chart access. Subsequent data changes are indexed incrementally via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, program enrollment, medication dispense, and patient merge operations. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is also available in **Admin > Scheduler > Manage Scheduler** if you prefer to pre-index all patients at once.
+When `chartsearchai.embedding.preFilter` is `true` (default), patient records are automatically indexed on first chart access. Subsequent data changes trigger automatic re-indexing via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, program enrollment, medication dispense, and patient merge operations. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is also available in **Admin > Scheduler > Manage Scheduler** if you prefer to pre-index all patients at once.
 
-**Switching embedding models:** The default model is all-MiniLM-L6-v2 (general-purpose, 384 dimensions). For better clinical text retrieval, you can switch to a clinical-domain model such as [NeuML/pubmedbert-base-embeddings](https://huggingface.co/NeuML/pubmedbert-base-embeddings) (Apache 2.0, 768 dimensions, ~440MB) by updating `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. Embedding dimensions are auto-detected from the model output, so models with any dimension size work without code changes. After switching models, existing embeddings are incompatible — run the **"Chart Search AI - Embedding Backfill"** task to re-index all patients with the new model.
+**Switching embedding models:** The default model is all-MiniLM-L6-v2 (general-purpose, 384 dimensions). Any BERT-based ONNX embedding model can be used as a drop-in replacement by updating `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. Embedding dimensions are auto-detected from the model output, so models with any dimension size work without code changes. After switching models, existing embeddings are incompatible — run the **"Chart Search AI - Embedding Backfill"** task to re-index all patients with the new model.
 
 ## API
 
