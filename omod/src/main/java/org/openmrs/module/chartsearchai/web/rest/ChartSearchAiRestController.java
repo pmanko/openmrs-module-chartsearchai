@@ -82,12 +82,12 @@ public class ChartSearchAiRestController {
 	// and can be bypassed with paraphrasing. The primary defense is the GBNF grammar
 	// which constrains LLM output to a fixed JSON structure regardless of prompt content.
 	private static final Pattern PROMPT_INJECTION = Pattern.compile(
-			"(?i)(ignore (previous|above|all) (instructions|prompts|rules)"
-			+ "|disregard (your|the|all) (instructions|rules|prompt)"
-			+ "|override (your|the|all) (instructions|rules|prompt)"
-			+ "|bypass (your|the|all) (instructions|rules|prompt)"
-			+ "|you are now|new instructions:|system prompt:"
-			+ "|forget (your|the|all|previous) (instructions|rules|prompt))");
+			"(?i)(ignore\\s+(previous|above|all)\\s+(instructions|prompts|rules)"
+			+ "|disregard\\s+(your|the|all)\\s+(instructions|rules|prompt)"
+			+ "|override\\s+(your|the|all)\\s+(instructions|rules|prompt)"
+			+ "|bypass\\s+(your|the|all)\\s+(instructions|rules|prompt)"
+			+ "|you\\s+are\\s+now|new\\s+instructions:|system\\s+prompt:"
+			+ "|forget\\s+(your|the|all|previous)\\s+(instructions|rules|prompt))");
 
 	private static final String DISCLAIMER = "This response is AI-generated and may not be "
 			+ "accurate. It is not a substitute for clinical judgment. Always verify against "
