@@ -28,9 +28,6 @@ public class ChartSearchAiConstants {
 
 	public static final String GP_EMBEDDING_VOCAB_FILE_PATH = "chartsearchai.embedding.vocabFilePath";
 
-
-	public static final int EMBEDDING_DIMENSIONS = 384;
-
 	public static final String GP_EMBEDDING_TOP_K = "chartsearchai.embedding.topK";
 
 	public static final int DEFAULT_RETRIEVAL_TOP_K = 15;

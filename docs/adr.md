@@ -148,7 +148,7 @@ Embed at the **individual record level**. Each record is serialized to concise c
 
 ### Decision
 
-Semantic vectors via **all-MiniLM-L6-v2** running in-process through ONNX Runtime. ~90MB model file, runs on CPU, no GPU needed. Produces 384-dimensional vectors. Requires two files configured via `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. Captures semantic meaning — effective for clinical queries where synonyms and related concepts matter (e.g., "hypertension" and "high blood pressure" are recognized as related).
+Semantic vectors via **all-MiniLM-L6-v2** running in-process through ONNX Runtime. ~90MB model file, runs on CPU, no GPU needed. Produces 384-dimensional vectors. Requires two files configured via `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. Captures semantic meaning — effective for clinical queries where synonyms and related concepts matter (e.g., "hypertension" and "high blood pressure" are recognized as related). Embedding dimensions are auto-detected from the model output on first use, so models with different dimensions (e.g., 768-dim pubmedbert-base-embeddings) work without code changes.
 
 A term-frequency hashing approach was considered as a simpler alternative (no model file needed, keyword-overlap retrieval). It was rejected because it cannot capture semantic similarity — for a clinical question like "any infections?", it would find records containing the word "infection" but miss "tuberculosis", "malaria", or "UTI". This defeats the purpose of pre-filtering, since the LLM with the full chart would catch all of these.
 
@@ -161,7 +161,7 @@ MySQL does not natively support vector embeddings (native `VECTOR` type was adde
 However, a vector database is unnecessary for this use case because:
 - Search is **per-patient**, not across all patients
 - A patient with 2000 records means 2000 vector comparisons — trivial in Java (microseconds)
-- Embeddings are stored as BLOBs (~1.5KB per record for 384 dimensions)
+- Embeddings are stored as BLOBs (~1.5KB per record for 384 dimensions, ~3KB for 768 dimensions)
 
 ### Decision
 
@@ -484,9 +484,9 @@ Embeddings use all-MiniLM-L6-v2 via ONNX Runtime (~90MB model file, configured v
 
 ### Embedding model selection
 
-The default embedding model (all-MiniLM-L6-v2) is general-purpose. For clinical text, it produces narrow similarity score ranges (e.g., 0.20–0.31) with poor separation between relevant and irrelevant records. A clinical-domain model like [MedEmbed-small-v1](https://huggingface.co/abhinand/MedEmbed-small-v0.1) (Apache 2.0, 384 dimensions, ~130MB), fine-tuned on PubMed clinical notes, is expected to produce wider score separation and better retrieval quality.
+The default embedding model (all-MiniLM-L6-v2) is general-purpose. For clinical text, it produces narrow similarity score ranges (e.g., 0.20–0.31) with poor separation between relevant and irrelevant records. A clinical-domain model like [NeuML/pubmedbert-base-embeddings](https://huggingface.co/NeuML/pubmedbert-base-embeddings) (Apache 2.0, 768 dimensions, ~440MB), fine-tuned on PubMed text, is expected to produce wider score separation and better retrieval quality.
 
-Any ONNX model with 384 embedding dimensions can be used as a drop-in replacement by updating `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. After switching models, all existing embeddings must be recomputed by running the backfill task, since embeddings from different models are not compatible.
+Any BERT-based ONNX embedding model can be used as a drop-in replacement by updating `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. Embedding dimensions are auto-detected from the model output — both 384-dim and 768-dim models (and any other size) work without code changes. After switching models, all existing embeddings must be recomputed by running the backfill task, since embeddings from different models are not compatible.
 
 A `chartsearchai.embedding.similarityRatio` setting (default 0.80) filters out low-relevance records by requiring each record to score at least 80% of the top result's similarity score. This works alongside `topK` as a quality floor — `topK` sets the maximum number of records, while `similarityRatio` drops noise within that cap.
 
@@ -616,6 +616,10 @@ Embedding computation is faster (~50–200ms per patient) so the embedding lock 
 - **External inference server**: Offload to a dedicated inference server (e.g., llama.cpp server mode, vLLM, Ollama) that manages its own concurrency. This decouples the module from native memory constraints but adds an external dependency.
 
 For the initial release targeting small clinics with low concurrent usage, the serialized approach is acceptable and avoids the complexity of managing multiple native contexts.
+
+## Known limitations
+
+- **Counting questions**: LLMs are unreliable at precise counting tasks (e.g., "how many weight records in the last 10 years?"). The model may undercount or overcount even when all relevant records are provided. Larger, more capable models perform better at counting but are still not perfectly reliable. This is a fundamental limitation of LLM inference, not a retrieval issue. Questions that require exact counts are better suited to structured queries.
 
 ## Planned future work
 

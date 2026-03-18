@@ -9,17 +9,25 @@
  */
 package org.openmrs.module.chartsearchai.embedding;
 
-import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
-
 /**
  * Stub embedding provider for tests. Uses hash-based vectors so tests
- * do not require ONNX model files.
+ * do not require ONNX model files. Dimensions default to 384 but can
+ * be changed via the constructor to simulate different embedding models.
  */
 public class StubEmbeddingProvider implements EmbeddingProvider {
 
+	private final int dimensions;
+
+	public StubEmbeddingProvider() {
+		this(384);
+	}
+
+	public StubEmbeddingProvider(int dimensions) {
+		this.dimensions = dimensions;
+	}
+
 	@Override
 	public float[] embed(String text) {
-		int dimensions = ChartSearchAiConstants.EMBEDDING_DIMENSIONS;
 		float[] embedding = new float[dimensions];
 
 		String[] tokens = text.toLowerCase().split("\\W+");
@@ -47,6 +55,6 @@ public class StubEmbeddingProvider implements EmbeddingProvider {
 
 	@Override
 	public int getDimensions() {
-		return ChartSearchAiConstants.EMBEDDING_DIMENSIONS;
+		return dimensions;
 	}
 }

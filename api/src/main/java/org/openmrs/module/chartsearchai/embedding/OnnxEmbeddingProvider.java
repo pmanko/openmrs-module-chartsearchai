@@ -26,9 +26,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * Embedding provider using ONNX Runtime with the all-MiniLM-L6-v2 model. Produces
- * 384-dimensional vectors for semantic similarity search. The ONNX model file path
- * is configured via the {@code chartsearchai.embedding.modelFilePath} global property.
+ * Embedding provider using ONNX Runtime. Supports any BERT-based sentence embedding
+ * model (e.g. all-MiniLM-L6-v2 at 384 dimensions, pubmedbert-base-embeddings at 768).
+ * The embedding dimensions are detected automatically from the model output on first use.
+ * The ONNX model file path is configured via the {@code chartsearchai.embedding.modelFilePath}
+ * global property.
  */
 @Component("chartSearchAi.embeddingProvider")
 public class OnnxEmbeddingProvider implements EmbeddingProvider {
@@ -44,6 +46,8 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 	private String loadedModelPath;
 
 	private WordPieceTokenizer tokenizer;
+
+	private int detectedDimensions = -1;
 
 	@Override
 	public synchronized float[] embed(String text) {
@@ -69,13 +73,15 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 			// Mean pooling over token embeddings (masked by attention)
 			float[][][] output = (float[][][]) result.get(0).getValue();
 			int modelDimensions = output[0][0].length;
-			if (modelDimensions != ChartSearchAiConstants.EMBEDDING_DIMENSIONS) {
-				throw new OrtException("ONNX model output dimensions (" + modelDimensions
-						+ ") do not match expected dimensions ("
-						+ ChartSearchAiConstants.EMBEDDING_DIMENSIONS
-						+ "). Ensure the correct embedding model is configured.");
+			if (detectedDimensions == -1) {
+				detectedDimensions = modelDimensions;
+				log.info("Detected embedding dimensions: {}", detectedDimensions);
+			} else if (modelDimensions != detectedDimensions) {
+				throw new OrtException("ONNX model output dimensions changed ("
+						+ modelDimensions + " vs previously detected "
+						+ detectedDimensions + "). Was the model swapped without reloading?");
 			}
-			float[] embedding = new float[ChartSearchAiConstants.EMBEDDING_DIMENSIONS];
+			float[] embedding = new float[modelDimensions];
 			long[] attentionMask = tokenized.getAttentionMask();
 			int tokenCount = 0;
 			for (int i = 0; i < seqLen; i++) {
@@ -131,7 +137,7 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 	@Override
 	public int getDimensions() {
-		return ChartSearchAiConstants.EMBEDDING_DIMENSIONS;
+		return detectedDimensions;
 	}
 
 	public synchronized void close() {
@@ -147,6 +153,7 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 			loadedModelPath = null;
 			tokenizer = null;
 			env = null;
+			detectedDimensions = -1;
 		}
 	}
 
