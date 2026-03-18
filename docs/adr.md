@@ -163,6 +163,12 @@ However, a vector database is unnecessary for this use case because:
 - A patient with 2000 records means 2000 vector comparisons — trivial in Java (microseconds)
 - Embeddings are stored as BLOBs (~1.5KB per record for 384 dimensions, ~3KB for 768 dimensions)
 
+### Why not a vector database?
+
+Vector databases (pgvector, Milvus, Pinecone, etc.) use approximate nearest neighbor (ANN) algorithms to efficiently search across millions or billions of vectors. This module searches at most a few thousand vectors per patient — brute-force cosine similarity in Java completes in microseconds, so there is no scale problem for ANN to solve.
+
+Adding a vector database would introduce extra infrastructure to install, configure, and maintain in low-resource settings that already struggle with MySQL + Tomcat — with no performance benefit. It would also return approximate results instead of exact ones, adding a source of retrieval error for no gain. The LLM inference step takes 15–45 seconds; the similarity search is never the bottleneck.
+
 ### Decision
 
 Store embeddings as `MEDIUMBLOB` in a regular MySQL table (`chartsearchai_embedding`), indexed by `patient_id`. Load a patient's embeddings into memory and compute cosine similarity in Java. Zero new infrastructure.
