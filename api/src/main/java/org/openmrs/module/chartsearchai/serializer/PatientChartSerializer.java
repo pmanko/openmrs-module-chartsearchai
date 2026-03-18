@@ -57,9 +57,11 @@ public class PatientChartSerializer {
 			int index = i + 1;
 			mappings.add(new RecordMapping(index, record.getResourceType(), record.getResourceId(), record.getDate()));
 
-			sb.append("[").append(index).append("] (")
-					.append(DateFormatUtil.formatDate(record.getDate())).append(") ")
-					.append(record.getText()).append("\n");
+			sb.append("[").append(index).append("] ");
+			if (record.getDate() != null) {
+				sb.append("(").append(DateFormatUtil.formatDate(record.getDate())).append(") ");
+			}
+			sb.append(record.getText()).append("\n");
 		}
 
 		return new PatientChart(sb.toString(), Collections.unmodifiableList(mappings));
