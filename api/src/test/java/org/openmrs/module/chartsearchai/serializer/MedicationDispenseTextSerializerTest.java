@@ -49,6 +49,36 @@ public class MedicationDispenseTextSerializerTest extends BaseModuleContextSensi
 	}
 
 	@Test
+	public void toText_shouldIncludeStatus() {
+		MedicationDispense dispense = new MedicationDispense();
+		Drug drug = new Drug();
+		drug.setName("Metformin 500mg");
+		dispense.setDrug(drug);
+
+		Concept status = new Concept();
+		status.addName(conceptName("Completed"));
+		dispense.setStatus(status);
+
+		String result = serializer.toText(dispense);
+		assertTrue(result.contains("Status: Completed"));
+	}
+
+	@Test
+	public void toText_shouldIncludeDeclinedStatus() {
+		MedicationDispense dispense = new MedicationDispense();
+		Drug drug = new Drug();
+		drug.setName("Amoxicillin 250mg");
+		dispense.setDrug(drug);
+
+		Concept status = new Concept();
+		status.addName(conceptName("Declined"));
+		dispense.setStatus(status);
+
+		String result = serializer.toText(dispense);
+		assertTrue(result.contains("Status: Declined"));
+	}
+
+	@Test
 	public void toText_shouldIncludeDoseAndRoute() {
 		MedicationDispense dispense = new MedicationDispense();
 		Drug drug = new Drug();

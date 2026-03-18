@@ -17,10 +17,13 @@ import org.springframework.stereotype.Component;
 /**
  * Serializes a {@link MedicationDispense} into embedding-friendly text.
  *
- * <p>Example output: {@code "Dispensed: Metformin 500mg. Quantity: 30 Tablet(s).
- * Dose: 1 Tablet(s) Oral twice daily. Status reason: Out of stock.
- * Substituted: Generic equivalent. Substitution reason: Cost.
+ * <p>Example output: {@code "Dispensed: Metformin 500mg. Status: Completed.
+ * Quantity: 30 Tablet(s). Dose: 1 Tablet(s) Oral twice daily.
  * Handed over: 2024-06-15"}</p>
+ *
+ * <p>Example with substitution: {@code "Dispensed: Metformin 500mg. Status: Completed.
+ * Status reason: Out of stock. Substituted: Generic equivalent.
+ * Substitution reason: Cost. Handed over: 2024-06-15"}</p>
  */
 @Component
 public class MedicationDispenseTextSerializer implements ClinicalTextSerializer<MedicationDispense> {
@@ -32,6 +35,16 @@ public class MedicationDispenseTextSerializer implements ClinicalTextSerializer<
 		String drugName = getDrugName(dispense);
 		if (!drugName.isEmpty()) {
 			sb.append("Dispensed: ").append(drugName);
+		}
+
+		if (dispense.getStatus() != null) {
+			String status = ConceptNameUtil.getName(dispense.getStatus());
+			if (!status.isEmpty()) {
+				if (sb.length() > 0) {
+					sb.append(". ");
+				}
+				sb.append("Status: ").append(status);
+			}
 		}
 
 		if (dispense.getQuantity() != null) {
