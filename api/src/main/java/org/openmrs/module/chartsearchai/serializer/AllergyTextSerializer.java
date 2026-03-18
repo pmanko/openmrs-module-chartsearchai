@@ -44,21 +44,27 @@ public class AllergyTextSerializer implements ClinicalTextSerializer<Allergy> {
 
 		List<AllergyReaction> reactions = allergy.getReactions();
 		if (reactions != null && !reactions.isEmpty()) {
-			if (sb.length() > 0) {
-				sb.append(". ");
-			}
-			sb.append("Reactions: ");
-			for (int i = 0; i < reactions.size(); i++) {
-				if (i > 0) {
-					sb.append(", ");
-				}
-				AllergyReaction reaction = reactions.get(i);
+			StringBuilder reactionSb = new StringBuilder();
+			for (AllergyReaction reaction : reactions) {
+				String reactionName = "";
 				if (reaction.getReaction() != null) {
-					sb.append(ConceptNameUtil.getName(reaction.getReaction()));
+					reactionName = ConceptNameUtil.getName(reaction.getReaction());
 				} else if (reaction.getReactionNonCoded() != null
 						&& !reaction.getReactionNonCoded().trim().isEmpty()) {
-					sb.append(reaction.getReactionNonCoded().trim());
+					reactionName = reaction.getReactionNonCoded().trim();
 				}
+				if (!reactionName.isEmpty()) {
+					if (reactionSb.length() > 0) {
+						reactionSb.append(", ");
+					}
+					reactionSb.append(reactionName);
+				}
+			}
+			if (reactionSb.length() > 0) {
+				if (sb.length() > 0) {
+					sb.append(". ");
+				}
+				sb.append("Reactions: ").append(reactionSb);
 			}
 		}
 		if (allergy.getComments() != null && !allergy.getComments().trim().isEmpty()) {

@@ -224,6 +224,10 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		});
 
+		if (scored.isEmpty()) {
+			return Collections.emptyList();
+		}
+
 		int limit = Math.min(topK, scored.size());
 		double similarityRatio = getSimilarityRatio();
 		double topScore = scored.get(0).score;

@@ -87,18 +87,27 @@ public class MedicationDispenseTextSerializer implements ClinicalTextSerializer<
 
 		if (dispense.getDosingInstructions() != null
 				&& !dispense.getDosingInstructions().trim().isEmpty()) {
-			sb.append(". Instructions: ").append(dispense.getDosingInstructions().trim());
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Instructions: ").append(dispense.getDosingInstructions().trim());
 		}
 
 		if (dispense.getStatusReason() != null) {
 			String reason = ConceptNameUtil.getName(dispense.getStatusReason());
 			if (!reason.isEmpty()) {
-				sb.append(". Status reason: ").append(reason);
+				if (sb.length() > 0) {
+					sb.append(". ");
+				}
+				sb.append("Status reason: ").append(reason);
 			}
 		}
 
 		if (dispense.getWasSubstituted() != null && dispense.getWasSubstituted()) {
-			sb.append(". Substituted");
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Substituted");
 			if (dispense.getSubstitutionType() != null) {
 				String type = ConceptNameUtil.getName(dispense.getSubstitutionType());
 				if (!type.isEmpty()) {
@@ -114,7 +123,10 @@ public class MedicationDispenseTextSerializer implements ClinicalTextSerializer<
 		}
 
 		if (dispense.getDateHandedOver() != null) {
-			sb.append(". Handed over: ").append(DateFormatUtil.formatDate(dispense.getDateHandedOver()));
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Handed over: ").append(DateFormatUtil.formatDate(dispense.getDateHandedOver()));
 		}
 
 		return sb.toString();

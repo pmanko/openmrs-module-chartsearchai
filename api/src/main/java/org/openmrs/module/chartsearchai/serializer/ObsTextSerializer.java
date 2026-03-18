@@ -37,6 +37,10 @@ public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {
 			}
 			boolean first = true;
 			for (Obs member : obs.getGroupMembers()) {
+				String memberValue = formatValue(member);
+				if (memberValue.isEmpty()) {
+					continue;
+				}
 				if (!first) {
 					sb.append("; ");
 				}
@@ -45,16 +49,20 @@ public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {
 				if (!memberName.isEmpty()) {
 					sb.append(memberName).append(": ");
 				}
-				sb.append(formatValue(member));
+				sb.append(memberValue);
 				if (member.getInterpretation() != null) {
 					sb.append(" (").append(member.getInterpretation()).append(")");
 				}
 			}
 		} else {
+			String value = formatValue(obs);
+			if (value.isEmpty()) {
+				return "";
+			}
 			if (!conceptName.isEmpty()) {
 				sb.append(conceptName).append(": ");
 			}
-			sb.append(formatValue(obs));
+			sb.append(value);
 
 			if (obs.getInterpretation() != null) {
 				sb.append(" (").append(obs.getInterpretation()).append(")");
@@ -84,7 +92,7 @@ public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {
 		if (obs.getValueDatetime() != null) {
 			return DateFormatUtil.formatDate(obs.getValueDatetime());
 		}
-		if (obs.getValueDrug() != null) {
+		if (obs.getValueDrug() != null && obs.getValueDrug().getName() != null) {
 			return obs.getValueDrug().getName();
 		}
 		return "";

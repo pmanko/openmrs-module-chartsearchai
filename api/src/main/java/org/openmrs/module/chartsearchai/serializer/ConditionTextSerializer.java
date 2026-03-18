@@ -38,13 +38,22 @@ public class ConditionTextSerializer implements ClinicalTextSerializer<Condition
 		}
 
 		if (condition.getVerificationStatus() != null) {
-			sb.append(". Verification: ").append(condition.getVerificationStatus());
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Verification: ").append(condition.getVerificationStatus());
 		}
 		if (condition.getAdditionalDetail() != null && !condition.getAdditionalDetail().trim().isEmpty()) {
-			sb.append(". Detail: ").append(condition.getAdditionalDetail().trim());
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Detail: ").append(condition.getAdditionalDetail().trim());
 		}
 		if (condition.getEndDate() != null) {
-			sb.append(". Resolved: ").append(DateFormatUtil.formatDate(condition.getEndDate()));
+			if (sb.length() > 0) {
+				sb.append(". ");
+			}
+			sb.append("Resolved: ").append(DateFormatUtil.formatDate(condition.getEndDate()));
 			if (condition.getEndReason() != null && !condition.getEndReason().trim().isEmpty()) {
 				sb.append(" (").append(condition.getEndReason().trim()).append(")");
 			}
