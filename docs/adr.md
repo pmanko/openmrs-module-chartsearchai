@@ -492,6 +492,19 @@ A `chartsearchai.embedding.similarityRatio` setting (default 0.80) filters out l
 
 No chunking is used. Each patient record (obs, condition, diagnosis, allergy, order, program enrollment, medication dispense) is serialized as a single text string and embedded as one unit. This is possible because individual clinical records are naturally short — typically a sentence or two — so they fit well within the embedding model's 256-token window without splitting. This avoids the complexity of chunk boundary management, overlap strategies, and reassembly that document-oriented RAG systems require.
 
+### Serialization format
+
+Records are serialized as labeled plain text (e.g., `Condition: Diabetes. Status: ACTIVE`). This was chosen over structured formats for token efficiency:
+
+| Format | Example | Tokens (approx.) |
+|--------|---------|-------------------|
+| **Plain text (chosen)** | `Condition: Diabetes. Status: ACTIVE` | ~8 |
+| JSON | `{"type":"condition","name":"Diabetes","status":"ACTIVE"}` | ~18 |
+| FHIR JSON | `{"resourceType":"Condition","code":{"text":"Diabetes"},"clinicalStatus":{"coding":[{"code":"active"}]}}` | ~30+ |
+| XML | `<condition><name>Diabetes</name><status>ACTIVE</status></condition>` | ~16 |
+
+With 15 records per query and potentially hundreds of patients per day, the token savings compound. Plain text also reads naturally, which helps smaller LLMs that perform better with human-readable input than structured formats. Field labels (e.g., "Status:", "Severity:") provide enough structure for the LLM to extract information without the overhead of delimiters, braces, or tags.
+
 ### Serialized fields per record type
 
 Each record type is serialized into a concise text string. The fields below are chosen for clinical value while minimizing token count.
