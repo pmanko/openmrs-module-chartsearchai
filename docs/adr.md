@@ -375,20 +375,18 @@ As a safety net, any slash-separated citations that small LLMs occasionally prod
 | Mistral Nemo 12B | ~7GB | ~12GB | 128K tokens | ~4–8 tok/s |
 | Qwen 2.5 14B | ~8GB | ~14GB | 128K tokens | ~3–6 tok/s |
 
-### Recommended model: Llama 3.2 3B
+### Recommended model: Llama 3.3 8B
 
-Llama 3.2 3B is the default recommendation for low-resource deployments. Its 128K token context window can hold approximately 6,000 serialized patient records (~15 tokens each), which comfortably accommodates even the largest patient charts. At 3B parameters with Q4_K_M quantization, it is ~2GB on disk and runs at ~20–30 tokens per second on CPU — fast enough for acceptable clinical use.
+Llama 3.3 8B is the default recommendation. Its 128K token context window can hold approximately 6,000 serialized patient records (~15 tokens each), which comfortably accommodates even the largest patient charts. At 8B parameters with Q4_K_M quantization, it is ~5GB on disk and requires ~10GB total RAM. It offers strong instruction following and medical text comprehension — significantly better than 3B models at reasoning, citation accuracy, and avoiding hallucinations.
 
-### Recommended upgrade models
-
-For servers with more RAM, these models offer significantly better answer quality (more accurate, better instruction following, fewer hallucinations):
+### Alternative models
 
 | Model | RAM Needed | Chat Template | Why |
 |-------|-----------|---------------|-----|
-| **Llama 3.3 8B** | ~10GB total | `llama3` | Best all-around upgrade from 3B. Strong instruction following and medical text comprehension. Same Llama template — only the model file path changes. |
+| **Llama 3.2 3B** | ~6GB total | `llama3` | For low-resource deployments where 10GB RAM is not available. Faster inference but weaker instruction following and reasoning. |
 | **Mistral Nemo 12B** | ~12GB total | `mistral` | Best sub-15B option for clinical Q&A. Strong medical text comprehension and 128K context window. Requires changing both model path and chat template. |
 
-These are the recommended upgrade paths because they are from US/EU organizations (Meta and Mistral AI respectively), have strong performance on medical benchmarks, and use chat templates already supported by the module. Switching requires only two global property changes (`modelFilePath` and `chatTemplate`) — no code changes or module rebuild.
+These models are from US/EU organizations (Meta and Mistral AI respectively), have strong performance on medical benchmarks, and use chat templates already supported by the module. Switching requires only two global property changes (`modelFilePath` and `chatTemplate`) — no code changes or module rebuild.
 
 ### Other alternatives
 
@@ -402,11 +400,11 @@ All models run via java-llama.cpp with Q4_K_M quantization in GGUF format.
 
 ### Licensing
 
-Llama 3.2 3B is free for both research and commercial use under the [Llama 3.2 Community License](https://www.llama.com/llama3_2/license/). No fees or royalties apply. The license permits use, modification, and distribution.
+Llama 3.3 8B is free for both research and commercial use under the [Llama 3.2 Community License](https://www.llama.com/llama3_2/license/). No fees or royalties apply. The license permits use, modification, and distribution.
 
 The model is not technically "open source" by the [Open Source Initiative's definition](https://opensource.org/blog/metas-llama-license-is-still-not-open-source) — Meta's license includes restrictions that do not meet OSI criteria. However, for practical purposes the only meaningful restriction is that products with over 700 million monthly active users require a separate license from Meta, which is not a concern for OpenMRS.
 
-The license requires the following attribution to be included in all distributed copies: *"Llama 3.2 is licensed under the Llama 3.2 Community License, Copyright (C) Meta Platforms, Inc. All Rights Reserved."*
+The license requires the following attribution to be included in all distributed copies: *"Llama 3.3 is licensed under the Llama 3.2 Community License, Copyright (C) Meta Platforms, Inc. All Rights Reserved."*
 
 ### Deployment and memory requirements
 
@@ -459,7 +457,7 @@ The module works with any GGUF-format model. Larger models produce better respon
 
 **3B models** are the most deployable in low-resource settings but struggle with strict instruction following — they tend to produce verbose responses, add unsolicited commentary, and hedge when they should give a direct "not found" answer. Few-shot examples in the system prompt help but do not fully solve this.
 
-**7B models** are the recommended middle ground — significantly better instruction following and clinical reasoning, while still feasible on a server with 10GB RAM.
+**8B models** (e.g. Llama 3.3 8B) are the recommended default — significantly better instruction following and clinical reasoning than 3B, while still feasible on a server with 10GB RAM.
 
 **9B models** (e.g. Gemma 2 9B Instruct) offer excellent reasoning and instruction following. Note that Gemma 2's 8K context window is smaller than Llama or Qwen models, so embedding pre-filtering is strongly recommended.
 
@@ -470,8 +468,8 @@ A server running OpenMRS typically uses 1–2GB for the JVM heap. A 4GB machine 
 ### Hardware requirements
 
 The module requires sufficient RAM for both the OpenMRS JVM and the LLM model:
-- **Minimum**: ~6GB total (1–2GB JVM + 3–4GB for a 3B model). Latency of a few seconds per query is expected with CPU inference.
-- **Recommended**: ~10GB total for a 7B model, which provides significantly better response quality.
+- **Minimum**: ~6GB total (1–2GB JVM + 3–4GB for a 3B model). Usable but with weaker instruction following and reasoning.
+- **Recommended**: ~10GB total for the default 8B model, which provides significantly better response quality.
 - The embedding pre-filter (default: enabled) reduces the number of tokens sent to the LLM, which improves both response quality and latency for large patient charts.
 
 ### Decision
@@ -496,7 +494,7 @@ No chunking is used. Each patient record (obs, condition, diagnosis, allergy, or
 
 ### Medical imaging data (X-rays, scans, etc.)
 
-The recommended Llama 3.2 3B model is text-only. Multimodal variants that can interpret images directly (Llama 3.2 11B and 90B) are too large for CPU inference in low-resource settings.
+The recommended Llama 3.3 8B model is text-only. Multimodal variants that can interpret images directly (Llama 3.2 11B and 90B) are too large for CPU inference in low-resource settings.
 
 #### Current approach: rely on text reports
 
@@ -599,7 +597,7 @@ When multiple users submit queries simultaneously, requests are serialized:
 2. Subsequent requests queue on the `synchronized` block and wait.
 3. Each request times out after `chartsearchai.llm.timeoutSeconds` (default 120s).
 
-With a 3B model on CPU, a single query typically takes 10–30 seconds. This means roughly **2–4 concurrent users** can be served before requests start timing out. Larger models (8B, 12B) have slower inference and reduce this further.
+With an 8B model on CPU, a single query typically takes 15–45 seconds. This means roughly **2–3 concurrent users** can be served before requests start timing out. Smaller models (3B) are faster but produce lower quality responses; larger models (12B) have slower inference and reduce concurrency further.
 
 Embedding computation is faster (~50–200ms per patient) so the embedding lock is rarely a bottleneck.
 
@@ -611,7 +609,7 @@ Embedding computation is faster (~50–200ms per patient) so the embedding lock 
 
 ### Future options (not yet implemented)
 
-- **Multiple model instances**: Load the LLM into separate native contexts and round-robin across them. Trades RAM for throughput (each 3B instance adds ~3–4GB).
+- **Multiple model instances**: Load the LLM into separate native contexts and round-robin across them. Trades RAM for throughput (each 8B instance adds ~6–8GB).
 - **Request queuing with position feedback**: Return queue position to the client via SSE so the UI can show "you are #3 in queue" instead of hanging silently.
 - **External inference server**: Offload to a dedicated inference server (e.g., llama.cpp server mode, vLLM, Ollama) that manages its own concurrency. This decouples the module from native memory constraints but adds an external dependency.
 

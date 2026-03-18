@@ -9,7 +9,7 @@ For project background, community discussion, and roadmap, see the [wiki project
 - Java 11+
 - OpenMRS Platform 2.8.0+
 - Webservices REST module 2.44.0+
-- 6GB+ RAM recommended (for LLM inference with a 3B model)
+- 10GB+ RAM recommended (for LLM inference with the default 8B model)
 
 ## Setup
 
@@ -23,7 +23,7 @@ The `.omod` file is in `omod/target/`.
 
 ### 2. Download the LLM model
 
-Download Llama 3.2 3B (Q4_K_M quantization) in GGUF format (~2GB) from [Hugging Face](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF).
+Download Llama 3.3 8B (Q4_K_M quantization) in GGUF format (~5GB) from [Hugging Face](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF).
 
 Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<openmrs-application-data-directory>/chartsearchai/`). Model paths are resolved relative to this directory for security.
 
@@ -31,11 +31,11 @@ Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<op
 
 | Model | RAM Needed | Chat Template | Download |
 |-------|-----------|---------------|----------|
-| Llama 3.2 3B *(default)* | ~6GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) |
-| Llama 3.3 8B | ~10GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF) |
+| Llama 3.2 3B | ~6GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) |
+| Llama 3.3 8B *(default)* | ~10GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF) |
 | Mistral Nemo 12B | ~12GB total | `mistral` | [GGUF](https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF) |
 
-Larger models produce more accurate answers with better instruction following. To switch models, update `chartsearchai.llm.modelFilePath` and `chartsearchai.llm.chatTemplate` — no rebuild needed.
+Larger models produce more accurate answers with better instruction following. Smaller models use less RAM but may produce lower quality responses. To switch models, update `chartsearchai.llm.modelFilePath` and `chartsearchai.llm.chatTemplate` — no rebuild needed.
 
 ### 3. Download the embedding model
 
@@ -180,4 +180,4 @@ See [docs/adr.md](docs/adr.md) for architectural decisions and design rationale.
 
 This project is licensed under the [MPL 2.0](http://openmrs.org/license/).
 
-Llama 3.2 is licensed under the [Llama 3.2 Community License](https://www.llama.com/llama3_2/license/), Copyright (C) Meta Platforms, Inc. All Rights Reserved.
+Llama 3.3 is licensed under the [Llama 3.2 Community License](https://www.llama.com/llama3_2/license/), Copyright (C) Meta Platforms, Inc. All Rights Reserved.
