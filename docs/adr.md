@@ -64,8 +64,7 @@ Retrieve relevant records first using deterministic search, then use the LLM onl
 
 **Strengths:**
 - Retrieval is deterministic and auditable — every piece of data has a traceable source.
-- LLM never invents facts; it only works with data explicitly provided.
-- Minimal hallucination surface area.
+- The LLM only sees data explicitly provided — it cannot hallucinate about records it was never given. It can still misinterpret or over-infer from the provided data (see Hallucination risk comparison in Decision 10), but the hallucination surface area is smaller than giving it the full chart.
 - Works with small local models since query parsing and response synthesis are short-context tasks.
 
 ### Decision
@@ -92,7 +91,7 @@ Pre-index all patient data with vector embeddings. At query time, find relevant 
 **Chosen because:**
 - No manual mapping needed — similarity search catches things you wouldn't think to query.
 - Works with both structured and unstructured data.
-- The embedding model is tiny (~80MB, runs on CPU in milliseconds).
+- The embedding model is tiny (~90MB, runs on CPU in milliseconds).
 - Query-time cost is just a vector similarity search — very fast.
 - Per-patient search space is small enough (typically <2000 records) for brute-force in-memory cosine similarity.
 
@@ -339,19 +338,19 @@ The direct LLM inference approach is more practical for these settings: deploy a
 
 ### Hallucination risk comparison
 
-Both the direct LLM inference and embedding-based RAG approaches carry hallucination risk, but the failure modes are different.
+Both approaches carry hallucination risk, but the failure modes differ. In the current system, these correspond to the `chartsearchai.embedding.preFilter` toggle: `true` (default) uses embedding-based pre-filtering, while `false` sends the full chart to the LLM.
 
-#### Embedding-based RAG hallucinations
+#### Embedding-based pre-filtering hallucinations (`preFilter=true`)
 
-With RAG, the LLM only sees the top-K retrieved records (default 15, configurable via `chartsearchai.embedding.topK`). This limits how much it can hallucinate *about*, but it introduces a different risk: hallucinating from *missing context*. Examples:
+With pre-filtering enabled, the LLM only sees the top-K retrieved records (default 15, configurable via `chartsearchai.embedding.topK`). This limits how much it can hallucinate *about*, but it introduces a different risk: hallucinating from *missing context*. Examples:
 
 - The retrieval step misses a relevant record (e.g., a resolved penicillin allergy) because the query and record text are semantically distant. The LLM confidently says "no known drug allergies" based on the records it received.
 - The LLM sees a single elevated blood pressure reading without the surrounding context of the patient exercising beforehand (that context is in a different obs comment that was not retrieved). It may overstate the clinical significance.
 - The LLM receives a medication order and a lab result but not the clinician's note explaining why the medication was started. It invents a plausible but incorrect reason.
 
-#### Direct LLM inference hallucinations
+#### Full-chart hallucinations (`preFilter=false`)
 
-With direct inference, the LLM sees the full patient chart. It will not miss relevant records, but more input means more opportunity to hallucinate from *over-interpreting context*. Examples:
+With pre-filtering disabled, the LLM sees the full patient chart. It will not miss relevant records, but more input means more opportunity to hallucinate from *over-interpreting context*. Examples:
 
 - The LLM sees a headache obs and a new hypertension medication started the same week. It infers the medication caused the headache, when the timing was coincidental.
 - The LLM notices elevated liver enzymes and a hepatitis B diagnosis. It concludes the hepatitis is active and causing the elevation, when the enzymes were actually elevated due to a statin started recently.
@@ -359,7 +358,7 @@ With direct inference, the LLM sees the full patient chart. It will not miss rel
 
 #### Mitigation
 
-The mitigation is the same for both approaches: **never present LLM output as clinical fact**. The module should always show the source records alongside the LLM's answer so the clinician can verify. The direct inference approach actually makes this easier — since there is no retrieval step, every record the LLM saw is known and can be cited. With RAG, the clinician must additionally trust that the retrieval step found the right records.
+The mitigation is the same for both modes: **never present LLM output as clinical fact**. The module should always show the source records alongside the LLM's answer so the clinician can verify. The full-chart mode actually makes this easier — since there is no retrieval step, every record the LLM saw is known and can be cited. With pre-filtering, the clinician must additionally trust that the retrieval step found the right records.
 
 ### Source citations
 
