@@ -18,7 +18,9 @@ import org.springframework.stereotype.Component;
  * Serializes a {@link MedicationDispense} into embedding-friendly text.
  *
  * <p>Example output: {@code "Dispensed: Metformin 500mg. Quantity: 30 Tablet(s).
- * Dose: 1 Tablet(s) Oral twice daily. Handed over: 2024-06-15"}</p>
+ * Dose: 1 Tablet(s) Oral twice daily. Status reason: Out of stock.
+ * Substituted: Generic equivalent. Substitution reason: Cost.
+ * Handed over: 2024-06-15"}</p>
  */
 @Component
 public class MedicationDispenseTextSerializer implements ClinicalTextSerializer<MedicationDispense> {
@@ -73,6 +75,29 @@ public class MedicationDispenseTextSerializer implements ClinicalTextSerializer<
 		if (dispense.getDosingInstructions() != null
 				&& !dispense.getDosingInstructions().trim().isEmpty()) {
 			sb.append(". Instructions: ").append(dispense.getDosingInstructions().trim());
+		}
+
+		if (dispense.getStatusReason() != null) {
+			String reason = ConceptNameUtil.getName(dispense.getStatusReason());
+			if (!reason.isEmpty()) {
+				sb.append(". Status reason: ").append(reason);
+			}
+		}
+
+		if (dispense.getWasSubstituted() != null && dispense.getWasSubstituted()) {
+			sb.append(". Substituted");
+			if (dispense.getSubstitutionType() != null) {
+				String type = ConceptNameUtil.getName(dispense.getSubstitutionType());
+				if (!type.isEmpty()) {
+					sb.append(": ").append(type);
+				}
+			}
+			if (dispense.getSubstitutionReason() != null) {
+				String reason = ConceptNameUtil.getName(dispense.getSubstitutionReason());
+				if (!reason.isEmpty()) {
+					sb.append(". Substitution reason: ").append(reason);
+				}
+			}
 		}
 
 		if (dispense.getDateHandedOver() != null) {

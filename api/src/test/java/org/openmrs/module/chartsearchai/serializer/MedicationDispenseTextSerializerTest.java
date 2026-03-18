@@ -96,6 +96,54 @@ public class MedicationDispenseTextSerializerTest extends BaseModuleContextSensi
 	}
 
 	@Test
+	public void toText_shouldIncludeStatusReason() {
+		MedicationDispense dispense = new MedicationDispense();
+		Drug drug = new Drug();
+		drug.setName("Metformin 500mg");
+		dispense.setDrug(drug);
+
+		Concept statusReason = new Concept();
+		statusReason.addName(conceptName("Out of stock"));
+		dispense.setStatusReason(statusReason);
+
+		String result = serializer.toText(dispense);
+		assertTrue(result.contains("Status reason: Out of stock"));
+	}
+
+	@Test
+	public void toText_shouldIncludeSubstitutionDetails() {
+		MedicationDispense dispense = new MedicationDispense();
+		Drug drug = new Drug();
+		drug.setName("Metformin 500mg");
+		dispense.setDrug(drug);
+		dispense.setWasSubstituted(true);
+
+		Concept subType = new Concept();
+		subType.addName(conceptName("Generic equivalent"));
+		dispense.setSubstitutionType(subType);
+
+		Concept subReason = new Concept();
+		subReason.addName(conceptName("Cost"));
+		dispense.setSubstitutionReason(subReason);
+
+		String result = serializer.toText(dispense);
+		assertTrue(result.contains("Substituted: Generic equivalent"));
+		assertTrue(result.contains("Substitution reason: Cost"));
+	}
+
+	@Test
+	public void toText_shouldNotIncludeSubstitutionWhenNotSubstituted() {
+		MedicationDispense dispense = new MedicationDispense();
+		Drug drug = new Drug();
+		drug.setName("Metformin 500mg");
+		dispense.setDrug(drug);
+		dispense.setWasSubstituted(false);
+
+		String result = serializer.toText(dispense);
+		assertTrue(!result.contains("Substituted"));
+	}
+
+	@Test
 	public void toText_shouldFallBackToConceptName() {
 		MedicationDispense dispense = new MedicationDispense();
 		Concept concept = new Concept();
