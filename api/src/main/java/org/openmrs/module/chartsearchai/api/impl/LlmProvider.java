@@ -287,6 +287,7 @@ public class LlmProvider {
 		return new InferenceParameters(prompt)
 				.setTemperature(0.0f)
 				.setSeed(42)
+				.setCachePrompt(false)
 				.setNPredict(ChartSearchAiConstants.DEFAULT_MAX_TOKENS)
 				.setGrammar(JSON_ANSWER_GRAMMAR)
 				.setRepeatPenalty(1.1f)
