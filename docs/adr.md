@@ -492,6 +492,54 @@ A `chartsearchai.embedding.similarityRatio` setting (default 0.80) filters out l
 
 No chunking is used. Each patient record (obs, condition, diagnosis, allergy, order, program enrollment, medication dispense) is serialized as a single text string and embedded as one unit. This is possible because individual clinical records are naturally short — typically a sentence or two — so they fit well within the embedding model's 256-token window without splitting. This avoids the complexity of chunk boundary management, overlap strategies, and reassembly that document-oriented RAG systems require.
 
+### Serialized fields per record type
+
+Each record type is serialized into a concise text string. The fields below are chosen for clinical value while minimizing token count.
+
+**Obs** (observations, vitals, lab results):
+- Included: concept name, value (coded/numeric/text/datetime/drug/boolean), units, value modifier (e.g., "<", ">"), interpretation (NORMAL, ABNORMAL), comment, group members (flattened)
+- Excluded: reference range (not exposed in OpenMRS 2.8.x API), linked order (serialized separately as its own record), obs datetime (already in the citation date label)
+- Example: `[1] (2025-10-30) Systolic Blood Pressure: 120 mmHg (ABNORMAL). Note: Taken after exercise`
+- Example (group): `[2] (2025-10-30) Blood Panel: Hemoglobin: 12.5 g/dL; White Blood Cells: 8000 cells/uL (NORMAL)`
+
+**Condition**:
+- Included: condition name, clinical status (ACTIVE/INACTIVE), verification status (CONFIRMED, etc.), additional detail, end date, end reason
+- Excluded: onset date (already in the citation date label)
+- Example: `[3] (2018-03-10) Condition: Type 2 Diabetes Mellitus. Status: ACTIVE. Verification: CONFIRMED. Detail: Stage 3, GFR 45 mL/min`
+- Example (resolved): `[4] (2023-01-15) Condition: Malaria. Status: INACTIVE. Resolved: 2023-02-01 (Treatment completed)`
+
+**Diagnosis**:
+- Included: diagnosis name, certainty (CONFIRMED/PROVISIONAL), rank (Primary/Secondary)
+- Excluded: linked condition (serialized separately)
+- Example: `[5] (2025-06-29) Diagnosis: Tuberculosis. Certainty: CONFIRMED. Rank: Secondary`
+
+**Allergy**:
+- Included: allergen name, allergen type (DRUG/FOOD/ENVIRONMENT), severity, reactions, comments
+- Example: `[6] (2024-12-29) Allergy: Penicillin (DRUG). Severity: Severe. Reactions: Anaphylaxis, Rash. Comments: Confirmed by allergist`
+
+**Order** (drug orders, test orders, referral orders):
+- Included: concept name, action (NEW/REVISE/DISCONTINUE/RENEW), urgency (ROUTINE/STAT), instructions, order reason, date stopped
+- Drug orders additionally: drug name, dose/units/route/frequency, duration/units, quantity/units, as-needed flag and condition, dosing instructions
+- Service/test/referral orders additionally: laterality, specimen source, clinical history
+- Excluded: number of refills (pharmacy detail), brand name (drug name already captured), dispense-as-written flag (pharmacy detail), care setting — inpatient/outpatient (adds tokens to every order for marginal value), scheduled date (only relevant for rare ON_SCHEDULED_DATE urgency), number of repeats (rarely relevant)
+- Example (drug): `[7] (2025-01-10) Drug order: Metformin 500mg. Dose: 1.0 Tablet(s) Oral twice daily. Duration: 30 Day(s). Quantity: 60.0 Tablet(s). Action: NEW. Urgency: ROUTINE`
+- Example (drug, as needed): `[8] (2025-03-15) Drug order: Ibuprofen 400mg. Dose: 1.0 Tablet(s) Oral. As needed (for pain). Action: NEW. Urgency: ROUTINE`
+- Example (test): `[9] (2025-06-29) Order: X-Ray Chest. Laterality: LEFT. Clinical history: Persistent cough for 3 weeks. Action: NEW. Urgency: STAT`
+- Example (discontinued): `[10] (2025-04-01) Drug order: Lisinopril 10mg. Action: DISCONTINUE. Urgency: ROUTINE. Reason: Persistent dry cough. Stopped: 2025-04-01`
+
+**Medication dispense**:
+- Included: drug name, status (completed/declined/cancelled), quantity/units, dose/units/route/frequency, dosing instructions, status reason, substitution flag/type/reason, date handed over
+- Excluded: date prepared (pharmacy workflow detail)
+- Example: `[11] (2025-01-10) Dispensed: Metformin 500mg. Status: Completed. Quantity: 60.0 Tablet(s). Dose: 1.0 Tablet(s) Oral twice daily. Handed over: 2025-01-10`
+- Example (substituted): `[12] (2025-01-10) Dispensed: Metformin 500mg. Status: Completed. Status reason: Out of stock. Substituted: Generic equivalent. Substitution reason: Cost. Handed over: 2025-01-10`
+- Example (declined): `[13] (2025-02-15) Dispensed: Amoxicillin 250mg. Status: Declined. Status reason: Patient refused`
+
+**Patient program**:
+- Included: program name, enrollment date, completion date, active status, outcome, current state
+- Excluded: location (where enrolled — marginal for clinical queries), program attributes (implementation-specific, unknown content)
+- Example: `[14] (2024-01-15) Program: HIV Treatment. Enrolled: 2024-01-15. Status: Active. Current state: On ART`
+- Example (completed): `[15] (2022-06-01) Program: TB Treatment. Enrolled: 2022-06-01. Completed: 2023-01-15. Outcome: Treatment completed`
+
 ### Medical imaging data (X-rays, scans, etc.)
 
 The recommended Llama 3.3 8B model is text-only. Multimodal variants that can interpret images directly (Llama 3.2 11B and 90B) are too large for CPU inference in low-resource settings.
