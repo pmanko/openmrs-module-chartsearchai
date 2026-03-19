@@ -135,6 +135,31 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void stripQueryStopwords_shouldNormalizeDifferentPhrasingsToSameResult() {
+		assertEquals(
+				LlmInferenceService.stripQueryStopwords("any medications?"),
+				LlmInferenceService.stripQueryStopwords("does the patient have any medications?"));
+	}
+
+	@Test
+	public void stripQueryStopwords_shouldPreserveContentWords() {
+		assertEquals("medications hypertension",
+				LlmInferenceService.stripQueryStopwords("any medications for hypertension?"));
+	}
+
+	@Test
+	public void stripQueryStopwords_shouldReturnOriginalWhenAllStopwords() {
+		String result = LlmInferenceService.stripQueryStopwords("does the patient have any?");
+		assertTrue(!result.isEmpty());
+	}
+
+	@Test
+	public void stripQueryStopwords_shouldHandleMixedCase() {
+		assertEquals("medications",
+				LlmInferenceService.stripQueryStopwords("Does The Patient Have Any Medications?"));
+	}
+
+	@Test
 	public void defaultSimilarityRatio_shouldBeBetweenZeroAndOne() {
 		assertTrue(ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO > 0);
 		assertTrue(ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO < 1);

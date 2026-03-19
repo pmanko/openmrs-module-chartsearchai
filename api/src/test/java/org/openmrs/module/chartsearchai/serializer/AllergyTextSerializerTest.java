@@ -43,7 +43,7 @@ public class AllergyTextSerializerTest extends BaseModuleContextSensitiveTest {
 
 		String result = serializer.toText(allergy);
 		assertTrue(result.contains("Allergy: Penicillin"));
-		assertTrue(result.contains("(DRUG)"));
+		assertTrue(result.contains("(drug allergen)"));
 	}
 
 	@Test
@@ -54,7 +54,7 @@ public class AllergyTextSerializerTest extends BaseModuleContextSensitiveTest {
 
 		String result = serializer.toText(allergy);
 		assertTrue(result.contains("Allergy: Shellfish"));
-		assertTrue(result.contains("(FOOD)"));
+		assertTrue(result.contains("(food allergen)"));
 	}
 
 	@Test

@@ -76,6 +76,47 @@ public class ChartSearchAiConstants {
 	public static final String RESOURCE_TYPE_MEDICATION_DISPENSE = "medication_dispense";
 
 	/**
+	 * Returns a semantic prefix for the given resource type and text, used when computing
+	 * embeddings to help the embedding model distinguish between record types.
+	 * This prefix is only prepended to the text for embedding computation, not
+	 * for display in the LLM prompt.
+	 *
+	 * @param resourceType the resource type constant
+	 * @param text the serialized record text, used to refine the prefix for types
+	 *        that have sub-types (e.g. drug orders vs test orders)
+	 * @return a descriptive prefix ending with ": "
+	 */
+	public static String getEmbeddingPrefix(String resourceType, String text) {
+		switch (resourceType) {
+			case RESOURCE_TYPE_OBS:
+				return "Clinical observation: ";
+			case RESOURCE_TYPE_CONDITION:
+				return "Medical condition: ";
+			case RESOURCE_TYPE_ALLERGY:
+				return "Patient allergy: ";
+			case RESOURCE_TYPE_DIAGNOSIS:
+				return "Clinical diagnosis: ";
+			case RESOURCE_TYPE_ORDER:
+				if (text != null && text.startsWith("Drug order:")) {
+					return "Medication prescription: ";
+				}
+				if (text != null && text.startsWith("Test order:")) {
+					return "Lab or diagnostic test: ";
+				}
+				if (text != null && text.startsWith("Referral order:")) {
+					return "Clinical referral: ";
+				}
+				return "Clinical order: ";
+			case RESOURCE_TYPE_PROGRAM:
+				return "Program enrollment: ";
+			case RESOURCE_TYPE_MEDICATION_DISPENSE:
+				return "Medication dispensed: ";
+			default:
+				return "";
+		}
+	}
+
+	/**
 	 * Resolves a model path relative to the OpenMRS application data directory.
 	 * Rejects paths containing ".." to prevent path traversal and verifies the
 	 * resolved path stays within the application data directory.

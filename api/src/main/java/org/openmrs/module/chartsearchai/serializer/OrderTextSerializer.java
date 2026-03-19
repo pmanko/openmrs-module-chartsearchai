@@ -11,7 +11,9 @@ package org.openmrs.module.chartsearchai.serializer;
 
 import org.openmrs.DrugOrder;
 import org.openmrs.Order;
+import org.openmrs.ReferralOrder;
 import org.openmrs.ServiceOrder;
+import org.openmrs.TestOrder;
 import org.openmrs.module.chartsearchai.util.ConceptNameUtil;
 import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.springframework.stereotype.Component;
@@ -41,7 +43,14 @@ public class OrderTextSerializer implements ClinicalTextSerializer<Order> {
 		} else {
 			String name = ConceptNameUtil.getName(order.getConcept());
 			if (!name.isEmpty()) {
-				sb.append("Order: ").append(name);
+				if (order instanceof TestOrder) {
+					sb.append("Test order: ");
+				} else if (order instanceof ReferralOrder) {
+					sb.append("Referral order: ");
+				} else {
+					sb.append("Order: ");
+				}
+				sb.append(name);
 			}
 			if (order instanceof ServiceOrder) {
 				appendServiceOrderFields(sb, (ServiceOrder) order);

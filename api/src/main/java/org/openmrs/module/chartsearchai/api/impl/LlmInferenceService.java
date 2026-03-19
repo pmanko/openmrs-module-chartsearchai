@@ -9,6 +9,13 @@
  */
 package org.openmrs.module.chartsearchai.api.impl;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -183,10 +190,81 @@ public class LlmInferenceService implements ChartSearchService {
 		return ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO;
 	}
 
+	private static final Set<String> QUERY_STOPWORDS = loadStopwords("query-stopwords.txt");
+
+	private static Set<String> loadStopwords(String fileName) {
+		// Try the OpenMRS application data directory first so admins can customize
+		// without recompiling. Fall back to the bundled resource.
+		InputStream is = null;
+		boolean fromFile = false;
+		try {
+			File appDataFile = new File(
+					org.openmrs.util.OpenmrsUtil.getApplicationDataDirectory(),
+					"chartsearchai" + File.separator + fileName);
+			if (appDataFile.exists()) {
+				is = new FileInputStream(appDataFile);
+				fromFile = true;
+				log.info("Loading stopwords from {}", appDataFile.getAbsolutePath());
+			}
+		}
+		catch (Exception e) {
+			log.debug("Could not load stopwords from application data directory: {}", e.getMessage());
+		}
+
+		if (is == null) {
+			is = LlmInferenceService.class.getClassLoader().getResourceAsStream(fileName);
+			if (is == null) {
+				log.warn("Stopwords resource not found: {}, query normalization will be disabled", fileName);
+				return Collections.emptySet();
+			}
+		}
+
+		Set<String> words = new HashSet<String>();
+		try (InputStream stream = is) {
+			BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
+			String line;
+			while ((line = reader.readLine()) != null) {
+				String trimmed = line.trim();
+				if (!trimmed.isEmpty() && !trimmed.startsWith("#")) {
+					words.add(trimmed.toLowerCase());
+				}
+			}
+		}
+		catch (IOException e) {
+			log.warn("Failed to load stopwords from {}: {}", fileName, e.getMessage());
+		}
+
+		if (fromFile) {
+			log.info("Loaded {} stopwords from application data directory", words.size());
+		}
+		return Collections.unmodifiableSet(words);
+	}
+
+	/**
+	 * Removes common stopwords from the query before embedding so that queries like
+	 * "any medications?" and "does the patient have any medications?" produce the
+	 * same embedding vector and thus the same retrieval results.
+	 */
+	static String stripQueryStopwords(String question) {
+		String[] words = question.toLowerCase().replaceAll("[?!.,;:]", "").trim().split("\\s+");
+		StringBuilder sb = new StringBuilder();
+		for (String word : words) {
+			if (!word.isEmpty() && !QUERY_STOPWORDS.contains(word)) {
+				if (sb.length() > 0) {
+					sb.append(" ");
+				}
+				sb.append(word);
+			}
+		}
+		return sb.length() > 0 ? sb.toString() : question.toLowerCase().trim();
+	}
+
 	private List<ChartEmbedding> findSimilar(Patient patient, String question, int topK) {
+		String normalizedQuery = stripQueryStopwords(question);
+		log.debug("Normalized query for embedding: '{}' -> '{}'", question, normalizedQuery);
 		float[] queryVector;
 		try {
-			queryVector = embeddingProvider.embed(question);
+			queryVector = embeddingProvider.embed(normalizedQuery);
 		}
 		catch (Exception e) {
 			log.debug("Embedding provider not available, falling back to full chart", e);
@@ -233,26 +311,42 @@ public class LlmInferenceService implements ChartSearchService {
 		double topScore = scored.get(0).score;
 		double minScore = topScore * similarityRatio;
 
+		// First pass: collect records above the similarity threshold
+		Set<String> passingTypes = new HashSet<String>();
 		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
+		int thresholdCutoff = 0;
 		for (int i = 0; i < limit; i++) {
 			if (scored.get(i).score >= minScore) {
 				results.add(scored.get(i).embedding);
+				passingTypes.add(scored.get(i).embedding.getResourceType());
+				thresholdCutoff = i + 1;
 			} else {
 				break;
 			}
 		}
 
-		if (log.isDebugEnabled()) {
-			StringBuilder scores = new StringBuilder();
-			for (int i = 0; i < limit; i++) {
-				if (i > 0) {
-					scores.append(", ");
-				}
-				scores.append(String.format("%.4f", scored.get(i).score));
+		// Second pass: include remaining top-K records whose resource type
+		// already has at least one record above the threshold. This ensures
+		// related records (e.g. two drug orders for the same patient) are not
+		// split by a marginal score difference.
+		for (int i = thresholdCutoff; i < limit; i++) {
+			if (passingTypes.contains(scored.get(i).embedding.getResourceType())) {
+				results.add(scored.get(i).embedding);
 			}
-			log.debug("Similarity scores: [{}], threshold: {}", scores,
-					String.format("%.4f", minScore));
 		}
+
+		StringBuilder scores = new StringBuilder();
+		for (int i = 0; i < limit; i++) {
+			if (i > 0) {
+				scores.append(", ");
+			}
+			ScoredEmbedding se = scored.get(i);
+			scores.append(se.embedding.getResourceType())
+					.append(":").append(se.embedding.getResourceId())
+					.append("=").append(String.format("%.4f", se.score));
+		}
+		log.debug("Similarity scores: [{}], threshold: {}", scores,
+				String.format("%.4f", minScore));
 		log.debug("Returning {} of {} candidates (topScore={}, minScore={}, max={})",
 				results.size(), scored.size(),
 				String.format("%.4f", topScore), String.format("%.4f", minScore), topK);

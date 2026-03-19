@@ -263,7 +263,7 @@ public class OrderTextSerializerTest extends BaseModuleContextSensitiveTest {
 		serviceOrder.setLaterality(ServiceOrder.Laterality.LEFT);
 
 		String result = serializer.toText(serviceOrder);
-		assertTrue(result.contains("Order: X-Ray Knee"));
+		assertTrue(result.contains("Test order: X-Ray Knee"));
 		assertTrue(result.contains("Laterality: LEFT"));
 	}
 
@@ -312,7 +312,7 @@ public class OrderTextSerializerTest extends BaseModuleContextSensitiveTest {
 		referralOrder.setClinicalHistory("Chest pain on exertion");
 
 		String result = serializer.toText(referralOrder);
-		assertTrue(result.contains("Order: Cardiology Consultation"));
+		assertTrue(result.contains("Referral order: Cardiology Consultation"));
 		assertTrue(result.contains("Clinical history: Chest pain on exertion"));
 	}
 

@@ -13,6 +13,7 @@ import java.util.List;
 
 import org.openmrs.Allergy;
 import org.openmrs.AllergyReaction;
+import org.openmrs.AllergenType;
 import org.openmrs.module.chartsearchai.util.ConceptNameUtil;
 import org.springframework.stereotype.Component;
 
@@ -32,7 +33,7 @@ public class AllergyTextSerializer implements ClinicalTextSerializer<Allergy> {
 		if (!name.isEmpty()) {
 			sb.append("Allergy: ").append(name);
 			if (allergy.getAllergen() != null && allergy.getAllergen().getAllergenType() != null) {
-				sb.append(" (").append(allergy.getAllergen().getAllergenType()).append(")");
+				sb.append(" (").append(formatAllergenType(allergy.getAllergen().getAllergenType())).append(")");
 			}
 		}
 		if (allergy.getSeverity() != null) {
@@ -75,6 +76,19 @@ public class AllergyTextSerializer implements ClinicalTextSerializer<Allergy> {
 		}
 
 		return sb.toString();
+	}
+
+	private static String formatAllergenType(AllergenType type) {
+		switch (type) {
+			case DRUG:
+				return "drug allergen";
+			case FOOD:
+				return "food allergen";
+			case ENVIRONMENT:
+				return "environmental allergen";
+			default:
+				return type.toString();
+		}
 	}
 
 	private String getAllergenName(Allergy allergy) {

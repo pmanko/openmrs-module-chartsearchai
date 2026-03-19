@@ -81,7 +81,9 @@ public class EmbeddingIndexer {
 				ce.setResourceType(record.getResourceType());
 				ce.setResourceId(record.getResourceId());
 				ce.setTextContent(record.getText());
-				ce.setEmbeddingVector(embeddingProvider.embed(record.getText()));
+				String embeddingText = ChartSearchAiConstants.getEmbeddingPrefix(
+						record.getResourceType(), record.getText()) + record.getText();
+				ce.setEmbeddingVector(embeddingProvider.embed(embeddingText));
 				ce.setDateCreated(now);
 				newEmbeddings.add(ce);
 			}
@@ -167,7 +169,8 @@ public class EmbeddingIndexer {
 		ce.setResourceType(resourceType);
 		ce.setResourceId(resourceId);
 		ce.setTextContent(text);
-		ce.setEmbeddingVector(embeddingProvider.embed(text));
+		ce.setEmbeddingVector(embeddingProvider.embed(
+				ChartSearchAiConstants.getEmbeddingPrefix(resourceType, text) + text));
 		ce.setDateCreated(now);
 		dao.saveChartEmbedding(ce);
 	}
@@ -177,7 +180,8 @@ public class EmbeddingIndexer {
 		ChartEmbedding existing = dao.getByResource(resourceType, resourceId);
 		if (existing != null) {
 			existing.setTextContent(text);
-			existing.setEmbeddingVector(embeddingProvider.embed(text));
+			existing.setEmbeddingVector(embeddingProvider.embed(
+					ChartSearchAiConstants.getEmbeddingPrefix(resourceType, text) + text));
 			existing.setDateCreated(now);
 			dao.saveChartEmbedding(existing);
 		} else {
