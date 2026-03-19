@@ -54,6 +54,8 @@ public class LlmProvider {
 			+ "Keep your answer concise — one to three sentences. "
 			+ "Respond with ONLY a JSON object with an \"answer\" string and a \"citations\" array "
 			+ "listing every record number you cited.\n\n"
+			+ "If no records are relevant, respond with:\n"
+			+ "{\"answer\": \"No relevant information was found in the patient's records.\", \"citations\": []}\n\n"
 			+ "Examples:\n\n"
 			+ "Records:\n[1] (2024-11-05) Condition: Zorblitis\n"
 			+ "[2] (2024-09-20) Medication: Xanthuril 50mg daily\n"
@@ -61,8 +63,8 @@ public class LlmProvider {
 			+ "[4] (2024-06-10) Flobnar level: 9.8\n\n"
 			+ "Question: What are the Flobnar levels?\n"
 			+ "{\"answer\": \"The Flobnar levels are 12.4 [3] and 9.8 [4].\", \"citations\": [3, 4]}\n\n"
-			+ "Question: Does the patient have diabetes?\n"
-			+ "{\"answer\": \"No relevant information was found in the patient's records.\", \"citations\": []}";
+			+ "Question: Does the patient have any conditions?\n"
+			+ "{\"answer\": \"Yes, the patient has Zorblitis [1].\", \"citations\": [1]}";
 
 	private static final String JSON_ANSWER_GRAMMAR = loadGrammar("json-answer.gbnf");
 
