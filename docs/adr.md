@@ -438,7 +438,7 @@ The model runs **in-process** inside the OpenMRS JVM via [java-llama.cpp](https:
 
 The model path is configured via the `chartsearchai.llm.modelFilePath` global property. The model loads into memory on first query and stays resident for subsequent requests. If the model path global property is changed, the model is automatically unloaded and the new model is loaded on the next query — no restart required.
 
-Inference uses temperature 0.0 and a fixed seed for deterministic output. This ensures that identical inputs produce consistent answers, which is important for clinical trust and for the answer cache to be meaningful.
+Inference uses temperature 0.0, a fixed seed, and prompt caching disabled (`setCachePrompt(false)`) for deterministic output. Prompt caching had to be disabled because llama.cpp's KV cache reuse caused non-deterministic responses — the first query for a given prompt produced a different answer than subsequent identical queries. With caching off, identical inputs always produce identical answers, which is important for clinical trust and for the answer cache to be meaningful.
 
 Model file paths are resolved relative to the OpenMRS application data directory. Path traversal (`..`) is rejected and the resolved path is verified to stay within the data directory, preventing an admin from accidentally (or maliciously) pointing the module at arbitrary files on the filesystem.
 
@@ -600,7 +600,7 @@ Examples:
      Duration: 30 Day(s). Quantity: 60.0 Tablet(s). Action: NEW. Urgency: ROUTINE
 [8]  (2025-03-15) Drug order: Ibuprofen 400mg. Dose: 1.0 Tablet(s) Oral.
      As needed (for pain). Action: NEW. Urgency: ROUTINE
-[9]  (2025-06-29) Order: X-Ray Chest. Laterality: LEFT.
+[9]  (2025-06-29) Test order: X-Ray Chest. Laterality: LEFT.
      Clinical history: Persistent cough for 3 weeks. Action: NEW. Urgency: STAT
 [10] (2025-04-01) Drug order: Lisinopril 10mg. Action: DISCONTINUE. Urgency: ROUTINE.
      Reason: Persistent dry cough. Stopped: 2025-04-01
