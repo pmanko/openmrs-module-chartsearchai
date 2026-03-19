@@ -206,7 +206,7 @@ A generic `ClinicalTextSerializer<T>` interface with one implementation per Open
 |---|---|
 | `ObsTextSerializer` | `"Systolic Blood Pressure: 120 mmHg (ABNORMAL). Note: Taken after exercise"` |
 | `ConditionTextSerializer` | `"Condition: Type 2 Diabetes Mellitus. Status: ACTIVE. Verification: CONFIRMED"` |
-| `AllergyTextSerializer` | `"Allergy: Penicillin (DRUG). Severity: Severe. Reactions: Anaphylaxis, Rash"` |
+| `AllergyTextSerializer` | `"Allergy: Penicillin (drug allergen). Severity: Severe. Reactions: Anaphylaxis, Rash"` |
 | `DiagnosisTextSerializer` | `"Diagnosis: Malaria. Certainty: CONFIRMED. Rank: Primary"` |
 | `OrderTextSerializer` | `"Drug order: Metformin 500mg. Dose: 1.0 Tablet(s) Oral twice daily. Duration: 30 Day(s). Action: NEW. Urgency: ROUTINE"` |
 | `PatientProgramTextSerializer` | `"Program: HIV Treatment. Enrolled: 2024-01-15. Status: Active. Current state: On ART"` |
@@ -511,6 +511,16 @@ Any BERT-based ONNX embedding model can be used as a drop-in replacement by upda
 
 A `chartsearchai.embedding.similarityRatio` setting (default 0.80) filters out low-relevance records by requiring each record to score at least 80% of the top result's similarity score. This works alongside `topK` as a quality floor — `topK` sets the maximum number of records, while `similarityRatio` drops noise within that cap.
 
+### Retrieval precision improvements
+
+The general-purpose embedding model (all-MiniLM-L6-v2) ranks records by lexical overlap rather than clinical semantics. For example, a query like "any medications?" would rank an allergy record containing "DRUG" higher than actual drug orders, because the word "DRUG" has higher surface-level similarity to "medications" than dosing details like "500mg Oral twice daily." Three techniques address this:
+
+**Semantic embedding prefixes.** Each record's text is prepended with a type-specific prefix before computing embeddings (but not in the LLM prompt). For example, a drug order is embedded as `"Medication prescription: Drug order: Azithromycin..."` while an allergy is embedded as `"Patient allergy: Allergy: Penicillin..."`. This shifts the embedding vectors toward the right semantic space, so medication queries rank drug orders higher. Prefixes are further specialized by order sub-type: `"Medication prescription:"` for drug orders, `"Lab or diagnostic test:"` for test orders, and `"Clinical referral:"` for referral orders. In testing, this moved drug orders from 8th/9th place to 1st/3rd place for medication queries.
+
+**Query stopword normalization.** Common filler words ("does", "the", "patient", "have", "any") are stripped from the query before embedding, so that "any medications?" and "does the patient have any medications?" produce the same embedding vector and identical retrieval results. Without this, different phrasings of the same question return different filtered record sets, leading to inconsistent LLM answers. Stopwords are loaded from `<application-data-directory>/chartsearchai/query-stopwords.txt` if present, otherwise from a bundled default. Only true filler words are stripped — clinical qualifiers like "no", "not", "current", "recent", "last", and "active" are preserved because they change the query's meaning.
+
+**Type-cohort expansion.** After applying the similarity ratio threshold, remaining top-K records whose resource type already has at least one record above the threshold are included. This prevents related records (e.g., two drug orders for the same patient) from being split by marginal score differences. For example, if one drug order scores 0.41 (above threshold) and another scores 0.39 (below threshold), both are included because the "order" type already has a passing record.
+
 ### Chunking strategy
 
 No chunking is used. Each patient record (obs, condition, diagnosis, allergy, order, program enrollment, medication dispense) is serialized as a single text string and embedded as one unit. This is possible because individual clinical records are naturally short — typically a sentence or two — so they fit well within the embedding model's 256-token window without splitting. This avoids the complexity of chunk boundary management, overlap strategies, and reassembly that document-oriented RAG systems require.
@@ -570,11 +580,11 @@ Example:
 
 #### Allergy
 
-**Included fields:** allergen name, allergen type (DRUG/FOOD/ENVIRONMENT), severity, reactions, comments
+**Included fields:** allergen name, allergen type (drug allergen/food allergen/environmental allergen), severity, reactions, comments
 
 Example:
 ```
-[6] (2024-12-29) Allergy: Penicillin (DRUG). Severity: Severe. Reactions: Anaphylaxis, Rash.
+[6] (2024-12-29) Allergy: Penicillin (drug allergen). Severity: Severe. Reactions: Anaphylaxis, Rash.
     Comments: Confirmed by allergist
 ```
 
