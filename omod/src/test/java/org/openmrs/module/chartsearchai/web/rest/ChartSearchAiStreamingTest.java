@@ -18,8 +18,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Tests for the streaming search endpoint controller structure.
- * Verifies that the controller does not store mutable auth state at class level
- * and that authorization is checked before the streaming thread is spawned.
+ * Verifies that the controller writes SSE events directly to the response
+ * without background threads or shared auth state.
  */
 public class ChartSearchAiStreamingTest {
 
@@ -36,13 +36,12 @@ public class ChartSearchAiStreamingTest {
 	public void searchStreamMethod_shouldExist() throws NoSuchMethodException {
 		assertNotNull(
 				ChartSearchAiRestController.class.getMethod("searchStream",
-						java.util.Map.class),
+						java.util.Map.class, javax.servlet.http.HttpServletResponse.class),
 				"searchStream method should exist");
 	}
 
 	@Test
-	public void streamingThread_shouldUseProxyPrivilegesNotSharedContext()
-			throws Exception {
+	public void streamingEndpoint_shouldNotUseBackgroundThreads() throws Exception {
 		String sourceFile = "omod/src/main/java/org/openmrs/module/chartsearchai"
 				+ "/web/rest/ChartSearchAiRestController.java";
 		java.io.File file = new java.io.File(sourceFile);
@@ -51,17 +50,19 @@ public class ChartSearchAiStreamingTest {
 		}
 		if (file.exists()) {
 			String source = new String(java.nio.file.Files.readAllBytes(file.toPath()));
-			assertTrue(source.contains("addProxyPrivilege"),
-					"Streaming thread must use proxy privileges for data access");
-			assertTrue(source.contains("removeProxyPrivilege"),
-					"Streaming thread must clean up proxy privileges");
+			assertTrue(!source.contains("new Thread("),
+					"Streaming must not create background threads");
+			assertTrue(!source.contains("import org.springframework.web.servlet.mvc.method.annotation.SseEmitter"),
+					"Streaming must not import SseEmitter");
+			assertTrue(!source.contains("addProxyPrivilege"),
+					"Streaming must not use proxy privileges");
 			assertTrue(!source.contains("setUserContext"),
 					"Must not share UserContext across threads");
 		}
 	}
 
 	@Test
-	public void authorizationCheck_shouldHappenBeforeThreadCreation() throws Exception {
+	public void authorizationCheck_shouldHappenBeforeStreaming() throws Exception {
 		String sourceFile = "omod/src/main/java/org/openmrs/module/chartsearchai"
 				+ "/web/rest/ChartSearchAiRestController.java";
 		java.io.File file = new java.io.File(sourceFile);
@@ -70,31 +71,25 @@ public class ChartSearchAiStreamingTest {
 		}
 		if (file.exists()) {
 			String source = new String(java.nio.file.Files.readAllBytes(file.toPath()));
-			int requirePrivIdx = source.indexOf("Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA)");
-			int canAccessIdx = source.indexOf("patientAccessCheck.canAccess(");
-			int threadIdx = source.indexOf("new Thread(");
 
-			// Find the streaming-related instances (second occurrence for stream method)
-			assertTrue(requirePrivIdx >= 0, "Must check PRIV_QUERY_PATIENT_DATA");
-			assertTrue(canAccessIdx >= 0, "Must check patient access");
-			assertTrue(threadIdx >= 0, "Must create streaming thread");
-
-			// The privilege and access checks must appear before the thread creation
-			// in the searchStream method
-			int streamMethodIdx = source.indexOf("public SseEmitter searchStream");
+			int streamMethodIdx = source.indexOf("public void searchStream");
 			assertTrue(streamMethodIdx >= 0, "searchStream method must exist");
 
-			int streamRequirePriv = source.indexOf(
+			int requirePriv = source.indexOf(
 					"Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA)",
 					streamMethodIdx);
-			int streamCanAccess = source.indexOf("patientAccessCheck.canAccess(",
+			int canAccess = source.indexOf("patientAccessCheck.canAccess(",
 					streamMethodIdx);
-			int streamThread = source.indexOf("new Thread(", streamMethodIdx);
+			int searchStreaming = source.indexOf("searchStreaming(", streamMethodIdx);
 
-			assertTrue(streamRequirePriv < streamThread,
-					"Privilege check must happen before thread creation");
-			assertTrue(streamCanAccess < streamThread,
-					"Patient access check must happen before thread creation");
+			assertTrue(requirePriv >= 0, "Must check PRIV_QUERY_PATIENT_DATA");
+			assertTrue(canAccess >= 0, "Must check patient access");
+			assertTrue(searchStreaming >= 0, "Must call searchStreaming");
+
+			assertTrue(requirePriv < searchStreaming,
+					"Privilege check must happen before streaming");
+			assertTrue(canAccess < searchStreaming,
+					"Patient access check must happen before streaming");
 		}
 	}
 }
