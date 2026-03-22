@@ -17,6 +17,7 @@ import java.util.Date;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.openmrs.Concept;
+import org.openmrs.ConceptClass;
 import org.openmrs.ConceptName;
 import org.openmrs.ConceptNumeric;
 import org.openmrs.Encounter;
@@ -218,6 +219,33 @@ public class ObsTextSerializerTest extends BaseModuleContextSensitiveTest {
 		String result = serializer.toText(obs);
 		assertTrue(result.contains("12.5 g/dL"));
 		assertTrue(!result.contains(">") && !result.contains("<"));
+	}
+
+	@Test
+	public void toText_shouldIncludeConceptClassPrefix() {
+		Obs obs = new Obs();
+		Concept concept = new Concept();
+		concept.addName(conceptName("Kaposi sarcoma oral"));
+		ConceptClass cc = new ConceptClass();
+		cc.setName("Finding");
+		concept.setConceptClass(cc);
+		obs.setConcept(concept);
+		obs.setValueNumeric(3.91);
+
+		String result = serializer.toText(obs);
+		assertEquals("Finding — Kaposi sarcoma oral: 3.91", result);
+	}
+
+	@Test
+	public void toText_shouldOmitConceptClassWhenNull() {
+		Obs obs = new Obs();
+		Concept concept = new Concept();
+		concept.addName(conceptName("Weight"));
+		obs.setConcept(concept);
+		obs.setValueNumeric(70.0);
+
+		String result = serializer.toText(obs);
+		assertTrue(result.startsWith("Weight: 70.0"));
 	}
 
 	private ConceptName conceptName(String name) {

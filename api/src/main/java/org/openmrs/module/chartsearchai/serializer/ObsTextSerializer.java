@@ -28,6 +28,11 @@ public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {
 	public String toText(Obs obs) {
 		StringBuilder sb = new StringBuilder();
 
+		String conceptClass = getConceptClassName(obs);
+		if (!conceptClass.isEmpty()) {
+			sb.append(conceptClass).append(" — ");
+		}
+
 		String conceptName = ConceptNameUtil.getName(obs.getConcept());
 
 		// Flatten group members into parent text, skipping the parent's own value
@@ -94,6 +99,16 @@ public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {
 		}
 		if (obs.getValueDrug() != null && obs.getValueDrug().getName() != null) {
 			return obs.getValueDrug().getName();
+		}
+		return "";
+	}
+
+	private String getConceptClassName(Obs obs) {
+		if (obs.getConcept() != null && obs.getConcept().getConceptClass() != null) {
+			String name = obs.getConcept().getConceptClass().getName();
+			if (name != null && !name.trim().isEmpty()) {
+				return name.trim();
+			}
 		}
 		return "";
 	}
