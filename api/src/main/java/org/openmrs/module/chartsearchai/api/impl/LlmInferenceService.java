@@ -242,13 +242,16 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
-	 * Removes common stopwords and stems remaining words before embedding so that
-	 * queries like "any medications?" and "does the patient have any medications?"
+	 * Removes common stopwords and optionally stems remaining words before embedding
+	 * so that queries like "any medications?" and "does the patient have any medications?"
 	 * produce the same embedding vector and thus the same retrieval results.
 	 * Stemming ensures word variants like "allergic" and "allergies" also normalize
 	 * to the same root.
+	 *
+	 * @param question the raw user question
+	 * @param stem whether to apply Porter stemming to remaining words
 	 */
-	static String stripQueryStopwords(String question) {
+	static String stripQueryStopwords(String question, boolean stem) {
 		String[] words = question.toLowerCase().replaceAll("[?!.,;:]", "").trim().split("\\s+");
 		StringBuilder sb = new StringBuilder();
 		for (String word : words) {
@@ -256,14 +259,24 @@ public class LlmInferenceService implements ChartSearchService {
 				if (sb.length() > 0) {
 					sb.append(" ");
 				}
-				sb.append(PorterStemmer.stem(word));
+				sb.append(stem ? PorterStemmer.stem(word) : word);
 			}
 		}
 		return sb.length() > 0 ? sb.toString() : question.toLowerCase().trim();
 	}
 
+	static String stripQueryStopwords(String question) {
+		return stripQueryStopwords(question, false);
+	}
+
+	private boolean useStemming() {
+		String value = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_QUERY_STEMMING);
+		return "true".equalsIgnoreCase(value != null ? value.trim() : "");
+	}
+
 	private List<ChartEmbedding> findSimilar(Patient patient, String question, int topK) {
-		String normalizedQuery = stripQueryStopwords(question);
+		String normalizedQuery = stripQueryStopwords(question, useStemming());
 		log.debug("Normalized query for embedding: '{}' -> '{}'", question, normalizedQuery);
 		float[] queryVector;
 		try {

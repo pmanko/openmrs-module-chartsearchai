@@ -143,9 +143,8 @@ public class LlmInferenceServiceTest {
 
 	@Test
 	public void stripQueryStopwords_shouldPreserveContentWords() {
-		String result = LlmInferenceService.stripQueryStopwords("any medications for hypertension?");
-		assertTrue(result.contains("medic"));
-		assertTrue(result.contains("hypertens"));
+		assertEquals("medications hypertension",
+				LlmInferenceService.stripQueryStopwords("any medications for hypertension?"));
 	}
 
 	@Test
@@ -156,8 +155,8 @@ public class LlmInferenceServiceTest {
 
 	@Test
 	public void stripQueryStopwords_shouldHandleMixedCase() {
-		String result = LlmInferenceService.stripQueryStopwords("Does The Patient Have Any Medications?");
-		assertTrue(result.contains("medic"));
+		assertEquals("medications",
+				LlmInferenceService.stripQueryStopwords("Does The Patient Have Any Medications?"));
 	}
 
 	@Test
@@ -168,10 +167,16 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void stripQueryStopwords_shouldStemAllergyNounForms() {
+	public void stripQueryStopwords_shouldStemWhenEnabled() {
 		assertEquals(
-				LlmInferenceService.stripQueryStopwords("any allergies?"),
-				LlmInferenceService.stripQueryStopwords("does the patient have any allergy?"));
+				LlmInferenceService.stripQueryStopwords("any allergies?", true),
+				LlmInferenceService.stripQueryStopwords("does the patient have any allergy?", true));
+	}
+
+	@Test
+	public void stripQueryStopwords_shouldNotStemWhenDisabled() {
+		assertEquals("allergies",
+				LlmInferenceService.stripQueryStopwords("any allergies?", false));
 	}
 
 	@Test
