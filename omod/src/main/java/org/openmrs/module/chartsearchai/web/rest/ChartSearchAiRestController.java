@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.openmrs.Patient;
 import org.openmrs.User;
 import org.openmrs.api.context.Context;
+import org.openmrs.util.PrivilegeConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
@@ -293,6 +294,31 @@ public class ChartSearchAiRestController {
 			public void run() {
 				Context.openSession();
 				try {
+					// This background thread has no authenticated user, so
+					// OpenMRS service calls (getPatient, getObsService, etc.)
+					// would fail with APIAuthenticationException. We use proxy
+					// privileges to allow these internal data-loading calls.
+					//
+					// This is safe because authorization was already verified
+					// in the request thread BEFORE this thread was created:
+					//   1. Context.requirePrivilege(PRIV_QUERY_PATIENT_DATA)
+					//      ensures only users with the AI query privilege reach
+					//      this code.
+					//   2. patientAccessCheck.canAccess(user, patient) ensures
+					//      the user has access to this specific patient's chart.
+					//
+					// The proxy privileges are scoped to this thread only and
+					// are removed in the finally block when the thread exits.
+					Context.addProxyPrivilege(PrivilegeConstants.GET_PATIENTS);
+					Context.addProxyPrivilege(PrivilegeConstants.GET_USERS);
+					Context.addProxyPrivilege(PrivilegeConstants.GET_OBS);
+					Context.addProxyPrivilege(PrivilegeConstants.GET_CONDITIONS);
+					Context.addProxyPrivilege(PrivilegeConstants.GET_ALLERGIES);
+					Context.addProxyPrivilege(PrivilegeConstants.GET_DIAGNOSES);
+					Context.addProxyPrivilege(PrivilegeConstants.GET_ORDERS);
+					Context.addProxyPrivilege(PrivilegeConstants.GET_PATIENT_PROGRAMS);
+					Context.addProxyPrivilege(PrivilegeConstants.GET_MEDICATION_DISPENSE);
+					Context.addProxyPrivilege(PrivilegeConstants.GET_GLOBAL_PROPERTIES);
 					Context.addProxyPrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA);
 
 					// Re-fetch entities in this thread's Hibernate session to avoid
@@ -387,6 +413,16 @@ public class ChartSearchAiRestController {
 				}
 				finally {
 					Context.removeProxyPrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA);
+					Context.removeProxyPrivilege(PrivilegeConstants.GET_GLOBAL_PROPERTIES);
+					Context.removeProxyPrivilege(PrivilegeConstants.GET_MEDICATION_DISPENSE);
+					Context.removeProxyPrivilege(PrivilegeConstants.GET_PATIENT_PROGRAMS);
+					Context.removeProxyPrivilege(PrivilegeConstants.GET_ORDERS);
+					Context.removeProxyPrivilege(PrivilegeConstants.GET_DIAGNOSES);
+					Context.removeProxyPrivilege(PrivilegeConstants.GET_ALLERGIES);
+					Context.removeProxyPrivilege(PrivilegeConstants.GET_CONDITIONS);
+					Context.removeProxyPrivilege(PrivilegeConstants.GET_OBS);
+					Context.removeProxyPrivilege(PrivilegeConstants.GET_USERS);
+					Context.removeProxyPrivilege(PrivilegeConstants.GET_PATIENTS);
 					Context.closeSession();
 				}
 			}
