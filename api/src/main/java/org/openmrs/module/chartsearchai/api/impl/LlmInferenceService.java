@@ -328,25 +328,25 @@ public class LlmInferenceService implements ChartSearchService {
 		double minScore = topScore * similarityRatio;
 
 		// First pass: collect records above the similarity threshold
-		Set<String> passingTypes = new HashSet<String>();
+		Set<String> passingGroups = new HashSet<String>();
 		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
 		int thresholdCutoff = 0;
 		for (int i = 0; i < limit; i++) {
 			if (scored.get(i).score >= minScore) {
 				results.add(scored.get(i).embedding);
-				passingTypes.add(scored.get(i).embedding.getResourceType());
+				passingGroups.add(groupingKey(scored.get(i).embedding));
 				thresholdCutoff = i + 1;
 			} else {
 				break;
 			}
 		}
 
-		// Second pass: include remaining top-K records whose resource type
-		// already has at least one record above the threshold. This ensures
-		// related records (e.g. two drug orders for the same patient) are not
-		// split by a marginal score difference.
+		// Second pass: include remaining top-K records whose grouping key
+		// already has at least one record above the threshold. Uses a
+		// concept-level key (not just resource type) so that e.g. "Respiratory
+		// Rate" observations don't pull in unrelated "Cough" observations.
 		for (int i = thresholdCutoff; i < limit; i++) {
-			if (passingTypes.contains(scored.get(i).embedding.getResourceType())) {
+			if (passingGroups.contains(groupingKey(scored.get(i).embedding))) {
 				results.add(scored.get(i).embedding);
 			}
 		}
@@ -367,6 +367,28 @@ public class LlmInferenceService implements ChartSearchService {
 				results.size(), scored.size(),
 				String.format("%.4f", topScore), String.format("%.4f", minScore), topK);
 		return results;
+	}
+
+	/**
+	 * Returns a grouping key for the second-pass inclusion logic. For Obs records,
+	 * extracts the concept name from the serialized text (e.g. "Test — Respiratory Rate: 18.0"
+	 * yields "Obs:Respiratory Rate") so that different observation types are not conflated.
+	 * For other resource types, uses the resource type alone.
+	 */
+	static String groupingKey(ChartEmbedding embedding) {
+		String type = embedding.getResourceType();
+		String text = embedding.getTextContent();
+		if (text != null && !text.isEmpty()) {
+			// Extract concept name: text format is "Class — ConceptName: value" or
+			// "ConceptName: value". Take everything before the first colon.
+			String prefix = text;
+			int colonIdx = text.indexOf(':');
+			if (colonIdx > 0) {
+				prefix = text.substring(0, colonIdx).trim();
+			}
+			return type + ":" + prefix;
+		}
+		return type;
 	}
 
 	private static class ScoredEmbedding {

@@ -21,6 +21,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.model.ChartEmbedding;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 
@@ -183,6 +184,36 @@ public class LlmInferenceServiceTest {
 	public void defaultSimilarityRatio_shouldBeBetweenZeroAndOne() {
 		assertTrue(ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO > 0);
 		assertTrue(ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO < 1);
+	}
+
+	@Test
+	public void groupingKey_shouldDistinguishDifferentObsConcepts() {
+		ChartEmbedding respRate = new ChartEmbedding();
+		respRate.setResourceType("Obs");
+		respRate.setTextContent("Test — Respiratory Rate: 18.0");
+
+		ChartEmbedding cough = new ChartEmbedding();
+		cough.setResourceType("Obs");
+		cough.setTextContent("Diagnosis — Cough: persistent cough for 2 weeks");
+
+		String respKey = LlmInferenceService.groupingKey(respRate);
+		String coughKey = LlmInferenceService.groupingKey(cough);
+		assertTrue(!respKey.equals(coughKey),
+				"Respiratory Rate and Cough observations should have different grouping keys");
+	}
+
+	@Test
+	public void groupingKey_shouldGroupSameConceptTogether() {
+		ChartEmbedding obs1 = new ChartEmbedding();
+		obs1.setResourceType("Obs");
+		obs1.setTextContent("Test — Respiratory Rate: 18.0");
+
+		ChartEmbedding obs2 = new ChartEmbedding();
+		obs2.setResourceType("Obs");
+		obs2.setTextContent("Test — Respiratory Rate: 23.0");
+
+		assertEquals(LlmInferenceService.groupingKey(obs1),
+				LlmInferenceService.groupingKey(obs2));
 	}
 
 	private static Date makeDate(int year, int month, int day) {
