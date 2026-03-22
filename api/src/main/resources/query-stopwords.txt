@@ -4,7 +4,7 @@
 #
 # IMPORTANT: Do NOT add words that carry clinical meaning:
 #   - Negation: no, not, never, none, without, neither
-#   - Temporal: current, recent, last, new, first, previous, latest, earliest
+#   - Temporal: recent, last, new, first, previous, earliest
 #   - Status: active, stopped, past, ongoing, chronic, acute, resolved
 #   - Quantity with clinical meaning: elevated, low, high, normal, abnormal
 #
@@ -236,7 +236,9 @@ why
 
 # Common filler in clinical queries
 check
+current
 currently
+latest
 describe
 detail
 details

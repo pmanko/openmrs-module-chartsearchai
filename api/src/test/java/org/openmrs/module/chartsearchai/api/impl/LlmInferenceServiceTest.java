@@ -160,6 +160,13 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void stripQueryStopwords_shouldNormalizeCurrentAndLatestToSameResult() {
+		assertEquals(
+				LlmInferenceService.stripQueryStopwords("What is the current CD4 Count?"),
+				LlmInferenceService.stripQueryStopwords("What is the latest CD4 Count?"));
+	}
+
+	@Test
 	public void defaultSimilarityRatio_shouldBeBetweenZeroAndOne() {
 		assertTrue(ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO > 0);
 		assertTrue(ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO < 1);
