@@ -43,6 +43,7 @@ public class ConceptNameUtilTest extends BaseModuleContextSensitiveTest {
 
 		String result = ConceptNameUtil.getName(concept);
 		assertTrue(result.startsWith("Hypertension"));
+		assertTrue(result.contains("syn."));
 		assertTrue(result.contains("HTN"));
 		assertTrue(result.contains("High Blood Pressure"));
 	}
@@ -73,6 +74,68 @@ public class ConceptNameUtilTest extends BaseModuleContextSensitiveTest {
 
 		String result = ConceptNameUtil.getName(concept);
 		assertEquals("Hypertension", result);
+	}
+
+	@Test
+	public void condenseSynonyms_shouldKeepFirstSynonymAsSlash() {
+		String input = "Diarrhea (syn. Diarrhoea, Loose bowels, Loose bowel movement)";
+		assertEquals("Diarrhea/Diarrhoea", ConceptNameUtil.condenseSynonyms(input));
+	}
+
+	@Test
+	public void condenseSynonyms_shouldPreserveStructuralParentheses() {
+		String input = "Allergy: Beef (food allergen). Severity: Severe";
+		assertEquals(input, ConceptNameUtil.condenseSynonyms(input));
+	}
+
+	@Test
+	public void condenseSynonyms_shouldHandleMixedContent() {
+		String input = "Allergy: Fomepizole (syn. Fomeject, Antizol) (drug allergen). "
+				+ "Reactions: Itching (syn. Itching of skin, Pruritus)";
+		assertEquals("Allergy: Fomepizole/Fomeject (drug allergen). Reactions: Itching/Itching of skin",
+				ConceptNameUtil.condenseSynonyms(input));
+	}
+
+	@Test
+	public void condenseSynonyms_shouldHandleSingleSynonym() {
+		String input = "Itching (syn. Pruritus)";
+		assertEquals("Itching/Pruritus", ConceptNameUtil.condenseSynonyms(input));
+	}
+
+	@Test
+	public void condenseSynonyms_shouldHandleNull() {
+		assertEquals(null, ConceptNameUtil.condenseSynonyms(null));
+	}
+
+	@Test
+	public void stripSynonyms_shouldRemoveSynonymParentheses() {
+		String input = "Diarrhea (syn. Diarrhoea, Loose bowels, Loose bowel movement)";
+		assertEquals("Diarrhea", ConceptNameUtil.stripSynonyms(input));
+	}
+
+	@Test
+	public void stripSynonyms_shouldPreserveStructuralParentheses() {
+		String input = "Allergy: Beef (food allergen). Severity: Severe";
+		assertEquals(input, ConceptNameUtil.stripSynonyms(input));
+	}
+
+	@Test
+	public void stripSynonyms_shouldHandleMixedContent() {
+		String input = "Allergy: Fomepizole (syn. Fomeject, Antizol) (drug allergen). "
+				+ "Reactions: Itching (syn. Itching of skin, Pruritus)";
+		assertEquals("Allergy: Fomepizole (drug allergen). Reactions: Itching",
+				ConceptNameUtil.stripSynonyms(input));
+	}
+
+	@Test
+	public void stripSynonyms_shouldRemoveSingleSynonym() {
+		String input = "Itching (syn. Pruritus)";
+		assertEquals("Itching", ConceptNameUtil.stripSynonyms(input));
+	}
+
+	@Test
+	public void stripSynonyms_shouldHandleNull() {
+		assertEquals(null, ConceptNameUtil.stripSynonyms(null));
 	}
 
 	private ConceptName conceptName(String name) {

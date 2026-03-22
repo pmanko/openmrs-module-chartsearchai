@@ -12,6 +12,8 @@ package org.openmrs.module.chartsearchai.util;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.openmrs.Concept;
 import org.openmrs.ConceptName;
@@ -27,6 +29,67 @@ public final class ConceptNameUtil {
 	private static final int MAX_SYNONYMS = 3;
 
 	private ConceptNameUtil() {
+	}
+
+	// Matches synonym parentheses added by getName(), e.g. " (syn. HTN, High Blood Pressure)"
+	// The "syn. " prefix distinguishes these from structural parens like "(food allergen)".
+	private static final Pattern SYNONYM_PARENS = Pattern.compile(" \\(syn\\. [^)]*\\)");
+
+	/**
+	 * Condenses synonym parentheses into a compact slash format so the LLM receives
+	 * concise but synonym-aware records. Keeps only the first synonym to minimize noise.
+	 *
+	 * <p>For example, {@code "Diarrhea (syn. Diarrhoea, Loose bowels)"} becomes
+	 * {@code "Diarrhea/Diarrhoea"}. Structural parentheses like "(food allergen)" are
+	 * preserved.</p>
+	 *
+	 * @param text the serialized record text
+	 * @return text with synonym parentheses condensed to slash format
+	 */
+	public static String condenseSynonyms(String text) {
+		if (text == null) {
+			return null;
+		}
+		Matcher matcher = SYNONYM_PARENS.matcher(text);
+		StringBuffer sb = new StringBuffer();
+		while (matcher.find()) {
+			// Extract content after "syn. ", take only the first synonym
+			String content = matcher.group();
+			String inner = content.substring(" (syn. ".length(), content.length() - 1);
+			String firstSynonym = inner.split(",")[0].trim();
+			matcher.appendReplacement(sb, Matcher.quoteReplacement("/" + firstSynonym));
+		}
+		matcher.appendTail(sb);
+		return sb.toString();
+	}
+
+	/**
+	 * Strips synonym parentheses from serialized text entirely.
+	 *
+	 * @param text the serialized record text
+	 * @return text with synonym parentheses removed
+	 */
+	public static String stripSynonyms(String text) {
+		if (text == null) {
+			return null;
+		}
+		return SYNONYM_PARENS.matcher(text).replaceAll("");
+	}
+
+	/**
+	 * Returns just the preferred concept name without synonyms. Useful when concise text
+	 * is needed, such as in allergy reaction and severity fields where synonyms would add
+	 * noise that hurts small-LLM citation accuracy.
+	 *
+	 * @param concept the concept to resolve
+	 * @return the preferred name, or empty string if unavailable
+	 */
+	public static String getPreferredName(Concept concept) {
+		if (concept == null) {
+			return "";
+		}
+		ConceptName preferred = concept.getName();
+		return preferred != null ? preferred.getName() : "";
 	}
 
 	/**
@@ -69,6 +132,6 @@ public final class ConceptNameUtil {
 		if (synonyms.isEmpty()) {
 			return preferredText;
 		}
-		return preferredText + " (" + String.join(", ", synonyms) + ")";
+		return preferredText + " (syn. " + String.join(", ", synonyms) + ")";
 	}
 }

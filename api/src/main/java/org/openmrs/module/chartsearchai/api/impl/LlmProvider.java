@@ -50,7 +50,7 @@ public class LlmProvider {
 			+ "review a patient's chart. Answer ONLY the specific question asked. "
 			+ "Use only the patient records below (sorted most recent first). "
 			+ "Include the relevant details from the records in your answer "
-			+ "and cite each record immediately after the fact it supports (e.g. [1], [3]). "
+			+ "and cite EVERY record you use by its number in brackets (e.g. [1], [3]). "
 			+ "Keep your answer concise — one to three sentences. "
 			+ "Respond with ONLY a JSON object with an \"answer\" string and a \"citations\" array "
 			+ "listing every record number you cited.\n\n"
@@ -184,6 +184,10 @@ public class LlmProvider {
 
 	private static final Pattern SLASH_CITATION = Pattern.compile("\\[(\\d+(?:/\\d+)+)\\]");
 
+	// Matches echoed slash-synonyms like "fomepizole/fomeject" in LLM answers.
+	// Captures word/word patterns (not inside brackets, which are citations).
+	private static final Pattern SLASH_SYNONYM = Pattern.compile("(?<=\\s|^)(\\w[\\w\\s]*?)/(\\w[\\w\\s]*?)(?=[\\s.,;:!?\\])]|$)");
+
 	/**
 	 * Extracts the answer and citations from the JSON response produced by the
 	 * grammar-constrained LLM. Expected format: {"answer": "...", "citations": [1, 2]}
@@ -199,7 +203,7 @@ public class LlmProvider {
 			JsonNode root = MAPPER.readTree(trimmed);
 			JsonNode answerNode = root.get("answer");
 			if (answerNode != null && answerNode.isTextual()) {
-				String answer = normalizeSlashCitations(answerNode.asText().trim());
+				String answer = stripSlashSynonyms(normalizeSlashCitations(answerNode.asText().trim()));
 				List<Integer> citations = new ArrayList<>();
 				JsonNode citationsNode = root.get("citations");
 				if (citationsNode != null && citationsNode.isArray()) {
@@ -242,6 +246,14 @@ public class LlmProvider {
 		}
 		matcher.appendTail(sb);
 		return sb.toString();
+	}
+
+	/**
+	 * Removes echoed slash-synonyms from the LLM answer, keeping only the first term.
+	 * For example, "fomepizole/fomeject" becomes "fomepizole".
+	 */
+	static String stripSlashSynonyms(String text) {
+		return SLASH_SYNONYM.matcher(text).replaceAll("$1");
 	}
 
 	/**
