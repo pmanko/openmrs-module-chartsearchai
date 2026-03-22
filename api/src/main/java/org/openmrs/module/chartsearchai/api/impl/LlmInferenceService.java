@@ -39,6 +39,7 @@ import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.Patien
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 import org.openmrs.module.chartsearchai.api.impl.LlmProvider.LlmResponse;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader;
+import org.openmrs.module.chartsearchai.util.PorterStemmer;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -241,9 +242,11 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
-	 * Removes common stopwords from the query before embedding so that queries like
-	 * "any medications?" and "does the patient have any medications?" produce the
-	 * same embedding vector and thus the same retrieval results.
+	 * Removes common stopwords and stems remaining words before embedding so that
+	 * queries like "any medications?" and "does the patient have any medications?"
+	 * produce the same embedding vector and thus the same retrieval results.
+	 * Stemming ensures word variants like "allergic" and "allergies" also normalize
+	 * to the same root.
 	 */
 	static String stripQueryStopwords(String question) {
 		String[] words = question.toLowerCase().replaceAll("[?!.,;:]", "").trim().split("\\s+");
@@ -253,7 +256,7 @@ public class LlmInferenceService implements ChartSearchService {
 				if (sb.length() > 0) {
 					sb.append(" ");
 				}
-				sb.append(word);
+				sb.append(PorterStemmer.stem(word));
 			}
 		}
 		return sb.length() > 0 ? sb.toString() : question.toLowerCase().trim();
