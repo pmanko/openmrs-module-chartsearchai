@@ -115,6 +115,12 @@ Question: Does the patient have any conditions?
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.embedding.queryStemming</property>
+		<defaultValue>false</defaultValue>
+		<description>When true, applies Porter stemming to query words before embedding so that word variants like "allergic" and "allergies" produce similar retrieval vectors. Requires re-indexing patient embeddings after enabling. Default: false.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.embedding.modelFilePath</property>
 		<defaultValue></defaultValue>
 		<description>Relative path, including the filename, within the OpenMRS application data directory to the ONNX embedding model file. Required when embedding pre-filtering is enabled (chartsearchai.embedding.preFilter is true, the default). Example: chartsearchai/all-MiniLM-L6-v2.onnx (resolves to &lt;application-data-directory&gt;/chartsearchai/all-MiniLM-L6-v2.onnx). Download the model.onnx file from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 and rename it. Path traversal (e.g. "..") is not allowed.</description>
