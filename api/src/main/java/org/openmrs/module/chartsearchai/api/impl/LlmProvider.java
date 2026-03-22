@@ -50,7 +50,7 @@ public class LlmProvider {
 			+ "review a patient's chart. Answer ONLY the specific question asked. "
 			+ "Use only the patient records below (sorted most recent first). "
 			+ "Include the relevant details from the records in your answer "
-			+ "and cite EVERY record you use by its number in brackets (e.g. [1], [3]). "
+			+ "and cite each record immediately after the fact it supports (e.g. [1], [3]). "
 			+ "Keep your answer concise — one to three sentences. "
 			+ "Respond with ONLY a JSON object with an \"answer\" string and a \"citations\" array "
 			+ "listing every record number you cited.\n\n"
