@@ -33,8 +33,8 @@ import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.ChartAnswer;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
+import org.openmrs.module.chartsearchai.api.AuditLogService;
 import org.openmrs.module.chartsearchai.api.PatientAccessCheck;
-import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
 import org.openmrs.module.chartsearchai.model.ChartSearchAuditLog;
 import org.openmrs.module.webservices.rest.web.RestConstants;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,10 +43,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -104,10 +101,8 @@ public class ChartSearchAiRestController {
 	private PatientAccessCheck patientAccessCheck;
 
 	@Autowired
-	private ChartSearchAiDAO dao;
-
-	@Autowired
-	private PlatformTransactionManager transactionManager;
+	@Qualifier("chartSearchAi.auditLogService")
+	private AuditLogService auditLogService;
 
 	@Transactional
 	@RequestMapping(value = "/search", method = RequestMethod.POST)
@@ -198,7 +193,7 @@ public class ChartSearchAiRestController {
 		auditLog.setResponseTimeMs(responseTimeMs);
 		auditLog.setDateCreated(new Date());
 		try {
-			dao.saveAuditLog(auditLog);
+			auditLogService.saveAuditLog(auditLog);
 		}
 		catch (Exception e) {
 			log.warn("Failed to save audit log for search query", e);
@@ -333,15 +328,11 @@ public class ChartSearchAiRestController {
 			auditLog.setSearchMode(searchMode);
 			auditLog.setResponseTimeMs(responseTimeMs);
 			auditLog.setDateCreated(new Date());
-			TransactionStatus tx = transactionManager.getTransaction(
-					new DefaultTransactionDefinition());
 			try {
-				dao.saveAuditLog(auditLog);
-				transactionManager.commit(tx);
+				auditLogService.saveAuditLog(auditLog);
 			}
-			catch (Exception txEx) {
-				transactionManager.rollback(tx);
-				log.warn("Failed to save audit log for streaming query", txEx);
+			catch (Exception e2) {
+				log.warn("Failed to save audit log for streaming query", e2);
 			}
 
 			Map<String, Object> doneData = new HashMap<String, Object>();
@@ -418,9 +409,9 @@ public class ChartSearchAiRestController {
 		Date fromDate = fromDateMs != null ? new Date(fromDateMs) : null;
 		Date toDate = toDateMs != null ? new Date(toDateMs) : null;
 
-		List<ChartSearchAuditLog> logs = dao.getAuditLogs(patient, user, fromDate, toDate,
+		List<ChartSearchAuditLog> logs = auditLogService.getAuditLogs(patient, user, fromDate, toDate,
 				startIndex, limit);
-		Long totalCount = dao.getAuditLogCount(patient, user, fromDate, toDate);
+		Long totalCount = auditLogService.getAuditLogCount(patient, user, fromDate, toDate);
 
 		List<Map<String, Object>> results = new ArrayList<Map<String, Object>>();
 		for (ChartSearchAuditLog auditLog : logs) {
@@ -472,7 +463,7 @@ public class ChartSearchAiRestController {
 		}
 
 		Date oneMinuteAgo = new Date(System.currentTimeMillis() - 60000);
-		long recentCount = dao.getQueryCountByUserSince(user, oneMinuteAgo);
+		long recentCount = auditLogService.getQueryCountByUserSince(user, oneMinuteAgo);
 
 		if (recentCount >= maxPerMinute) {
 			log.warn("Rate limit exceeded for user {} ({} queries in last minute)",

@@ -13,7 +13,7 @@ import java.util.Date;
 
 import org.openmrs.api.context.Context;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
-import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
+import org.openmrs.module.chartsearchai.api.AuditLogService;
 import org.openmrs.scheduler.tasks.AbstractTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,10 +41,10 @@ public class AuditLogPurgeTask extends AbstractTask {
 		long cutoffMs = System.currentTimeMillis() - (retentionDays * 24L * 60L * 60L * 1000L);
 		Date cutoffDate = new Date(cutoffMs);
 
-		ChartSearchAiDAO dao = Context.getRegisteredComponent(
-				"hibernateChartSearchAiDAO", ChartSearchAiDAO.class);
+		AuditLogService service = Context.getRegisteredComponent(
+				"chartSearchAi.auditLogService", AuditLogService.class);
 
-		int deleted = dao.deleteAuditLogsBefore(cutoffDate);
+		int deleted = service.deleteAuditLogsBefore(cutoffDate);
 		log.info("Audit log purge completed: deleted {} entries older than {} days",
 				deleted, retentionDays);
 	}
