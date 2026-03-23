@@ -22,6 +22,7 @@ import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import de.kherud.llama.Pair;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import de.kherud.llama.InferenceParameters;
@@ -294,20 +295,28 @@ public class LlmProvider {
 		String userMessage = "Patient records (most recent first):\n" + numberedRecords + "\n\nQuestion: " + question;
 		String templateValue = getChatTemplate();
 
-		String prompt = formatPrompt(templateValue, systemPrompt, userMessage);
-		log.debug("LLM prompt size: {} tokens", llm.encode(prompt).length);
-		String[] stopStrings = resolveStopStrings(templateValue);
+		InferenceParameters params;
+		if ("auto".equalsIgnoreCase(templateValue)) {
+			// Use the model's built-in GGUF chat template for correct formatting
+			List<Pair<String, String>> messages = new ArrayList<Pair<String, String>>();
+			messages.add(new Pair<String, String>("user", userMessage));
+			params = new InferenceParameters("")
+					.setUseChatTemplate(true)
+					.setMessages(systemPrompt, messages);
+			log.debug("Using model's built-in chat template");
+		} else {
+			String prompt = formatPrompt(templateValue, systemPrompt, userMessage);
+			log.debug("LLM prompt size: {} tokens", llm.encode(prompt).length);
+			params = new InferenceParameters(prompt)
+					.setStopStrings(resolveStopStrings(templateValue));
+		}
 
-		return new InferenceParameters(prompt)
+		return params
 				.setTemperature(0.0f)
 				.setSeed(42)
 				.setCachePrompt(false)
 				.setNPredict(ChartSearchAiConstants.DEFAULT_MAX_TOKENS)
-				.setGrammar(JSON_ANSWER_GRAMMAR)
-				.setRepeatPenalty(1.1f)
-				.setRepeatLastN(256)
-				.setFrequencyPenalty(0.1f)
-				.setStopStrings(stopStrings);
+				.setGrammar(JSON_ANSWER_GRAMMAR);
 	}
 
 	static String formatPrompt(String templateValue, String systemPrompt, String userMessage) {
@@ -329,7 +338,7 @@ public class LlmProvider {
 		if (value != null && !value.trim().isEmpty()) {
 			return value.trim();
 		}
-		return "llama3";
+		return "auto";
 	}
 
 	protected String getSystemPrompt() {
@@ -379,7 +388,7 @@ public class LlmProvider {
 			log.info("Loading LLM from {}", modelPath);
 			ModelParameters modelParams = new ModelParameters()
 					.setModel(modelPath)
-					.setGpuLayers(0);
+					.setGpuLayers(-1);
 			model = new LlamaModel(modelParams);
 			loadedModelPath = modelPath;
 			log.info("LLM loaded successfully");
