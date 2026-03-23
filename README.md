@@ -66,12 +66,13 @@ Set these global properties in **Admin > Settings**:
 | `chartsearchai.embedding.similarityRatio` | `0.80` | Minimum similarity score as a fraction of the top result's score. Records scoring below this ratio are excluded even if within the topK limit. Must be between 0 and 1 |
 | `chartsearchai.embedding.modelFilePath` | — | Required when pre-filtering is enabled. Relative path to the ONNX model file (all-MiniLM-L6-v2), e.g. `chartsearchai/all-MiniLM-L6-v2.onnx` |
 | `chartsearchai.embedding.vocabFilePath` | — | Required when pre-filtering is enabled. Relative path to the WordPiece `vocab.txt` file, e.g. `chartsearchai/vocab.txt` |
+| `chartsearchai.embedding.queryStemming` | `false` | When `true`, applies Porter stemming to query words before embedding so that word variants like "allergic" and "allergies" produce similar retrieval vectors. Requires re-indexing patient embeddings after enabling |
 
 #### LLM tuning
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `chartsearchai.llm.chatTemplate` | `llama3` | Chat template for formatting prompts. Presets: `llama3`, `mistral`, `phi3`, `chatml`, `gemma`. Or a custom template string with `{system}` and `{user}` placeholders |
+| `chartsearchai.llm.chatTemplate` | `llama3` | Chat template for formatting prompts. Presets: `llama3`, `mistral`, `phi3`, `chatml`, `gemma`. Set to `auto` to use the model's built-in GGUF chat template. Or a custom template string with `{system}` and `{user}` placeholders |
 | `chartsearchai.llm.systemPrompt` | *(built-in clinical prompt)* | System prompt that guides how the LLM responds — e.g. answering only the question asked, using only the provided patient records, citing records by number, declining to answer when records lack relevant information, keeping answers concise, and returning structured JSON |
 | `chartsearchai.llm.timeoutSeconds` | `120` | Maximum seconds to wait for LLM inference before timing out |
 
