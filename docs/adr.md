@@ -174,6 +174,10 @@ Store embeddings as `MEDIUMBLOB` in a regular MySQL table (`chartsearchai_embedd
 
 The `UNIQUE KEY (resource_type, resource_id)` constraint prevents duplicate embeddings and enables upsert on re-index.
 
+### CQRS separation
+
+The module applies the CQRS (Command Query Responsibility Segregation) principle in relation to OpenMRS patient data. The transactional store (OpenMRS's normalized relational tables — `obs`, `orders`, `conditions`, etc.) serves clinical workflows and CRUD operations. The query store (`chartsearchai_embedding`) is a separate, denormalized projection containing pre-serialized text and embedding vectors, optimized for semantic similarity search. AOP advice hooks on clinical services act as the event bridge, triggering projection rebuilds to keep the query store eventually consistent with the transactional source. The module never writes to OpenMRS clinical tables.
+
 ## Decision 8: Index population strategy
 
 ### Decision
