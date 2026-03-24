@@ -342,7 +342,7 @@ Both approaches carry hallucination risk, but the failure modes differ. In the c
 
 #### Embedding-based pre-filtering hallucinations (`preFilter=true`)
 
-With pre-filtering enabled, the LLM only sees the top-K retrieved records (default 15, configurable via `chartsearchai.embedding.topK`). This limits how much it can hallucinate *about*, but it introduces a different risk: hallucinating from *missing context*. Examples:
+With pre-filtering enabled, the LLM only sees the top-K retrieved records (default 10, configurable via `chartsearchai.embedding.topK`). This limits how much it can hallucinate *about*, but it introduces a different risk: hallucinating from *missing context*. Examples:
 
 - The retrieval step misses a relevant record (e.g., a resolved penicillin allergy) because the query and record text are semantically distant. The LLM confidently says "no known drug allergies" based on the records it received.
 - The LLM sees a single elevated blood pressure reading without the surrounding context of the patient exercising beforehand (that context is in a different obs comment that was not retrieved). It may overstate the clinical significance.
@@ -501,7 +501,7 @@ The module requires sufficient RAM for both the OpenMRS JVM and the LLM model:
 
 ### Decision
 
-A single architecture is used: all queries go through the LLM for reasoning and synthesis. An embedding pre-filter (`chartsearchai.embedding.preFilter`, default `true`) narrows the patient chart to the most relevant records before sending them to the LLM (default top 15, configurable via `chartsearchai.embedding.topK`). This solves the "lost in the middle" problem where small LLMs struggle to find relevant information in large contexts. Set to `false` to send the full chart instead.
+A single architecture is used: all queries go through the LLM for reasoning and synthesis. An embedding pre-filter (`chartsearchai.embedding.preFilter`, default `true`) narrows the patient chart to the most relevant records before sending them to the LLM (default top 10, configurable via `chartsearchai.embedding.topK`). This solves the "lost in the middle" problem where small LLMs struggle to find relevant information in large contexts. Set to `false` to send the full chart instead.
 
 Embeddings are indexed on first patient chart access and kept up to date automatically via AOP hooks on data changes. A bulk backfill task is also available for pre-indexing all patients.
 
@@ -515,17 +515,24 @@ Any BERT-based ONNX embedding model can be used as a drop-in replacement by upda
 
 A `chartsearchai.embedding.similarityRatio` setting (default 0.80) filters out low-relevance records by requiring each record to score at least 80% of the top result's similarity score. This works alongside `topK` as a quality floor — `topK` sets the maximum number of records, while `similarityRatio` drops noise within that cap.
 
+### Similarity threshold algorithm
+
+The similarity threshold uses a dual-floor approach that adapts to query strength:
+
+- **Strong matches (top score > 0.50)**: The query matched a specific record strongly, so the ratio-based floor (`topScore * similarityRatio`) is reliable. Only this floor is used.
+- **Weak matches (top score <= 0.50)**: Queries are fuzzier and out-of-vocabulary terms can depress relevant records. A range-based floor (`topScore - similarityRatio * scoreRange`) provides needed leniency. The minimum of the ratio floor and range floor is used.
+
+An **absolute similarity floor** (0.25) filters out completely unrelated queries early — if the best match in the entire patient chart scores below 0.25, the query is unrelated to any record (e.g., "any teacher?" against clinical data) and an empty result is returned.
+
+An **adaptive gap detection** algorithm (`chartsearchai.embedding.scoreGapMultiplier`, default 2.5) finds natural cluster boundaries in the sorted similarity scores. It walks the scores tracking the running average gap between consecutive entries. When a gap exceeds the multiplier times the average gap, the cluster boundary is found and lower-scoring records are excluded. This ensures at least 2 records are returned when available above the similarity floor.
+
 ### Retrieval precision improvements
 
-The general-purpose embedding model (all-MiniLM-L6-v2) ranks records by lexical overlap rather than clinical semantics. For example, a query like "any medications?" would rank an allergy record containing "DRUG" higher than actual drug orders, because the word "DRUG" has higher surface-level similarity to "medications" than dosing details like "500mg Oral twice daily." Three techniques address this:
+The general-purpose embedding model (all-MiniLM-L6-v2) ranks records by lexical overlap rather than clinical semantics. For example, a query like "any medications?" would rank an allergy record containing "DRUG" higher than actual drug orders, because the word "DRUG" has higher surface-level similarity to "medications" than dosing details like "500mg Oral twice daily." Two techniques address this:
 
 **Semantic embedding prefixes.** Each record's text is prepended with a type-specific prefix before computing embeddings (but not in the LLM prompt). For example, a drug order is embedded as `"Medication prescription: Drug order: Azithromycin..."` while an allergy is embedded as `"Patient allergy: Allergy: Penicillin..."`. This shifts the embedding vectors toward the right semantic space, so medication queries rank drug orders higher. Prefixes are further specialized by order sub-type: `"Medication prescription:"` for drug orders, `"Lab or diagnostic test:"` for test orders, and `"Clinical referral:"` for referral orders. In testing, this moved drug orders from 8th/9th place to 1st/3rd place for medication queries.
 
 **Query stopword normalization.** Common filler words ("does", "the", "patient", "have", "any") are stripped from the query before embedding, so that "any medications?" and "does the patient have any medications?" produce the same embedding vector and identical retrieval results. Without this, different phrasings of the same question return different filtered record sets, leading to inconsistent LLM answers. Stopwords are loaded from `<application-data-directory>/chartsearchai/query-stopwords.txt` if present, otherwise from a bundled default. Admins can customize the stopwords list by placing a modified file at that path without recompiling the module. Only true filler words are stripped — clinical qualifiers like "no", "not", "current", "recent", "last", and "active" are preserved because they change the query's meaning.
-
-**Dual-vector query embedding.** The query is embedded twice: once as the raw question and once as the stripped version. Each vector runs through the similarity threshold selection independently, and the results are unioned with deduplication by resource key. This ensures that both the natural-language phrasing and the normalized clinical terms contribute to retrieval. If the stripped query is identical to the raw query (e.g., a single-word question with no stopwords), only one embedding is computed to avoid redundant work. The independent threshold evaluation prevents one vector's high scores from raising the threshold for the other, which would cause the weaker vector to contribute nothing.
-
-**Concept-level cohort expansion.** After applying the similarity ratio threshold, remaining top-K records whose grouping key already has at least one record above the threshold are included. For most resource types, the grouping key is the resource type itself (e.g., all orders group together). For Obs records, the grouping key includes the concept name extracted from the serialized text (e.g., `"Obs:Respiratory Rate"` vs `"Obs:Weight"`), so that different observation types are not conflated — a passing respiratory rate record does not pull in unrelated weight records that happen to be in the top-K. This prevents related records of the same clinical concept (e.g., two blood pressure readings) from being split by marginal score differences, while keeping unrelated obs types independent.
 
 ### Chunking strategy
 
@@ -542,7 +549,7 @@ Records are serialized as labeled plain text (e.g., `Condition: Diabetes. Status
 | FHIR JSON | `{"resourceType":"Condition","code":{"text":"Diabetes"},"clinicalStatus":{"coding":[{"code":"active"}]}}` | ~30+ |
 | XML | `<condition><name>Diabetes</name><status>ACTIVE</status></condition>` | ~16 |
 
-With 15 records per query and potentially hundreds of patients per day, the token savings compound. Plain text also reads naturally, which helps smaller LLMs that perform better with human-readable input than structured formats. Field labels (e.g., "Status:", "Severity:") provide enough structure for the LLM to extract information without the overhead of delimiters, braces, or tags.
+With 10 records per query and potentially hundreds of patients per day, the token savings compound. Plain text also reads naturally, which helps smaller LLMs that perform better with human-readable input than structured formats. Field labels (e.g., "Status:", "Severity:") provide enough structure for the LLM to extract information without the overhead of delimiters, braces, or tags.
 
 ### Serialized fields per record type
 
@@ -778,7 +785,7 @@ For the initial release targeting small clinics with low concurrent usage, the s
 ## Planned future work
 
 - **Incremental embedding indexing**: Currently, `indexPatient()` deletes all embeddings for a patient and recomputes them from scratch on every data change. This is simple and guarantees consistency, but recomputes embeddings for records that haven't changed. An incremental approach would track which record maps to which embedding row and only add, update, or delete the specific embeddings affected. This matters for patients with large charts where AOP hooks fire frequently.
-- **Reranking**: A cross-encoder reranking step between embedding retrieval and LLM inference could improve relevance. Currently deferred because: individual records are short (embedding similarity works well), the LLM itself reasons over all 15 retrieved records (acting as an implicit reranker), and adding another model increases RAM usage, latency, and concurrency bottlenecks. Worth revisiting if real-world usage reveals relevance gaps, if top-K is increased significantly (50+), or if patient charts grow very large with thousands of records.
+- **Reranking**: A cross-encoder reranking step between embedding retrieval and LLM inference could improve relevance. Currently deferred because: individual records are short (embedding similarity works well), the LLM itself reasons over all 10 retrieved records (acting as an implicit reranker), and adding another model increases RAM usage, latency, and concurrency bottlenecks. Worth revisiting if real-world usage reveals relevance gaps, if top-K is increased significantly (50+), or if patient charts grow very large with thousands of records.
 - **Concept graph traversal**: Complement embedding search with OpenMRS concept relationship traversal to improve retrieval for queries involving related concepts (e.g., finding NSAID allergies when asking about ibuprofen).
 - **Pre-computed summaries**: Cache LLM-generated summaries for common query patterns (e.g., "current medications", "active problems") to reduce inference latency for frequently asked questions.
 - **Agent/tool-use pattern**: Enable multi-step reasoning where the LLM can request additional data or perform follow-up queries. Deferred until local models with reliable tool-use capabilities are available.

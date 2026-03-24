@@ -114,7 +114,7 @@ Question: Does the patient have diabetes?
 	<globalProperty>
 		<property>chartsearchai.embedding.topK</property>
 		<defaultValue>10</defaultValue>
-		<description>Maximum number of records to retrieve via embedding similarity when pre-filtering is enabled. Lower values produce more focused LLM responses; higher values provide more context but may reduce reasoning quality. Default: 15.</description>
+		<description>Maximum number of records to retrieve via embedding similarity when pre-filtering is enabled. Lower values produce more focused LLM responses; higher values provide more context but may reduce reasoning quality. Default: 10.</description>
 	</globalProperty>
 
 	<globalProperty>
