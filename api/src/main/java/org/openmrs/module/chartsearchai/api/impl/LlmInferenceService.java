@@ -327,15 +327,19 @@ public class LlmInferenceService implements ChartSearchService {
 
 		int limit = Math.min(topK, scored.size());
 		double similarityRatio = getSimilarityRatio();
-		// Use the more lenient of two floors: the ratio-based floor works
-		// well for compressed score distributions (all scores in a narrow
-		// band), while the range-based floor adapts to high-variance
-		// distributions where OOV vocabulary causes relevant records to
-		// score much lower than the top hit.
 		double ratioFloor = topScore * similarityRatio;
-		double scoreRange = topScore - scored.get(limit - 1).score;
-		double rangeFloor = topScore - similarityRatio * scoreRange;
-		double minScore = Math.min(ratioFloor, rangeFloor);
+		double minScore;
+		// When the top score is high (> 0.50), the query matched a specific
+		// record strongly and the ratio-based floor is reliable. When the top
+		// score is moderate, queries are fuzzier and OOV vocabulary can depress
+		// relevant records — the range-based floor provides needed leniency.
+		if (topScore > 0.50) {
+			minScore = ratioFloor;
+		} else {
+			double scoreRange = topScore - scored.get(limit - 1).score;
+			double rangeFloor = topScore - similarityRatio * scoreRange;
+			minScore = Math.min(ratioFloor, rangeFloor);
+		}
 
 		// Adaptive cutoff: find the natural cluster boundary using score gap
 		// detection. When the drop between consecutive scores exceeds a
