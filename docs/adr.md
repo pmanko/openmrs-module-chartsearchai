@@ -398,6 +398,7 @@ As a safety net, any slash-separated citations that small LLMs occasionally prod
 | Mistral Nemo 12B | ~7GB | ~12GB | 128K tokens | ~4–8 tok/s |
 | Phi-3-Medium 14B | ~8GB | ~14GB | 4K tokens (128K variant available) | ~3–6 tok/s |
 | Qwen 2.5 14B | ~8GB | ~14GB | 128K tokens | ~3–6 tok/s |
+| MedGemma 27B Text | ~16.5GB | ~20–24GB | 128K tokens | ~1–2 tok/s |
 
 ### Recommended model: Llama 3.3 8B
 
@@ -420,6 +421,7 @@ These models are from US/EU organizations (Meta and Mistral AI respectively), ha
 - **Mistral 7B** has strong reasoning but at 7B parameters it is noticeably slower on CPU (~10–15 tok/s) and requires ~8GB RAM. Superseded by Llama 3.3 8B which offers better quality at a similar resource cost.
 - **Qwen 2.5 7B/14B** (Alibaba) offers strong instruction following and large context windows. However, Qwen is developed by a Chinese company subject to China's data laws — while GGUF models run locally with no data leaving the machine, US healthcare organizations may face compliance or perception concerns. Consider Llama or Mistral alternatives first.
 - **Gemma 2 9B Instruct** (Google) has excellent reasoning and instruction following at 9B parameters, but its 8K context window limits it to ~500 records without embedding pre-filtering. Requires ~10GB RAM.
+- **MedGemma 27B Text** (Google) is a medical-domain model built on the Gemma 3 architecture, fine-tuned on clinical and biomedical text. At 27B parameters it offers strong medical text comprehension and a 128K token context window. With Q4_K_M quantization it is ~16.5GB on disk and requires ~20–24GB total RAM. CPU inference is very slow (~1–2 tok/s), making it impractical for point-of-care use without a GPU (16–24GB VRAM recommended, where it can reach ~10–20+ tok/s). It uses the `gemma` chat template already supported by the module. Licensed under the [Health AI Developer Foundations Terms of Use](https://developers.google.com/health-ai-developer-foundations/terms), which is more restrictive than Llama's community license — review the terms before deploying. GGUF quantizations are available from [unsloth/medgemma-27b-text-it-GGUF](https://huggingface.co/unsloth/medgemma-27b-text-it-GGUF). Best suited for GPU-equipped deployments where medical-domain accuracy is the top priority.
 
 All models run via java-llama.cpp with Q4_K_M quantization in GGUF format.
 
@@ -481,6 +483,7 @@ The module works with any GGUF-format model. Larger models produce better respon
 | **7B** (e.g. Qwen 2.5 7B, Mistral 7B) | ~4GB | ~6–8GB | ~8–10GB | ~3–8 tokens/sec |
 | **9B** (e.g. Gemma 2 9B Instruct) | ~5GB | ~8–10GB | ~10–12GB | ~3–6 tokens/sec |
 | **14B** (e.g. Qwen 2.5 14B) | ~8GB | ~12–14GB | ~14–16GB | ~2–4 tokens/sec |
+| **27B** (e.g. MedGemma 27B Text) | ~16.5GB | ~18–22GB | ~20–24GB | ~1–2 tokens/sec |
 
 **3B models** are the most deployable in low-resource settings but struggle with strict instruction following — they tend to produce verbose responses, add unsolicited commentary, and hedge when they should give a direct "not found" answer. Few-shot examples in the system prompt help but do not fully solve this.
 
@@ -489,6 +492,8 @@ The module works with any GGUF-format model. Larger models produce better respon
 **9B models** (e.g. Gemma 2 9B Instruct) offer excellent reasoning and instruction following. Note that Gemma 2's 8K context window is smaller than Llama or Qwen models, so embedding pre-filtering is strongly recommended.
 
 **14B models** (e.g. Qwen 2.5 14B, Phi-3-Medium 14B) provide the best response quality among CPU-viable options, with strong reasoning. They require 14–16GB total RAM and produce slower inference (~2–4 tok/s). Suitable for well-resourced deployments where response quality is prioritized over speed. Note that context window size varies significantly at this tier — Qwen 2.5 14B offers 128K tokens natively, while Phi-3-Medium defaults to 4K (128K variant available but slower on CPU).
+
+**27B models** (e.g. MedGemma 27B Text) are medical-domain specialist models that offer the highest potential accuracy for clinical Q&A. At ~16.5GB on disk and ~20–24GB total RAM, they exceed what most CPU-only deployments can handle — inference at ~1–2 tok/s is too slow for interactive use. These models are practical only with GPU acceleration (16–24GB VRAM), where they can achieve ~10–20+ tok/s. Consider this tier for GPU-equipped deployments where medical-domain accuracy justifies the hardware investment.
 
 A server running OpenMRS typically uses 1–2GB for the JVM heap. A 4GB machine is insufficient to run this module — the LLM alone requires at least 3–4GB for the smallest viable model.
 
