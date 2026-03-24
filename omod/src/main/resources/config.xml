@@ -39,7 +39,7 @@
 	<!-- Global Properties -->
 	<globalProperty>
 		<property>chartsearchai.llm.modelFilePath</property>
-		<defaultValue></defaultValue>
+		<defaultValue>chartsearchai/Llama-3.2-3B-Instruct-Q4_K_M.gguf</defaultValue>
 		<description>Relative path, including the filename, within the OpenMRS application data directory to the GGUF LLM model file used for inference. Example: chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf (resolves to &lt;application-data-directory&gt;/chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf). The recommended model is Llama 3.3 8B Instruct (Q4_K_M quantization, ~5GB). Download from https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF. Path traversal (e.g. "..") is not allowed.</description>
 	</globalProperty>
 
@@ -131,13 +131,13 @@ Question: Does the patient have diabetes?
 
 	<globalProperty>
 		<property>chartsearchai.embedding.modelFilePath</property>
-		<defaultValue></defaultValue>
+		<defaultValue>chartsearchai/model.onnx</defaultValue>
 		<description>Relative path, including the filename, within the OpenMRS application data directory to the ONNX embedding model file. Required when embedding pre-filtering is enabled (chartsearchai.embedding.preFilter is true, the default). Example: chartsearchai/all-MiniLM-L6-v2.onnx (resolves to &lt;application-data-directory&gt;/chartsearchai/all-MiniLM-L6-v2.onnx). Download the model.onnx file from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 and rename it. Path traversal (e.g. "..") is not allowed.</description>
 	</globalProperty>
 
 	<globalProperty>
 		<property>chartsearchai.embedding.vocabFilePath</property>
-		<defaultValue></defaultValue>
+		<defaultValue>chartsearchai/vocab.txt</defaultValue>
 		<description>Relative path, including the filename, within the OpenMRS application data directory to the WordPiece vocabulary file (vocab.txt) for the ONNX embedding model. Required when embedding pre-filtering is enabled (chartsearchai.embedding.preFilter is true, the default). Example: chartsearchai/vocab.txt (resolves to &lt;application-data-directory&gt;/chartsearchai/vocab.txt). Download vocab.txt from the same model repository as the ONNX model (e.g. https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2). Path traversal (e.g. "..") is not allowed.</description>
 	</globalProperty>
 
