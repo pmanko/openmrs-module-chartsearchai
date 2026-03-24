@@ -168,52 +168,167 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void stripQueryStopwords_shouldStemWhenEnabled() {
-		assertEquals(
-				LlmInferenceService.stripQueryStopwords("any allergies?", true),
-				LlmInferenceService.stripQueryStopwords("does the patient have any allergy?", true));
-	}
-
-	@Test
-	public void stripQueryStopwords_shouldNotStemWhenDisabled() {
-		assertEquals("allergies",
-				LlmInferenceService.stripQueryStopwords("any allergies?", false));
-	}
-
-	@Test
 	public void defaultSimilarityRatio_shouldBeBetweenZeroAndOne() {
 		assertTrue(ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO > 0);
 		assertTrue(ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO < 1);
 	}
 
 	@Test
-	public void groupingKey_shouldDistinguishDifferentObsConcepts() {
-		ChartEmbedding respRate = new ChartEmbedding();
-		respRate.setResourceType("Obs");
-		respRate.setTextContent("Test — Respiratory Rate: 18.0");
+	public void findAdaptiveCutoff_shouldDetectGapInScores() {
+		// Scores: 0.95, 0.93, 0.91, [gap], 0.75, 0.73
+		// The gap from 0.91 to 0.75 (0.16) is much larger than the avg gap so far (0.02)
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbedding(0.95),
+				makeScoredEmbedding(0.93),
+				makeScoredEmbedding(0.91),
+				makeScoredEmbedding(0.75),
+				makeScoredEmbedding(0.73));
 
-		ChartEmbedding cough = new ChartEmbedding();
-		cough.setResourceType("Obs");
-		cough.setTextContent("Diagnosis — Cough: persistent cough for 2 weeks");
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.70, 2.5);
 
-		String respKey = LlmInferenceService.groupingKey(respRate);
-		String coughKey = LlmInferenceService.groupingKey(cough);
-		assertTrue(!respKey.equals(coughKey),
-				"Respiratory Rate and Cough observations should have different grouping keys");
+		assertEquals(3, cutoff, "Should cut at position 3 where the large gap occurs");
 	}
 
 	@Test
-	public void groupingKey_shouldGroupSameConceptTogether() {
-		ChartEmbedding obs1 = new ChartEmbedding();
-		obs1.setResourceType("Obs");
-		obs1.setTextContent("Test — Respiratory Rate: 18.0");
+	public void findAdaptiveCutoff_shouldReturnAllWhenScoresAreUniform() {
+		// Scores evenly spaced — no outlier gap
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbedding(0.90),
+				makeScoredEmbedding(0.88),
+				makeScoredEmbedding(0.86),
+				makeScoredEmbedding(0.84),
+				makeScoredEmbedding(0.82));
 
-		ChartEmbedding obs2 = new ChartEmbedding();
-		obs2.setResourceType("Obs");
-		obs2.setTextContent("Test — Respiratory Rate: 23.0");
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.70, 2.5);
 
-		assertEquals(LlmInferenceService.groupingKey(obs1),
-				LlmInferenceService.groupingKey(obs2));
+		assertEquals(5, cutoff, "Should include all records when scores are evenly spaced");
+	}
+
+	@Test
+	public void findAdaptiveCutoff_shouldRespectSimilarityFloor() {
+		// 3 records above floor, 2 below
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbedding(0.90),
+				makeScoredEmbedding(0.88),
+				makeScoredEmbedding(0.85),
+				makeScoredEmbedding(0.60),
+				makeScoredEmbedding(0.55));
+
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.80, 2.5);
+
+		assertEquals(3, cutoff, "Should not include records below the similarity floor");
+	}
+
+	@Test
+	public void findAdaptiveCutoff_shouldReturnAllWhenBothAboveFloor() {
+		// Both records above the floor — no gap detection needed with only 2
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbedding(0.90),
+				makeScoredEmbedding(0.50));
+
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 2, 0.40, 2.5);
+
+		assertEquals(2, cutoff, "Should include all records when both are above the floor");
+	}
+
+	@Test
+	public void findAdaptiveCutoff_shouldHandleSingleRecord() {
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbedding(0.90));
+
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 1, 0.70, 2.5);
+
+		assertEquals(1, cutoff);
+	}
+
+	@Test
+	public void findAdaptiveCutoff_shouldNotCutBeforeMinimumRecords() {
+		// Huge gap at i=2 (0.94 -> 0.50 = 0.44). Without the i >= minRecords
+		// guard, this would trigger at i=2 (cutoff=2, only 2 records). With
+		// minRecords=2, the check is deferred past i=1. The large gap at i=2
+		// triggers the cut, yielding 2 records.
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbedding(0.95),
+				makeScoredEmbedding(0.94),
+				makeScoredEmbedding(0.50),
+				makeScoredEmbedding(0.48),
+				makeScoredEmbedding(0.46));
+
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.40, 2.5);
+
+		assertTrue(cutoff >= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS,
+				"Should not cut below the minimum record count");
+	}
+
+	@Test
+	public void findAdaptiveCutoff_shouldHandleIdenticalScores() {
+		// All scores identical — every gap is 0, no cutoff detected
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbedding(0.85),
+				makeScoredEmbedding(0.85),
+				makeScoredEmbedding(0.85),
+				makeScoredEmbedding(0.85));
+
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 4, 0.70, 2.5);
+
+		assertEquals(4, cutoff, "Should include all records when scores are identical");
+	}
+
+	@Test
+	public void findAdaptiveCutoff_shouldDetectGapAfterIdenticalScores() {
+		// 4 identical scores then a drop — gap is infinite relative to avg of 0
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbedding(0.90),
+				makeScoredEmbedding(0.90),
+				makeScoredEmbedding(0.90),
+				makeScoredEmbedding(0.90),
+				makeScoredEmbedding(0.60));
+
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.50, 2.5);
+
+		assertEquals(4, cutoff, "Should cut where scores drop after a plateau");
+	}
+
+	@Test
+	public void findAdaptiveCutoff_shouldNotFalselyCutOnTiedScores() {
+		// Positions 1 and 2 are tied (gap=0). A narrow baseline seeded only
+		// from this zero gap would make ANY subsequent non-zero gap trigger.
+		// The running average includes the 0.10 gap at i=1, giving a realistic
+		// baseline: avgGap = (0.10 + 0.00) / 2 = 0.05, threshold = 0.125.
+		// The 0.01 gap at i=3 is well below this, so no cut.
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbedding(0.95),
+				makeScoredEmbedding(0.85),
+				makeScoredEmbedding(0.85),
+				makeScoredEmbedding(0.84),
+				makeScoredEmbedding(0.83));
+
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.70, 2.5);
+
+		assertEquals(5, cutoff, "Tied scores should not cause false gap detection");
+	}
+
+	@Test
+	public void findAdaptiveCutoff_shouldRespectHigherMultiplier() {
+		// Same scores as the basic gap test, but with a very high multiplier
+		// that prevents the gap from triggering
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbedding(0.95),
+				makeScoredEmbedding(0.93),
+				makeScoredEmbedding(0.91),
+				makeScoredEmbedding(0.75),
+				makeScoredEmbedding(0.73));
+
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.70, 999.0);
+
+		assertEquals(5, cutoff, "Very high multiplier should effectively disable gap detection");
+	}
+
+	private static LlmInferenceService.ScoredEmbedding makeScoredEmbedding(double score) {
+		ChartEmbedding ce = new ChartEmbedding();
+		ce.setResourceType("obs");
+		ce.setTextContent("Test — Example: value");
+		return new LlmInferenceService.ScoredEmbedding(ce, score);
 	}
 
 	private static Date makeDate(int year, int month, int day) {

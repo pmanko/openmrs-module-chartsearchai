@@ -82,7 +82,7 @@ public class EmbeddingIndexer {
 				ce.setResourceId(record.getResourceId());
 				ce.setTextContent(record.getText());
 				String embeddingText = ChartSearchAiConstants.getEmbeddingPrefix(
-						record.getResourceType(), record.getText()) + record.getText();
+						record.getResourceType(), record.getText()) + firstSentence(record.getText());
 				ce.setEmbeddingVector(embeddingProvider.embed(embeddingText));
 				ce.setDateCreated(now);
 				newEmbeddings.add(ce);
@@ -170,7 +170,7 @@ public class EmbeddingIndexer {
 		ce.setResourceId(resourceId);
 		ce.setTextContent(text);
 		ce.setEmbeddingVector(embeddingProvider.embed(
-				ChartSearchAiConstants.getEmbeddingPrefix(resourceType, text) + text));
+				ChartSearchAiConstants.getEmbeddingPrefix(resourceType, text) + firstSentence(text)));
 		ce.setDateCreated(now);
 		dao.saveChartEmbedding(ce);
 	}
@@ -181,11 +181,25 @@ public class EmbeddingIndexer {
 		if (existing != null) {
 			existing.setTextContent(text);
 			existing.setEmbeddingVector(embeddingProvider.embed(
-					ChartSearchAiConstants.getEmbeddingPrefix(resourceType, text) + text));
+					ChartSearchAiConstants.getEmbeddingPrefix(resourceType, text) + firstSentence(text)));
 			existing.setDateCreated(now);
 			dao.saveChartEmbedding(existing);
 		} else {
 			saveEmbedding(patient, resourceType, resourceId, text, now);
 		}
 	}
+
+	/**
+	 * Extracts the first sentence from serialized record text (up to the first
+	 * ". "). The first sentence captures the record type and primary concept
+	 * (e.g. "Allergy: Beef (food allergen)").
+	 */
+	static String firstSentence(String text) {
+		if (text == null) {
+			return "";
+		}
+		int idx = text.indexOf(". ");
+		return idx > 0 ? text.substring(0, idx) : text;
+	}
+
 }

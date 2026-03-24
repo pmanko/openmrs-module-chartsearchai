@@ -107,7 +107,14 @@ public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {
 		if (obs.getConcept() != null && obs.getConcept().getConceptClass() != null) {
 			String name = obs.getConcept().getConceptClass().getName();
 			if (name != null && !name.trim().isEmpty()) {
-				return name.trim();
+				String trimmed = name.trim();
+				// "Question" is a metadata class (form fields) that collides with the
+				// "Question:" query separator in the LLM prompt. Map to "Assessment"
+				// which is clinically appropriate and non-colliding.
+				if ("Question".equalsIgnoreCase(trimmed)) {
+					return "Assessment";
+				}
+				return trimmed;
 			}
 		}
 		return "";

@@ -111,6 +111,25 @@ public class EmbeddingIndexerTest extends BaseModuleContextSensitiveTest {
 	}
 
 	@Test
+	public void firstSentence_shouldExtractTextBeforeFirstPeriodSpace() {
+		assertEquals("Allergy: Beef (food allergen)",
+				EmbeddingIndexer.firstSentence(
+						"Allergy: Beef (food allergen). Severity: Severe. Reactions: Diarrhea"));
+	}
+
+	@Test
+	public void firstSentence_shouldReturnFullTextWhenNoPeriodSpace() {
+		assertEquals("Test — Hemoglobin: 12.4 g/dL (HIGH)",
+				EmbeddingIndexer.firstSentence("Test — Hemoglobin: 12.4 g/dL (HIGH)"));
+	}
+
+	@Test
+	public void firstSentence_shouldHandleNull() {
+		assertEquals("", EmbeddingIndexer.firstSentence(null));
+	}
+
+
+	@Test
 	public void indexEncounter_shouldUpsertExistingEmbeddings() {
 		Encounter encounter = Context.getEncounterService().getEncounter(100);
 

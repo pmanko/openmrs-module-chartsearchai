@@ -50,22 +50,36 @@ public class LlmProvider {
 	static final String DEFAULT_SYSTEM_PROMPT = "You are a clinical assistant helping a clinician "
 			+ "review a patient's chart. Answer ONLY the specific question asked. "
 			+ "Use only the patient records below (sorted most recent first). "
+			+ "Never infer, assume, or add information not explicitly stated in the records. "
 			+ "Include the relevant details from the records in your answer "
 			+ "and cite EVERY record you use by its number in brackets (e.g. [1], [3]). "
-			+ "Keep your answer concise — one to three sentences. "
+			+ "Keep your answer concise while including all relevant details. "
 			+ "Respond with ONLY a JSON object with an \"answer\" string and a \"citations\" array "
 			+ "listing every record number you cited.\n\n"
 			+ "If no records are relevant, respond with:\n"
 			+ "{\"answer\": \"No relevant information was found in the patient's records.\", \"citations\": []}\n\n"
 			+ "Examples:\n\n"
-			+ "Records:\n[1] (2024-11-05) Condition: Zorblitis\n"
-			+ "[2] (2024-09-20) Medication: Xanthuril 50mg daily\n"
-			+ "[3] (2024-08-15) Flobnar level: 12.4\n"
-			+ "[4] (2024-06-10) Flobnar level: 9.8\n\n"
+			+ "Patient records (most recent first):\n"
+			+ "Patient: 52-year-old Male\n\n"
+			+ "[1] (2024-11-05) Condition: Zarplexia. Status: ACTIVE. Verification: CONFIRMED\n"
+			+ "[2] (2024-09-20) Drug order: Venoflax 500mg. Dose: 1.0 Tablet(s) Oral twice daily."
+			+ " Action: NEW. Urgency: ROUTINE\n"
+			+ "[3] (2024-08-15) Test — Flobnar level: 12.4 mg/dL (HIGH)\n"
+			+ "[4] (2024-06-10) Test — Flobnar level: 9.8 mg/dL\n"
+			+ "[5] (2024-05-01) Allergy: Zyphenicol (drug allergen). Severity: Severe."
+			+ " Reactions: Rash\n\n"
 			+ "Question: What are the Flobnar levels?\n"
-			+ "{\"answer\": \"The Flobnar levels are 12.4 [3] and 9.8 [4].\", \"citations\": [3, 4]}\n\n"
-			+ "Question: Does the patient have any conditions?\n"
-			+ "{\"answer\": \"Yes, the patient has Zorblitis [1].\", \"citations\": [1]}";
+			+ "{\"answer\": \"The Flobnar levels are 12.4 mg/dL (HIGH) [3] and 9.8 mg/dL [4].\","
+			+ " \"citations\": [3, 4]}\n\n"
+			+ "Question: What medications is the patient on?\n"
+			+ "{\"answer\": \"The patient is on Venoflax 500mg, 1 tablet orally twice daily [2].\","
+			+ " \"citations\": [2]}\n\n"
+			+ "Question: Does the patient have any allergies?\n"
+			+ "{\"answer\": \"Yes, the patient has a severe allergy to Zyphenicol with a reaction"
+			+ " of Rash [5].\", \"citations\": [5]}\n\n"
+			+ "Question: Does the patient have diabetes?\n"
+			+ "{\"answer\": \"No relevant information was found in the patient's records.\","
+			+ " \"citations\": []}";
 
 	private static final String JSON_ANSWER_GRAMMAR = loadGrammar("json-answer.gbnf");
 
@@ -292,7 +306,8 @@ public class LlmProvider {
 	private InferenceParameters createInferenceParameters(LlamaModel llm, String numberedRecords,
 			String question) {
 		String systemPrompt = getSystemPrompt();
-		String userMessage = "Patient records (most recent first):\n" + numberedRecords + "\n\nQuestion: " + question;
+		String userMessage = "Patient records (most recent first):\n" + numberedRecords.stripTrailing()
+				+ "\n\nQuestion: " + question;
 		String templateValue = getChatTemplate();
 
 		InferenceParameters params;

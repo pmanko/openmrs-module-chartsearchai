@@ -65,7 +65,7 @@ public class PatientChartSerializer {
 			if (record.getDate() != null) {
 				sb.append("(").append(DateFormatUtil.formatDate(record.getDate())).append(") ");
 			}
-			sb.append(ConceptNameUtil.condenseSynonyms(record.getText())).append("\n");
+			sb.append(ConceptNameUtil.stripSynonyms(record.getText())).append("\n");
 		}
 
 		return new PatientChart(sb.toString(), Collections.unmodifiableList(mappings));

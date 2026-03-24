@@ -30,11 +30,19 @@ public class ChartSearchAiConstants {
 
 	public static final String GP_EMBEDDING_TOP_K = "chartsearchai.embedding.topK";
 
-	public static final int DEFAULT_RETRIEVAL_TOP_K = 15;
+	public static final int DEFAULT_RETRIEVAL_TOP_K = 10;
 
 	public static final String GP_EMBEDDING_SIMILARITY_RATIO = "chartsearchai.embedding.similarityRatio";
 
 	public static final double DEFAULT_SIMILARITY_RATIO = 0.80;
+
+	public static final String GP_EMBEDDING_SCORE_GAP_MULTIPLIER = "chartsearchai.embedding.scoreGapMultiplier";
+
+	public static final double DEFAULT_SCORE_GAP_MULTIPLIER = 2.5;
+
+	public static final int ADAPTIVE_MIN_RECORDS = 2;
+
+	public static final double ABSOLUTE_SIMILARITY_FLOOR = 0.25;
 
 	public static final String GP_AUDIT_LOG_RETENTION_DAYS = "chartsearchai.auditLogRetentionDays";
 
@@ -53,8 +61,6 @@ public class ChartSearchAiConstants {
 	public static final String GP_RATE_LIMIT_PER_MINUTE = "chartsearchai.rateLimitPerMinute";
 
 	public static final int DEFAULT_RATE_LIMIT_PER_MINUTE = 10;
-
-	public static final String GP_QUERY_STEMMING = "chartsearchai.embedding.queryStemming";
 
 	public static final String GP_CACHE_TTL_MINUTES = "chartsearchai.cacheTtlMinutes";
 

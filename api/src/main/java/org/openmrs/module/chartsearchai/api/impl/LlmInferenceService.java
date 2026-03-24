@@ -39,7 +39,6 @@ import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.Patien
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 import org.openmrs.module.chartsearchai.api.impl.LlmProvider.LlmResponse;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader;
-import org.openmrs.module.chartsearchai.util.PorterStemmer;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -114,9 +113,11 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 
 		int topK = getTopK();
+		// findSimilar returns null when no embeddings exist (needs indexing),
+		// or an empty list when embeddings exist but nothing matched the query.
 		List<ChartEmbedding> similar = findSimilar(patient, question, topK);
 
-		if (similar.isEmpty()) {
+		if (similar == null) {
 			log.info("No embeddings found for patient [id={}], indexing now", patient.getPatientId());
 			try {
 				embeddingIndexer.indexPatient(patient);
@@ -128,9 +129,14 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
-		if (similar.isEmpty()) {
+		if (similar == null) {
 			log.debug("Still no embeddings after indexing attempt, falling back to full chart");
 			return chartSerializer.serialize(patient);
+		}
+
+		if (similar.isEmpty()) {
+			log.debug("No records matched the query, returning empty chart");
+			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
 
 		Set<String> relevantKeys = new HashSet<String>();
@@ -242,16 +248,13 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
-	 * Removes common stopwords and optionally stems remaining words before embedding
-	 * so that queries like "any medications?" and "does the patient have any medications?"
+	 * Removes common stopwords before embedding so that queries like
+	 * "any medications?" and "does the patient have any medications?"
 	 * produce the same embedding vector and thus the same retrieval results.
-	 * Stemming ensures word variants like "allergic" and "allergies" also normalize
-	 * to the same root.
 	 *
 	 * @param question the raw user question
-	 * @param stem whether to apply Porter stemming to remaining words
 	 */
-	static String stripQueryStopwords(String question, boolean stem) {
+	static String stripQueryStopwords(String question) {
 		String[] words = question.toLowerCase().replaceAll("[?!.,;:]", "").trim().split("\\s+");
 		StringBuilder sb = new StringBuilder();
 		for (String word : words) {
@@ -259,24 +262,14 @@ public class LlmInferenceService implements ChartSearchService {
 				if (sb.length() > 0) {
 					sb.append(" ");
 				}
-				sb.append(stem ? PorterStemmer.stem(word) : word);
+				sb.append(word);
 			}
 		}
 		return sb.length() > 0 ? sb.toString() : question.toLowerCase().trim();
 	}
 
-	static String stripQueryStopwords(String question) {
-		return stripQueryStopwords(question, false);
-	}
-
-	private boolean useStemming() {
-		String value = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_QUERY_STEMMING);
-		return "true".equalsIgnoreCase(value != null ? value.trim() : "");
-	}
-
 	private List<ChartEmbedding> findSimilar(Patient patient, String question, int topK) {
-		String normalizedQuery = stripQueryStopwords(question, useStemming());
+		String normalizedQuery = stripQueryStopwords(question);
 		log.debug("Normalized query for embedding: '{}' -> '{}'", question, normalizedQuery);
 		float[] queryVector;
 		try {
@@ -284,12 +277,12 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 		catch (Exception e) {
 			log.debug("Embedding provider not available, falling back to full chart", e);
-			return Collections.emptyList();
+			return null;
 		}
 
 		List<ChartEmbedding> allEmbeddings = dao.getByPatient(patient);
 		if (allEmbeddings.isEmpty()) {
-			return Collections.emptyList();
+			return null;
 		}
 
 		List<ScoredEmbedding> scored = new ArrayList<ScoredEmbedding>();
@@ -322,33 +315,38 @@ public class LlmInferenceService implements ChartSearchService {
 			return Collections.emptyList();
 		}
 
-		int limit = Math.min(topK, scored.size());
-		double similarityRatio = getSimilarityRatio();
 		double topScore = scored.get(0).score;
-		double minScore = topScore * similarityRatio;
-
-		// First pass: collect records above the similarity threshold
-		Set<String> passingGroups = new HashSet<String>();
-		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
-		int thresholdCutoff = 0;
-		for (int i = 0; i < limit; i++) {
-			if (scored.get(i).score >= minScore) {
-				results.add(scored.get(i).embedding);
-				passingGroups.add(groupingKey(scored.get(i).embedding));
-				thresholdCutoff = i + 1;
-			} else {
-				break;
-			}
+		// If nothing scores above the absolute floor, the query is unrelated
+		// to any record in the chart (e.g. "any teacher?" against clinical data).
+		if (topScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
+			log.debug("Top score {} is below absolute floor {}, returning empty",
+					String.format("%.4f", topScore),
+					ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR);
+			return Collections.emptyList();
 		}
 
-		// Second pass: include remaining top-K records whose grouping key
-		// already has at least one record above the threshold. Uses a
-		// concept-level key (not just resource type) so that e.g. "Respiratory
-		// Rate" observations don't pull in unrelated "Cough" observations.
-		for (int i = thresholdCutoff; i < limit; i++) {
-			if (passingGroups.contains(groupingKey(scored.get(i).embedding))) {
-				results.add(scored.get(i).embedding);
-			}
+		int limit = Math.min(topK, scored.size());
+		double similarityRatio = getSimilarityRatio();
+		// Use the more lenient of two floors: the ratio-based floor works
+		// well for compressed score distributions (all scores in a narrow
+		// band), while the range-based floor adapts to high-variance
+		// distributions where OOV vocabulary causes relevant records to
+		// score much lower than the top hit.
+		double ratioFloor = topScore * similarityRatio;
+		double scoreRange = topScore - scored.get(limit - 1).score;
+		double rangeFloor = topScore - similarityRatio * scoreRange;
+		double minScore = Math.min(ratioFloor, rangeFloor);
+
+		// Adaptive cutoff: find the natural cluster boundary using score gap
+		// detection. When the drop between consecutive scores exceeds a
+		// multiplier of the running average gap, that signals the end of the
+		// relevant cluster. The similarity ratio threshold and topK ceiling
+		// still apply as hard limits.
+		int adaptiveCutoff = findAdaptiveCutoff(scored, limit, minScore, getScoreGapMultiplier());
+
+		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
+		for (int i = 0; i < adaptiveCutoff; i++) {
+			results.add(scored.get(i).embedding);
 		}
 
 		StringBuilder scores = new StringBuilder();
@@ -361,8 +359,8 @@ public class LlmInferenceService implements ChartSearchService {
 					.append(":").append(se.embedding.getResourceId())
 					.append("=").append(String.format("%.4f", se.score));
 		}
-		log.debug("Similarity scores: [{}], threshold: {}", scores,
-				String.format("%.4f", minScore));
+		log.debug("Similarity scores: [{}], threshold: {}, adaptiveCutoff: {}", scores,
+				String.format("%.4f", minScore), adaptiveCutoff);
 		log.debug("Returning {} of {} candidates (topScore={}, minScore={}, max={})",
 				results.size(), scored.size(),
 				String.format("%.4f", topScore), String.format("%.4f", minScore), topK);
@@ -370,28 +368,87 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
-	 * Returns a grouping key for the second-pass inclusion logic. For Obs records,
-	 * extracts the concept name from the serialized text (e.g. "Test — Respiratory Rate: 18.0"
-	 * yields "Obs:Respiratory Rate") so that different observation types are not conflated.
-	 * For other resource types, uses the resource type alone.
+	 * Finds the adaptive cutoff point in a sorted list of scored embeddings by
+	 * detecting a significant gap in similarity scores. Walks the sorted scores
+	 * and tracks the running average gap between consecutive entries. When a gap
+	 * exceeds the average by more than the configured multiplier, the cluster
+	 * boundary is found. Always includes at least
+	 * {@link ChartSearchAiConstants#ADAPTIVE_MIN_RECORDS} records (if available
+	 * above the similarity floor) so the LLM has enough context.
+	 *
+	 * @param scored sorted list of scored embeddings (highest score first)
+	 * @param limit the maximum number of candidates to consider (topK cap)
+	 * @param minScore the absolute similarity floor from the ratio threshold
+	 * @param gapMultiplier how many times larger than the average gap a score drop
+	 *        must be to trigger a cutoff
+	 * @return the number of records to include in the primary cluster
 	 */
-	static String groupingKey(ChartEmbedding embedding) {
-		String type = embedding.getResourceType();
-		String text = embedding.getTextContent();
-		if (text != null && !text.isEmpty()) {
-			// Extract concept name: text format is "Class — ConceptName: value" or
-			// "ConceptName: value". Take everything before the first colon.
-			String prefix = text;
-			int colonIdx = text.indexOf(':');
-			if (colonIdx > 0) {
-				prefix = text.substring(0, colonIdx).trim();
+	static int findAdaptiveCutoff(List<ScoredEmbedding> scored, int limit, double minScore,
+			double gapMultiplier) {
+		int minRecords = ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS;
+
+		// Count how many records pass the similarity floor
+		int aboveFloor = 0;
+		for (int i = 0; i < limit; i++) {
+			if (scored.get(i).score >= minScore) {
+				aboveFloor++;
+			} else {
+				break;
 			}
-			return type + ":" + prefix;
 		}
-		return type;
+
+		if (aboveFloor == 0) {
+			return 0;
+		}
+
+		// Walk through consecutive scores tracking the running average gap.
+		// Once a gap exceeds gapMultiplier * avgGap, cut there. All prior
+		// gaps feed the running average so that the baseline reflects the
+		// full score distribution, which prevents degenerate seeds (e.g. a
+		// single tied-score gap of 0.0) from making the detector overly
+		// trigger-happy.
+		double gapSum = 0;
+		int cutoff = aboveFloor; // default: include everything above the floor
+		for (int i = 1; i < aboveFloor; i++) {
+			double gap = scored.get(i - 1).score - scored.get(i).score;
+
+			// Only consider cutting after the minimum number of records, and
+			// only when we have at least 2 prior gaps to form a meaningful
+			// average (i - 1 gaps have been accumulated at this point).
+			if (i >= minRecords && i >= 2) {
+				double avgGap = gapSum / (i - 1);
+				if (gap > avgGap * gapMultiplier) {
+					cutoff = i;
+					log.debug("Score gap detected at position {}: gap={}, avgGap={}, multiplier={}",
+							i, String.format("%.4f", gap), String.format("%.4f", avgGap),
+							gapMultiplier);
+					break;
+				}
+			}
+			gapSum += gap;
+		}
+
+		return cutoff;
 	}
 
-	private static class ScoredEmbedding {
+	private static double getScoreGapMultiplier() {
+		String value = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_SCORE_GAP_MULTIPLIER);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				double parsed = Double.parseDouble(value.trim());
+				if (parsed > 1) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid scoreGapMultiplier value '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER;
+	}
+
+	static class ScoredEmbedding {
 
 		final ChartEmbedding embedding;
 

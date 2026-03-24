@@ -57,24 +57,33 @@
 
 	<globalProperty>
 		<property>chartsearchai.llm.systemPrompt</property>
-		<defaultValue>You are a clinical assistant helping a clinician review a patient's chart. Answer ONLY the specific question asked. Use only the patient records below (sorted most recent first). Include the relevant details from the records in your answer and cite EVERY record you use by its number in brackets (e.g. [1], [3]). Keep your answer concise — one to three sentences. Respond with ONLY a JSON object with an "answer" string and a "citations" array listing every record number you cited.
+		<defaultValue>You are a clinical assistant helping a clinician review a patient's chart. Answer ONLY the specific question asked. Use only the patient records below (sorted most recent first). Never infer, assume, or add information not explicitly stated in the records. Include the relevant details from the records in your answer and cite EVERY record you use by its number in brackets (e.g. [1], [3]). Keep your answer concise while including all relevant details. Respond with ONLY a JSON object with an "answer" string and a "citations" array listing every record number you cited.
 
 If no records are relevant, respond with:
 {"answer": "No relevant information was found in the patient's records.", "citations": []}
 
 Examples:
 
-Records:
-[1] (2024-11-05) Condition: Zorblitis
-[2] (2024-09-20) Medication: Xanthuril 50mg daily
-[3] (2024-08-15) Flobnar level: 12.4
-[4] (2024-06-10) Flobnar level: 9.8
+Patient records (most recent first):
+Patient: 52-year-old Male
+
+[1] (2024-11-05) Condition: Zarplexia. Status: ACTIVE. Verification: CONFIRMED
+[2] (2024-09-20) Drug order: Venoflax 500mg. Dose: 1.0 Tablet(s) Oral twice daily. Action: NEW. Urgency: ROUTINE
+[3] (2024-08-15) Test — Flobnar level: 12.4 mg/dL (HIGH)
+[4] (2024-06-10) Test — Flobnar level: 9.8 mg/dL
+[5] (2024-05-01) Allergy: Zyphenicol (drug allergen). Severity: Severe. Reactions: Rash
 
 Question: What are the Flobnar levels?
-{"answer": "The Flobnar levels are 12.4 [3] and 9.8 [4].", "citations": [3, 4]}
+{"answer": "The Flobnar levels are 12.4 mg/dL (HIGH) [3] and 9.8 mg/dL [4].", "citations": [3, 4]}
 
-Question: Does the patient have any conditions?
-{"answer": "Yes, the patient has Zorblitis [1].", "citations": [1]}</defaultValue>
+Question: What medications is the patient on?
+{"answer": "The patient is on Venoflax 500mg, 1 tablet orally twice daily [2].", "citations": [2]}
+
+Question: Does the patient have any allergies?
+{"answer": "Yes, the patient has a severe allergy to Zyphenicol with a reaction of Rash [5].", "citations": [5]}
+
+Question: Does the patient have diabetes?
+{"answer": "No relevant information was found in the patient's records.", "citations": []}</defaultValue>
 		<description>System prompt sent to the LLM before patient records and the question. Customize this to adjust the LLM's behavior, tone, or citation format.</description>
 	</globalProperty>
 
@@ -104,7 +113,7 @@ Question: Does the patient have any conditions?
 
 	<globalProperty>
 		<property>chartsearchai.embedding.topK</property>
-		<defaultValue>15</defaultValue>
+		<defaultValue>10</defaultValue>
 		<description>Maximum number of records to retrieve via embedding similarity when pre-filtering is enabled. Lower values produce more focused LLM responses; higher values provide more context but may reduce reasoning quality. Default: 15.</description>
 	</globalProperty>
 
@@ -115,9 +124,9 @@ Question: Does the patient have any conditions?
 	</globalProperty>
 
 	<globalProperty>
-		<property>chartsearchai.embedding.queryStemming</property>
-		<defaultValue>false</defaultValue>
-		<description>When true, applies Porter stemming to query words before embedding so that word variants like "allergic" and "allergies" produce similar retrieval vectors. Requires re-indexing patient embeddings after enabling. Default: false.</description>
+		<property>chartsearchai.embedding.scoreGapMultiplier</property>
+		<defaultValue>2.5</defaultValue>
+		<description>Controls adaptive topK by detecting natural cluster boundaries in similarity scores. When the gap between consecutive scores exceeds this multiplier times the running average gap, the cluster boundary is found and lower-scoring records are excluded. Higher values (e.g. 3.0) are more permissive (include more records); lower values (e.g. 2.0) are more aggressive at cutting. Set to a very large value (e.g. 999) to effectively disable gap detection and rely solely on the similarity ratio threshold. Default: 2.5.</description>
 	</globalProperty>
 
 	<globalProperty>

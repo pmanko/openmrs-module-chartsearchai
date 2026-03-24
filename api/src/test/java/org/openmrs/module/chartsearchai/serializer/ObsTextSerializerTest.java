@@ -237,6 +237,23 @@ public class ObsTextSerializerTest extends BaseModuleContextSensitiveTest {
 	}
 
 	@Test
+	public void toText_shouldOmitQuestionConceptClass() {
+		Obs obs = new Obs();
+		Concept concept = new Concept();
+		concept.addName(conceptName("Do you smoke?"));
+		ConceptClass cc = new ConceptClass();
+		cc.setName("Question");
+		concept.setConceptClass(cc);
+		obs.setConcept(concept);
+		Concept yes = new Concept();
+		yes.addName(conceptName("Yes"));
+		obs.setValueCoded(yes);
+
+		String result = serializer.toText(obs);
+		assertEquals("Assessment \u2014 Do you smoke?: Yes", result);
+	}
+
+	@Test
 	public void toText_shouldOmitConceptClassWhenNull() {
 		Obs obs = new Obs();
 		Concept concept = new Concept();
