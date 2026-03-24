@@ -37,28 +37,39 @@ public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {
 
 		// Flatten group members into parent text, skipping the parent's own value
 		if (obs.hasGroupMembers()) {
-			if (!conceptName.isEmpty()) {
-				sb.append(conceptName).append(": ");
-			}
+			StringBuilder membersSb = new StringBuilder();
 			boolean first = true;
 			for (Obs member : obs.getGroupMembers()) {
 				String memberValue = formatValue(member);
-				if (memberValue.isEmpty()) {
+				String memberName = ConceptNameUtil.getName(member.getConcept());
+				// Skip members with no useful value: empty, or valueCoded
+				// is the same concept as the member itself (data quality
+				// issue — a concept cannot be its own answer)
+				boolean selfReferencing = member.getValueCoded() != null
+						&& member.getConcept() != null
+						&& member.getValueCoded().equals(member.getConcept());
+				if (memberValue.isEmpty() || selfReferencing) {
 					continue;
 				}
 				if (!first) {
-					sb.append("; ");
+					membersSb.append("; ");
 				}
 				first = false;
-				String memberName = ConceptNameUtil.getName(member.getConcept());
 				if (!memberName.isEmpty()) {
-					sb.append(memberName).append(": ");
+					membersSb.append(memberName).append(": ");
 				}
-				sb.append(memberValue);
+				membersSb.append(memberValue);
 				if (member.getInterpretation() != null) {
-					sb.append(" (").append(member.getInterpretation()).append(")");
+					membersSb.append(" (").append(member.getInterpretation()).append(")");
 				}
 			}
+			if (membersSb.length() == 0) {
+				return "";
+			}
+			if (!conceptName.isEmpty()) {
+				sb.append(conceptName).append(": ");
+			}
+			sb.append(membersSb);
 		} else {
 			String value = formatValue(obs);
 			if (value.isEmpty()) {

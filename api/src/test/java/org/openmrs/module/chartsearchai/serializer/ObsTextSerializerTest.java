@@ -265,6 +265,88 @@ public class ObsTextSerializerTest extends BaseModuleContextSensitiveTest {
 		assertTrue(result.startsWith("Weight: 70.0"));
 	}
 
+	@Test
+	public void toText_shouldSkipGroupMemberWhenValueCodedIsSameConcept() {
+		Obs parent = new Obs();
+		Concept parentConcept = new Concept();
+		parentConcept.addName(conceptName("Urine microscopy panel"));
+		ConceptClass labSet = new ConceptClass();
+		labSet.setName("LabSet");
+		parentConcept.setConceptClass(labSet);
+		parent.setConcept(parentConcept);
+
+		// Member where valueCoded == concept (self-referencing, no real result)
+		Concept bacteriuria = new Concept();
+		bacteriuria.addName(conceptName("Bacteriuria test"));
+		Obs selfRef = new Obs();
+		selfRef.setConcept(bacteriuria);
+		selfRef.setValueCoded(bacteriuria);
+		parent.addGroupMember(selfRef);
+
+		// Member with a real numeric value
+		Obs realResult = new Obs();
+		Concept leukocytes = new Concept();
+		leukocytes.addName(conceptName("Leukocytes"));
+		realResult.setConcept(leukocytes);
+		realResult.setValueNumeric(5.0);
+		parent.addGroupMember(realResult);
+
+		String result = serializer.toText(parent);
+		assertTrue(!result.contains("Bacteriuria test"),
+				"Should skip member where valueCoded is the same concept");
+		assertTrue(result.contains("Leukocytes: 5.0"),
+				"Should include member with a real value");
+	}
+
+	@Test
+	public void toText_shouldReturnEmptyWhenAllGroupMembersAreSelfReferencing() {
+		Obs parent = new Obs();
+		Concept parentConcept = new Concept();
+		parentConcept.addName(conceptName("Urine microscopy panel"));
+		ConceptClass labSet = new ConceptClass();
+		labSet.setName("LabSet");
+		parentConcept.setConceptClass(labSet);
+		parent.setConcept(parentConcept);
+
+		Concept test1 = new Concept();
+		test1.addName(conceptName("Bacteriuria test"));
+		Obs member1 = new Obs();
+		member1.setConcept(test1);
+		member1.setValueCoded(test1);
+		parent.addGroupMember(member1);
+
+		Concept test2 = new Concept();
+		test2.addName(conceptName("Yeast presence"));
+		Obs member2 = new Obs();
+		member2.setConcept(test2);
+		member2.setValueCoded(test2);
+		parent.addGroupMember(member2);
+
+		String result = serializer.toText(parent);
+		assertEquals("", result, "Should return empty when all members are self-referencing");
+	}
+
+	@Test
+	public void toText_shouldNotSkipGroupMemberWhenValueCodedIsDifferentConcept() {
+		Obs parent = new Obs();
+		Concept parentConcept = new Concept();
+		parentConcept.addName(conceptName("Lab Panel"));
+		parent.setConcept(parentConcept);
+
+		Concept question = new Concept();
+		question.addName(conceptName("Blood Type"));
+		Concept answer = new Concept();
+		answer.addName(conceptName("Type A"));
+		Obs member = new Obs();
+		member.setConcept(question);
+		member.setValueCoded(answer);
+		parent.addGroupMember(member);
+
+		String result = serializer.toText(parent);
+		assertTrue(result.contains("Blood Type: Type A"),
+				"Should include member when valueCoded is a different concept");
+	}
+
 	private ConceptName conceptName(String name) {
 		ConceptName cn = new ConceptName();
 		cn.setName(name);
