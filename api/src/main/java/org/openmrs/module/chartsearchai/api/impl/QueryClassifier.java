@@ -80,9 +80,12 @@ public class QueryClassifier {
 					+ "|glucose|creatinine|wbc|rbc|platelet|platelets|cd4)\\b");
 
 	private static final Pattern CONDITION_PATTERN = Pattern.compile(
-			"\\b(?:condition|conditions|diagnosis|diagnoses|diagnosed"
-					+ "|disease|diseases|illness|problem|problems|comorbidity"
-					+ "|comorbidities|chronic|hypertension|diabetes|hiv|tb|malaria)\\b");
+			"\\b(?:condition|conditions|disease|diseases|illness"
+					+ "|problem|problems|comorbidity|comorbidities"
+					+ "|chronic|hypertension|diabetes|hiv|tb|malaria)\\b");
+
+	private static final Pattern DIAGNOSIS_PATTERN = Pattern.compile(
+			"\\b(?:diagnosis|diagnoses|diagnosed)\\b");
 
 	private static final Pattern PROGRAM_PATTERN = Pattern.compile(
 			"\\b(?:program|programs|enrolled|enrollment|enrolment"
@@ -120,6 +123,7 @@ public class QueryClassifier {
 		boolean hasAllergy = ALLERGY_PATTERN.matcher(lower).find();
 		boolean hasLab = LAB_PATTERN.matcher(lower).find();
 		boolean hasCondition = CONDITION_PATTERN.matcher(lower).find();
+		boolean hasDiagnosis = DIAGNOSIS_PATTERN.matcher(lower).find();
 		boolean hasProgram = PROGRAM_PATTERN.matcher(lower).find();
 		boolean hasVitals = VITALS_PATTERN.matcher(lower).find();
 
@@ -141,6 +145,8 @@ public class QueryClassifier {
 		}
 		if (hasCondition) {
 			types.add(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION);
+		}
+		if (hasDiagnosis) {
 			types.add(ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS);
 		}
 		if (hasProgram) {

@@ -381,19 +381,21 @@ public class LlmInferenceService implements ChartSearchService {
 		int adaptiveCutoff = findAdaptiveCutoff(scored, limit, minScore, getScoreGapMultiplier());
 
 		// Category queries ("any conditions?", "list all medications") and
-		// focused queries ("does the patient have diabetes?") use fundamentally
-		// different retrieval strategies:
+		// focused queries ("does the patient have diabetes?") both use topK,
+		// but differently:
 		//
-		// - Category: the user explicitly asked for ALL records of a type.
-		//   The type filter is the relevance criterion, NOT semantic similarity.
-		//   topK does not apply — return every type-matched record.
+		// - Category: ALL type-matched records are included (auto-expands
+		//   beyond topK when needed), then remaining topK slots are filled
+		//   with contextual records from the adaptive cutoff.
 		//
-		// - Focused: the user asked a specific question. Semantic similarity
-		//   determines relevance, capped at topK via adaptive cutoff.
+		// - Focused: semantic similarity determines inclusion via adaptive
+		//   cutoff, capped at topK.
 		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
 		Set<String> includedKeys = new HashSet<String>();
 
 		if (intent.isCategoryQuery()) {
+			// Phase 1: include ALL type-matched records (no topK cap —
+			// the user explicitly asked for everything of this type)
 			for (ScoredEmbedding se : scored) {
 				if (intent.getTargetTypes().contains(
 						se.embedding.getResourceType())) {
@@ -405,8 +407,23 @@ public class LlmInferenceService implements ChartSearchService {
 					}
 				}
 			}
-			log.debug("Category query for types {}: returning {} type-matched records",
-					intent.getTargetTypes(), results.size());
+			// Phase 2: fill up to topK with the best non-type-matched
+			// records from the adaptive cutoff (e.g., assessment notes)
+			for (int i = 0; i < adaptiveCutoff && results.size() < topK; i++) {
+				ChartEmbedding ce = scored.get(i).embedding;
+				String key = ce.getResourceType() + ":" + ce.getResourceId();
+				if (!includedKeys.contains(key)) {
+					results.add(ce);
+					includedKeys.add(key);
+				}
+			}
+			log.debug("Category query for types {}: {} type-matched + {} contextual = {} total (topK={})",
+					intent.getTargetTypes(),
+					(int) results.stream().filter(r -> intent.getTargetTypes()
+							.contains(r.getResourceType())).count(),
+					(int) results.stream().filter(r -> !intent.getTargetTypes()
+							.contains(r.getResourceType())).count(),
+					results.size(), topK);
 		} else {
 			for (int i = 0; i < adaptiveCutoff; i++) {
 				ChartEmbedding ce = scored.get(i).embedding;

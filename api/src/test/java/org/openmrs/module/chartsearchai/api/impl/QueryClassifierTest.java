@@ -50,7 +50,15 @@ public class QueryClassifierTest {
 	public void classify_shouldDetectConditionQuery() {
 		QueryIntent intent = QueryClassifier.classify("conditions");
 		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION));
+		assertFalse(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS));
+	}
+
+	@Test
+	public void classify_shouldDetectDiagnosisQuery() {
+		QueryIntent intent = QueryClassifier.classify("any diagnoses");
 		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS));
+		assertFalse(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION));
+		assertTrue(intent.isCategoryQuery());
 	}
 
 	@Test
@@ -160,6 +168,6 @@ public class QueryClassifierTest {
 		QueryIntent intent = QueryClassifier.classify("any conditions");
 		assertTrue(intent.isCategoryQuery());
 		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION));
-		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS));
+		assertFalse(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS));
 	}
 }
