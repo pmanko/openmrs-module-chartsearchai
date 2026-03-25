@@ -37,8 +37,6 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 	private static final Logger log = LoggerFactory.getLogger(OnnxEmbeddingProvider.class);
 
-	private static final int MAX_SEQUENCE_LENGTH = 256;
-
 	private OrtEnvironment env;
 
 	private OrtSession session;
@@ -195,9 +193,11 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 			}
 			String vocabPath = ChartSearchAiConstants.resolveModelPath(
 					configuredPath.trim(), ChartSearchAiConstants.GP_EMBEDDING_VOCAB_FILE_PATH);
-			log.info("Loading WordPiece vocabulary from {}", vocabPath);
+			int maxSeqLen = getMaxSequenceLength();
+			log.info("Loading WordPiece vocabulary from {} (maxSequenceLength={})",
+					vocabPath, maxSeqLen);
 			try {
-				tokenizer = new WordPieceTokenizer(vocabPath, MAX_SEQUENCE_LENGTH);
+				tokenizer = new WordPieceTokenizer(vocabPath, maxSeqLen);
 			}
 			catch (IOException e) {
 				throw new IllegalStateException("Failed to load WordPiece vocabulary from "
@@ -206,5 +206,22 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 			log.info("WordPiece vocabulary loaded successfully");
 		}
 		return tokenizer;
+	}
+
+	private static int getMaxSequenceLength() {
+		String value = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_MAX_SEQUENCE_LENGTH);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				int parsed = Integer.parseInt(value.trim());
+				if (parsed >= 32 && parsed <= 8192) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid maxSequenceLength value '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_MAX_SEQUENCE_LENGTH;
 	}
 }

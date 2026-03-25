@@ -40,6 +40,22 @@ public class ChartSearchAiConstants {
 
 	public static final double DEFAULT_SCORE_GAP_MULTIPLIER = 2.5;
 
+	public static final String GP_EMBEDDING_KEYWORD_WEIGHT = "chartsearchai.embedding.keywordWeight";
+
+	public static final double DEFAULT_KEYWORD_WEIGHT = 0.3;
+
+	public static final String GP_EMBEDDING_TYPE_BOOST_FACTOR = "chartsearchai.embedding.typeBoostFactor";
+
+	public static final double DEFAULT_TYPE_BOOST_FACTOR = 1.0;
+
+	public static final String GP_EMBEDDING_QUERY_PREFIX = "chartsearchai.embedding.queryPrefix";
+
+	public static final String DEFAULT_QUERY_EMBEDDING_PREFIX = "";
+
+	public static final String GP_EMBEDDING_MAX_SEQUENCE_LENGTH = "chartsearchai.embedding.maxSequenceLength";
+
+	public static final int DEFAULT_MAX_SEQUENCE_LENGTH = 256;
+
 	public static final int ADAPTIVE_MIN_RECORDS = 2;
 
 	public static final double ABSOLUTE_SIMILARITY_FLOOR = 0.25;

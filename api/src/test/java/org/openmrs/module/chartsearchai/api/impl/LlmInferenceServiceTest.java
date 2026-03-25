@@ -324,6 +324,79 @@ public class LlmInferenceServiceTest {
 		assertEquals(5, cutoff, "Very high multiplier should effectively disable gap detection");
 	}
 
+	@Test
+	public void computeKeywordScore_shouldReturnOneWhenAllTermsMatch() {
+		String[] terms = { "metformin", "500mg" };
+		double score = LlmInferenceService.computeKeywordScore(terms,
+				"Drug order: Metformin 500mg. Dose: 1.0 Tablet(s) Oral twice daily");
+		assertEquals(1.0, score, 0.001);
+	}
+
+	@Test
+	public void computeKeywordScore_shouldReturnZeroWhenNoTermsMatch() {
+		String[] terms = { "penicillin", "allergy" };
+		double score = LlmInferenceService.computeKeywordScore(terms,
+				"Drug order: Metformin 500mg. Dose: 1.0 Tablet(s)");
+		assertEquals(0.0, score, 0.001);
+	}
+
+	@Test
+	public void computeKeywordScore_shouldReturnPartialScore() {
+		String[] terms = { "metformin", "allergy" };
+		double score = LlmInferenceService.computeKeywordScore(terms,
+				"Drug order: Metformin 500mg");
+		assertEquals(0.5, score, 0.001);
+	}
+
+	@Test
+	public void computeKeywordScore_shouldBeCaseInsensitive() {
+		String[] terms = { "metformin" };
+		double score = LlmInferenceService.computeKeywordScore(terms,
+				"Drug order: METFORMIN 500mg");
+		assertEquals(1.0, score, 0.001);
+	}
+
+	@Test
+	public void computeKeywordScore_shouldHandleEmptyTerms() {
+		assertEquals(0.0, LlmInferenceService.computeKeywordScore(
+				new String[0], "Some text"), 0.001);
+	}
+
+	@Test
+	public void computeKeywordScore_shouldHandleNullText() {
+		String[] terms = { "test" };
+		assertEquals(0.0, LlmInferenceService.computeKeywordScore(terms, null), 0.001);
+	}
+
+	@Test
+	public void computeKeywordScore_shouldMatchSubstrings() {
+		String[] terms = { "medication" };
+		double score = LlmInferenceService.computeKeywordScore(terms,
+				"Dispensed: Metformin 500mg. Status: Completed. medications given");
+		assertEquals(1.0, score, 0.001);
+	}
+
+	@Test
+	public void extractQueryTerms_shouldFilterOutSingleCharacterTerms() {
+		String[] terms = LlmInferenceService.extractQueryTerms("a medications b");
+		assertEquals(1, terms.length);
+		assertEquals("medications", terms[0]);
+	}
+
+	@Test
+	public void extractQueryTerms_shouldLowercaseTerms() {
+		String[] terms = LlmInferenceService.extractQueryTerms("Metformin Dose");
+		assertEquals(2, terms.length);
+		assertEquals("metformin", terms[0]);
+		assertEquals("dose", terms[1]);
+	}
+
+	@Test
+	public void extractQueryTerms_shouldHandleEmptyInput() {
+		String[] terms = LlmInferenceService.extractQueryTerms("");
+		assertEquals(0, terms.length);
+	}
+
 	private static LlmInferenceService.ScoredEmbedding makeScoredEmbedding(double score) {
 		ChartEmbedding ce = new ChartEmbedding();
 		ce.setResourceType("obs");

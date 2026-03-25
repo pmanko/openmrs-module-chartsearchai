@@ -273,7 +273,7 @@ public class LlmInferenceService implements ChartSearchService {
 		log.debug("Normalized query for embedding: '{}' -> '{}'", question, normalizedQuery);
 		float[] queryVector;
 		try {
-			queryVector = embeddingProvider.embed(normalizedQuery);
+			queryVector = embeddingProvider.embed(getQueryPrefix() + normalizedQuery);
 		}
 		catch (Exception e) {
 			log.debug("Embedding provider not available, falling back to full chart", e);
@@ -284,6 +284,16 @@ public class LlmInferenceService implements ChartSearchService {
 		if (allEmbeddings.isEmpty()) {
 			return null;
 		}
+
+		String[] queryTerms = extractQueryTerms(normalizedQuery);
+		double keywordWeight = getKeywordWeight();
+		QueryClassifier.QueryIntent intent = QueryClassifier.classify(normalizedQuery);
+		double typeBoostFactor = intent.getTargetTypes().isEmpty() ? 1.0
+				: getTypeBoostFactor();
+
+		// Track the highest un-boosted score so thresholds are not inflated
+		// by the type boost. The boost only affects ranking, not filtering.
+		double maxBaseScore = 0;
 
 		List<ScoredEmbedding> scored = new ArrayList<ScoredEmbedding>();
 		for (ChartEmbedding ce : allEmbeddings) {
@@ -300,8 +310,27 @@ public class LlmInferenceService implements ChartSearchService {
 				normB += vector[i] * vector[i];
 			}
 			double denom = Math.sqrt(normA) * Math.sqrt(normB);
-			double similarity = denom == 0 ? 0 : dot / denom;
-			scored.add(new ScoredEmbedding(ce, similarity));
+			double semanticScore = denom == 0 ? 0 : dot / denom;
+
+			// Additive bonus: keyword overlap can only increase the score,
+			// never decrease it. A zero keyword match leaves the semantic
+			// score unchanged, avoiding the trap where a weighted average
+			// would suppress scores below the absolute similarity floor.
+			double keywordScore = computeKeywordScore(queryTerms, ce.getTextContent());
+			double baseScore = semanticScore + keywordWeight * keywordScore;
+
+			if (baseScore > maxBaseScore) {
+				maxBaseScore = baseScore;
+			}
+
+			// Type boost for ranking: promotes records of the classified
+			// resource type but is NOT used for threshold computation.
+			double rankScore = baseScore;
+			if (intent.getTargetTypes().contains(ce.getResourceType())) {
+				rankScore = baseScore * typeBoostFactor;
+			}
+
+			scored.add(new ScoredEmbedding(ce, rankScore));
 		}
 
 		Collections.sort(scored, new Comparator<ScoredEmbedding>() {
@@ -315,9 +344,9 @@ public class LlmInferenceService implements ChartSearchService {
 			return Collections.emptyList();
 		}
 
-		double topScore = scored.get(0).score;
-		// If nothing scores above the absolute floor, the query is unrelated
-		// to any record in the chart (e.g. "any teacher?" against clinical data).
+		// Use the un-boosted top score for threshold computation so the
+		// type boost doesn't inflate the floor and cut non-boosted records.
+		double topScore = maxBaseScore;
 		if (topScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
 			log.debug("Top score {} is below absolute floor {}, returning empty",
 					String.format("%.4f", topScore),
@@ -349,8 +378,32 @@ public class LlmInferenceService implements ChartSearchService {
 		int adaptiveCutoff = findAdaptiveCutoff(scored, limit, minScore, getScoreGapMultiplier());
 
 		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
+		Set<String> includedKeys = new HashSet<String>();
 		for (int i = 0; i < adaptiveCutoff; i++) {
-			results.add(scored.get(i).embedding);
+			ChartEmbedding ce = scored.get(i).embedding;
+			results.add(ce);
+			includedKeys.add(ce.getResourceType() + ":" + ce.getResourceId());
+		}
+
+		// For broad category queries ("any medications?", "list all conditions"),
+		// include ALL records of the matched resource types that scored above
+		// the absolute floor, even if they were cut by topK or gap detection.
+		if (intent.isCategoryQuery()) {
+			for (ScoredEmbedding se : scored) {
+				if (se.score < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
+					break; // scores are sorted descending
+				}
+				String key = se.embedding.getResourceType() + ":"
+						+ se.embedding.getResourceId();
+				if (!includedKeys.contains(key)
+						&& intent.getTargetTypes().contains(
+								se.embedding.getResourceType())) {
+					results.add(se.embedding);
+					includedKeys.add(key);
+				}
+			}
+			log.debug("Category query detected for types {}, expanded results from {} to {}",
+					intent.getTargetTypes(), adaptiveCutoff, results.size());
 		}
 
 		StringBuilder scores = new StringBuilder();
@@ -450,6 +503,89 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 		return ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER;
+	}
+
+	private static double getKeywordWeight() {
+		String value = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_KEYWORD_WEIGHT);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				double parsed = Double.parseDouble(value.trim());
+				if (parsed >= 0 && parsed <= 1) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid keywordWeight value '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT;
+	}
+
+	private static double getTypeBoostFactor() {
+		String value = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_TYPE_BOOST_FACTOR);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				double parsed = Double.parseDouble(value.trim());
+				if (parsed >= 1.0 && parsed <= 3.0) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid typeBoostFactor value '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_TYPE_BOOST_FACTOR;
+	}
+
+	private static String getQueryPrefix() {
+		String value = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_QUERY_PREFIX);
+		if (value != null && !value.trim().isEmpty()) {
+			return value;
+		}
+		return ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX;
+	}
+
+	/**
+	 * Extracts content terms from the normalized query for keyword matching.
+	 * Returns lowercased terms with length >= 2 (single-letter terms are too
+	 * ambiguous to be useful for keyword overlap scoring).
+	 */
+	static String[] extractQueryTerms(String normalizedQuery) {
+		String[] allTerms = normalizedQuery.toLowerCase().split("\\s+");
+		List<String> terms = new ArrayList<String>();
+		for (String term : allTerms) {
+			if (term.length() >= 2) {
+				terms.add(term);
+			}
+		}
+		return terms.toArray(new String[0]);
+	}
+
+	/**
+	 * Computes a keyword overlap score between query terms and record text.
+	 * Returns a value between 0.0 (no terms match) and 1.0 (all terms match).
+	 * Uses case-insensitive substring matching so that a query term "metformin"
+	 * matches "Drug order: Metformin 500mg".
+	 *
+	 * @param queryTerms the extracted query terms (lowercased)
+	 * @param textContent the full serialized record text
+	 * @return the fraction of query terms found in the text
+	 */
+	static double computeKeywordScore(String[] queryTerms, String textContent) {
+		if (queryTerms.length == 0 || textContent == null || textContent.isEmpty()) {
+			return 0.0;
+		}
+		String lowerText = textContent.toLowerCase();
+		int matched = 0;
+		for (String term : queryTerms) {
+			if (lowerText.contains(term)) {
+				matched++;
+			}
+		}
+		return (double) matched / queryTerms.length;
 	}
 
 	static class ScoredEmbedding {
