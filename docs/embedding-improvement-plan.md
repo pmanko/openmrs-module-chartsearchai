@@ -113,7 +113,7 @@ The `ADAPTIVE_MIN_RECORDS = 2` floor means gap detection never fires before posi
 
 ## Recommended Improvements (Ordered by Impact × Feasibility)
 
-### 1. ★★★ Embed Full Serialized Text Instead of First Sentence Only
+### 1. ★★★ Embed Full Serialized Text Instead of First Sentence Only — ✅ Implemented
 
 **Change:** Remove the `firstSentence()` truncation. Embed the full `prefix + text` instead of `prefix + firstSentence(text)`.
 
@@ -123,80 +123,29 @@ The `ADAPTIVE_MIN_RECORDS = 2` floor means gap detection never fires before posi
 
 **Files to change:** `EmbeddingIndexer.java` (remove `firstSentence()` calls)
 
-### 2. ★★★ Add Query-Side Prefixing to Match Document Structure
+### 2. ★★★ Add Query-Side Prefixing to Match Document Structure — ✅ Implemented
 
-**Change:** Apply the same type of semantic prefixing to the query. Use a lightweight query classifier to prepend context:
+**Change:** The user query can be prepended with a configurable prefix before embedding (`chartsearchai.embedding.queryPrefix`, default empty). Disabled by default because all-MiniLM-L6-v2 was not trained with instruction prefixes — adding one dilutes short queries with noise tokens that reduce cosine similarity. Enable via global property when using instruction-aware models (e.g., BGE).
 
-```java
-// Before embedding, classify and prefix the query
-String prefixedQuery = "Clinical question: " + normalizedQuery;
-float[] queryVector = embeddingProvider.embed(prefixedQuery);
-```
+### 3. ★★★ Implement Hybrid Retrieval: Keyword + Semantic — ✅ Implemented
 
-Better yet, use **instruction-prefixed queries** that match the document prefix style. For models like all-MiniLM-L6-v2, a simple `"search_query: "` prefix (which the model was partially trained on) normalizes the query-document gap.
+**Change:** An additive keyword bonus is computed alongside cosine similarity: `finalScore = semanticScore + α × keywordScore`, where α defaults to 0.3 (`chartsearchai.embedding.keywordWeight`). The additive formulation ensures keyword overlap can only increase a record's score, never decrease it. A weighted-average formulation (`(1-α) × semantic + α × keyword`) was tried first but rejected because it suppresses semantic scores by `1-α` when keywords don't match (keyword=0), pushing scores below the absolute similarity floor.
 
-**Why:** Reduces the asymmetry between how queries and documents are embedded, improving cosine similarity accuracy.
+### 4. ★★☆ Add Resource-Type Boosting via Query Classification — ✅ Implemented
 
-**Files to change:** `LlmInferenceService.java` (`findSimilar()` method)
+**Change:** A `QueryClassifier` maps query keywords to resource types. Each clinical type is mapped independently: "conditions" → `condition`, "diagnoses" → `diagnosis`, "medications" → `order` + `medication_dispense`, "allergies" → `allergy`, "labs" → `obs`, "vitals" → `obs`, "programs" → `program`. The classifier receives the raw query (before stopword removal) to preserve category indicators like "any" and "all". Type boost factor is configurable (`chartsearchai.embedding.typeBoostFactor`, default 1.0 — disabled) to avoid artificial score gaps.
 
-### 3. ★★★ Implement Hybrid Retrieval: Keyword + Semantic
+### 5. ★★☆ Two-Phase Retrieval with Auto-Expand for Category Queries — ✅ Implemented
 
-**Change:** Add a BM25-style keyword match alongside embedding similarity. Combine scores:
+**Change:** Category queries (detected by a category indicator word + a type keyword) use a two-phase retrieval strategy: **Phase 1** includes ALL records of the matched type regardless of topK or score (auto-expand). **Phase 2** fills remaining topK slots with the best non-type-matched records from the semantic adaptive cutoff. Focused queries (no category indicator) use topK as a hard cap with semantic similarity controlling inclusion. No absolute similarity floor is applied to type-matched records in category queries because rare medical terms (e.g., "Granuloma annulare") can produce low cosine similarity against generic category words despite being a perfect type match.
 
-```
-finalScore = α * semanticScore + (1 - α) * keywordScore
-```
+### 6. ★★☆ Configurable Embedding Model Parameters — ✅ Implemented
 
-The keyword score is easy to compute on the already-stored `textContent` field — simple TF-IDF or even substring matching on the query terms against each record's text.
+**Change:** `MAX_SEQUENCE_LENGTH` (default 256) and query prefix (default empty) are configurable via global properties. This supports swapping to alternative embedding models without code changes.
 
-**Why:** This is the single most impactful change for retrieval quality. Pure semantic search misses exact matches (a query for "Metformin" should find all Metformin records regardless of embedding similarity). Pure keyword search misses synonyms. Hybrid catches both.
+### Future: Switch to a Clinical-Domain Embedding Model
 
-**Implementation approach:**
-- After `stripQueryStopwords()`, extract content keywords
-- For each `ChartEmbedding`, compute a keyword overlap score against `textContent`
-- Linearly combine with cosine similarity (α = 0.7 semantic, 0.3 keyword is a good starting point)
-- Apply the existing threshold/gap detection on the combined score
-
-**Files to change:** `LlmInferenceService.java` (add keyword scoring in `findSimilar()`)
-
-### 4. ★★☆ Add Resource-Type Boosting via Query Classification
-
-**Change:** Add a lightweight keyword-based query classifier that detects the likely target resource types:
-
-```java
-Map<String, Set<String>> QUERY_TYPE_MAP = Map.of(
-    "medication|drug|prescription|med|rx|dose|dosing|pill|tablet",
-        Set.of("order", "medication_dispense"),
-    "allergy|allergic|allergen|reaction|anaphylaxis",
-        Set.of("allergy"),
-    "lab|test|result|level|count|panel|blood work",
-        Set.of("obs"),
-    "condition|diagnosis|disease|illness|problem",
-        Set.of("condition", "diagnosis"),
-    "program|enrolled|enrollment|treatment program",
-        Set.of("program")
-);
-```
-
-When a query matches a type pattern, boost records of that type by a configurable factor (e.g., 1.3x their similarity score).
-
-**Why:** A query like "any medications?" should strongly prefer drug orders over allergy records that happen to contain the word "drug allergen." This directly addresses the allergy-over-medication ranking issue mentioned in the ADR.
-
-**Files to change:** `LlmInferenceService.java`, possibly new `QueryClassifier` utility class
-
-### 5. ★★☆ Relax the "Sometimes Too Few" Problem with Dynamic Top-K
-
-**Change:** When the gap detection or ratio threshold reduces results below a configurable minimum (e.g., 3), AND the query appears to be a broad category query ("any medications?", "all conditions"), increase topK to include all records of the matched type.
-
-**Why:** Category queries expect exhaustive results. "What medications is this patient on?" should return ALL medications, not just the top 10 most semantically similar.
-
-**Implementation:** When query classification (from #4) detects a category query, bypass the similarity threshold for records matching the target resource type and include all of them.
-
-**Files to change:** `LlmInferenceService.java` (`findSimilar()`)
-
-### 6. ★★☆ Switch to a Clinical-Domain Embedding Model
-
-**Change:** Replace all-MiniLM-L6-v2 with a model that has wider score separation on clinical text. Candidates:
+Replace all-MiniLM-L6-v2 with a model that has wider score separation on clinical text. Candidates:
 
 1. **`BAAI/bge-base-en-v1.5`** (768 dims, ~440MB) — Trained with instruction-aware queries, supports query prefixing natively (`"Represent this sentence for searching: "`). Significantly better retrieval on specialized domains.
 2. **`NeuML/pubmedbert-base-embeddings`** — Already tested (per ADR) but rejected because it ranked worse. However, the ADR tested it *with the first-sentence truncation*; re-testing with full text embedding (fix #1) may yield different results.
@@ -206,7 +155,7 @@ When a query matches a type pattern, boost records of that type by a configurabl
 
 **Risk:** Requires re-indexing all patients (backfill task already supports this). Larger model file (440MB vs 90MB).
 
-### 7. ★☆☆ Add a Cross-Encoder Re-Ranking Stage
+### Future: Add a Cross-Encoder Re-Ranking Stage
 
 **Change:** After the initial cosine similarity retrieval returns the top-K candidates, run a cross-encoder model that scores (query, record) pairs jointly. Re-rank by cross-encoder score and apply the threshold on those scores instead.
 
@@ -216,7 +165,7 @@ When a query matches a type pattern, boost records of that type by a configurabl
 
 **Risk:** Adds ~50-200ms per query for re-scoring 20 candidates. Requires a second ONNX model. May be overkill if fixes #1-#4 resolve the issue.
 
-### 8. ★☆☆ Multi-Vector Embedding per Record
+### Future: Multi-Vector Embedding per Record
 
 **Change:** Instead of one embedding per record, generate 2-3 embeddings capturing different aspects:
 1. **Concept embedding**: Just the concept name/type (what it IS)
@@ -229,7 +178,7 @@ Query similarity is the max across all vectors for a record.
 
 **Risk:** 2-3x storage and indexing time. Significant code complexity increase.
 
-### 9. ★☆☆ LLM-Assisted Query Expansion
+### Future: LLM-Assisted Query Expansion
 
 **Change:** Before embedding the query, use the local LLM to expand it:
 
@@ -244,10 +193,15 @@ Expanded: "medications drugs prescriptions drug orders pills tablets dispensed"
 
 ---
 
-## Priority Recommendation
+## Implementation Status
 
-Start with **#1 + #2 + #3** (full text embedding, query prefixing, hybrid retrieval). These three changes together address the three biggest root causes (truncation, asymmetry, and keyword blindness) with moderate implementation effort and no new model files needed. They can be implemented and tested independently.
+Improvements **#1 through #6** have been implemented and are in production. Key design decisions discovered during implementation:
 
-If those are insufficient, add **#4** (resource-type boosting) and **#5** (dynamic top-K for category queries).
+- **Additive keyword bonus, not weighted average.** A weighted-average formula `(1-α)×semantic + α×keyword` suppresses semantic scores when keywords don't match, pushing scores below the absolute floor. The additive formula `semantic + α×keyword` can only help, never hurt.
+- **No query prefix for non-instruction models.** Adding `"search_query: "` to queries for all-MiniLM-L6-v2 (which was NOT trained with instruction prefixes) adds noise tokens that dilute short queries by ~50%. Default prefix is empty; opt-in via GP for instruction-aware models.
+- **Type boost disabled by default.** A type boost factor > 1.0 inflates the reference score used for threshold computation, creating artificial score gaps. Default is 1.0 (disabled).
+- **Classifier receives raw query.** Category indicator words ("any", "all", "what") overlap with stopwords. The classifier must see the original query before stopword removal.
+- **Conditions and diagnoses decoupled.** Mapping both to the same classifier target caused them to compete for topK slots. Each is now an independent type.
+- **Auto-expand for category queries.** Type-matched records in category queries are not subject to topK. The user explicitly asked for "any/all" of a type — capping results defeats the purpose.
 
-Changes #6-#9 are more invasive and should only be pursued if the first tier doesn't sufficiently improve quality.
+The remaining future improvements (clinical-domain embedding model, cross-encoder re-ranking, multi-vector embedding, LLM-assisted query expansion) are more invasive and should only be pursued if the current tier doesn't sufficiently improve quality.

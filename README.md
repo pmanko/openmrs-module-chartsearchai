@@ -62,7 +62,7 @@ Set these global properties in **Admin > Settings**:
 | Property | Default | Description |
 |----------|---------|-------------|
 | `chartsearchai.embedding.preFilter` | `true` | When `true`, uses embedding similarity to narrow patient records to the most relevant ones before sending to the LLM. Set to `false` to send the full chart instead |
-| `chartsearchai.embedding.topK` | `10` | Maximum number of records to retrieve via embedding similarity when pre-filtering is enabled |
+| `chartsearchai.embedding.topK` | `15` | Maximum number of records sent to the LLM per query. For **focused queries** (e.g., "does the patient have diabetes?") this is the hard cap. For **category queries** (e.g., "any conditions?") all type-matched records are included regardless of topK (auto-expand), and remaining topK slots are filled with contextual records |
 | `chartsearchai.embedding.similarityRatio` | `0.80` | Minimum similarity score as a fraction of the top result's score. Records scoring below this ratio are excluded even if within the topK limit. Must be between 0 and 1 |
 | `chartsearchai.embedding.scoreGapMultiplier` | `2.5` | Controls adaptive topK by detecting natural cluster boundaries in similarity scores. Higher values include more records; lower values cut more aggressively. Set to a very large value (e.g. 999) to disable gap detection |
 | `chartsearchai.embedding.keywordWeight` | `0.3` | Additive keyword bonus weight in the hybrid retrieval formula: `finalScore = semanticScore + weight × keywordScore`. Keyword overlap can only increase the score, never decrease it. Set to `0` to disable keyword matching |
