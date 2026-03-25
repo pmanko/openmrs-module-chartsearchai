@@ -389,13 +389,15 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 
 		// For broad category queries ("any medications?", "list all conditions"),
-		// include ALL records of the matched resource types that scored above
-		// the absolute floor, even if they were cut by topK or gap detection.
+		// include ALL records of the matched resource types regardless of their
+		// semantic similarity score. The type-match constraint is sufficient —
+		// the user explicitly asked for everything of that type. The absolute
+		// similarity floor is NOT applied here because rare medical terms
+		// (e.g., "Granuloma annulare") can push embedding vectors far from
+		// the generic category word ("conditions"), producing low cosine
+		// similarity despite being a perfect type match.
 		if (intent.isCategoryQuery()) {
 			for (ScoredEmbedding se : scored) {
-				if (se.score < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
-					break; // scores are sorted descending
-				}
 				String key = se.embedding.getResourceType() + ":"
 						+ se.embedding.getResourceId();
 				if (!includedKeys.contains(key)
