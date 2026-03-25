@@ -380,22 +380,21 @@ public class LlmInferenceService implements ChartSearchService {
 		// still apply as hard limits.
 		int adaptiveCutoff = findAdaptiveCutoff(scored, limit, minScore, getScoreGapMultiplier());
 
-		// For broad category queries ("any medications?", "list all conditions"),
-		// prioritize type-matched records so they are not crowded out by
-		// semantically similar but unrelated records. We first collect ALL
-		// type-matched records (regardless of score — rare medical terms like
-		// "Granuloma annulare" can score low against the generic "conditions"),
-		// then fill remaining topK slots with the best non-type-matched records
-		// from the adaptive cutoff. This ensures topK is always the hard cap.
+		// Category queries ("any conditions?", "list all medications") and
+		// focused queries ("does the patient have diabetes?") use fundamentally
+		// different retrieval strategies:
+		//
+		// - Category: the user explicitly asked for ALL records of a type.
+		//   The type filter is the relevance criterion, NOT semantic similarity.
+		//   topK does not apply — return every type-matched record.
+		//
+		// - Focused: the user asked a specific question. Semantic similarity
+		//   determines relevance, capped at topK via adaptive cutoff.
 		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
 		Set<String> includedKeys = new HashSet<String>();
 
 		if (intent.isCategoryQuery()) {
-			// Phase 1: include all type-matched records, up to topK
 			for (ScoredEmbedding se : scored) {
-				if (results.size() >= topK) {
-					break;
-				}
 				if (intent.getTargetTypes().contains(
 						se.embedding.getResourceType())) {
 					String key = se.embedding.getResourceType() + ":"
@@ -406,21 +405,8 @@ public class LlmInferenceService implements ChartSearchService {
 					}
 				}
 			}
-			// Phase 2: fill remaining slots with non-type-matched records
-			// from the adaptive cutoff (e.g., assessment notes that provide
-			// relevant context about the conditions)
-			for (int i = 0; i < adaptiveCutoff && results.size() < topK; i++) {
-				ChartEmbedding ce = scored.get(i).embedding;
-				String key = ce.getResourceType() + ":" + ce.getResourceId();
-				if (!includedKeys.contains(key)) {
-					results.add(ce);
-					includedKeys.add(key);
-				}
-			}
-			log.debug("Category query detected for types {}, included {} type-matched + {} contextual (topK={})",
-					intent.getTargetTypes(),
-					includedKeys.size() - (results.size() - includedKeys.size()),
-					results.size(), topK);
+			log.debug("Category query for types {}: returning {} type-matched records",
+					intent.getTargetTypes(), results.size());
 		} else {
 			for (int i = 0; i < adaptiveCutoff; i++) {
 				ChartEmbedding ce = scored.get(i).embedding;
