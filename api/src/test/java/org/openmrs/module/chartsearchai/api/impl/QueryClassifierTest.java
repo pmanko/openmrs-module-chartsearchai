@@ -154,4 +154,12 @@ public class QueryClassifierTest {
 		assertTrue(intent.isCategoryQuery());
 		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_ALLERGY));
 	}
+
+	@Test
+	public void classify_shouldDetectAnyConditionsAsCategory() {
+		QueryIntent intent = QueryClassifier.classify("any conditions");
+		assertTrue(intent.isCategoryQuery());
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION));
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS));
+	}
 }

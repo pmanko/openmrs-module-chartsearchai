@@ -102,14 +102,17 @@ public class QueryClassifier {
 	}
 
 	/**
-	 * Classifies the normalized (stopword-stripped) query and returns the
-	 * inferred intent.
+	 * Classifies the raw user query and returns the inferred intent.
+	 * <p>
+	 * <strong>Important:</strong> Pass the original query, NOT the
+	 * stopword-stripped version. Category indicators like "any", "all",
+	 * "what" overlap with stopwords and would be lost after stripping.
 	 *
-	 * @param normalizedQuery the query after stopword removal and lowercasing
+	 * @param rawQuery the original user question (before stopword removal)
 	 * @return the classification result (never null; targetTypes may be empty)
 	 */
-	public static QueryIntent classify(String normalizedQuery) {
-		String lower = normalizedQuery.toLowerCase();
+	public static QueryIntent classify(String rawQuery) {
+		String lower = rawQuery.toLowerCase();
 
 		Set<String> types = new HashSet<String>();
 		boolean hasMedication = MEDICATION_PATTERN.matcher(lower).find();

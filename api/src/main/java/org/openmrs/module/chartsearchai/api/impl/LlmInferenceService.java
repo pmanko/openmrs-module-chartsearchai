@@ -287,7 +287,10 @@ public class LlmInferenceService implements ChartSearchService {
 
 		String[] queryTerms = extractQueryTerms(normalizedQuery);
 		double keywordWeight = getKeywordWeight();
-		QueryClassifier.QueryIntent intent = QueryClassifier.classify(normalizedQuery);
+		// Classify the ORIGINAL question so category indicators like "any",
+		// "all", "what" (which are also stopwords) are still visible to the
+		// classifier. The normalized query is used only for embedding.
+		QueryClassifier.QueryIntent intent = QueryClassifier.classify(question);
 		double typeBoostFactor = intent.getTargetTypes().isEmpty() ? 1.0
 				: getTypeBoostFactor();
 
