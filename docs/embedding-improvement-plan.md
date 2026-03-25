@@ -145,15 +145,65 @@ The `ADAPTIVE_MIN_RECORDS = 2` floor means gap detection never fires before posi
 
 ### Future: Switch to a Clinical-Domain Embedding Model
 
-Replace all-MiniLM-L6-v2 with a model that has wider score separation on clinical text. Candidates:
-
-1. **`BAAI/bge-base-en-v1.5`** (768 dims, ~440MB) — Trained with instruction-aware queries, supports query prefixing natively (`"Represent this sentence for searching: "`). Significantly better retrieval on specialized domains.
-2. **`NeuML/pubmedbert-base-embeddings`** — Already tested (per ADR) but rejected because it ranked worse. However, the ADR tested it *with the first-sentence truncation*; re-testing with full text embedding (fix #1) may yield different results.
-3. **`sentence-transformers/all-mpnet-base-v2`** (768 dims) — Better than MiniLM on retrieval benchmarks while still general-purpose.
+Replace all-MiniLM-L6-v2 with a model that has wider score separation on clinical text.
 
 **Why:** Wider score separation means the threshold logic works more reliably. The difference between relevant and irrelevant records should be 0.2-0.3, not 0.05-0.10.
 
 **Risk:** Requires re-indexing all patients (backfill task already supports this). Larger model file (440MB vs 90MB).
+
+#### Important: Base Language Models vs Sentence Embedding Models
+
+Not all "clinical BERT" models are suitable for retrieval. There are two categories:
+
+- **Base language models** (BiomedBERT, Bio_ClinicalBERT, ClinicalBERT) understand medical text but are NOT trained for sentence similarity or retrieval. Mean-pooled embeddings from these models produce poor cosine similarity distributions. They would require fine-tuning with a contrastive loss before use in this pipeline.
+- **Sentence embedding models** (BGE, E5, GTE, MedCPT, Nomic Embed, Jina Embeddings) are specifically trained so that cosine similarity between embeddings indicates semantic similarity. These are drop-in candidates.
+
+Only sentence embedding models should be considered without additional fine-tuning.
+
+#### Candidate Models
+
+**Recommended: `BAAI/bge-base-en-v1.5`** (768 dims, ~440MB)
+
+Top recommendation for this use case. Strongest general retrieval scores on MTEB benchmarks, instruction-aware (supports `"Represent this sentence for searching: "` prefix via the existing `queryPrefix` global property), single-encoder architecture (drop-in compatible with `OnnxEmbeddingProvider`), MIT license, maintained by the Beijing Academy of AI (BAAI). Best balance of retrieval quality, compatibility, and long-term maintenance.
+
+| Model | Dims | Maintainer | License | Strengths | Compatibility Notes |
+|---|---|---|---|---|---|
+| **`BAAI/bge-base-en-v1.5`** | 768 | BAAI (org) | MIT | Top MTEB retrieval scores, instruction-aware queries | ✅ Drop-in, single encoder |
+| `Alibaba-NLP/gte-base-en-v1.5` | 768 | Alibaba (org) | Apache 2.0 | Very competitive with BGE on benchmarks | ✅ Drop-in, single encoder |
+| `intfloat/e5-base-v2` | 768 | Microsoft (org) | MIT | Query/passage prefix support (`"query: "` / `"passage: "`) | ✅ Drop-in, single encoder |
+| `ncbi/MedCPT-Query-Encoder` | 768 | NCBI/NIH (gov org) | Apache 2.0 | Only medical-specific *retrieval* model; trained on PubMed queries | ⚠️ Dual encoder — needs separate query and document models, requires code changes |
+| `nomic-ai/nomic-embed-text-v1.5` | 768 | Nomic AI (org) | Apache 2.0 | Matryoshka dimensions (variable size), long context | ✅ Drop-in, single encoder |
+| `jinaai/jina-embeddings-v2-base-en` | 768 | Jina AI (org) | Apache 2.0 | 8K token context window | ✅ Drop-in, single encoder |
+| `NeuML/pubmedbert-base-embeddings` | 768 | NeuML (individual) | Apache 2.0 | PubMed-trained sentence embeddings | ✅ Drop-in; previously tested (ADR) with first-sentence truncation and rejected — re-test with full text |
+| `sentence-transformers/all-mpnet-base-v2` | 768 | Hugging Face (org) | Apache 2.0 | Better than MiniLM on retrieval while still general-purpose | ✅ Drop-in, single encoder |
+
+**Not recommended without fine-tuning** (base language models, not sentence embedding models):
+
+| Model | Maintainer | Why not |
+|---|---|---|
+| `microsoft/BiomedNLP-BiomedBERT-base` | Microsoft (org) | Base MLM, not trained for sentence similarity |
+| `emilyalsentzer/Bio_ClinicalBERT` | Emily Alsentzer (individual) | Base MLM trained on MIMIC-III, no retrieval objective |
+| `medicalai/ClinicalBERT` | medicalai (small group) | Base MLM, not trained for sentence similarity |
+| `FremyCompany/BioLORD-2023` | FremyCompany (individual) | Biomedical ontology alignment, limited retrieval validation |
+
+#### How to Evaluate
+
+Before committing to a model, benchmark 2-3 candidates on representative queries from your deployment:
+
+1. **Prepare a test set:** 10-15 queries spanning category lookups ("any conditions?"), specific concepts ("does the patient have diabetes?"), and cross-type queries ("is diabetes controlled?"). Include expected results for each.
+2. **Export an ONNX model** for each candidate using `optimum` or `sentence-transformers`:
+   ```bash
+   pip install optimum[exporters] sentence-transformers
+   optimum-cli export onnx --model BAAI/bge-base-en-v1.5 bge-base-onnx/
+   ```
+3. **Swap the model** by replacing `model.onnx`, `tokenizer.json`, and `vocab.txt` in the module's resources.
+4. **Re-index** by running the "Chart Search AI - Embedding Backfill" scheduled task.
+5. **Compare** precision (how many returned results are relevant) and recall (how many relevant results are returned) across models. Pay attention to score separation — a good model should show a clear gap between relevant and irrelevant records.
+
+Set `chartsearchai.embedding.queryPrefix` appropriately for each model:
+- BGE: `"Represent this sentence for searching relevant passages: "`
+- E5: `"query: "`
+- Others: leave empty
 
 ### Future: Add a Cross-Encoder Re-Ranking Stage
 
