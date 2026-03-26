@@ -2179,4 +2179,155 @@ public class LlmInferenceServiceTest {
 		return cal.getTime();
 	}
 
+	// ---- Real-model integration tests ----
+	// These use the actual ONNX embedding model to compute semantic scores,
+	// ensuring tests reflect real embedding behavior instead of hand-crafted
+	// adversarial scores.
+
+	private static final String MODEL_PATH =
+			"/Users/danielkayiwa/Projects/openmrs/standalone/target/"
+			+ "referenceapplication-standalone-3.7.0-SNAPSHOT/appdata/"
+			+ "chartsearchai/models/all-MiniLM-L6-v2/model.onnx";
+
+	private static final String VOCAB_PATH =
+			"/Users/danielkayiwa/Projects/openmrs/standalone/target/"
+			+ "referenceapplication-standalone-3.7.0-SNAPSHOT/appdata/"
+			+ "chartsearchai/models/all-MiniLM-L6-v2/vocab.txt";
+
+	private static boolean modelFilesExist() {
+		return new java.io.File(MODEL_PATH).exists()
+				&& new java.io.File(VOCAB_PATH).exists();
+	}
+
+	/**
+	 * Computes real semantic scores for every record in FULL_PATIENT_DATASET
+	 * against the given query using the actual ONNX embedding model.
+	 */
+	private static double[] computeRealSemanticScores(
+			org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider provider,
+			String query) {
+		String normalizedQuery = LlmInferenceService.stripQueryStopwords(query);
+		float[] queryVector = provider.embed(normalizedQuery);
+
+		double[] scores = new double[FULL_PATIENT_DATASET.length];
+		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
+			String text = FULL_PATIENT_DATASET[i];
+			float[] docVector = provider.embed(text);
+			double dot = 0, normA = 0, normB = 0;
+			for (int j = 0; j < queryVector.length; j++) {
+				dot += queryVector[j] * docVector[j];
+				normA += queryVector[j] * queryVector[j];
+				normB += docVector[j] * docVector[j];
+			}
+			double denom = Math.sqrt(normA) * Math.sqrt(normB);
+			scores[i] = denom == 0 ? 0 : dot / denom;
+		}
+		return scores;
+	}
+
+	/**
+	 * Runs the full pipeline simulation using real semantic scores from the
+	 * ONNX model combined with keyword scores from the dataset.
+	 */
+	private static List<Integer> runRealModelPipeline(String query, int topK) {
+		org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider provider =
+				new org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider(
+						MODEL_PATH, VOCAB_PATH);
+		try {
+			double[] semantic = computeRealSemanticScores(provider, query);
+
+			String normalized = LlmInferenceService.stripQueryStopwords(query);
+			String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+
+			double[] keyword = new double[FULL_PATIENT_DATASET.length];
+			for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
+				keyword[i] = LlmInferenceService.computeKeywordScore(
+						queryTerms, FULL_PATIENT_DATASET[i]);
+			}
+
+			return simulatePipelineIndices(semantic, keyword, 0.3,
+					queryTerms.length, topK);
+		} finally {
+			provider.close();
+		}
+	}
+
+	@Test
+	public void realModel_vitalsTrendQuery_shouldReturnOnlyBpWeightAndTemperature() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"How have this patient's blood pressure, weight, and temperature "
+				+ "trended across their last 7 visits?", 10);
+
+		// All 40 BP + weight + temperature records (24 BP + 7 weight + 9 temp)
+		// Must NOT include blood oxygen or fetishism records.
+		assertEquals(Arrays.asList(17, 18, 22, 23, 25, 26, 31, 33, 36, 38,
+				47, 48, 58, 63, 64, 73, 74, 76, 77, 81,
+				93, 94, 96, 101, 102, 107, 111, 113, 114, 126,
+				128, 129, 131, 137, 138, 143, 144, 147, 148, 150),
+				result, "Should return all 40 BP + weight + temperature records");
+	}
+
+	@Test
+	public void realModel_cancerQuery_shouldReturnKaposiSarcomaOnly() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"does the patient have cancer?", 10);
+
+		assertEquals(Arrays.asList(11, 88),
+				result, "Should return exactly 2 Kaposi sarcoma records");
+	}
+
+	@Test
+	public void realModel_historyOfCancerQuery_shouldReturnKaposiSarcomaOnly() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"any history of cancer?", 10);
+
+		assertEquals(Arrays.asList(11, 88),
+				result, "Should return exactly 2 Kaposi sarcoma records");
+	}
+
+	@Test
+	public void realModel_familyHistoryOfCancerQuery_shouldReturnNoRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"Any family history of cancer?", 10);
+
+		assertEquals(Collections.emptyList(),
+				result, "Should return no records");
+	}
+
+	@Test
+	public void realModel_stdQuery_shouldReturnHivRecordsOnly() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"any sexually transmitted disease?", 10);
+
+		assertEquals(Arrays.asList(39, 40, 68, 69, 71, 110),
+				result, "Should return exactly 6 HIV-related records");
+	}
+
+	@Test
+	public void realModel_familyPlanningQuery_shouldReturnFamilyPlanningRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"Does this patient use any family planning methods?", 10);
+
+		assertEquals(Arrays.asList(5, 6),
+				result, "Should return exactly 2 family planning records");
+	}
+
 }

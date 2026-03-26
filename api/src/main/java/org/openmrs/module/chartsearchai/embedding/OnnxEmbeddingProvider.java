@@ -47,6 +47,32 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 	private int detectedDimensions = -1;
 
+	private String explicitModelPath;
+
+	private String explicitVocabPath;
+
+	private int explicitMaxSeqLen = -1;
+
+	/**
+	 * Default constructor for Spring context — resolves model paths from
+	 * OpenMRS global properties.
+	 */
+	public OnnxEmbeddingProvider() {
+	}
+
+	/**
+	 * Test-friendly constructor that accepts explicit file paths, bypassing
+	 * the OpenMRS Context dependency.
+	 *
+	 * @param modelPath absolute path to the ONNX model file
+	 * @param vocabPath absolute path to the WordPiece vocabulary file
+	 */
+	public OnnxEmbeddingProvider(String modelPath, String vocabPath) {
+		this.explicitModelPath = modelPath;
+		this.explicitVocabPath = vocabPath;
+		this.explicitMaxSeqLen = ChartSearchAiConstants.DEFAULT_MAX_SEQUENCE_LENGTH;
+	}
+
 	@Override
 	public synchronized float[] embed(String text) {
 		Map<String, OnnxTensor> inputs = new HashMap<String, OnnxTensor>();
@@ -156,15 +182,20 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 	}
 
 	private synchronized OrtSession getSession() throws OrtException {
-		String configuredPath = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
-		if (configuredPath == null || configuredPath.trim().isEmpty()) {
-			throw new IllegalStateException(
-					"Embedding model path not configured. Set the global property: "
-							+ ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
+		String modelPath;
+		if (explicitModelPath != null) {
+			modelPath = explicitModelPath;
+		} else {
+			String configuredPath = Context.getAdministrationService()
+					.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
+			if (configuredPath == null || configuredPath.trim().isEmpty()) {
+				throw new IllegalStateException(
+						"Embedding model path not configured. Set the global property: "
+								+ ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
+			}
+			modelPath = ChartSearchAiConstants.resolveModelPath(
+					configuredPath.trim(), ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
 		}
-		String modelPath = ChartSearchAiConstants.resolveModelPath(
-				configuredPath.trim(), ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
 
 		if (session != null && !modelPath.equals(loadedModelPath)) {
 			log.info("Embedding model path changed from {} to {}, reloading",
@@ -184,16 +215,22 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 	private synchronized WordPieceTokenizer getTokenizer() {
 		if (tokenizer == null) {
-			String configuredPath = Context.getAdministrationService()
-					.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_VOCAB_FILE_PATH);
-			if (configuredPath == null || configuredPath.trim().isEmpty()) {
-				throw new IllegalStateException(
-						"Embedding vocabulary path not configured. Set the global property: "
-								+ ChartSearchAiConstants.GP_EMBEDDING_VOCAB_FILE_PATH);
+			String vocabPath;
+			if (explicitVocabPath != null) {
+				vocabPath = explicitVocabPath;
+			} else {
+				String configuredPath = Context.getAdministrationService()
+						.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_VOCAB_FILE_PATH);
+				if (configuredPath == null || configuredPath.trim().isEmpty()) {
+					throw new IllegalStateException(
+							"Embedding vocabulary path not configured. Set the global property: "
+									+ ChartSearchAiConstants.GP_EMBEDDING_VOCAB_FILE_PATH);
+				}
+				vocabPath = ChartSearchAiConstants.resolveModelPath(
+						configuredPath.trim(), ChartSearchAiConstants.GP_EMBEDDING_VOCAB_FILE_PATH);
 			}
-			String vocabPath = ChartSearchAiConstants.resolveModelPath(
-					configuredPath.trim(), ChartSearchAiConstants.GP_EMBEDDING_VOCAB_FILE_PATH);
-			int maxSeqLen = getMaxSequenceLength();
+			int maxSeqLen = explicitMaxSeqLen > 0
+					? explicitMaxSeqLen : getMaxSequenceLength();
 			log.info("Loading WordPiece vocabulary from {} (maxSequenceLength={})",
 					vocabPath, maxSeqLen);
 			try {
