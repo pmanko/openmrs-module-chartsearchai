@@ -34,8 +34,8 @@ import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
  * <ul>
  *   <li><b>Generic terms</b> (trigger category expansion): add a
  *       {@code {"singular", "plural"}} pair to the relevant {@code *_TERMS}
- *       array. This automatically updates type detection, category detection,
- *       and every/each detection — no other changes needed.</li>
+ *       array. A query containing the plural form automatically becomes a
+ *       category query — no other changes needed.</li>
  *   <li><b>Specific terms</b> (type boosting only): add to the relevant
  *       {@code *_SPECIFIC} array. These match for type detection but never
  *       trigger category expansion — use for clinical concepts like
@@ -222,28 +222,20 @@ public class QueryClassifier {
 	// =====================================================================
 	// CATEGORY DETECTION PATTERNS — generated from *_TERMS arrays
 	//
-	// Category detection uses proximity: an indicator word must appear
-	// within a small window of a generic type keyword.
-	//
-	// Three structural signals prevent misclassification:
-	//   1. PROXIMITY: indicator must be within 4 words of a type keyword.
-	//      "what is the latest CD4 count?" — "what" is too far from any
-	//      generic type word.
-	//   2. PLURAL FORM: only plural type nouns trigger the main pattern.
-	//      "what test did they run?" uses singular "test", indicating a
-	//      specific instance. Category queries naturally use plural
-	//      nouns ("any tests?") because they ask for a list.
-	//   3. SPECIFIC EXCLUSION: clinical concepts (cd4, diabetes, etc.)
-	//      are in *_SPECIFIC arrays only, never in *_TERMS. They boost
-	//      type detection without triggering category expansion.
+	// A query is a category query when it contains a PLURAL generic type
+	// word. The plural form itself is the category signal — clinicians
+	// asking about a specific item use singular ("the medication",
+	// "a condition") while listing queries use plural ("medications",
+	// "conditions"). Specific clinical terms (cd4, diabetes, hemoglobin)
+	// are in *_SPECIFIC only, never in *_TERMS, so they never trigger
+	// category expansion.
 	//
 	// Exception: "every/each" grammatically require SINGULAR nouns
 	// ("every condition", not "every conditions"), so they use a
-	// separate pattern with tighter proximity (2 words) and singular
-	// forms from column 0 of the TERMS arrays.
+	// separate proximity pattern with singular forms.
 	// =====================================================================
 
-	private static final Pattern CATEGORY_QUERY_PATTERN;
+	private static final Pattern PLURAL_TYPE_PATTERN;
 
 	private static final Pattern EVERY_EACH_CATEGORY_PATTERN;
 
@@ -255,10 +247,8 @@ public class QueryClassifier {
 				LAB_TERMS, CONDITION_TERMS, DIAGNOSIS_TERMS,
 				PROGRAM_TERMS, VITALS_TERMS);
 
-		CATEGORY_QUERY_PATTERN = Pattern.compile(
-				"\\b(?:any|all|list|every|each|show|what|which|tell)\\b"
-						+ "(?:\\s+\\S+){0,4}?\\s+"
-						+ "\\b(?:" + plurals + ")\\b");
+		PLURAL_TYPE_PATTERN = Pattern.compile(
+				"\\b(?:" + plurals + ")\\b");
 
 		EVERY_EACH_CATEGORY_PATTERN = Pattern.compile(
 				"\\b(?:every|each)\\b"
@@ -383,12 +373,13 @@ public class QueryClassifier {
 			types.add(ChartSearchAiConstants.RESOURCE_TYPE_OBS);
 		}
 
-		// A category query requires a category indicator NEAR a generic type
-		// keyword (structural proximity). This prevents "what is the latest
-		// CD4 count?" from triggering category expansion — the indicator
-		// "what" is too far from any generic type word.
+		// A query is a category query when it contains a plural generic type
+		// word (e.g. "conditions", "medications", "tests"). The plural form
+		// is the strongest natural-language signal for "give me everything of
+		// this type". The EVERY_EACH pattern catches the grammatical exception
+		// where "every/each" require singular nouns.
 		boolean isCategory = !types.isEmpty()
-				&& (CATEGORY_QUERY_PATTERN.matcher(lower).find()
+				&& (PLURAL_TYPE_PATTERN.matcher(lower).find()
 						|| EVERY_EACH_CATEGORY_PATTERN.matcher(lower).find());
 
 		return new QueryIntent(types, isCategory);
