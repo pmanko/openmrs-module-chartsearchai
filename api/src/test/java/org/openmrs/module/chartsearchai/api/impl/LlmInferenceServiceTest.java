@@ -1342,6 +1342,54 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void pipeline_fractureQuery_realData_shouldReturnNoRecords() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "any fracture?" → expected: 0 records. No record in the dataset
+		// mentions fracture. All semantic scores should be low enough that the
+		// gate check (topScore < ABSOLUTE_SIMILARITY_FLOOR 0.25) returns empty.
+
+		String normalized = LlmInferenceService.stripQueryStopwords("any fracture?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertArrayEquals(new String[] { "fracture" }, queryTerms,
+				"Only 'fracture' should remain after stopword removal");
+
+		String[] recordTexts = {
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Medical condition: Hypertension. Status: ACTIVE",
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED",
+				"Clinical diagnosis: Skin Infection. Certainty: CONFIRMED",
+				"Clinical diagnosis: Gastroenteritis. Certainty: PROVISIONAL",
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.91",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Clinical observation: Test — Weight (kg): 94.0",
+				"Clinical observation: Test — Height (cm): 131.0",
+				"Patient allergy: Beef (food allergen). Severity: Severe",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
+				"Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
+		};
+
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+		for (int i = 0; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001, "No record should match 'fracture'");
+		}
+
+		// All semantic scores below the ABSOLUTE_SIMILARITY_FLOOR (0.25)
+		// because nothing in this chart is related to fractures
+		double[] semantic = {
+				0.18, 0.17, 0.16, 0.15, 0.14, 0.13, 0.12, 0.11, 0.10, 0.09,
+				0.08, 0.12,
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(0, result,
+				"Query 'any fracture?' should return 0 records — nothing in the chart is related");
+	}
+
+	@Test
 	public void pipeline_coughQuery_realData_shouldReturnExactlyOneRecord() {
 		// Real patient dataset: 16-year-old Male with 153 records.
 		// Query: "any cough?" → expected: exactly 1 record mentioning cough.
