@@ -60,6 +60,17 @@ public class ChartSearchAiConstants {
 
 	public static final double ABSOLUTE_SIMILARITY_FLOOR = 0.25;
 
+	public static final String GP_EMBEDDING_MIN_SCORE_GAP = "chartsearchai.embedding.minScoreGap";
+
+	/**
+	 * Minimum absolute gap between consecutive scores required for the adaptive
+	 * cutoff detector to trigger. Prevents premature cutting when a relatively
+	 * large gap (compared to a tight cluster's running average) is still small
+	 * in absolute terms — e.g. a 0.07 gap inside a cluster that spans from
+	 * 0.60 down to 0.30 should not be treated as a relevance boundary.
+	 */
+	public static final double DEFAULT_MIN_SCORE_GAP = 0.10;
+
 	public static final String GP_AUDIT_LOG_RETENTION_DAYS = "chartsearchai.auditLogRetentionDays";
 
 	public static final int DEFAULT_AUDIT_LOG_RETENTION_DAYS = 90;

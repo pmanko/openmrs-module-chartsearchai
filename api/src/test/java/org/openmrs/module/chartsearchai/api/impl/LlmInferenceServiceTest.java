@@ -184,7 +184,7 @@ public class LlmInferenceServiceTest {
 				makeScoredEmbedding(0.75),
 				makeScoredEmbedding(0.73));
 
-		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.70, 2.5);
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.70, 2.5, 0.0);
 
 		assertEquals(3, cutoff, "Should cut at position 3 where the large gap occurs");
 	}
@@ -199,7 +199,7 @@ public class LlmInferenceServiceTest {
 				makeScoredEmbedding(0.84),
 				makeScoredEmbedding(0.82));
 
-		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.70, 2.5);
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.70, 2.5, 0.0);
 
 		assertEquals(5, cutoff, "Should include all records when scores are evenly spaced");
 	}
@@ -214,7 +214,7 @@ public class LlmInferenceServiceTest {
 				makeScoredEmbedding(0.60),
 				makeScoredEmbedding(0.55));
 
-		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.80, 2.5);
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.80, 2.5, 0.0);
 
 		assertEquals(3, cutoff, "Should not include records below the similarity floor");
 	}
@@ -226,7 +226,7 @@ public class LlmInferenceServiceTest {
 				makeScoredEmbedding(0.90),
 				makeScoredEmbedding(0.50));
 
-		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 2, 0.40, 2.5);
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 2, 0.40, 2.5, 0.0);
 
 		assertEquals(2, cutoff, "Should include all records when both are above the floor");
 	}
@@ -236,7 +236,7 @@ public class LlmInferenceServiceTest {
 		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(0.90));
 
-		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 1, 0.70, 2.5);
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 1, 0.70, 2.5, 0.0);
 
 		assertEquals(1, cutoff);
 	}
@@ -254,7 +254,7 @@ public class LlmInferenceServiceTest {
 				makeScoredEmbedding(0.48),
 				makeScoredEmbedding(0.46));
 
-		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.40, 2.5);
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.40, 2.5, 0.0);
 
 		assertTrue(cutoff >= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS,
 				"Should not cut below the minimum record count");
@@ -269,7 +269,7 @@ public class LlmInferenceServiceTest {
 				makeScoredEmbedding(0.85),
 				makeScoredEmbedding(0.85));
 
-		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 4, 0.70, 2.5);
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 4, 0.70, 2.5, 0.0);
 
 		assertEquals(4, cutoff, "Should include all records when scores are identical");
 	}
@@ -284,7 +284,7 @@ public class LlmInferenceServiceTest {
 				makeScoredEmbedding(0.90),
 				makeScoredEmbedding(0.60));
 
-		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.50, 2.5);
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.50, 2.5, 0.0);
 
 		assertEquals(4, cutoff, "Should cut where scores drop after a plateau");
 	}
@@ -303,7 +303,7 @@ public class LlmInferenceServiceTest {
 				makeScoredEmbedding(0.84),
 				makeScoredEmbedding(0.83));
 
-		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.70, 2.5);
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.70, 2.5, 0.0);
 
 		assertEquals(5, cutoff, "Tied scores should not cause false gap detection");
 	}
@@ -319,7 +319,7 @@ public class LlmInferenceServiceTest {
 				makeScoredEmbedding(0.75),
 				makeScoredEmbedding(0.73));
 
-		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.70, 999.0);
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.70, 999.0, 0.0);
 
 		assertEquals(5, cutoff, "Very high multiplier should effectively disable gap detection");
 	}
@@ -374,6 +374,68 @@ public class LlmInferenceServiceTest {
 		double score = LlmInferenceService.computeKeywordScore(terms,
 				"Dispensed: Metformin 500mg. Status: Completed. medications given");
 		assertEquals(1.0, score, 0.001);
+	}
+
+	@Test
+	public void computeKeywordScore_shouldMatchPluralToSingular() {
+		// "conditions" (plural) should match "Condition:" (singular) in the text
+		String[] terms = { "conditions" };
+		double score = LlmInferenceService.computeKeywordScore(terms,
+				"Condition: Nonparalytic stroke. Status: ACTIVE");
+		assertEquals(1.0, score, 0.001);
+	}
+
+	@Test
+	public void computeKeywordScore_shouldNotStemShortWords() {
+		// "as" (length 2) should not be stemmed to "a"
+		String[] terms = { "as" };
+		double score = LlmInferenceService.computeKeywordScore(terms,
+				"Condition: Type 2 Diabetes. Status: ACTIVE");
+		assertEquals(0.0, score, 0.001);
+	}
+
+	@Test
+	public void computeKeywordScore_shouldNotStemDoubleS() {
+		// "pass" should not be stemmed to "pas"
+		String[] terms = { "pass" };
+		double score = LlmInferenceService.computeKeywordScore(terms,
+				"some text without the word");
+		assertEquals(0.0, score, 0.001);
+	}
+
+	@Test
+	public void findAdaptiveCutoff_shouldNotCutOnSmallAbsoluteGap() {
+		// Tight cluster: 0.55, 0.54, 0.53, then a 0.07 gap to 0.46, 0.45
+		// Relative to avgGap=0.01, 0.07 is 7x the average (triggers at 2.5x).
+		// But 0.07 < minGap of 0.10, so we should NOT cut.
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbedding(0.55),
+				makeScoredEmbedding(0.54),
+				makeScoredEmbedding(0.53),
+				makeScoredEmbedding(0.46),
+				makeScoredEmbedding(0.45));
+
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.40, 2.5, 0.10);
+
+		assertEquals(5, cutoff,
+				"Should not cut when gap is below absolute minimum even if above relative threshold");
+	}
+
+	@Test
+	public void findAdaptiveCutoff_shouldCutOnLargeAbsoluteGap() {
+		// Same tight cluster but bigger gap: 0.55, 0.54, 0.53, [0.15 gap], 0.38, 0.37
+		// 0.15 > avgGap*2.5 AND 0.15 > 0.10 → should cut.
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbedding(0.55),
+				makeScoredEmbedding(0.54),
+				makeScoredEmbedding(0.53),
+				makeScoredEmbedding(0.38),
+				makeScoredEmbedding(0.37));
+
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 5, 0.30, 2.5, 0.10);
+
+		assertEquals(3, cutoff,
+				"Should cut when gap exceeds both relative and absolute thresholds");
 	}
 
 	@Test

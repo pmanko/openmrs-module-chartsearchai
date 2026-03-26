@@ -335,7 +335,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// together and the gap appears after the entire cluster. The score
 		// distribution itself determines how many records to return.
 		int adaptiveCutoff = findAdaptiveCutoff(scored, scored.size(),
-				minScore, getScoreGapMultiplier());
+				minScore, getScoreGapMultiplier(), getMinScoreGap());
 
 		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
 		for (int i = 0; i < adaptiveCutoff; i++) {
@@ -365,20 +365,24 @@ public class LlmInferenceService implements ChartSearchService {
 	 * Finds the adaptive cutoff point in a sorted list of scored embeddings by
 	 * detecting a significant gap in similarity scores. Walks the sorted scores
 	 * and tracks the running average gap between consecutive entries. When a gap
-	 * exceeds the average by more than the configured multiplier, the cluster
-	 * boundary is found. Always includes at least
+	 * exceeds the average by more than the configured multiplier AND exceeds the
+	 * minimum absolute gap, the cluster boundary is found. The absolute minimum
+	 * prevents premature cutting on small gaps that only appear large relative
+	 * to a tight cluster. Always includes at least
 	 * {@link ChartSearchAiConstants#ADAPTIVE_MIN_RECORDS} records (if available
 	 * above the similarity floor) so the LLM has enough context.
 	 *
 	 * @param scored sorted list of scored embeddings (highest score first)
-	 * @param limit the maximum number of candidates to consider (topK cap)
-	 * @param minScore the absolute similarity floor from the ratio threshold
+	 * @param limit the maximum number of candidates to consider
+	 * @param minScore the absolute similarity floor
 	 * @param gapMultiplier how many times larger than the average gap a score drop
 	 *        must be to trigger a cutoff
+	 * @param minGap the minimum absolute gap required to trigger a cutoff,
+	 *        regardless of the multiplier condition
 	 * @return the number of records to include in the primary cluster
 	 */
 	static int findAdaptiveCutoff(List<ScoredEmbedding> scored, int limit, double minScore,
-			double gapMultiplier) {
+			double gapMultiplier, double minGap) {
 		int minRecords = ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS;
 
 		// Count how many records pass the similarity floor
@@ -411,7 +415,7 @@ public class LlmInferenceService implements ChartSearchService {
 			// average (i - 1 gaps have been accumulated at this point).
 			if (i >= minRecords && i >= 2) {
 				double avgGap = gapSum / (i - 1);
-				if (gap > avgGap * gapMultiplier) {
+				if (gap > avgGap * gapMultiplier && gap > minGap) {
 					cutoff = i;
 					log.debug("Score gap detected at position {}: gap={}, avgGap={}, multiplier={}",
 							i, String.format("%.4f", gap), String.format("%.4f", avgGap),
@@ -440,6 +444,23 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 		return ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER;
+	}
+
+	private static double getMinScoreGap() {
+		String value = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_MIN_SCORE_GAP);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				double parsed = Double.parseDouble(value.trim());
+				if (parsed >= 0 && parsed <= 1) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid minScoreGap value '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP;
 	}
 
 	private static double getKeywordWeight() {
@@ -488,7 +509,8 @@ public class LlmInferenceService implements ChartSearchService {
 	 * Computes a keyword overlap score between query terms and record text.
 	 * Returns a value between 0.0 (no terms match) and 1.0 (all terms match).
 	 * Uses case-insensitive substring matching so that a query term "metformin"
-	 * matches "Drug order: Metformin 500mg".
+	 * matches "Drug order: Metformin 500mg". Also tries a simple plural stem
+	 * (stripping trailing 's') so that "conditions" matches "Condition: ...".
 	 *
 	 * @param queryTerms the extracted query terms (lowercased)
 	 * @param textContent the full serialized record text
@@ -503,6 +525,13 @@ public class LlmInferenceService implements ChartSearchService {
 		for (String term : queryTerms) {
 			if (lowerText.contains(term)) {
 				matched++;
+			} else if (term.length() > 3 && term.endsWith("s") && !term.endsWith("ss")) {
+				// Simple plural stem: "conditions" → "condition",
+				// "medications" → "medication", "tests" → "test".
+				// Avoids stemming words ending in "ss" like "less", "pass".
+				if (lowerText.contains(term.substring(0, term.length() - 1))) {
+					matched++;
+				}
 			}
 		}
 		return (double) matched / queryTerms.length;
