@@ -1390,6 +1390,89 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void pipeline_medicationsQuery_realData_shouldReturnFourRecords() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "is the patient on any medications?" → expected: 4 records.
+		// All words except "medications" are stopwords → <2 content words → full query
+		// preserved for embedding. "medications" → plural strip → "medication" matches:
+		//   - 2 drug orders (prefix "Medication prescription:")
+		//   - 2 visit notes containing "Medication adjusted."
+		// All 4 are clinically relevant: drug orders show WHAT medications,
+		// visit notes show WHEN medication changes happened.
+
+		String normalized = LlmInferenceService.stripQueryStopwords(
+				"is the patient on any medications?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertArrayEquals(new String[] { "medications" }, queryTerms,
+				"Only 'medications' should remain after stopword removal");
+		assertTrue(normalized.contains("patient"),
+				"Full query should be preserved for embedding context");
+
+		String[] recordTexts = {
+				// 2 drug orders (actual medications)
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0 Tablet) "
+						+ "Intravenous Every six hours. Duration: 5 Days. Action: REVISE",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0 Tablet) "
+						+ "Intravenous Thrice daily. Duration: 5 Days. Action: NEW. Stopped: 2026-03-18",
+				// 2 visit notes mentioning medication adjustment
+				"Clinical diagnosis: Fetishism: Chronic disease management visit. Medication adjusted.",
+				"Clinical diagnosis: Fetishism: Chronic disease management visit. Medication adjusted.",
+				// Non-matching records
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Medical condition: Hypertension. Status: ACTIVE",
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED",
+				"Clinical diagnosis: Diabetes Mellitus. Certainty: PROVISIONAL",
+				"Clinical observation: Test — CD4 Count: 988.0",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Clinical observation: Test — Temperature (C): 36.7",
+				"Clinical observation: Test — Weight (kg): 94.0",
+				"Patient allergy: Beef (food allergen). Severity: Severe",
+				"Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
+				"Clinical diagnosis: Fetishism: Routine checkup. No significant findings.",
+		};
+
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+
+		// Drug orders match via prefix "Medication prescription"
+		assertEquals(1.0, keyword[0], 0.001, "Drug order #1 should match 'medication'");
+		assertEquals(1.0, keyword[1], 0.001, "Drug order #2 should match 'medication'");
+		// Visit notes match via "Medication adjusted" in text
+		assertEquals(1.0, keyword[2], 0.001, "Visit note #1 should match 'medication'");
+		assertEquals(1.0, keyword[3], 0.001, "Visit note #2 should match 'medication'");
+		for (int i = 4; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001,
+					"Non-medication record should not match: " + recordTexts[i].substring(0, 30));
+		}
+
+		double[] semantic = {
+				0.55, // Drug order: Azithromycin REVISE (highest - direct medication)
+				0.45, // Drug order: Azithromycin NEW
+				0.40, // Visit note: Medication adjusted
+				0.39, // Visit note: Medication adjusted
+				0.25, // TB condition
+				0.23, // Hypertension
+				0.22, // HIV
+				0.21, // Diabetes
+				0.18, // CD4 Count
+				0.16, // Pulse
+				0.15, // Temperature
+				0.14, // Weight
+				0.13, // Allergy
+				0.17, // Assessment
+				0.20, // Routine checkup
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(4, result,
+				"Query 'is the patient on any medications?' should return 4 records: "
+						+ "2 drug orders + 2 visit notes mentioning medication adjustment");
+	}
+
+	@Test
 	public void pipeline_stdQuery_realData_shouldReturnExactlySixRecords() {
 		// Real patient dataset: 16-year-old Male with 153 records.
 		// Query: "any sexually transmitted disease?" → expected: 6 HIV Disease records.
