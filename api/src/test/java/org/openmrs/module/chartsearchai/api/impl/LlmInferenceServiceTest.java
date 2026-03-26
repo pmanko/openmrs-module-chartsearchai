@@ -1473,6 +1473,56 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void pipeline_knownConditionsQuery_realData_shouldReturnExactlyTwoRecords() {
+		// Variant: "any known conditions?" — "any" and "known" are stopwords →
+		// only "conditions" remains, same as "any conditions" query.
+
+		String normalized = LlmInferenceService.stripQueryStopwords("any known conditions?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertArrayEquals(new String[] { "conditions" }, queryTerms,
+				"'known' should be stripped as stopword, leaving only 'conditions'");
+
+		String[] recordTexts = {
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Medical condition: Hypertension. Status: ACTIVE",
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
+				"Clinical diagnosis: Gastroenteritis. Certainty: PROVISIONAL",
+				"Clinical diagnosis: Skin Infection. Certainty: CONFIRMED",
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.91",
+				"Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
+				"Clinical observation: Test — CD4 Count: 988.0",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Clinical observation: Test — Temperature (C): 36.7",
+				"Clinical observation: Test — Weight (kg): 94.0",
+				"Patient allergy: Beef (food allergen). Severity: Severe",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
+				"Clinical diagnosis: Fetishism: Routine checkup. No significant findings.",
+				"Clinical observation: Assessment — Primary Diagnosis: HIV Disease",
+		};
+
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+
+		assertEquals(1.0, keyword[0], 0.001, "TB condition should match");
+		assertEquals(1.0, keyword[1], 0.001, "Hypertension condition should match");
+		for (int i = 2; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001, "Non-condition record should not match");
+		}
+
+		double[] semantic = {
+				0.50, 0.48, 0.35, 0.33, 0.32, 0.28, 0.30, 0.20, 0.18, 0.17,
+				0.16, 0.15, 0.14, 0.22, 0.29,
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(2, result,
+				"Query 'any known conditions?' should return exactly 2 condition records");
+	}
+
+	@Test
 	public void pipeline_conditionsQuery_realData_shouldReturnExactlyTwoRecords() {
 		// Real patient dataset: 16-year-old Male with 153 records.
 		// Query: "any conditions" → expected: exactly 2 condition records.
