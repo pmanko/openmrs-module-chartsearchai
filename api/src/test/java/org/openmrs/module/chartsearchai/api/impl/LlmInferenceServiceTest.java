@@ -1556,7 +1556,14 @@ public class LlmInferenceServiceTest {
 		assertEquals(0.3333, keyword[6], 0.01, "[7] matches family");
 
 		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.15);
+		Arrays.fill(semantic, 0.10);
+
+		// Model inflates scores for records sharing words with query
+		semantic[3]  = 0.32; // [4] Immunization history — "history" word overlap
+		semantic[5]  = 0.30; // [6] Family planning: Condoms — "family" word overlap
+		semantic[6]  = 0.29; // [7] Family planning: Diaphragm — "family" word overlap
+		semantic[11] = 0.32; // [12] Kaposi sarcoma — cancer concept
+		semantic[88] = 0.30; // [89] Kaposi sarcoma — cancer concept
 
 		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
@@ -1776,8 +1783,9 @@ public class LlmInferenceServiceTest {
 		semantic[ 71] = 0.36; // [ 72]
 		semantic[110] = 0.35; // [111]
 
-		semantic[ 56] = 0.15; // [ 57]
-		semantic[ 91] = 0.15; // [ 92]
+		// Fetishism notes share "disease" → model inflates their scores
+		semantic[ 56] = 0.33; // [ 57] Fetishism "Chronic disease management" — "disease" word overlap
+		semantic[ 91] = 0.33; // [ 92] Fetishism "Chronic disease management" — "disease" word overlap
 		semantic[  7] = 0.20; // [  8]
 		semantic[ 54] = 0.19; // [ 55]
 		semantic[ 52] = 0.18; // [ 53]
@@ -1983,23 +1991,66 @@ public class LlmInferenceServiceTest {
 		double tempKw = keyword[17]; // Temperature
 		assertTrue(tempKw > 0, "Temperature should match temperature");
 
-		// Semantic scores: 8 target vitals (4 BP + 2 weight + 2 temp)
-		// from the most recent visits score high. All other records
-		// (including non-target vitals from older visits) score low.
+		// Realistic scores: the embedding model scores ALL vitals of the same
+		// type similarly — it cannot distinguish "recent" from "old" visits.
+		// ALL Blood Pressure, Weight, and Temperature records score high.
 		double[] semantic = new double[FULL_PATIENT_DATASET.length];
 		Arrays.fill(semantic, 0.10);
 
-		// Target Blood Pressure records (4)
+		// ALL Systolic/Diastolic Blood Pressure records (~24 total)
 		semantic[ 22] = 0.50; // [ 23] Systolic BP: 97.0
 		semantic[ 23] = 0.50; // [ 24] Diastolic BP: 99.0
+		semantic[ 31] = 0.50; // [ 32] Diastolic BP: 92.0
 		semantic[ 36] = 0.50; // [ 37] Systolic BP: 122.0
+		semantic[ 47] = 0.50; // [ 48] Systolic BP: 101.0
 		semantic[ 48] = 0.50; // [ 49] Diastolic BP: 99.0
-		// Target Weight records (2)
+		semantic[ 58] = 0.50; // [ 59] Systolic BP: 123.0
+		semantic[ 64] = 0.50; // [ 65] Diastolic BP: 71.0
+		semantic[ 73] = 0.50; // [ 74] Systolic BP: 137.0
+		semantic[ 74] = 0.50; // [ 75] Diastolic BP: 67.0
+		semantic[ 81] = 0.50; // [ 82] Diastolic BP: 105.0
+		semantic[ 93] = 0.50; // [ 94] Systolic BP: 147.0
+		semantic[ 94] = 0.50; // [ 95] Diastolic BP: 58.0
+		semantic[102] = 0.50; // [103] Diastolic BP: 50.0
+		semantic[107] = 0.50; // [108] Diastolic BP: 93.0
+		semantic[111] = 0.50; // [112] Systolic BP: 98.0
+		semantic[126] = 0.50; // [127] Systolic BP: 134.0
+		semantic[128] = 0.50; // [129] Systolic BP: 117.0
+		semantic[129] = 0.50; // [130] Diastolic BP: 70.0
+		semantic[137] = 0.50; // [138] Diastolic BP: 76.0
+		semantic[138] = 0.50; // [139] Systolic BP: 102.0
+		semantic[144] = 0.50; // [145] Diastolic BP: 78.0
+		semantic[147] = 0.50; // [148] Systolic BP: 151.0
+		semantic[148] = 0.50; // [149] Diastolic BP: 53.0
+		// ALL Weight records (~7 total)
 		semantic[ 18] = 0.50; // [ 19] Weight: 94.0
 		semantic[ 26] = 0.50; // [ 27] Weight: 107.0
-		// Target Temperature records (2)
+		semantic[ 33] = 0.50; // [ 34] Weight: 139.0
+		semantic[ 63] = 0.50; // [ 64] Weight: 38.0
+		semantic[ 77] = 0.50; // [ 78] Weight: 146.0
+		semantic[101] = 0.50; // [102] Weight: 68.0
+		semantic[114] = 0.50; // [115] Weight: 121.0
+		// ALL Temperature records (~9 total)
 		semantic[ 17] = 0.50; // [ 18] Temperature: 36.7
 		semantic[ 25] = 0.50; // [ 26] Temperature: 37.7
+		semantic[ 38] = 0.50; // [ 39] Temperature: 40.3
+		semantic[ 76] = 0.50; // [ 77] Temperature: 39.3
+		semantic[ 96] = 0.50; // [ 97] Temperature: 36.4
+		semantic[113] = 0.50; // [114] Temperature: 37.8
+		semantic[131] = 0.50; // [132] Temperature: 40.1
+		semantic[143] = 0.50; // [144] Temperature: 39.3
+		semantic[150] = 0.50; // [151] Temperature: 39.4
+		// Blood Oxygen also matches "blood" keyword
+		semantic[ 34] = 0.40; // [ 35] Blood O2: 88.0
+		semantic[ 45] = 0.40; // [ 46] Blood O2: 92.0
+		semantic[ 59] = 0.40; // [ 60] Blood O2: 86.0
+		semantic[ 79] = 0.40; // [ 80] Blood O2: 86.0
+		semantic[ 83] = 0.40; // [ 84] Blood O2: 100.0
+		semantic[103] = 0.40; // [104] Blood O2: 94.0
+		semantic[108] = 0.40; // [109] Blood O2: 95.0
+		semantic[116] = 0.40; // [117] Blood O2: 94.0
+		semantic[145] = 0.40; // [146] Blood O2: 88.0
+		semantic[151] = 0.40; // [152] Blood O2: 88.0
 
 		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
@@ -2055,7 +2106,7 @@ public class LlmInferenceServiceTest {
 		semantic[88] = 0.38; // [89] Kaposi sarcoma oral: 3.5
 
 		// Disease/condition records — moderate semantic similarity to "cancer"
-		semantic[3]   = 0.22; // [4] Immunization history (has "history" concept)
+		semantic[3]   = 0.39; // [4] Immunization history — model inflates due to "history" word overlap
 		semantic[39]  = 0.21; // [40] HIV Disease
 		semantic[71]  = 0.20; // [72] HIV Disease
 		semantic[110] = 0.20; // [111] HIV Disease
