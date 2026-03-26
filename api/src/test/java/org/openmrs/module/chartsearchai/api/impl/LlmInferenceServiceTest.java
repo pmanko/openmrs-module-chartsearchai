@@ -1390,6 +1390,65 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void pipeline_whatIsPatientAllergicToQuery_realData_shouldReturnExactlyTwoRecords() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "What is the patient allergic to?" → expected: exactly 2 allergy records.
+		// "what", "is", "the", "patient", "to" are stopwords → only "allergic" remains
+		// (<2 content words → full query preserved for embedding).
+		// "allergic" (8 chars ≥ 7) → stem "allerg" → word-prefix matches "allergy"/"allergen"
+		// but NOT "Photoallergy" (starts with "photo").
+
+		String normalized = LlmInferenceService.stripQueryStopwords("What is the patient allergic to?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertArrayEquals(new String[] { "allergic" }, queryTerms,
+				"Only 'allergic' should remain after stopword removal");
+		assertTrue(normalized.contains("patient") && normalized.contains("allergic"),
+				"Full query should be preserved for embedding context");
+
+		String[] recordTexts = {
+				"Patient allergy: Beef (food allergen). Severity: Severe. "
+						+ "Reactions: Diarrhea, Itching. Comments: Happens during pregnancy",
+				"Patient allergy: Fomepizole (drug allergen)",
+				"Clinical diagnosis: Photoallergy: 9.93",
+				"Clinical diagnosis: Photoallergy: 8.27",
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.91",
+				"Clinical diagnosis: Skin Infection. Certainty: CONFIRMED",
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED",
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Medical condition: Hypertension. Status: ACTIVE",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
+				"Clinical observation: Test — CD4 Count: 988.0",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
+				"Clinical observation: Test — Temperature (C): 36.7",
+				"Clinical observation: Test — Weight (kg): 94.0",
+		};
+
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+
+		assertEquals(1.0, keyword[0], 0.001, "Beef allergy should match 'allergic' via stem 'allerg'");
+		assertEquals(1.0, keyword[1], 0.001, "Fomepizole allergy should match via stem 'allerg'");
+		assertEquals(0.0, keyword[2], 0.001, "Photoallergy must NOT match (compound word)");
+		assertEquals(0.0, keyword[3], 0.001, "Photoallergy must NOT match (compound word)");
+		for (int i = 4; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001, "Non-allergy record should not match");
+		}
+
+		double[] semantic = {
+				0.55, 0.50, 0.35, 0.33, 0.25, 0.27, 0.24, 0.30, 0.29, 0.26,
+				0.20, 0.18, 0.25, 0.17, 0.16,
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(2, result,
+				"Query 'What is the patient allergic to?' should return exactly 2 allergy records");
+	}
+
+	@Test
 	public void pipeline_coughQuery_realData_shouldReturnExactlyOneRecord() {
 		// Real patient dataset: 16-year-old Male with 153 records.
 		// Query: "any cough?" → expected: exactly 1 record mentioning cough.
