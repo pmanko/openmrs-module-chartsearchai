@@ -2077,9 +2077,12 @@ public class LlmInferenceServiceTest {
 
 		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		// [18] Temperature: 36.7, [19] Weight: 94.0, [23] Systolic BP: 97.0, [24] Diastolic BP: 99.0, [26] Temperature: 37.7, [27] Weight: 107.0, [37] Systolic BP: 122.0, [49] Diastolic BP: 99.0
-		assertEquals(Arrays.asList(17, 18, 22, 23, 25, 26, 36, 48),
-				result, "Should return exactly 8 records: 4 BP + 2 weight + 2 temperature");
+		// All 40 BP + weight + temperature records (24 BP + 7 weight + 9 temp)
+		assertEquals(Arrays.asList(17, 18, 22, 23, 25, 26, 31, 33, 36, 38,
+				47, 48, 58, 63, 64, 73, 74, 76, 77, 81,
+				93, 94, 96, 101, 102, 107, 111, 113, 114, 126,
+				128, 129, 131, 137, 138, 143, 144, 147, 148, 150),
+				result, "Should return all 40 BP + weight + temperature records");
 	}
 
 	@Test
