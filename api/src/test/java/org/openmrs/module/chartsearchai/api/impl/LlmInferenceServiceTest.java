@@ -666,8 +666,10 @@ public class LlmInferenceServiceTest {
 
 		List<LlmInferenceService.ScoredEmbedding> scored =
 				new ArrayList<LlmInferenceService.ScoredEmbedding>();
+		double bonusThreshold = (double) Math.min(2, queryTermCount) / queryTermCount;
 		for (int i = 0; i < semanticScores.length; i++) {
-			double baseScore = semanticScores[i] + keywordWeight * keywordScores[i];
+			double keywordBonus = keywordScores[i] >= bonusThreshold ? keywordScores[i] : 0.0;
+			double baseScore = semanticScores[i] + keywordWeight * keywordBonus;
 			scored.add(makeScoredEmbedding(baseScore, keywordScores[i]));
 		}
 
@@ -1399,6 +1401,69 @@ public class LlmInferenceServiceTest {
 
 		assertEquals(2, result,
 				"Query 'any cancer?' should return exactly 2 Kaposi sarcoma records");
+	}
+
+	@Test
+	public void pipeline_historyOfCancerQuery_realData_shouldReturnExactlyTwoRecords() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "any history of cancer?" → terms: ["history", "cancer"] (N=2).
+		// "immunization history" matches only "history" (1/2 = 0.5),
+		// "family planning" matches nothing. With the keyword bonus threshold
+		// (≥2 terms required for N≥2), NO record gets a keyword bonus.
+		// Kaposi sarcoma records win on pure semantic similarity.
+
+		String normalized = LlmInferenceService.stripQueryStopwords("any history of cancer?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertArrayEquals(new String[] { "history", "cancer" }, queryTerms,
+				"'history' and 'cancer' should remain after stopword removal");
+
+		String[] recordTexts = {
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.91",
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.5",
+				"Finding — Immunization history: Immunizations: Polio vaccination",
+				"Clinical observation: Assessment — Method of family planning: Condoms",
+				"Clinical observation: Assessment — Method of family planning: Diaphragm",
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED",
+				"Clinical diagnosis: Skin Infection. Certainty: CONFIRMED",
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Medical condition: Hypertension. Status: ACTIVE",
+				"Clinical observation: Test — CD4 Count: 988.0",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Patient allergy: Beef (food allergen). Severity: Severe",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
+				"Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
+				"Clinical observation: Test — Weight (kg): 94.0",
+		};
+
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+
+		// "immunization history" matches "history" (1/2 terms)
+		assertEquals(0.5, keyword[2], 0.001, "'history' should match 'Immunization history'");
+		// But all others match 0 terms
+		assertEquals(0.0, keyword[0], 0.001, "Kaposi sarcoma should not match keywords");
+		assertEquals(0.0, keyword[1], 0.001);
+		assertEquals(0.0, keyword[3], 0.001, "family planning should not match 'history' or 'cancer'");
+		assertEquals(0.0, keyword[4], 0.001);
+		for (int i = 5; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001);
+		}
+
+		// Semantic scores: Kaposi sarcoma is semantically closest to "cancer",
+		// immunization history is NOT semantically close to "history of cancer".
+		// With keyword bonus threshold, the 0.5 keyword score on immunization
+		// history does NOT inflate its ranking (needs 2/2 for bonus).
+		double[] semantic = {
+				0.40, 0.38, 0.22, 0.18, 0.17, 0.20, 0.19, 0.21, 0.20, 0.16,
+				0.14, 0.13, 0.12, 0.15, 0.11,
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(2, result,
+				"Query 'any history of cancer?' should return exactly 2 Kaposi sarcoma records");
 	}
 
 	@Test

@@ -344,7 +344,13 @@ public class LlmInferenceService implements ChartSearchService {
 			String keywordText = ChartSearchAiConstants.getEmbeddingPrefix(
 					ce.getResourceType(), ce.getTextContent()) + ce.getTextContent();
 			double keywordScore = computeKeywordScore(queryTerms, keywordText);
-			double baseScore = semanticScore + keywordWeight * keywordScore;
+			// Only apply keyword bonus when enough terms match. In multi-word
+			// queries, a single coincidental keyword match (e.g. "history" in
+			// "immunization history" for "history of cancer") should not inflate
+			// the ranking score. Require ≥2 term matches for multi-word queries.
+			double bonusThreshold = (double) Math.min(2, queryTerms.length) / queryTerms.length;
+			double keywordBonus = keywordScore >= bonusThreshold ? keywordScore : 0.0;
+			double baseScore = semanticScore + keywordWeight * keywordBonus;
 
 			if (semanticScore > maxSemanticScore) {
 				maxSemanticScore = semanticScore;
