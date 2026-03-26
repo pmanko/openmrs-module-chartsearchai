@@ -465,10 +465,12 @@ public class LlmInferenceService implements ChartSearchService {
 	 * discriminative type signal (e.g., "conditions" matching "Condition:"
 	 * in record text).
 	 *
-	 * <p>The refinement requires at least 2 query terms to match (or half
-	 * for very short queries) to avoid false positives from incidental
-	 * single-term matches (e.g., "normal" appearing in many vital sign
-	 * interpretations). It only activates when:
+	 * <p>The refinement requires at least 1 matching term for short queries
+	 * (1-3 terms), scaling up to 2 for longer queries (4+ terms). This
+	 * avoids false positives from incidental single-term matches (e.g.,
+	 * "normal" appearing in many vital sign interpretations) while allowing
+	 * short queries to work with a single discriminative match. It only
+	 * activates when:
 	 * <ul>
 	 * <li>At least {@link ChartSearchAiConstants#ADAPTIVE_MIN_RECORDS} records
 	 * have strong keyword matches (enough to be meaningful)</li>

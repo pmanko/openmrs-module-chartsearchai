@@ -497,7 +497,7 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void refineByKeywords_shouldFilterToKeywordMatchedSubset() {
 		// 3 records have strong keyword matches (2/6 terms), 2 don't.
-		// With queryTermCount=6, threshold = min(2/6, 0.5) = 0.333...
+		// With queryTermCount=6, threshold = min(2, max(1, 2))/6 = 0.333...
 		double kwMatch = 2.0 / 6; // exact fraction avoids floating-point mismatch
 		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
 				makeScoredEmbedding(0.70, kwMatch),
@@ -562,7 +562,7 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void refineByKeywords_shouldIgnoreIncidentalSingleTermMatches() {
 		// 2 records match 2/6 terms, 4 records match only 1/6.
-		// Threshold = min(2/6, 0.5) = 0.333. Only the 2 strong matches should pass.
+		// Threshold = min(2, max(1, 2))/6 = 0.333. Only the 2 strong matches should pass.
 		double strongMatch = 2.0 / 6; // 0.333...
 		double weakMatch = 1.0 / 6;   // 0.166...
 		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
