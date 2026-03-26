@@ -287,9 +287,8 @@ public class LlmInferenceService implements ChartSearchService {
 
 		String[] queryTerms = extractQueryTerms(normalizedQuery);
 		double keywordWeight = getKeywordWeight();
-		// Classify the ORIGINAL question so category indicators like "any",
-		// "all", "what" (which are also stopwords) are still visible to the
-		// classifier. The normalized query is used only for embedding.
+		// Classify the question for TYPE DETECTION. Category vs focused is
+		// handled below by gap detection within type-matched records.
 		QueryClassifier.QueryIntent intent = QueryClassifier.classify(question);
 		double typeBoostFactor = intent.getTargetTypes().isEmpty() ? 1.0
 				: getTypeBoostFactor();
@@ -380,35 +379,57 @@ public class LlmInferenceService implements ChartSearchService {
 		// still apply as hard limits.
 		int adaptiveCutoff = findAdaptiveCutoff(scored, limit, minScore, getScoreGapMultiplier());
 
-		// Category queries ("any conditions?", "list all medications") and
-		// focused queries ("does the patient have diabetes?") both use topK,
-		// but differently:
+		// --- Type-aware gap detection ---
+		// Instead of classifying queries as "category" vs "focused" (which
+		// requires fragile word-pattern heuristics), we apply the existing
+		// gap detection algorithm WITHIN type-matched records. The score
+		// distribution itself reveals the query's breadth:
 		//
-		// - Category: ALL type-matched records are included (auto-expands
-		//   beyond topK when needed), then remaining topK slots are filled
-		//   with contextual records from the adaptive cutoff.
+		// - Broad ("list all medications"): all medication records cluster at
+		//   similar scores → gap detector finds no significant drop → all
+		//   included automatically.
 		//
-		// - Focused: semantic similarity determines inclusion via adaptive
-		//   cutoff, capped at topK.
+		// - Specific ("HB results"): HB records score high, other OBS records
+		//   score low → gap detector finds the drop-off and stops.
+		//
+		// This eliminates the entire class of bugs where query wording
+		// ("results", "each", "every", indicator proximity) caused incorrect
+		// category/focused classification.
 		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
 		Set<String> includedKeys = new HashSet<String>();
 
-		if (intent.isCategoryQuery()) {
-			// Phase 1: include ALL type-matched records (no topK cap —
-			// the user explicitly asked for everything of this type)
+		if (!intent.getTargetTypes().isEmpty()) {
+			// Extract type-matched records (already sorted by score)
+			List<ScoredEmbedding> typeMatched = new ArrayList<ScoredEmbedding>();
 			for (ScoredEmbedding se : scored) {
 				if (intent.getTargetTypes().contains(
 						se.embedding.getResourceType())) {
-					String key = se.embedding.getResourceType() + ":"
-							+ se.embedding.getResourceId();
+					typeMatched.add(se);
+				}
+			}
+
+			if (!typeMatched.isEmpty()) {
+				// Use a permissive floor for type-matched records: the type
+				// filter already provides a relevance signal, so we rely on
+				// gap detection for the cutoff rather than a strict floor.
+				double typeFloor = ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2;
+				int typeCutoff = findAdaptiveCutoff(typeMatched,
+						typeMatched.size(), typeFloor, getScoreGapMultiplier());
+
+				for (int i = 0; i < typeCutoff; i++) {
+					ChartEmbedding ce = typeMatched.get(i).embedding;
+					String key = ce.getResourceType() + ":"
+							+ ce.getResourceId();
 					if (!includedKeys.contains(key)) {
-						results.add(se.embedding);
+						results.add(ce);
 						includedKeys.add(key);
 					}
 				}
 			}
-			// Phase 2: fill up to topK with the best non-type-matched
-			// records from the adaptive cutoff (e.g., assessment notes)
+
+			// Fill remaining topK slots with contextual records from the
+			// global adaptive cutoff (e.g., assessment notes that provide
+			// context for the type-matched records).
 			for (int i = 0; i < adaptiveCutoff && results.size() < topK; i++) {
 				ChartEmbedding ce = scored.get(i).embedding;
 				String key = ce.getResourceType() + ":" + ce.getResourceId();
@@ -417,7 +438,8 @@ public class LlmInferenceService implements ChartSearchService {
 					includedKeys.add(key);
 				}
 			}
-			log.debug("Category query for types {}: {} type-matched + {} contextual = {} total (topK={})",
+
+			log.debug("Type-aware retrieval for types {}: {} type-matched + {} contextual = {} total (topK={})",
 					intent.getTargetTypes(),
 					(int) results.stream().filter(r -> intent.getTargetTypes()
 							.contains(r.getResourceType())).count(),
@@ -425,10 +447,12 @@ public class LlmInferenceService implements ChartSearchService {
 							.contains(r.getResourceType())).count(),
 					results.size(), topK);
 		} else {
+			// Untyped query: use global gap detection, capped at topK
 			for (int i = 0; i < adaptiveCutoff; i++) {
 				ChartEmbedding ce = scored.get(i).embedding;
 				results.add(ce);
-				includedKeys.add(ce.getResourceType() + ":" + ce.getResourceId());
+				includedKeys.add(ce.getResourceType() + ":"
+						+ ce.getResourceId());
 			}
 		}
 

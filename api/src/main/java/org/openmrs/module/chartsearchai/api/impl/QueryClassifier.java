@@ -20,29 +20,31 @@ import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 
 /**
  * Lightweight keyword-based classifier that maps a user query to the clinical
- * resource types most likely to contain the answer. Also detects broad "category"
- * queries (e.g., "any medications?") that expect exhaustive results rather than
- * just the top few matches.
+ * resource types most likely to contain the answer.
+ *
+ * <p>The classifier detects <b>types only</b>. It does <b>not</b> classify
+ * queries as "category" vs "focused" — the retrieval layer handles that
+ * distinction automatically by applying gap detection within type-matched
+ * records. This data-driven approach eliminates the fragile word-pattern
+ * heuristics that previously required manual patching for each new query
+ * phrasing ("results", "each", "every", etc.).
  *
  * <h3>Vocabulary-driven design</h3>
  * All clinical terms are defined <b>once</b> in vocabulary arrays at the top
- * of this class. Type detection, category detection, and every/each patterns
- * are then generated automatically. This eliminates synchronization bugs where
- * a term is present in one pattern but missing from another.
+ * of this class. Type detection patterns are generated automatically from
+ * these arrays.
  *
  * <h3>Adding new terms</h3>
  * <ul>
- *   <li><b>Generic terms</b> (trigger category expansion): add a
- *       {@code {"singular", "plural"}} pair to the relevant {@code *_TERMS}
- *       array. A query containing the plural form automatically becomes a
- *       category query — no other changes needed.</li>
- *   <li><b>Specific terms</b> (type boosting only): add to the relevant
- *       {@code *_SPECIFIC} array. These match for type detection but never
- *       trigger category expansion — use for clinical concepts like
- *       "cd4" or "diabetes" that name specific items, not categories.</li>
- *   <li><b>Multi-word patterns</b> (regex, type detection only): add to
- *       the relevant {@code *_MULTI_WORD} array. These may contain regex
- *       operators (e.g. {@code blood\\s*pressure}).</li>
+ *   <li><b>Generic terms</b>: add a {@code {"singular", "plural"}} pair to
+ *       the relevant {@code *_TERMS} array. Both forms are included in the
+ *       type detection regex automatically.</li>
+ *   <li><b>Specific terms</b>: add to the relevant {@code *_SPECIFIC} array.
+ *       Use for clinical concepts like "cd4" or "diabetes" that name specific
+ *       items rather than record categories.</li>
+ *   <li><b>Multi-word patterns</b> (regex): add to the relevant
+ *       {@code *_MULTI_WORD} array. These may contain regex operators
+ *       (e.g. {@code blood\\s*pressure}).</li>
  * </ul>
  *
  * <p>The classifier is intentionally simple — it uses regex keyword matching
@@ -53,8 +55,7 @@ import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 public class QueryClassifier {
 
 	/**
-	 * Classification result containing the matched resource types and whether
-	 * the query appears to be a broad category query.
+	 * Classification result containing the matched resource types.
 	 */
 	public static class QueryIntent {
 
@@ -73,9 +74,10 @@ public class QueryClassifier {
 		}
 
 		/**
-		 * True if the query is a broad category query expecting exhaustive
-		 * results (e.g., "any medications?", "list all conditions"). These
-		 * queries should bypass topK limits for matched resource types.
+		 * Always returns {@code false}. Category vs focused distinction is
+		 * now handled by the retrieval layer's gap detection algorithm.
+		 *
+		 * @deprecated Retained for API compatibility. Do not branch on this.
 		 */
 		public boolean isCategoryQuery() {
 			return categoryQuery;
@@ -221,43 +223,6 @@ public class QueryClassifier {
 			VITALS_TERMS, VITALS_SPECIFIC, VITALS_MULTI_WORD);
 
 	// =====================================================================
-	// CATEGORY DETECTION PATTERNS — generated from *_TERMS arrays
-	//
-	// A query is a category query when it contains a PLURAL generic type
-	// word. The plural form itself is the category signal — clinicians
-	// asking about a specific item use singular ("the medication",
-	// "a condition") while listing queries use plural ("medications",
-	// "conditions"). Specific clinical terms (cd4, diabetes, hemoglobin)
-	// are in *_SPECIFIC only, never in *_TERMS, so they never trigger
-	// category expansion.
-	//
-	// Exception: "every/each" grammatically require SINGULAR nouns
-	// ("every condition", not "every conditions"), so they use a
-	// separate proximity pattern with singular forms.
-	// =====================================================================
-
-	private static final Pattern PLURAL_TYPE_PATTERN;
-
-	private static final Pattern EVERY_EACH_CATEGORY_PATTERN;
-
-	static {
-		String plurals = collectForms(1, MEDICATION_TERMS, ALLERGY_TERMS,
-				LAB_TERMS, CONDITION_TERMS, DIAGNOSIS_TERMS,
-				PROGRAM_TERMS, VITALS_TERMS);
-		String singulars = collectForms(0, MEDICATION_TERMS, ALLERGY_TERMS,
-				LAB_TERMS, CONDITION_TERMS, DIAGNOSIS_TERMS,
-				PROGRAM_TERMS, VITALS_TERMS);
-
-		PLURAL_TYPE_PATTERN = Pattern.compile(
-				"\\b(?:" + plurals + ")\\b");
-
-		EVERY_EACH_CATEGORY_PATTERN = Pattern.compile(
-				"\\b(?:every|each)\\b"
-						+ "(?:\\s+\\S+){0,2}?\\s+"
-						+ "\\b(?:" + singulars + ")\\b");
-	}
-
-	// =====================================================================
 	// PATTERN BUILDING HELPERS
 	// =====================================================================
 
@@ -290,24 +255,6 @@ public class QueryClassifier {
 		return Pattern.compile("\\b(?:" + joinPipe(terms) + ")\\b");
 	}
 
-	/**
-	 * Collects either singular (column 0) or plural (column 1) forms from
-	 * multiple term arrays into a pipe-delimited alternation string.
-	 */
-	private static String collectForms(int column, String[][]... termArrays) {
-		List<String> forms = new ArrayList<String>();
-		Set<String> seen = new HashSet<String>();
-		for (String[][] terms : termArrays) {
-			for (String[] pair : terms) {
-				if (!seen.contains(pair[column])) {
-					forms.add(pair[column]);
-					seen.add(pair[column]);
-				}
-			}
-		}
-		return joinPipe(forms);
-	}
-
 	private static String joinPipe(List<String> items) {
 		StringBuilder sb = new StringBuilder();
 		for (int i = 0; i < items.size(); i++) {
@@ -323,13 +270,9 @@ public class QueryClassifier {
 	}
 
 	/**
-	 * Classifies the raw user query and returns the inferred intent.
-	 * <p>
-	 * <strong>Important:</strong> Pass the original query, NOT the
-	 * stopword-stripped version. Category indicators like "any", "all",
-	 * "what" overlap with stopwords and would be lost after stripping.
+	 * Classifies the raw user query and returns the inferred type intent.
 	 *
-	 * @param rawQuery the original user question (before stopword removal)
+	 * @param rawQuery the original user question
 	 * @return the classification result (never null; targetTypes may be empty)
 	 */
 	public static QueryIntent classify(String rawQuery) {
@@ -374,15 +317,9 @@ public class QueryClassifier {
 			types.add(ChartSearchAiConstants.RESOURCE_TYPE_OBS);
 		}
 
-		// A query is a category query when it contains a plural generic type
-		// word (e.g. "conditions", "medications", "tests"). The plural form
-		// is the strongest natural-language signal for "give me everything of
-		// this type". The EVERY_EACH pattern catches the grammatical exception
-		// where "every/each" require singular nouns.
-		boolean isCategory = !types.isEmpty()
-				&& (PLURAL_TYPE_PATTERN.matcher(lower).find()
-						|| EVERY_EACH_CATEGORY_PATTERN.matcher(lower).find());
-
-		return new QueryIntent(types, isCategory);
+		// Category detection is NOT done here. The retrieval layer applies
+		// gap detection within type-matched records to auto-determine how
+		// many to include — no query wording heuristics needed.
+		return new QueryIntent(types, false);
 	}
 }
