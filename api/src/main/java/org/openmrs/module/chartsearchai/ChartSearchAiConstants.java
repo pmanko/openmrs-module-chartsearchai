@@ -71,6 +71,29 @@ public class ChartSearchAiConstants {
 	 */
 	public static final double DEFAULT_MIN_SCORE_GAP = 0.10;
 
+	/** Gap multiplier for the sensitive second-pass gap detection in the
+	 * non-refinement path. Lower than the primary multiplier to detect
+	 * tight clusters (e.g. 2 Kaposi sarcoma records for a cancer query). */
+	public static final double SECOND_PASS_GAP_MULTIPLIER = 1.5;
+
+	/** Minimum gap for the sensitive second-pass gap detection. Very low to
+	 * allow detection of small but meaningful gaps (e.g. 0.014 between
+	 * cancer-related and unrelated records). */
+	public static final double SECOND_PASS_MIN_GAP = 0.01;
+
+	/** Fraction of max semantic score used as the adaptive minimum gap in
+	 * the refinement path's second-pass gap detection. Scales the threshold
+	 * with the score range of the current query. */
+	public static final double REFINEMENT_ADAPTIVE_GAP_RATIO = 0.10;
+
+	/** Gap multiplier for inter-candidate coherence outlier detection.
+	 * Moderate sensitivity — only removes clear topic outliers. */
+	public static final double COHERENCE_GAP_MULTIPLIER = 2.0;
+
+	/** Fraction of max coherence used as the adaptive minimum gap for
+	 * coherence outlier detection. */
+	public static final double COHERENCE_ADAPTIVE_GAP_RATIO = 0.20;
+
 	public static final String GP_AUDIT_LOG_RETENTION_DAYS = "chartsearchai.auditLogRetentionDays";
 
 	public static final int DEFAULT_AUDIT_LOG_RETENTION_DAYS = 90;

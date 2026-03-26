@@ -454,16 +454,18 @@ public class LlmInferenceService implements ChartSearchService {
 					maxSemanticRefined = se.semanticScore;
 				}
 			}
-			double adaptiveMinGap = maxSemanticRefined * 0.10;
+			double adaptiveMinGap = Math.max(
+					maxSemanticRefined * ChartSearchAiConstants.REFINEMENT_ADAPTIVE_GAP_RATIO,
+					ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
 			int refinedCutoff = findAdaptiveCutoff(candidates, candidates.size(),
 					minScore, getScoreGapMultiplier(), adaptiveMinGap);
 			candidates = new ArrayList<ScoredEmbedding>(candidates.subList(0, refinedCutoff));
 		} else {
-			// Sensitive second-pass: lower multiplier (1.5 vs 2.5) and
-			// small absolute minGap (0.01) to detect tight clusters that
-			// the first pass (minGap=0.10) missed.
+			// Sensitive second-pass: lower multiplier and small absolute
+			// minGap to detect tight clusters that the first pass missed.
 			int secondCutoff = findAdaptiveCutoff(candidates, candidates.size(),
-					minScore, 1.5, 0.01);
+					minScore, ChartSearchAiConstants.SECOND_PASS_GAP_MULTIPLIER,
+					ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
 			if (secondCutoff < candidates.size()) {
 				candidates = new ArrayList<ScoredEmbedding>(candidates.subList(0, secondCutoff));
 			}
@@ -500,7 +502,6 @@ public class LlmInferenceService implements ChartSearchService {
 		// available (real pipeline, not unit test simulations) and there
 		// are at least 3 candidates to form a meaningful cluster comparison.
 		if (candidates.size() >= 3
-				&& !candidates.isEmpty()
 				&& candidates.get(0).embedding.getEmbedding() != null
 				&& candidates.get(0).embedding.getEmbedding().length > 0) {
 			candidates = filterByCoherence(candidates);
@@ -903,14 +904,16 @@ public class LlmInferenceService implements ChartSearchService {
 		// range. The multiplier (2.0) is moderate — we only remove clear
 		// outliers, not borderline records.
 		double maxCoherence = coherence[sortedIdx[0]];
-		double coherenceMinGap = maxCoherence * 0.20;
+		double coherenceMinGap = maxCoherence
+				* ChartSearchAiConstants.COHERENCE_ADAPTIVE_GAP_RATIO;
 		int keepCount = n;
 		double gapSum = 0;
 		for (int i = 1; i < n; i++) {
 			double gap = coherence[sortedIdx[i - 1]] - coherence[sortedIdx[i]];
 			if (i >= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS && i >= 2) {
 				double avgGap = gapSum / (i - 1);
-				if (gap > avgGap * 2.0 && gap > coherenceMinGap) {
+				if (gap > avgGap * ChartSearchAiConstants.COHERENCE_GAP_MULTIPLIER
+						&& gap > coherenceMinGap) {
 					keepCount = i;
 					log.debug(
 							"Coherence gap at position {}: gap={}, avgGap={}, "

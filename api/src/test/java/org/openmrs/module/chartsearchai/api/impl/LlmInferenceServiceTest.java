@@ -898,7 +898,10 @@ public class LlmInferenceServiceTest {
 					maxSemanticRefined = se.semanticScore;
 				}
 			}
-			double adaptiveMinGap = maxSemanticRefined * 0.10;
+			double adaptiveMinGap = Math.max(
+					maxSemanticRefined
+							* ChartSearchAiConstants.REFINEMENT_ADAPTIVE_GAP_RATIO,
+					ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
 			int refinedCutoff = LlmInferenceService.findAdaptiveCutoff(
 					candidates, candidates.size(), minScore, gapMultiplier,
 					adaptiveMinGap);
@@ -906,7 +909,9 @@ public class LlmInferenceServiceTest {
 					candidates.subList(0, refinedCutoff));
 		} else {
 			int secondCutoff = LlmInferenceService.findAdaptiveCutoff(
-					candidates, candidates.size(), minScore, 1.5, 0.01);
+					candidates, candidates.size(), minScore,
+					ChartSearchAiConstants.SECOND_PASS_GAP_MULTIPLIER,
+					ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
 			if (secondCutoff < candidates.size()) {
 				candidates = new ArrayList<LlmInferenceService.ScoredEmbedding>(
 						candidates.subList(0, secondCutoff));
