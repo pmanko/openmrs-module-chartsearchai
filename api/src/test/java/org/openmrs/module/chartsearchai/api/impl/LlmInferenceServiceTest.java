@@ -30,6 +30,164 @@ import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.Record
 
 public class LlmInferenceServiceTest {
 
+	// Full 153-record dataset from a real 16-year-old Male patient chart.
+	// Used by integration tests that need the complete patient record set.
+	private static final String[] FULL_PATIENT_DATASET = {
+			/* [  1] */ "Drug order: Azithromycin. Dose: 2.0 Tablet) Intravenous Every six hours. Duration: 5 Days. Quantity: 4.0 Tablet). As needed (subject to heart attack). Dosing: Take after eating. Action: REVISE. Urgency: ROUTINE. Reason: Spectrum",
+			/* [  2] */ "Drug order: Azithromycin. Dose: 2.0 Tablet) Intravenous Thrice daily. Duration: 5 Days. Quantity: 4.0 Tablet). As needed (subject to heart attack). Dosing: Take after eating. Action: NEW. Urgency: ROUTINE. Reason: Spectrum. Stopped: 2026-03-18",
+			/* [  3] */ "Program: PMTCT. Enrolled: 2026-03-18. Status: Active",
+			/* [  4] */ "Finding — Immunization history: Immunizations: Polio vaccination, oral, Oral polio vacc); Vaccination date: 2026-03-18; Immunization sequence number: 1.0",
+			/* [  5] */ "Allergy: Beef (food allergen). Severity: Severe. Reactions: Diarrhea, Itching. Comments: Happens during pregnancy",
+			/* [  6] */ "Assessment — Method of family planning: Condoms",
+			/* [  7] */ "Assessment — Method of family planning: Diaphragm. Note: in bathroom",
+			/* [  8] */ "Condition: Tuberculosis. Status: ACTIVE",
+			/* [  9] */ "Test — CD4 Count: 988.0",
+			/* [ 10] */ "Drug — Pyrimethamine / sulfadoxine: 11.58",
+			/* [ 11] */ "Units of Measure — Syringe): 65.0",
+			/* [ 12] */ "Diagnosis — Kaposi sarcoma oral: 3.91",
+			/* [ 13] */ "Assessment — Primary Diagnosis: Tuberculosis",
+			/* [ 14] */ "Frequency — Every twenty-four hours: Every four hours",
+			/* [ 15] */ "Test — Height (cm): 131.0",
+			/* [ 16] */ "Test — Respiratory Rate: 18.0",
+			/* [ 17] */ "Test — Pulse: 95.0",
+			/* [ 18] */ "Test — Temperature (C): 36.7",
+			/* [ 19] */ "Test — Weight (kg): 94.0",
+			/* [ 20] */ "Diagnosis — Fetishism: Patient presents with mild symptoms. Advised rest and fluids.",
+			/* [ 21] */ "Frequency — Every twenty-four hours: Every eight hours",
+			/* [ 22] */ "Diagnosis: Gastroenteritis. Certainty: PROVISIONAL. Rank: Primary",
+			/* [ 23] */ "Test — Systolic Blood Pressure: 97.0",
+			/* [ 24] */ "Test — Diastolic Blood Pressure: 99.0",
+			/* [ 25] */ "Test — Pulse: 62.0",
+			/* [ 26] */ "Test — Temperature (C): 37.7",
+			/* [ 27] */ "Test — Weight (kg): 107.0",
+			/* [ 28] */ "Test — Height (cm): 137.0",
+			/* [ 29] */ "Test — Respiratory Rate: 24.0",
+			/* [ 30] */ "Assessment — Primary Diagnosis: Anemia",
+			/* [ 31] */ "Frequency — Every twenty-four hours: Every five hours",
+			/* [ 32] */ "Test — Diastolic Blood Pressure: 92.0",
+			/* [ 33] */ "Test — Respiratory Rate: 32.0",
+			/* [ 34] */ "Test — Weight (kg): 139.0",
+			/* [ 35] */ "Test — Blood Oxygen Saturation: 88.0",
+			/* [ 36] */ "Diagnosis — Fetishism: Annual physical examination. Labs ordered.",
+			/* [ 37] */ "Test — Systolic Blood Pressure: 122.0",
+			/* [ 38] */ "Test — Height (cm): 103.0",
+			/* [ 39] */ "Test — Temperature (C): 40.3",
+			/* [ 40] */ "Diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
+			/* [ 41] */ "Assessment — Primary Diagnosis: HIV Disease",
+			/* [ 42] */ "Diagnosis — Fetishism: Patient stable on current regimen.",
+			/* [ 43] */ "Frequency — Every twenty-four hours: Married",
+			/* [ 44] */ "Test — Pulse: 62.0",
+			/* [ 45] */ "Test — Respiratory Rate: 23.0",
+			/* [ 46] */ "Test — Blood Oxygen Saturation: 92.0",
+			/* [ 47] */ "Test — Height (cm): 126.0",
+			/* [ 48] */ "Test — Systolic Blood Pressure: 101.0",
+			/* [ 49] */ "Test — Diastolic Blood Pressure: 99.0",
+			/* [ 50] */ "Assessment — Primary Diagnosis: Diabetes Mellitus",
+			/* [ 51] */ "Diagnosis — Fetishism: New complaint of persistent cough for 2 weeks.",
+			/* [ 52] */ "Diagnosis: Urinary Tract Infection. Certainty: PROVISIONAL. Rank: Primary",
+			/* [ 53] */ "Diagnosis: Tuberculosis. Certainty: CONFIRMED. Rank: Secondary",
+			/* [ 54] */ "Allergy: Fomepizole (drug allergen)",
+			/* [ 55] */ "Condition: Hypertension. Status: ACTIVE",
+			/* [ 56] */ "Assessment — Primary Diagnosis: Anemia",
+			/* [ 57] */ "Diagnosis — Fetishism: Chronic disease management visit. Medication adjusted.",
+			/* [ 58] */ "Test — Height (cm): 101.0",
+			/* [ 59] */ "Test — Systolic Blood Pressure: 123.0",
+			/* [ 60] */ "Test — Blood Oxygen Saturation: 86.0",
+			/* [ 61] */ "Test — Pulse: 51.0",
+			/* [ 62] */ "Diagnosis: Skin Infection. Certainty: CONFIRMED. Rank: Primary",
+			/* [ 63] */ "Assessment — Primary Diagnosis: Pneumonia",
+			/* [ 64] */ "Test — Weight (kg): 38.0",
+			/* [ 65] */ "Test — Diastolic Blood Pressure: 71.0",
+			/* [ 66] */ "Test — Respiratory Rate: 16.0",
+			/* [ 67] */ "Diagnosis: Malaria. Certainty: PROVISIONAL. Rank: Primary",
+			/* [ 68] */ "Diagnosis: Diabetes Mellitus. Certainty: CONFIRMED. Rank: Secondary",
+			/* [ 69] */ "Assessment — Primary Diagnosis: HIV Disease",
+			/* [ 70] */ "Diagnosis: HIV Disease. Certainty: PROVISIONAL. Rank: Primary",
+			/* [ 71] */ "Diagnosis — Fetishism: Presenting with fever and body aches for 3 days.",
+			/* [ 72] */ "Diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
+			/* [ 73] */ "Diagnosis: Anemia. Certainty: PROVISIONAL. Rank: Secondary",
+			/* [ 74] */ "Test — Systolic Blood Pressure: 137.0",
+			/* [ 75] */ "Test — Diastolic Blood Pressure: 67.0",
+			/* [ 76] */ "Test — Pulse: 86.0",
+			/* [ 77] */ "Test — Temperature (C): 39.3",
+			/* [ 78] */ "Test — Weight (kg): 146.0",
+			/* [ 79] */ "Test — Height (cm): 107.0",
+			/* [ 80] */ "Test — Blood Oxygen Saturation: 86.0",
+			/* [ 81] */ "Test — Respiratory Rate: 30.0",
+			/* [ 82] */ "Test — Diastolic Blood Pressure: 105.0",
+			/* [ 83] */ "Test — Pulse: 70.0",
+			/* [ 84] */ "Test — Blood Oxygen Saturation: 100.0",
+			/* [ 85] */ "Test — Respiratory Rate: 40.0",
+			/* [ 86] */ "Test — CD4 Count: 1191.0",
+			/* [ 87] */ "Units of Measure — Syringe): 339.0",
+			/* [ 88] */ "Misc — Milligram per meter squared: 47.0",
+			/* [ 89] */ "Diagnosis — Kaposi sarcoma oral: 3.5",
+			/* [ 90] */ "Diagnosis — Photoallergy: 9.93",
+			/* [ 91] */ "Assessment — Primary Diagnosis: Urinary Tract Infection",
+			/* [ 92] */ "Diagnosis — Fetishism: Chronic disease management visit. Medication adjusted.",
+			/* [ 93] */ "Diagnosis: Hypertension. Certainty: PROVISIONAL. Rank: Primary",
+			/* [ 94] */ "Test — Systolic Blood Pressure: 147.0",
+			/* [ 95] */ "Test — Diastolic Blood Pressure: 58.0",
+			/* [ 96] */ "Test — Pulse: 53.0",
+			/* [ 97] */ "Test — Temperature (C): 36.4",
+			/* [ 98] */ "Test — Height (cm): 163.0",
+			/* [ 99] */ "Test — Respiratory Rate: 19.0",
+			/* [100] */ "Assessment — Primary Diagnosis: Headache",
+			/* [101] */ "Test — Pulse: 83.0",
+			/* [102] */ "Test — Weight (kg): 68.0",
+			/* [103] */ "Test — Diastolic Blood Pressure: 50.0",
+			/* [104] */ "Test — Blood Oxygen Saturation: 94.0",
+			/* [105] */ "Test — Respiratory Rate: 40.0",
+			/* [106] */ "Assessment — Primary Diagnosis: Malaria",
+			/* [107] */ "Diagnosis — Fetishism: Well-child visit. Growth and development normal.",
+			/* [108] */ "Test — Diastolic Blood Pressure: 93.0",
+			/* [109] */ "Test — Blood Oxygen Saturation: 95.0",
+			/* [110] */ "Test — Respiratory Rate: 36.0",
+			/* [111] */ "Diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
+			/* [112] */ "Test — Systolic Blood Pressure: 98.0",
+			/* [113] */ "Test — Pulse: 66.0",
+			/* [114] */ "Test — Temperature (C): 37.8",
+			/* [115] */ "Test — Weight (kg): 121.0",
+			/* [116] */ "Test — Height (cm): 173.0",
+			/* [117] */ "Test — Blood Oxygen Saturation: 94.0",
+			/* [118] */ "Test — Respiratory Rate: 29.0",
+			/* [119] */ "Assessment — Primary Diagnosis: Urinary Tract Infection",
+			/* [120] */ "Diagnosis — Fetishism: Presenting with fever and body aches for 3 days.",
+			/* [121] */ "Diagnosis — Fetishism: Patient counseled on lifestyle modifications.",
+			/* [122] */ "Frequency — Every twenty-four hours: Every four hours",
+			/* [123] */ "Assessment — Primary Diagnosis: Skin Infection",
+			/* [124] */ "Diagnosis — Fetishism: Annual physical examination. Labs ordered.",
+			/* [125] */ "Test — Height (cm): 137.0",
+			/* [126] */ "Test — Respiratory Rate: 28.0",
+			/* [127] */ "Test — Systolic Blood Pressure: 134.0",
+			/* [128] */ "Diagnosis: Asthma. Certainty: CONFIRMED. Rank: Primary",
+			/* [129] */ "Test — Systolic Blood Pressure: 117.0",
+			/* [130] */ "Test — Diastolic Blood Pressure: 70.0",
+			/* [131] */ "Test — Pulse: 115.0",
+			/* [132] */ "Test — Temperature (C): 40.1",
+			/* [133] */ "Test — Height (cm): 186.0",
+			/* [134] */ "Test — Respiratory Rate: 22.0",
+			/* [135] */ "Assessment — Primary Diagnosis: Tuberculosis",
+			/* [136] */ "Assessment — Primary Diagnosis: Tuberculosis",
+			/* [137] */ "Test — Respiratory Rate: 28.0",
+			/* [138] */ "Test — Diastolic Blood Pressure: 76.0",
+			/* [139] */ "Test — Systolic Blood Pressure: 102.0",
+			/* [140] */ "Units of Measure — Syringe): 237.0",
+			/* [141] */ "Misc — Milligram per meter squared: 17.0",
+			/* [142] */ "Diagnosis — Photoallergy: 8.27",
+			/* [143] */ "Diagnosis — Fetishism: Routine checkup. No significant findings.",
+			/* [144] */ "Test — Temperature (C): 39.3",
+			/* [145] */ "Test — Diastolic Blood Pressure: 78.0",
+			/* [146] */ "Test — Blood Oxygen Saturation: 88.0",
+			/* [147] */ "Diagnosis: Diabetes Mellitus. Certainty: PROVISIONAL. Rank: Primary",
+			/* [148] */ "Test — Systolic Blood Pressure: 151.0",
+			/* [149] */ "Test — Diastolic Blood Pressure: 53.0",
+			/* [150] */ "Test — Pulse: 117.0",
+			/* [151] */ "Test — Temperature (C): 39.4",
+			/* [152] */ "Test — Blood Oxygen Saturation: 88.0",
+			/* [153] */ "Test — Respiratory Rate: 15.0",
+	};
+
 	@Test
 	public void extractCitedReferences_shouldExtractReferencesFromCitations() {
 		List<RecordMapping> mappings = Arrays.asList(
@@ -1414,60 +1572,82 @@ public class LlmInferenceServiceTest {
 
 	@Test
 	public void pipeline_historyOfCancerQuery_realData_shouldReturnExactlyTwoRecords() {
-		// Real patient dataset: 16-year-old Male with 153 records.
+		// Full 153-record patient dataset: 16-year-old Male.
 		// Query: "any history of cancer?" → terms: ["history", "cancer"] (N=2).
-		// "immunization history" matches only "history" (1/2 = 0.5),
-		// "family planning" matches nothing. With the keyword bonus threshold
-		// (≥2 terms required for N≥2), NO record gets a keyword bonus.
-		// Kaposi sarcoma records win on pure semantic similarity.
+		// Only record [4] ("Immunization history") matches "history" (1/2 = 0.5).
+		// No record contains literal "cancer". Kaposi sarcoma ([12],[89]) is
+		// semantically closest to "cancer" but has zero keyword match.
+		// With keyword bonus threshold (≥2 terms for N=2), NO record gets bonus.
+		// Gap detection separates the 2 Kaposi sarcoma records from the rest.
 
 		String normalized = LlmInferenceService.stripQueryStopwords("any history of cancer?");
 		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
 		assertArrayEquals(new String[] { "history", "cancer" }, queryTerms,
 				"'history' and 'cancer' should remain after stopword removal");
 
-		String[] recordTexts = {
-				"Clinical diagnosis: Kaposi sarcoma oral: 3.91",
-				"Clinical diagnosis: Kaposi sarcoma oral: 3.5",
-				"Finding — Immunization history: Immunizations: Polio vaccination",
-				"Clinical observation: Assessment — Method of family planning: Condoms",
-				"Clinical observation: Assessment — Method of family planning: Diaphragm",
-				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED",
-				"Clinical diagnosis: Skin Infection. Certainty: CONFIRMED",
-				"Medical condition: Tuberculosis. Status: ACTIVE",
-				"Medical condition: Hypertension. Status: ACTIVE",
-				"Clinical observation: Test — CD4 Count: 988.0",
-				"Clinical observation: Test — Pulse: 95.0",
-				"Patient allergy: Beef (food allergen). Severity: Severe",
-				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
-				"Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
-				"Clinical observation: Test — Weight (kg): 94.0",
-		};
-
-		double[] keyword = new double[recordTexts.length];
-		for (int i = 0; i < recordTexts.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		double[] keyword = new double[FULL_PATIENT_DATASET.length];
+		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
 		}
 
-		// "immunization history" matches "history" (1/2 terms)
-		assertEquals(0.5, keyword[2], 0.001, "'history' should match 'Immunization history'");
-		// But all others match 0 terms
-		assertEquals(0.0, keyword[0], 0.001, "Kaposi sarcoma should not match keywords");
-		assertEquals(0.0, keyword[1], 0.001);
-		assertEquals(0.0, keyword[3], 0.001, "family planning should not match 'history' or 'cancer'");
-		assertEquals(0.0, keyword[4], 0.001);
-		for (int i = 5; i < keyword.length; i++) {
-			assertEquals(0.0, keyword[i], 0.001);
+		// Only "Immunization history" matches "history" (1/2 terms = 0.5)
+		assertEquals(0.5, keyword[3], 0.001,
+				"[4] 'history' should match 'Immunization history'");
+		// Kaposi sarcoma records have zero keyword match
+		assertEquals(0.0, keyword[11], 0.001,
+				"[12] Kaposi sarcoma should not match 'history' or 'cancer'");
+		assertEquals(0.0, keyword[88], 0.001,
+				"[89] Kaposi sarcoma should not match 'history' or 'cancer'");
+		// All other records should also have zero keyword match
+		for (int i = 0; i < keyword.length; i++) {
+			if (i == 3) continue; // skip immunization history
+			assertEquals(0.0, keyword[i], 0.001,
+					"Record [" + (i + 1) + "] should not match 'history' or 'cancer'");
 		}
 
-		// Semantic scores: Kaposi sarcoma is semantically closest to "cancer",
-		// immunization history is NOT semantically close to "history of cancer".
-		// With keyword bonus threshold, the 0.5 keyword score on immunization
-		// history does NOT inflate its ranking (needs 2/2 for bonus).
-		double[] semantic = {
-				0.40, 0.38, 0.22, 0.18, 0.17, 0.20, 0.19, 0.21, 0.20, 0.16,
-				0.14, 0.13, 0.12, 0.15, 0.11,
-		};
+		// Semantic scores: Kaposi sarcoma is semantically closest to "cancer".
+		// Disease/condition records have moderate similarity. Vitals, meds,
+		// frequencies, etc. have low similarity. The key gap is between the
+		// 2 Kaposi sarcoma records (0.38-0.40) and all others (≤0.22).
+		double[] semantic = new double[FULL_PATIENT_DATASET.length];
+		Arrays.fill(semantic, 0.10);
+
+		// Cancer-related — clearly the highest semantic similarity
+		semantic[11] = 0.40; // [12] Kaposi sarcoma oral: 3.91
+		semantic[88] = 0.38; // [89] Kaposi sarcoma oral: 3.5
+
+		// Disease/condition records — moderate semantic similarity to "cancer"
+		semantic[3]   = 0.22; // [4] Immunization history (has "history" concept)
+		semantic[39]  = 0.21; // [40] HIV Disease
+		semantic[71]  = 0.20; // [72] HIV Disease
+		semantic[110] = 0.20; // [111] HIV Disease
+		semantic[7]   = 0.19; // [8] Condition: TB
+		semantic[52]  = 0.19; // [53] TB
+		semantic[69]  = 0.19; // [70] HIV Disease
+		semantic[54]  = 0.18; // [55] Condition: Hypertension
+		semantic[40]  = 0.18; // [41] Assessment: HIV Disease
+		semantic[68]  = 0.18; // [69] Assessment: HIV Disease
+		semantic[12]  = 0.17; // [13] Assessment: TB
+		semantic[62]  = 0.17; // [63] Assessment: Pneumonia
+		semantic[66]  = 0.17; // [67] Malaria
+		semantic[92]  = 0.17; // [93] Hypertension
+		semantic[134] = 0.17; // [135] Assessment: TB
+		semantic[135] = 0.17; // [136] Assessment: TB
+		semantic[21]  = 0.16; // [22] Gastroenteritis
+		semantic[61]  = 0.16; // [62] Skin Infection
+		semantic[72]  = 0.16; // [73] Anemia
+		semantic[127] = 0.16; // [128] Asthma
+		semantic[146] = 0.16; // [147] Diabetes
+		semantic[29]  = 0.16; // [30] Assessment: Anemia
+		semantic[55]  = 0.16; // [56] Assessment: Anemia
+		semantic[105] = 0.16; // [106] Assessment: Malaria
+		semantic[49]  = 0.15; // [50] Assessment: Diabetes
+		semantic[90]  = 0.15; // [91] Assessment: UTI
+		semantic[118] = 0.15; // [119] Assessment: UTI
+		semantic[89]  = 0.14; // [90] Photoallergy
+		semantic[141] = 0.14; // [142] Photoallergy
+		semantic[8]   = 0.14; // [9] CD4 Count
+		semantic[85]  = 0.14; // [86] CD4 Count
 
 		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
 
