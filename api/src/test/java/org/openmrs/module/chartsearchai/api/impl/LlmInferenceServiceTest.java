@@ -1217,6 +1217,80 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void pipeline_cancerQuery_realData_shouldReturnExactlyTwoRecords() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "does the patient have cancer?" → expected: exactly 2 Kaposi sarcoma records.
+		// "cancer" doesn't appear literally in any record text (records say "Kaposi sarcoma"),
+		// so keyword refinement won't activate. This is a PURELY SEMANTIC query where
+		// gap detection + ratio floor must isolate the 2 cancer-related records.
+
+		// Step 1: Normalize query and extract terms
+		String normalized = LlmInferenceService.stripQueryStopwords("does the patient have cancer?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertArrayEquals(new String[] { "cancer" }, queryTerms,
+				"Only 'cancer' should remain after stopword removal");
+		// Full query preserved for embedding since <2 content words
+		assertTrue(normalized.contains("does") && normalized.contains("patient"),
+				"Full query should be preserved for embedding context");
+
+		// Step 2: Representative records with actual text (prefix + content)
+		String[] recordTexts = {
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.91",
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.5",
+				"Clinical diagnosis: Photoallergy: 9.93",
+				"Clinical diagnosis: Photoallergy: 8.27",
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Medical condition: Hypertension. Status: ACTIVE",
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED",
+				"Clinical diagnosis: Skin Infection. Certainty: CONFIRMED",
+				"Clinical diagnosis: Gastroenteritis. Certainty: PROVISIONAL",
+				"Clinical diagnosis: Diabetes Mellitus. Certainty: PROVISIONAL",
+				"Clinical observation: Test — CD4 Count: 988.0",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Patient allergy: Beef (food allergen). Severity: Severe",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
+				"Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
+		};
+
+		// Step 3: Verify no keyword matches (cancer ≠ Kaposi sarcoma literally)
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+		for (int i = 0; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001,
+					"No literal 'cancer' match expected in: " + recordTexts[i].substring(0, 30));
+		}
+
+		// Step 4: Simulate pipeline with realistic semantic scores.
+		// The embedding model understands Kaposi sarcoma IS cancer semantically.
+		// Gap detection should cut between the 2 cancer records and the rest.
+		double[] semantic = {
+				0.45, // Kaposi sarcoma oral (IS cancer → high semantic match)
+				0.42, // Kaposi sarcoma oral (IS cancer)
+				0.28, // Photoallergy (medical but not cancer)
+				0.27, // Photoallergy
+				0.26, // Tuberculosis (disease, not cancer)
+				0.25, // Hypertension
+				0.24, // HIV Disease
+				0.23, // Skin Infection
+				0.22, // Gastroenteritis
+				0.21, // Diabetes Mellitus
+				0.19, // CD4 Count
+				0.17, // Pulse
+				0.16, // Allergy
+				0.15, // Drug order
+				0.18, // Assessment
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(2, result,
+				"Query 'does the patient have cancer?' should return exactly 2 Kaposi sarcoma records "
+						+ "via gap detection and ratio floor (no keyword help available)");
+	}
+
+	@Test
 	public void pipeline_allergyQuery_realData_shouldReturnExactlyTwoRecords() {
 		// Real patient dataset: 16-year-old Male with 153 records.
 		// Query: "any allergies?" → expected: exactly 2 allergy records.
