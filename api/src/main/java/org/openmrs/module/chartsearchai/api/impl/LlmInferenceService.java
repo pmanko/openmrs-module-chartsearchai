@@ -317,6 +317,14 @@ public class LlmInferenceService implements ChartSearchService {
 		double maxBaseScore = 0;
 		double maxSemanticScore = 0;
 
+		// For short queries (N≤3), require ≥2 term matches for bonus so that
+		// single coincidental matches (e.g. "history" in "immunization history"
+		// for "history of cancer") are penalized. For longer multi-concept
+		// queries (N≥4), matching ANY term is legitimate — the query spans
+		// multiple concepts and each record type may only match its own concept.
+		double bonusThreshold = queryTerms.length >= 4
+				? 1.0 / queryTerms.length
+				: (double) Math.min(2, queryTerms.length) / queryTerms.length;
 		List<ScoredEmbedding> scored = new ArrayList<ScoredEmbedding>();
 		for (ChartEmbedding ce : allEmbeddings) {
 			float[] vector = ce.getEmbeddingVector();
@@ -348,9 +356,17 @@ public class LlmInferenceService implements ChartSearchService {
 			// queries, a single coincidental keyword match (e.g. "history" in
 			// "immunization history" for "history of cancer") should not inflate
 			// the ranking score. Require ≥2 term matches for multi-word queries.
-			double bonusThreshold = (double) Math.min(2, queryTerms.length) / queryTerms.length;
 			double keywordBonus = keywordScore >= bonusThreshold ? keywordScore : 0.0;
-			double baseScore = semanticScore + keywordWeight * keywordBonus;
+			// When a record matches SOME query terms but below the bonus
+			// threshold, the embedding model likely inflated its semantic
+			// score via word overlap (e.g. "history" in "Immunization
+			// history" for query "history of cancer"). Apply a penalty to
+			// correct for this inflation, pushing false positives below
+			// the ratio floor.
+			double keywordPenalty = (keywordScore > 0 && keywordScore < bonusThreshold)
+					? keywordScore : 0.0;
+			double baseScore = semanticScore + keywordWeight * keywordBonus
+					- keywordWeight * keywordPenalty;
 
 			if (semanticScore > maxSemanticScore) {
 				maxSemanticScore = semanticScore;
@@ -412,18 +428,28 @@ public class LlmInferenceService implements ChartSearchService {
 			candidates = refined;
 		}
 
-		// When keyword refinement successfully identified a relevant subset,
-		// trust its judgment — those records ARE the answer. When it couldn't
-		// discriminate (no keywords matched or all records matched equally),
-		// fall back to a ratio-based floor + topK cap. The ratio floor
-		// (topScore * similarityRatio, default 0.80) adapts to the model's
-		// confidence: high top scores set a strict bar, filtering out marginal
-		// records that the absolute floor would let through. The absolute
-		// floor (0.25) still acts as a safety net for low-confidence queries.
-		if (!refinementActivated) {
-			double ratioFloor = maxBaseScore * getSimilarityRatio();
-			double effectiveFloor = Math.max(ratioFloor,
-					ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR);
+		// Two-tier post-processing based on whether refinement activated:
+		// When refinement narrowed candidates, trust its judgment for records
+		// with keyword bonus (they were positively identified). But apply the
+		// ratio floor to PENALIZED records — those with partial keyword matches
+		// below bonus threshold whose combined score dropped due to word-overlap
+		// correction (e.g. "family planning" for "family history of cancer").
+		// When refinement couldn't discriminate, fall back to the full
+		// ratio-based floor + topK cap.
+		double ratioFloor = maxBaseScore * getSimilarityRatio();
+		double effectiveFloor = Math.max(ratioFloor,
+				ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR);
+		if (refinementActivated) {
+			List<ScoredEmbedding> safetyFiltered = new ArrayList<ScoredEmbedding>();
+			for (ScoredEmbedding se : candidates) {
+				boolean isPenalized = se.keywordScore > 0
+						&& se.keywordScore < bonusThreshold;
+				if (!isPenalized || se.score >= effectiveFloor) {
+					safetyFiltered.add(se);
+				}
+			}
+			candidates = safetyFiltered;
+		} else {
 			List<ScoredEmbedding> strict = new ArrayList<ScoredEmbedding>();
 			for (ScoredEmbedding se : candidates) {
 				if (se.score >= effectiveFloor) {
@@ -431,7 +457,18 @@ public class LlmInferenceService implements ChartSearchService {
 				}
 			}
 			candidates = strict;
-			if (candidates.size() > topK) {
+			// For multi-concept queries where every result has keyword
+			// matches, gap detection + ratio floor already identified the
+			// relevant cluster. TopK would arbitrarily truncate legitimate
+			// results (e.g. 40 vitals for "BP, weight, temperature trend").
+			boolean allHaveKeywords = true;
+			for (ScoredEmbedding se : candidates) {
+				if (se.keywordScore == 0) {
+					allHaveKeywords = false;
+					break;
+				}
+			}
+			if (!allHaveKeywords && candidates.size() > topK) {
 				candidates = candidates.subList(0, topK);
 			}
 		}
