@@ -665,32 +665,44 @@ public class LlmInferenceService implements ChartSearchService {
 			return 0.0;
 		}
 		String lowerText = textContent.toLowerCase();
+		String[] textWords = lowerText.split("\\s+");
 		int matched = 0;
 		for (String term : queryTerms) {
+			boolean termMatched = false;
+
+			// 1. Exact substring match
 			if (lowerText.contains(term)) {
-				matched++;
-			} else if (term.length() > 3 && term.endsWith("s") && !term.endsWith("ss")) {
-				// Simple plural stem: "conditions" → "condition",
-				// "medications" → "medication", "tests" → "test".
-				// Avoids stemming words ending in "ss" like "less", "pass".
+				termMatched = true;
+			}
+
+			// 2. Plural stem: strip trailing 's'
+			if (!termMatched && term.length() > 3
+					&& term.endsWith("s") && !term.endsWith("ss")) {
 				if (lowerText.contains(term.substring(0, term.length() - 1))) {
-					matched++;
+					termMatched = true;
 				}
-			} else if (term.length() >= 7) {
-				// Morphological stem: strip 2-3 trailing characters to match
-				// derivational variants (e.g. allergic/allergy/allergen,
-				// prescribed/prescription, diagnoses/diagnosis). Requires
-				// stem ≥ 5 chars to avoid false positives from short stems.
-				boolean stemMatched = false;
-				for (int trim = 2; trim <= 3 && !stemMatched; trim++) {
+			}
+
+			// 3. Morphological stem: trim 2-3 trailing characters to handle
+			// derivational variants (allergic/allergy, prescribed/prescription).
+			// Uses word-prefix matching instead of substring to avoid false
+			// positives from compound words (e.g. "allerg" inside "Photoallergy").
+			if (!termMatched && term.length() >= 7) {
+				for (int trim = 2; trim <= 3 && !termMatched; trim++) {
 					String stem = term.substring(0, term.length() - trim);
-					if (stem.length() >= 5 && lowerText.contains(stem)) {
-						stemMatched = true;
+					if (stem.length() >= 5) {
+						for (String word : textWords) {
+							if (word.startsWith(stem)) {
+								termMatched = true;
+								break;
+							}
+						}
 					}
 				}
-				if (stemMatched) {
-					matched++;
-				}
+			}
+
+			if (termMatched) {
+				matched++;
 			}
 		}
 		return (double) matched / queryTerms.length;

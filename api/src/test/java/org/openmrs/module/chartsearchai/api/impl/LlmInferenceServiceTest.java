@@ -1094,6 +1094,86 @@ public class LlmInferenceServiceTest {
 				"Allergy query should return only allergy records via stem-based keyword refinement");
 	}
 
+	@Test
+	public void pipeline_allergyQuery_realData_shouldReturnExactlyTwoRecords() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "any allergies?" → expected: exactly 2 allergy records.
+		// Records #5 and #54 from the full chart. Must NOT include the
+		// 2 Photoallergy diagnoses (#90 and #142) even though they contain
+		// "allerg" as a substring inside the compound word "Photoallergy".
+
+		// Step 1: Normalize query and extract terms
+		String normalized = LlmInferenceService.stripQueryStopwords("any allergies?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertEquals(1, queryTerms.length, "Should have 1 query term after stopword removal");
+		assertEquals("allergies", queryTerms[0]);
+
+		// Step 2: Representative records with actual text (prefix + content)
+		// as used for keyword matching
+		String[] recordTexts = {
+				"Patient allergy: Beef (food allergen). Severity: Severe. "
+						+ "Reactions: Diarrhea, Itching. Comments: Happens during pregnancy",
+				"Patient allergy: Fomepizole (drug allergen)",
+				"Clinical diagnosis: Photoallergy: 9.93",
+				"Clinical diagnosis: Photoallergy: 8.27",
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.91",
+				"Clinical diagnosis: Skin Infection. Certainty: CONFIRMED",
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED",
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Medical condition: Hypertension. Status: ACTIVE",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
+				"Clinical observation: Test — CD4 Count: 988.0",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
+				"Clinical observation: Test — Temperature (C): 36.7",
+				"Clinical observation: Test — Weight (kg): 94.0",
+		};
+
+		// Step 3: Compute ACTUAL keyword scores using our matching logic
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+
+		// Verify keyword matching correctness
+		assertEquals(1.0, keyword[0], 0.001,
+				"Beef allergy should match 'allergies' via stem 'allerg'");
+		assertEquals(1.0, keyword[1], 0.001,
+				"Fomepizole allergy should match 'allergies' via stem 'allerg'");
+		assertEquals(0.0, keyword[2], 0.001,
+				"Photoallergy diagnosis must NOT match — 'allerg' is inside compound word");
+		assertEquals(0.0, keyword[3], 0.001,
+				"Photoallergy diagnosis must NOT match — 'allerg' is inside compound word");
+		for (int i = 4; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001,
+					"Record should not match: " + recordTexts[i].substring(0, 30));
+		}
+
+		// Step 4: Simulate pipeline with realistic semantic scores
+		double[] semantic = {
+				0.55,  // Allergy: Beef (highest for allergy query)
+				0.50,  // Allergy: Fomepizole
+				0.35,  // Photoallergy (semantic proximity to "allergy")
+				0.33,  // Photoallergy
+				0.25,  // Kaposi sarcoma
+				0.27,  // Skin Infection
+				0.24,  // HIV
+				0.30,  // TB condition
+				0.29,  // Hypertension
+				0.26,  // Drug order
+				0.20,  // CD4
+				0.18,  // Pulse
+				0.25,  // Assessment
+				0.17,  // Temperature
+				0.16,  // Weight
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(2, result,
+				"Query 'any allergies?' should return exactly 2 allergy records from real patient data");
+	}
+
 	private static Date makeDate(int year, int month, int day) {
 		Calendar cal = Calendar.getInstance();
 		cal.set(year, month - 1, day, 0, 0, 0);
