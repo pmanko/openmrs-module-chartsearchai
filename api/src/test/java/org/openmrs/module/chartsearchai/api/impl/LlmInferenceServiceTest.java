@@ -843,18 +843,34 @@ public class LlmInferenceServiceTest {
 			return new ArrayList<Integer>();
 		}
 
-		// Zero-keyword gate: stricter floor when too few records match keywords
-		if (queryTermCount > 0) {
+		// Zero-keyword gate: z-score check when too few records match keywords.
+		// Only meaningful with enough data points for statistics.
+		if (queryTermCount > 0
+				&& semanticScores.length
+				>= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
 			int keywordMatchCount = 0;
 			for (double kw : keywordScores) {
 				if (kw > 0) {
 					keywordMatchCount++;
 				}
 			}
-			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS
-					&& maxSemanticScore
-					< ChartSearchAiConstants.ZERO_KEYWORD_SIMILARITY_FLOOR) {
-				return new ArrayList<Integer>();
+			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
+				double sumSem = 0;
+				for (double s : semanticScores) {
+					sumSem += s;
+				}
+				double meanSem = sumSem / semanticScores.length;
+				double sumSqDiff = 0;
+				for (double s : semanticScores) {
+					double diff = s - meanSem;
+					sumSqDiff += diff * diff;
+				}
+				double stddev = Math.sqrt(sumSqDiff / semanticScores.length);
+				double zScore = stddev == 0 ? 0
+						: (maxSemanticScore - meanSem) / stddev;
+				if (zScore < ChartSearchAiConstants.ZERO_KEYWORD_MIN_Z_SCORE) {
+					return new ArrayList<Integer>();
+				}
 			}
 		}
 
@@ -1214,15 +1230,13 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void pipeline_noKeywordMatchesSmoothDistribution_shouldFallBackToStrictFloorAndTopK() {
+	public void pipeline_noKeywordMatchesSmoothDistribution_shouldReturnEmpty() {
 		// Models: "HB results over time" — the patient has NO HB results.
 		// All 93 records are vital signs with smooth, similar semantic scores
-		// and ZERO keyword matches. Gap detection won't trigger (smooth
-		// distribution), keyword refinement won't activate (0 matches < 2).
-		// The pipeline should fall back to the strict floor (0.25) + topK.
-		// Scores range from 0.42 down to 0.236 (step 0.002).
-		// Strict floor 0.25: records 0..85 pass (0.42 - 85*0.002 = 0.25),
-		// records 86..92 don't (< 0.25). Then topK=10 caps to 10.
+		// and ZERO keyword matches. The z-score gate detects that the top
+		// score (0.42) is not a statistical outlier — it's just part of
+		// the noise floor (z ≈ 1.73 < 2.0). Without keyword corroboration,
+		// these results are unreliable and the pipeline returns empty.
 		int recordCount = 93;
 		double[] semantic = new double[recordCount];
 		double[] keyword = new double[recordCount];
@@ -1233,8 +1247,8 @@ public class LlmInferenceServiceTest {
 
 		int result = simulatePipeline(semantic, keyword, 0.3, 7);
 
-		assertEquals(10, result,
-				"When no keywords match, should fall back to strict floor + topK cap");
+		assertEquals(0, result,
+				"Z-score gate should reject smooth distribution with no keyword matches");
 	}
 
 	@Test

@@ -396,30 +396,50 @@ public class LlmInferenceService implements ChartSearchService {
 			return Collections.emptyList();
 		}
 
-		// Stricter gate when too few records match any query keyword. A
-		// single coincidental keyword match (e.g. "normal" in a Fetishism
-		// record for "HB results over time... normal range?") is not a
-		// meaningful discriminative signal. Without keyword corroboration,
-		// moderate semantic similarity is unreliable — the embedding model
-		// groups all records of a similar type (e.g. all lab tests) so
-		// "HB results" gets ~0.27 to Respiratory Rate even though they
-		// are completely different tests.
-		if (queryTerms.length > 0) {
+		// Stricter gate when too few records match any query keyword:
+		// check whether the top semantic score is a statistical outlier
+		// (z-score ≥ threshold) rather than part of the noise floor.
+		// This automatically adapts to any embedding model and dataset
+		// — no model-specific magic numbers. A z-score of 2.0 means the
+		// best match is in the top 2.3% of the score distribution.
+		// Requires at least 30 records for the z-score to be statistically
+		// meaningful; with fewer records, the pipeline's other stages
+		// (gap detection, ratio floor, topK) provide sufficient filtering.
+		if (queryTerms.length > 0
+				&& scored.size() >= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
 			int keywordMatchCount = 0;
 			for (ScoredEmbedding se : scored) {
 				if (se.keywordScore > 0) {
 					keywordMatchCount++;
 				}
 			}
-			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS
-					&& maxSemanticScore
-					< ChartSearchAiConstants.ZERO_KEYWORD_SIMILARITY_FLOOR) {
-				log.debug("Only {} keyword match(es) and top semantic score {} "
-						+ "is below zero-keyword floor {}, returning empty",
-						keywordMatchCount,
-						String.format("%.4f", maxSemanticScore),
-						ChartSearchAiConstants.ZERO_KEYWORD_SIMILARITY_FLOOR);
-				return Collections.emptyList();
+			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
+				double sumSem = 0;
+				for (ScoredEmbedding se : scored) {
+					sumSem += se.semanticScore;
+				}
+				double meanSem = sumSem / scored.size();
+				double sumSqDiff = 0;
+				for (ScoredEmbedding se : scored) {
+					double diff = se.semanticScore - meanSem;
+					sumSqDiff += diff * diff;
+				}
+				double stddev = Math.sqrt(sumSqDiff / scored.size());
+				double zScore = stddev == 0 ? 0
+						: (maxSemanticScore - meanSem) / stddev;
+				if (zScore < ChartSearchAiConstants.ZERO_KEYWORD_MIN_Z_SCORE) {
+					log.debug("Only {} keyword match(es) and top semantic "
+							+ "z-score {} is below threshold {}, "
+							+ "returning empty (maxSem={}, mean={}, "
+							+ "stddev={})",
+							keywordMatchCount,
+							String.format("%.2f", zScore),
+							ChartSearchAiConstants.ZERO_KEYWORD_MIN_Z_SCORE,
+							String.format("%.4f", maxSemanticScore),
+							String.format("%.4f", meanSem),
+							String.format("%.4f", stddev));
+					return Collections.emptyList();
+				}
 			}
 		}
 

@@ -60,14 +60,22 @@ public class ChartSearchAiConstants {
 
 	public static final double ABSOLUTE_SIMILARITY_FLOOR = 0.25;
 
-	/** Stricter similarity floor applied when fewer than
-	 * {@link #ADAPTIVE_MIN_RECORDS} records match any query keyword.
-	 * Without keyword corroboration, the semantic score alone must be
-	 * more convincing — moderate similarity (e.g. 0.275 for "HB results"
-	 * matching Respiratory Rate) is noise from the embedding model
-	 * grouping all lab tests together. Set slightly above typical noise
-	 * (0.27) but below weak-but-legitimate matches (0.29+). */
-	public static final double ZERO_KEYWORD_SIMILARITY_FLOOR = 0.28;
+	/** Minimum z-score (standard deviations above mean) required for the
+	 * top semantic score when fewer than {@link #ADAPTIVE_MIN_RECORDS}
+	 * records match any query keyword. Without keyword corroboration, the
+	 * top semantic score must be a statistical outlier — not just part of
+	 * the noise floor. A z-score of 2.0 means the best match is in the
+	 * top 2.3% of the score distribution, indicating genuine semantic
+	 * affinity rather than the embedding model grouping similar record
+	 * types together (e.g. all lab tests scoring ~0.27 for "HB results").
+	 * This threshold automatically adapts to any embedding model and
+	 * dataset size since it is relative to the score distribution. */
+	public static final double ZERO_KEYWORD_MIN_Z_SCORE = 2.0;
+
+	/** Minimum number of records required for the z-score gate to
+	 * activate. Below this threshold, the score distribution has too
+	 * few data points for the z-score to be statistically meaningful. */
+	public static final int MIN_RECORDS_FOR_Z_SCORE = 30;
 
 	public static final String GP_EMBEDDING_MIN_SCORE_GAP = "chartsearchai.embedding.minScoreGap";
 
