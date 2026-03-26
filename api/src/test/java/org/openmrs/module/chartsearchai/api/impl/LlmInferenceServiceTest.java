@@ -1390,6 +1390,82 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void pipeline_stdQuery_realData_shouldReturnExactlySixRecords() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "any sexually transmitted disease?" → expected: 6 HIV Disease records.
+		// None of the query terms are stopwords → ["sexually", "transmitted", "disease"].
+		// Only "disease" matches literally in "HIV Disease" records → keyword score 1/3.
+		// Threshold for 3 terms: min(2, max(1, 3/3)) / 3 = 1/3 → passes.
+		// Keyword refinement narrows to the 6 HIV Disease records.
+
+		String normalized = LlmInferenceService.stripQueryStopwords("any sexually transmitted disease?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertArrayEquals(new String[] { "sexually", "transmitted", "disease" }, queryTerms,
+				"All three clinical terms should remain after stopword removal");
+
+		String[] recordTexts = {
+				// 6 HIV Disease records (expected results)
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
+				"Clinical observation: Assessment — Primary Diagnosis: HIV Disease",
+				"Clinical observation: Assessment — Primary Diagnosis: HIV Disease",
+				"Clinical diagnosis: HIV Disease. Certainty: PROVISIONAL. Rank: Primary",
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
+				// Non-matching records
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Medical condition: Hypertension. Status: ACTIVE",
+				"Clinical diagnosis: Diabetes Mellitus. Certainty: PROVISIONAL",
+				"Clinical diagnosis: Gastroenteritis. Certainty: PROVISIONAL",
+				"Clinical diagnosis: Skin Infection. Certainty: CONFIRMED",
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.91",
+				"Clinical observation: Test — CD4 Count: 988.0",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Patient allergy: Beef (food allergen). Severity: Severe",
+		};
+
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+
+		// HIV Disease records match "disease" → 1/3
+		double expectedKw = 1.0 / 3.0;
+		for (int i = 0; i < 6; i++) {
+			assertEquals(expectedKw, keyword[i], 0.001,
+					"HIV Disease record should match 'disease' (1/3 terms)");
+		}
+		for (int i = 6; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001,
+					"Non-HIV record should not match: " + recordTexts[i].substring(0, 30));
+		}
+
+		// Semantic scores: HIV Disease records high (STD is semantically related),
+		// other diseases moderate, vitals/allergies low
+		double[] semantic = {
+				0.50, // HIV Disease diagnosis
+				0.47, // Assessment: HIV Disease
+				0.46, // Assessment: HIV Disease
+				0.48, // HIV Disease provisional
+				0.49, // HIV Disease confirmed
+				0.45, // HIV Disease confirmed
+				0.30, // TB (infectious disease but not STD)
+				0.22, // Hypertension
+				0.21, // Diabetes
+				0.20, // Gastroenteritis
+				0.19, // Skin Infection
+				0.18, // Kaposi sarcoma
+				0.17, // CD4 Count
+				0.15, // Pulse
+				0.14, // Allergy
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(6, result,
+				"Query 'any sexually transmitted disease?' should return exactly 6 HIV Disease records");
+	}
+
+	@Test
 	public void pipeline_whatIsPatientAllergicToQuery_realData_shouldReturnExactlyTwoRecords() {
 		// Real patient dataset: 16-year-old Male with 153 records.
 		// Query: "What is the patient allergic to?" → expected: exactly 2 allergy records.
