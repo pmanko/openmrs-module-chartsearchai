@@ -325,6 +325,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// multiple concepts and each record type may only match its own concept.
 		double bonusThreshold = queryTerms.length >= 4
 				? 1.0 / queryTerms.length
+				: queryTerms.length == 0 ? 1.0
 				: (double) Math.min(2, queryTerms.length) / queryTerms.length;
 		List<ScoredEmbedding> scored = new ArrayList<ScoredEmbedding>();
 		for (ChartEmbedding ce : allEmbeddings) {
@@ -334,19 +335,13 @@ public class LlmInferenceService implements ChartSearchService {
 						ce.getEmbeddingId(), vector.length, queryVector.length);
 				continue;
 			}
-			double dot = 0, normA = 0, normB = 0;
-			for (int i = 0; i < queryVector.length; i++) {
-				dot += queryVector[i] * vector[i];
-				normA += queryVector[i] * queryVector[i];
-				normB += vector[i] * vector[i];
-			}
-			double denom = Math.sqrt(normA) * Math.sqrt(normB);
-			double semanticScore = denom == 0 ? 0 : dot / denom;
+			double semanticScore = cosineSimilarity(queryVector, vector);
 
-			// Additive bonus: keyword overlap can only increase the score,
-			// never decrease it. A zero keyword match leaves the semantic
-			// score unchanged, avoiding the trap where a weighted average
-			// would suppress scores below the absolute similarity floor.
+			// Additive keyword bonus increases the score when enough terms
+			// match. For N≤2 queries, a partial keyword match (below the
+			// bonus threshold) applies a penalty instead, suppressing
+			// coincidental single-word overlaps like "history" in
+			// "immunization history" for "history of cancer?".
 			// Include the embedding prefix in keyword matching so that
 			// type-specific terms (e.g. "medication") match the prefix
 			// "Medication prescription: ..." on drug orders.
@@ -498,12 +493,10 @@ public class LlmInferenceService implements ChartSearchService {
 
 		// Inter-candidate coherence filter: remove "topic outliers" that
 		// scored similarly to the query by coincidence but are unrelated to
-		// the other results. Only applies when embedding vectors are
-		// available (real pipeline, not unit test simulations) and there
-		// are at least 3 candidates to form a meaningful cluster comparison.
-		if (candidates.size() >= 3
-				&& candidates.get(0).embedding.getEmbedding() != null
-				&& candidates.get(0).embedding.getEmbedding().length > 0) {
+		// the other results. Requires at least 3 candidates to form a
+		// meaningful cluster comparison. The filter itself validates that
+		// all candidates have embedding vectors, returning unmodified if not.
+		if (candidates.size() >= 3) {
 			candidates = filterByCoherence(candidates);
 		}
 
@@ -861,13 +854,27 @@ public class LlmInferenceService implements ChartSearchService {
 	static List<ScoredEmbedding> filterByCoherence(List<ScoredEmbedding> candidates) {
 		int n = candidates.size();
 
+		// Cache embedding vectors to avoid redundant byte[] → float[]
+		// decoding in the O(n²) pairwise loop.
+		float[][] vectors = new float[n][];
+		boolean allValid = true;
+		for (int i = 0; i < n; i++) {
+			byte[] raw = candidates.get(i).embedding.getEmbedding();
+			if (raw == null || raw.length == 0) {
+				allValid = false;
+				break;
+			}
+			vectors[i] = candidates.get(i).embedding.getEmbeddingVector();
+		}
+		if (!allValid) {
+			return candidates;
+		}
+
 		// Compute pairwise cosine similarities between candidate embeddings
 		double[][] pairSim = new double[n][n];
 		for (int i = 0; i < n; i++) {
-			float[] embI = candidates.get(i).embedding.getEmbeddingVector();
 			for (int j = i + 1; j < n; j++) {
-				float[] embJ = candidates.get(j).embedding.getEmbeddingVector();
-				double sim = cosineSimilarity(embI, embJ);
+				double sim = cosineSimilarity(vectors[i], vectors[j]);
 				pairSim[i][j] = sim;
 				pairSim[j][i] = sim;
 			}

@@ -847,6 +847,7 @@ public class LlmInferenceServiceTest {
 				new ArrayList<LlmInferenceService.ScoredEmbedding>();
 		double bonusThreshold = queryTermCount >= 4
 				? 1.0 / queryTermCount
+				: queryTermCount == 0 ? 1.0
 				: (double) Math.min(2, queryTermCount) / queryTermCount;
 		for (int i = 0; i < semanticScores.length; i++) {
 			double keywordBonus = keywordScores[i] >= bonusThreshold ? keywordScores[i] : 0.0;
