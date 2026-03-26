@@ -396,6 +396,33 @@ public class LlmInferenceService implements ChartSearchService {
 			return Collections.emptyList();
 		}
 
+		// Stricter gate when too few records match any query keyword. A
+		// single coincidental keyword match (e.g. "normal" in a Fetishism
+		// record for "HB results over time... normal range?") is not a
+		// meaningful discriminative signal. Without keyword corroboration,
+		// moderate semantic similarity is unreliable — the embedding model
+		// groups all records of a similar type (e.g. all lab tests) so
+		// "HB results" gets ~0.27 to Respiratory Rate even though they
+		// are completely different tests.
+		if (queryTerms.length > 0) {
+			int keywordMatchCount = 0;
+			for (ScoredEmbedding se : scored) {
+				if (se.keywordScore > 0) {
+					keywordMatchCount++;
+				}
+			}
+			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS
+					&& maxSemanticScore
+					< ChartSearchAiConstants.ZERO_KEYWORD_SIMILARITY_FLOOR) {
+				log.debug("Only {} keyword match(es) and top semantic score {} "
+						+ "is below zero-keyword floor {}, returning empty",
+						keywordMatchCount,
+						String.format("%.4f", maxSemanticScore),
+						ChartSearchAiConstants.ZERO_KEYWORD_SIMILARITY_FLOOR);
+				return Collections.emptyList();
+			}
+		}
+
 		// Permissive floor: gap detection handles the real cutoff based on
 		// score distribution. The floor just excludes near-zero noise so
 		// the gap detector has a clean signal.

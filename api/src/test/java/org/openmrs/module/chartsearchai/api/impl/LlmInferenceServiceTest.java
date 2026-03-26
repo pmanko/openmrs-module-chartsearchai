@@ -843,6 +843,21 @@ public class LlmInferenceServiceTest {
 			return new ArrayList<Integer>();
 		}
 
+		// Zero-keyword gate: stricter floor when too few records match keywords
+		if (queryTermCount > 0) {
+			int keywordMatchCount = 0;
+			for (double kw : keywordScores) {
+				if (kw > 0) {
+					keywordMatchCount++;
+				}
+			}
+			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS
+					&& maxSemanticScore
+					< ChartSearchAiConstants.ZERO_KEYWORD_SIMILARITY_FLOOR) {
+				return new ArrayList<Integer>();
+			}
+		}
+
 		List<LlmInferenceService.ScoredEmbedding> scored =
 				new ArrayList<LlmInferenceService.ScoredEmbedding>();
 		double bonusThreshold = queryTermCount >= 4
@@ -2383,6 +2398,19 @@ public class LlmInferenceServiceTest {
 
 		assertEquals(Arrays.asList(5, 6),
 				result, "Should return exactly 2 family planning records");
+	}
+
+	@Test
+	public void realModel_hbResultsQuery_shouldReturnNoRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"What are this patient's HB results over time, and are values "
+				+ "moving toward or away from the normal range?", 10);
+
+		assertEquals(Collections.emptyList(),
+				result, "Should return no records — dataset has no HB/hemoglobin data");
 	}
 
 	@Test
