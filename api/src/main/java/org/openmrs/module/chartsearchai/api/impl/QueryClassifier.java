@@ -256,7 +256,7 @@ public class QueryClassifier {
 				PROGRAM_TERMS, VITALS_TERMS);
 
 		CATEGORY_QUERY_PATTERN = Pattern.compile(
-				"\\b(?:any|all|list|every|show|what|which|tell)\\b"
+				"\\b(?:any|all|list|every|each|show|what|which|tell)\\b"
 						+ "(?:\\s+\\S+){0,4}?\\s+"
 						+ "\\b(?:" + plurals + ")\\b");
 

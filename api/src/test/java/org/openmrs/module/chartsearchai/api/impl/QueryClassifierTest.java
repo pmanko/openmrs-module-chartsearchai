@@ -273,4 +273,14 @@ public class QueryClassifierTest {
 		assertTrue(intent.isCategoryQuery());
 		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION));
 	}
+
+	@Test
+	public void classify_shouldBeCategoryForEachWithPluralAtDistance() {
+		// "each of this patient's active conditions" — "each" is 4 words from
+		// the plural "conditions". Must trigger category.
+		QueryIntent intent = QueryClassifier.classify(
+				"When were each of this patient's active conditions first recorded?");
+		assertTrue(intent.isCategoryQuery());
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION));
+	}
 }
