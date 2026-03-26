@@ -294,7 +294,12 @@ public class LlmInferenceService implements ChartSearchService {
 			// never decrease it. A zero keyword match leaves the semantic
 			// score unchanged, avoiding the trap where a weighted average
 			// would suppress scores below the absolute similarity floor.
-			double keywordScore = computeKeywordScore(queryTerms, ce.getTextContent());
+			// Include the embedding prefix in keyword matching so that
+			// type-specific terms (e.g. "medication") match the prefix
+			// "Medication prescription: ..." on drug orders.
+			String keywordText = ChartSearchAiConstants.getEmbeddingPrefix(
+					ce.getResourceType(), ce.getTextContent()) + ce.getTextContent();
+			double keywordScore = computeKeywordScore(queryTerms, keywordText);
 			double baseScore = semanticScore + keywordWeight * keywordScore;
 
 			if (baseScore > maxBaseScore) {
@@ -473,10 +478,13 @@ public class LlmInferenceService implements ChartSearchService {
 		if (queryTermCount == 0) {
 			return candidates;
 		}
-		// Require at least 2 query terms to match (or half for short queries).
-		// This prevents records with incidental single-term matches (e.g.,
-		// "normal" in vital sign interpretations) from passing the filter.
-		double minKwScore = Math.min(2.0 / queryTermCount, 0.5);
+		// Require at least 1 matching term for short queries (1-3 terms),
+		// scaling up to 2 for longer queries (6+ terms). This prevents
+		// incidental single-term matches from passing in long queries
+		// (e.g. "normal" in vital signs) while allowing short queries
+		// like "medications prescribed" to work with 1 discriminative match.
+		double minMatchCount = Math.min(2.0, Math.max(1.0, queryTermCount / 3.0));
+		double minKwScore = minMatchCount / queryTermCount;
 
 		List<ScoredEmbedding> keywordMatched = new ArrayList<ScoredEmbedding>();
 		for (ScoredEmbedding se : candidates) {

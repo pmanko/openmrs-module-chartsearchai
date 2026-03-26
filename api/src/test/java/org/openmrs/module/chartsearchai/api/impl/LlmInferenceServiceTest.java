@@ -406,6 +406,27 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void computeKeywordScore_shouldMatchMedicationInPrefixedText() {
+		// When findSimilar prepends the embedding prefix, "medication" (stemmed
+		// from "medications") should match "Medication prescription: " prefix.
+		String[] terms = { "medications", "prescribed", "started" };
+		double score = LlmInferenceService.computeKeywordScore(terms,
+				"Medication prescription: Drug order: Metformin 500mg. Dose: 1.0 Tablet(s)");
+		assertTrue(score >= 1.0 / 3 - 0.001,
+				"'medications' should match 'Medication' in the prefix text via stemming");
+	}
+
+	@Test
+	public void computeKeywordScore_shouldMatchTestInPrefixedText() {
+		// "tests" (stemmed to "test") should match "Lab or diagnostic test: " prefix
+		String[] terms = { "tests", "ordered" };
+		double score = LlmInferenceService.computeKeywordScore(terms,
+				"Lab or diagnostic test: Test order: CD4 count. Action: NEW");
+		assertTrue(score >= 1.0 / 2 - 0.001,
+				"'tests' should match 'test' in the prefix text via stemming");
+	}
+
+	@Test
 	public void findAdaptiveCutoff_shouldNotCutOnSmallAbsoluteGap() {
 		// Tight cluster: 0.55, 0.54, 0.53, then a 0.07 gap to 0.46, 0.45
 		// Relative to avgGap=0.01, 0.07 is 7x the average (triggers at 2.5x).
@@ -762,6 +783,90 @@ public class LlmInferenceServiceTest {
 
 		assertEquals(8, result,
 				"With keywordWeight=0, keyword refinement should be disabled");
+	}
+
+	@Test
+	public void pipeline_medicationQueryWithDrugOrders_shouldReturnOnlyMedications() {
+		// Models: "medications prescribed started" — 3 terms. Drug orders
+		// match "medication" via the embedding prefix (1/3 = 0.33). With
+		// the revised threshold for 3-term queries (min(2, max(1, 1))/3 =
+		// 0.33), a single strong match suffices. Conditions and findings
+		// score moderately on semantic similarity but have no keyword match.
+		double[] semantic = new double[15];
+		double[] keyword = new double[15];
+		// 3 drug orders: match "medication" via prefix → 1/3 = 0.33
+		for (int i = 0; i < 3; i++) {
+			semantic[i] = 0.50 - i * 0.02;
+			keyword[i] = 1.0 / 3;
+		}
+		// 12 conditions/findings: no keyword match
+		for (int i = 0; i < 12; i++) {
+			semantic[3 + i] = 0.45 - i * 0.02;
+			keyword[3 + i] = 0.0;
+		}
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 3);
+
+		assertEquals(3, result,
+				"Medication query should return only drug orders when they match via prefix");
+	}
+
+	@Test
+	public void pipeline_medicationQueryNoDrugOrders_shouldReturnContext() {
+		// Models: "medications prescribed started" — 3 terms. Patient has NO
+		// drug orders, so no records match keyword "medication". The pipeline
+		// should return the gap-detected set as context so the LLM can say
+		// "no medications found."
+		double[] semantic = new double[10];
+		double[] keyword = new double[10];
+		for (int i = 0; i < 10; i++) {
+			semantic[i] = 0.40 - i * 0.01;
+			keyword[i] = 0.0;
+		}
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 3);
+
+		assertEquals(10, result,
+				"When no records match keywords, should return full gap-detected set as context");
+	}
+
+	@Test
+	public void refineByKeywords_shortQuerySingleMatchShouldPass() {
+		// For 3-term queries, the threshold = min(2, max(1, 1))/3 = 0.33.
+		// A record matching 1/3 terms should pass (single discriminative match).
+		double kwMatch = 1.0 / 3;
+		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+				makeScoredEmbedding(0.70, kwMatch),
+				makeScoredEmbedding(0.65, kwMatch),
+				makeScoredEmbedding(0.60, 0.0),
+				makeScoredEmbedding(0.55, 0.0),
+				makeScoredEmbedding(0.50, 0.0));
+
+		List<LlmInferenceService.ScoredEmbedding> refined =
+				LlmInferenceService.refineByKeywords(candidates, 3);
+
+		assertEquals(2, refined.size(),
+				"3-term query: single-match records should pass the threshold");
+	}
+
+	@Test
+	public void refineByKeywords_longQuerySingleMatchShouldFail() {
+		// For 6-term queries, threshold = min(2, max(1, 2))/6 = 0.33.
+		// A record matching only 1/6 terms (0.17) should NOT pass.
+		double weakMatch = 1.0 / 6;
+		double strongMatch = 2.0 / 6;
+		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+				makeScoredEmbedding(0.70, strongMatch),
+				makeScoredEmbedding(0.65, weakMatch),
+				makeScoredEmbedding(0.60, strongMatch),
+				makeScoredEmbedding(0.55, weakMatch),
+				makeScoredEmbedding(0.50, 0.0));
+
+		List<LlmInferenceService.ScoredEmbedding> refined =
+				LlmInferenceService.refineByKeywords(candidates, 6);
+
+		assertEquals(2, refined.size(),
+				"6-term query: single-match records (0.17) should NOT pass the threshold (0.33)");
 	}
 
 	private static Date makeDate(int year, int month, int day) {
