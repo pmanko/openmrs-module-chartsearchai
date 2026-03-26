@@ -650,6 +650,21 @@ public class LlmInferenceService implements ChartSearchService {
 				if (lowerText.contains(term.substring(0, term.length() - 1))) {
 					matched++;
 				}
+			} else if (term.length() >= 7) {
+				// Morphological stem: strip 2-3 trailing characters to match
+				// derivational variants (e.g. allergic/allergy/allergen,
+				// prescribed/prescription, diagnoses/diagnosis). Requires
+				// stem ≥ 5 chars to avoid false positives from short stems.
+				boolean stemMatched = false;
+				for (int trim = 2; trim <= 3 && !stemMatched; trim++) {
+					String stem = term.substring(0, term.length() - trim);
+					if (stem.length() >= 5 && lowerText.contains(stem)) {
+						stemMatched = true;
+					}
+				}
+				if (stemMatched) {
+					matched++;
+				}
 			}
 		}
 		return (double) matched / queryTerms.length;

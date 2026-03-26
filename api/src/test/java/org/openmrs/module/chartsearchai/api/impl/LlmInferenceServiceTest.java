@@ -427,6 +427,29 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void computeKeywordScore_shouldMatchMorphologicalVariants() {
+		// "allergic" (adjective) should match records containing "allergy"
+		// (noun) via stem matching: "allergic" → stem "allerg" → substring
+		// of "allergy". This handles derivational suffixes like -ic/-y.
+		String[] terms = { "allergic" };
+		double score = LlmInferenceService.computeKeywordScore(terms,
+				"Patient allergy: Beef (food allergen). Severity: Severe");
+		assertEquals(1.0, score, 0.001,
+				"'allergic' should match 'allergy' via stem 'allerg'");
+	}
+
+	@Test
+	public void computeKeywordScore_shouldNotStemMatchShortWords() {
+		// Words < 7 chars should not attempt stem matching to avoid
+		// false positives from very short stems.
+		String[] terms = { "cancer" };
+		double score = LlmInferenceService.computeKeywordScore(terms,
+				"Clinical diagnosis: Photoallergy: 9.93");
+		assertEquals(0.0, score, 0.001,
+				"'cancer' (6 chars) should not stem-match 'Photoallergy'");
+	}
+
+	@Test
 	public void findAdaptiveCutoff_shouldNotCutOnSmallAbsoluteGap() {
 		// Tight cluster: 0.55, 0.54, 0.53, then a 0.07 gap to 0.46, 0.45
 		// Relative to avgGap=0.01, 0.07 is 7x the average (triggers at 2.5x).
@@ -1019,6 +1042,32 @@ public class LlmInferenceServiceTest {
 
 		assertEquals(15, result,
 				"Keyword refinement should return all 15 conditions even though topK is 10");
+	}
+
+	@Test
+	public void pipeline_allergyQueryShouldReturnOnlyAllergyRecords() {
+		// Regression test: "What is the patient allergic to?" returned 10
+		// records instead of 2. The query term "allergic" couldn't match
+		// "allergy" in record text, so keyword refinement didn't activate.
+		// With stem matching, "allergic" → stem "allerg" → matches "allergy",
+		// enabling keyword refinement to filter to just allergy records.
+		double[] semantic = new double[10];
+		double[] keyword = new double[10];
+		// 2 allergy records: "allergic" matches via stem "allerg" → "allergy"
+		semantic[0] = 0.42;
+		keyword[0] = 1.0; // "allergic" matches (1/1 term)
+		semantic[1] = 0.38;
+		keyword[1] = 1.0;
+		// 8 diagnosis records: no keyword match for "allergic"
+		for (int i = 0; i < 8; i++) {
+			semantic[2 + i] = 0.36 - i * 0.01;
+			keyword[2 + i] = 0.0;
+		}
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 1);
+
+		assertEquals(2, result,
+				"Allergy query should return only allergy records via stem-based keyword refinement");
 	}
 
 	private static Date makeDate(int year, int month, int day) {
