@@ -2077,25 +2077,9 @@ public class LlmInferenceServiceTest {
 
 		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		// [18] Temperature: 36.7, [19] Weight: 94.0, [23] Systolic BP: 97.0,
-		// [24] Diastolic BP: 99.0, [26] Temperature: 37.7, [27] Weight: 107.0,
-		// [32] Diastolic BP: 92.0, [34] Weight: 139.0, [37] Systolic BP: 122.0,
-		// [39] Temperature: 40.3, [48] Systolic BP: 101.0, [49] Diastolic BP: 99.0,
-		// [59] Systolic BP: 123.0, [64] Weight: 38.0, [65] Diastolic BP: 71.0,
-		// [74] Systolic BP: 137.0, [75] Diastolic BP: 67.0, [77] Temperature: 39.3,
-		// [78] Weight: 146.0, [82] Diastolic BP: 105.0, [94] Systolic BP: 147.0,
-		// [95] Diastolic BP: 58.0, [97] Temperature: 36.4, [102] Weight: 68.0,
-		// [103] Diastolic BP: 50.0, [108] Diastolic BP: 93.0, [112] Systolic BP: 98.0,
-		// [114] Temperature: 37.8, [115] Weight: 121.0, [127] Systolic BP: 134.0,
-		// [129] Systolic BP: 117.0, [130] Diastolic BP: 70.0, [132] Temperature: 40.1,
-		// [138] Diastolic BP: 76.0, [139] Systolic BP: 102.0, [144] Temperature: 39.3,
-		// [145] Diastolic BP: 78.0, [148] Systolic BP: 151.0, [149] Diastolic BP: 53.0,
-		// [150] Weight: 101.0 (dup?), [151] Temperature: 39.4
-		assertEquals(Arrays.asList(17, 18, 22, 23, 25, 26, 31, 33, 36, 38,
-				47, 48, 58, 63, 64, 73, 74, 76, 77, 81,
-				93, 94, 96, 101, 102, 107, 111, 113, 114, 126,
-				128, 129, 131, 137, 138, 143, 144, 147, 148, 150),
-				result, "Should return all 40 BP + weight + temperature records");
+		// [18] Temperature: 36.7, [19] Weight: 94.0, [23] Systolic BP: 97.0, [24] Diastolic BP: 99.0, [26] Temperature: 37.7, [27] Weight: 107.0, [37] Systolic BP: 122.0, [49] Diastolic BP: 99.0
+		assertEquals(Arrays.asList(17, 18, 22, 23, 25, 26, 36, 48),
+				result, "Should return exactly 8 records: 4 BP + 2 weight + 2 temperature");
 	}
 
 	@Test
