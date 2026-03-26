@@ -460,10 +460,78 @@ public class LlmInferenceServiceTest {
 	}
 
 	private static LlmInferenceService.ScoredEmbedding makeScoredEmbedding(double score) {
+		return makeScoredEmbedding(score, 0.0);
+	}
+
+	private static LlmInferenceService.ScoredEmbedding makeScoredEmbedding(double score,
+			double keywordScore) {
 		ChartEmbedding ce = new ChartEmbedding();
 		ce.setResourceType("obs");
 		ce.setTextContent("Test — Example: value");
-		return new LlmInferenceService.ScoredEmbedding(ce, score);
+		return new LlmInferenceService.ScoredEmbedding(ce, score, keywordScore);
+	}
+
+	@Test
+	public void refineByKeywords_shouldFilterToKeywordMatchedSubset() {
+		// 3 records have keyword matches, 2 don't — should keep only the 3
+		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+				makeScoredEmbedding(0.70, 0.33),
+				makeScoredEmbedding(0.65, 0.33),
+				makeScoredEmbedding(0.60, 0.0),
+				makeScoredEmbedding(0.55, 0.33),
+				makeScoredEmbedding(0.50, 0.0));
+
+		List<LlmInferenceService.ScoredEmbedding> refined =
+				LlmInferenceService.refineByKeywords(candidates);
+
+		assertEquals(3, refined.size(),
+				"Should keep only keyword-matched records when they form a proper subset");
+	}
+
+	@Test
+	public void refineByKeywords_shouldReturnAllWhenAllHaveKeywordMatches() {
+		// All records have keyword matches — keywords aren't discriminative
+		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+				makeScoredEmbedding(0.70, 0.50),
+				makeScoredEmbedding(0.65, 0.33),
+				makeScoredEmbedding(0.60, 0.17));
+
+		List<LlmInferenceService.ScoredEmbedding> refined =
+				LlmInferenceService.refineByKeywords(candidates);
+
+		assertEquals(3, refined.size(),
+				"Should return all records when keywords aren't discriminative");
+	}
+
+	@Test
+	public void refineByKeywords_shouldReturnAllWhenNoneHaveKeywordMatches() {
+		// No keyword matches — no signal to refine on
+		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+				makeScoredEmbedding(0.70, 0.0),
+				makeScoredEmbedding(0.65, 0.0),
+				makeScoredEmbedding(0.60, 0.0));
+
+		List<LlmInferenceService.ScoredEmbedding> refined =
+				LlmInferenceService.refineByKeywords(candidates);
+
+		assertEquals(3, refined.size(),
+				"Should return all records when no keyword signal exists");
+	}
+
+	@Test
+	public void refineByKeywords_shouldReturnAllWhenTooFewKeywordMatches() {
+		// Only 1 keyword match — below ADAPTIVE_MIN_RECORDS (2)
+		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+				makeScoredEmbedding(0.70, 0.33),
+				makeScoredEmbedding(0.65, 0.0),
+				makeScoredEmbedding(0.60, 0.0),
+				makeScoredEmbedding(0.55, 0.0));
+
+		List<LlmInferenceService.ScoredEmbedding> refined =
+				LlmInferenceService.refineByKeywords(candidates);
+
+		assertEquals(4, refined.size(),
+				"Should return all records when too few have keyword matches");
 	}
 
 	private static Date makeDate(int year, int month, int day) {

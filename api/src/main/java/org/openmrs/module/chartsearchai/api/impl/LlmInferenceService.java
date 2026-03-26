@@ -301,7 +301,7 @@ public class LlmInferenceService implements ChartSearchService {
 				maxBaseScore = baseScore;
 			}
 
-			scored.add(new ScoredEmbedding(ce, baseScore));
+			scored.add(new ScoredEmbedding(ce, baseScore, keywordScore));
 		}
 
 		Collections.sort(scored, new Comparator<ScoredEmbedding>() {
@@ -337,9 +337,23 @@ public class LlmInferenceService implements ChartSearchService {
 		int adaptiveCutoff = findAdaptiveCutoff(scored, scored.size(),
 				minScore, getScoreGapMultiplier(), getMinScoreGap());
 
-		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
+		List<ScoredEmbedding> candidates = new ArrayList<ScoredEmbedding>();
 		for (int i = 0; i < adaptiveCutoff; i++) {
-			results.add(scored.get(i).embedding);
+			candidates.add(scored.get(i));
+		}
+
+		// Keyword refinement: when gap detection returns a broad set but
+		// keyword matches identify a specific subset, prefer those records.
+		// This catches cases where the score distribution is too smooth for
+		// gap detection (e.g. "conditions" query where condition records get
+		// a keyword boost but the gap to non-conditions is < minGap).
+		if (keywordWeight > 0) {
+			candidates = refineByKeywords(candidates);
+		}
+
+		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
+		for (ScoredEmbedding se : candidates) {
+			results.add(se.embedding);
 		}
 
 		int logLimit = Math.min(topK, scored.size());
@@ -427,6 +441,43 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 
 		return cutoff;
+	}
+
+	/**
+	 * Refines the gap-detected result set by keeping only records that have
+	 * keyword matches, when keyword matches identify a clear subset. This
+	 * catches cases where the score distribution is too smooth for gap
+	 * detection to find a cutoff, but keyword matching provides a
+	 * discriminative type signal (e.g., "conditions" matching "Condition:"
+	 * in record text).
+	 *
+	 * <p>The refinement only activates when:
+	 * <ul>
+	 * <li>At least {@link ChartSearchAiConstants#ADAPTIVE_MIN_RECORDS} records
+	 * have keyword matches (enough to be meaningful)</li>
+	 * <li>The keyword-matched records are a proper subset of the candidates
+	 * (not all records match, which would mean keywords aren't
+	 * discriminative)</li>
+	 * </ul>
+	 *
+	 * @param candidates the gap-detected result set with keyword scores
+	 * @return the refined set (keyword-matched only) or the original set
+	 *         if refinement conditions are not met
+	 */
+	static List<ScoredEmbedding> refineByKeywords(List<ScoredEmbedding> candidates) {
+		List<ScoredEmbedding> keywordMatched = new ArrayList<ScoredEmbedding>();
+		for (ScoredEmbedding se : candidates) {
+			if (se.keywordScore > 0) {
+				keywordMatched.add(se);
+			}
+		}
+		int minRecords = ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS;
+		if (keywordMatched.size() >= minRecords && keywordMatched.size() < candidates.size()) {
+			log.debug("Keyword refinement: keeping {} keyword-matched records out of {} candidates",
+					keywordMatched.size(), candidates.size());
+			return keywordMatched;
+		}
+		return candidates;
 	}
 
 	private static double getScoreGapMultiplier() {
@@ -543,9 +594,12 @@ public class LlmInferenceService implements ChartSearchService {
 
 		final double score;
 
-		ScoredEmbedding(ChartEmbedding embedding, double score) {
+		final double keywordScore;
+
+		ScoredEmbedding(ChartEmbedding embedding, double score, double keywordScore) {
 			this.embedding = embedding;
 			this.score = score;
+			this.keywordScore = keywordScore;
 		}
 	}
 
