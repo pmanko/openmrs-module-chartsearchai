@@ -2212,6 +2212,8 @@ public class LlmInferenceServiceTest {
 		// Multi-concept query: should return blood pressure, weight, AND
 		// temperature records — not just blood pressure (which gets 2/N
 		// keyword matches vs 1/N for the others).
+		// Before fix: only 4 BP records returned (keyword bonus created
+		// artificial gap, refinement threshold rejected 1-term matches).
 
 		String normalized = LlmInferenceService.stripQueryStopwords(
 				"How have this patient's blood pressure, weight, and temperature "
@@ -2222,7 +2224,6 @@ public class LlmInferenceServiceTest {
 		// "7" → single char → filtered by extractQueryTerms
 		assertTrue(queryTerms.length >= 4,
 				"Should have at least blood/pressure/weight/temperature as terms");
-		// Verify the core content terms are present
 		List<String> termList = Arrays.asList(queryTerms);
 		assertTrue(termList.contains("blood"), "Should contain 'blood'");
 		assertTrue(termList.contains("pressure"), "Should contain 'pressure'");
@@ -2230,14 +2231,18 @@ public class LlmInferenceServiceTest {
 		assertTrue(termList.contains("temperature"), "Should contain 'temperature'");
 
 		String[] recordTexts = {
+				// 4 Blood Pressure records (systolic + diastolic)
 				"Clinical observation: Test — Systolic Blood Pressure: 97.0",
 				"Clinical observation: Test — Diastolic Blood Pressure: 99.0",
 				"Clinical observation: Test — Systolic Blood Pressure: 122.0",
 				"Clinical observation: Test — Diastolic Blood Pressure: 71.0",
+				// 2 Weight records
 				"Clinical observation: Test — Weight (kg): 94.0",
 				"Clinical observation: Test — Weight (kg): 88.0",
+				// 2 Temperature records
 				"Clinical observation: Test — Temperature (C): 36.7",
 				"Clinical observation: Test — Temperature (C): 37.2",
+				// 7 distractors — other vitals and non-vitals
 				"Clinical observation: Test — Pulse: 95.0",
 				"Clinical observation: Test — CD4 Count: 988.0",
 				"Clinical observation: Test — Height (cm): 131.0",
@@ -2252,18 +2257,30 @@ public class LlmInferenceServiceTest {
 			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
 		}
 
-		// Blood pressure records match "blood" + "pressure" (2 terms)
-		assertTrue(keyword[0] > keyword[4],
-				"BP should have higher keyword score than weight");
-		// Weight and temperature match 1 term each
-		assertTrue(keyword[4] > 0, "Weight records should match 'weight'");
-		assertTrue(keyword[6] > 0, "Temperature records should match 'temperature'");
-		// Pulse, CD4, Height don't match any content term
-		assertEquals(0.0, keyword[8], 0.001, "Pulse should not match");
-		assertEquals(0.0, keyword[9], 0.001, "CD4 should not match");
+		// Blood pressure matches "blood" + "pressure" (2 terms)
+		double bpScore = keyword[0];
+		assertTrue(bpScore > 0, "BP should match 'blood' + 'pressure'");
+		assertEquals(bpScore, keyword[1], 0.001, "All BP records should have same keyword score");
+		assertEquals(bpScore, keyword[2], 0.001);
+		assertEquals(bpScore, keyword[3], 0.001);
+		// Weight matches "weight" (1 term)
+		double weightScore = keyword[4];
+		assertTrue(weightScore > 0, "Weight should match 'weight'");
+		assertTrue(bpScore > weightScore, "BP should have higher keyword score than weight");
+		assertEquals(weightScore, keyword[5], 0.001);
+		// Temperature matches "temperature" (1 term)
+		double tempScore = keyword[6];
+		assertTrue(tempScore > 0, "Temperature should match 'temperature'");
+		assertEquals(tempScore, keyword[7], 0.001);
+		// Distractors: no content-term matches
+		for (int i = 8; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001,
+					"Distractor should not match: " + recordTexts[i].substring(0, 30));
+		}
 
 		// Semantic scores: all vitals-related records score well for a
 		// trending-vitals query. BP, weight, temperature cluster together.
+		// Pulse and Height are related vitals but NOT asked for.
 		double[] semantic = {
 				0.55, 0.54, 0.53, 0.52,  // BP records (4)
 				0.50, 0.49,               // Weight records (2)
@@ -2276,9 +2293,8 @@ public class LlmInferenceServiceTest {
 
 		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
 
-		// Must return all 8 records: 4 BP + 2 weight + 2 temperature
-		assertTrue(result >= 8,
-				"Multi-concept query should return BP, weight, AND temperature records; got " + result);
+		assertEquals(8, result,
+				"Query should return exactly 8 records: 4 BP + 2 weight + 2 temperature");
 	}
 
 	private static Date makeDate(int year, int month, int day) {
