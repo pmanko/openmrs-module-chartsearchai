@@ -1165,6 +1165,58 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void pipeline_latestCd4CountQuery_realData_shouldReturnExactlyTwoRecords() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "What is the latest CD4 Count?" → expected: exactly 2 CD4 records.
+		// "latest" is a stopword, so this should reduce to same terms as "current CD4 Count".
+
+		String normalized = LlmInferenceService.stripQueryStopwords("What is the latest CD4 Count?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertArrayEquals(new String[] { "cd4", "count" }, queryTerms,
+				"'latest' should be stripped as stopword, leaving 'cd4' and 'count'");
+
+		String[] recordTexts = {
+				"Clinical observation: Test — CD4 Count: 988.0",
+				"Clinical observation: Test — CD4 Count: 1191.0",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Clinical observation: Test — Temperature (C): 36.7",
+				"Clinical observation: Test — Weight (kg): 94.0",
+				"Clinical observation: Test — Height (cm): 131.0",
+				"Clinical observation: Test — Respiratory Rate: 18.0",
+				"Clinical observation: Test — Systolic Blood Pressure: 97.0",
+				"Clinical observation: Test — Diastolic Blood Pressure: 99.0",
+				"Clinical observation: Test — Blood Oxygen Saturation: 88.0",
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.91",
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Medical condition: Hypertension. Status: ACTIVE",
+				"Patient allergy: Beef (food allergen). Severity: Severe",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
+		};
+
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+
+		assertEquals(1.0, keyword[0], 0.001, "CD4 Count #1 should match");
+		assertEquals(1.0, keyword[1], 0.001, "CD4 Count #2 should match");
+		for (int i = 2; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001,
+					"Non-CD4 record should not match: " + recordTexts[i].substring(0, 30));
+		}
+
+		double[] semantic = {
+				0.58, 0.54, 0.30, 0.28, 0.27, 0.26, 0.25, 0.24, 0.23, 0.22,
+				0.20, 0.18, 0.17, 0.15, 0.14,
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(2, result,
+				"Query 'What is the latest CD4 Count?' should return exactly 2 CD4 records");
+	}
+
+	@Test
 	public void pipeline_allergyQuery_realData_shouldReturnExactlyTwoRecords() {
 		// Real patient dataset: 16-year-old Male with 153 records.
 		// Query: "any allergies?" → expected: exactly 2 allergy records.
