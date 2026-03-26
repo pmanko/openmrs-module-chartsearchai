@@ -1473,6 +1473,74 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void pipeline_conditionsQuery_realData_shouldReturnExactlyTwoRecords() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "any conditions" → expected: exactly 2 condition records.
+		// "any" is a stopword → "conditions" remains (<2 content words → full query preserved).
+		// Plural strip "conditions" → "condition" matches the "Medical condition:" prefix.
+
+		String normalized = LlmInferenceService.stripQueryStopwords("any conditions");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertArrayEquals(new String[] { "conditions" }, queryTerms,
+				"Only 'conditions' should remain after stopword removal");
+
+		String[] recordTexts = {
+				// 2 condition records (expected results)
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Medical condition: Hypertension. Status: ACTIVE",
+				// Non-matching records
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
+				"Clinical diagnosis: Gastroenteritis. Certainty: PROVISIONAL",
+				"Clinical diagnosis: Skin Infection. Certainty: CONFIRMED",
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.91",
+				"Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
+				"Clinical observation: Test — CD4 Count: 988.0",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Clinical observation: Test — Temperature (C): 36.7",
+				"Clinical observation: Test — Weight (kg): 94.0",
+				"Patient allergy: Beef (food allergen). Severity: Severe",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
+				"Clinical diagnosis: Fetishism: Routine checkup. No significant findings.",
+				"Clinical observation: Assessment — Primary Diagnosis: HIV Disease",
+		};
+
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+
+		assertEquals(1.0, keyword[0], 0.001, "TB condition should match via plural strip");
+		assertEquals(1.0, keyword[1], 0.001, "Hypertension condition should match via plural strip");
+		for (int i = 2; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001,
+					"Non-condition record should not match: " + recordTexts[i].substring(0, 30));
+		}
+
+		double[] semantic = {
+				0.50, // TB condition
+				0.48, // Hypertension condition
+				0.35, // HIV diagnosis
+				0.33, // Gastroenteritis
+				0.32, // Skin Infection
+				0.28, // Kaposi sarcoma
+				0.30, // Assessment: TB
+				0.20, // CD4 Count
+				0.18, // Pulse
+				0.17, // Temperature
+				0.16, // Weight
+				0.15, // Allergy
+				0.14, // Drug order
+				0.22, // Routine checkup
+				0.29, // Assessment: HIV
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(2, result,
+				"Query 'any conditions' should return exactly 2 condition records");
+	}
+
+	@Test
 	public void pipeline_stdQuery_realData_shouldReturnExactlySixRecords() {
 		// Real patient dataset: 16-year-old Male with 153 records.
 		// Query: "any sexually transmitted disease?" → expected: 6 HIV Disease records.
