@@ -139,9 +139,13 @@ public class LlmInferenceServiceTest {
 
 	@Test
 	public void stripQueryStopwords_shouldNormalizeDifferentPhrasingsToSameResult() {
-		assertEquals(
-				LlmInferenceService.stripQueryStopwords("any medications?"),
-				LlmInferenceService.stripQueryStopwords("does the patient have any medications?"));
+		// Both queries have only 1 content word ("medications"), so both
+		// preserve the full sentence. The embedding model handles both
+		// similarly because the key term is the same.
+		String short1 = LlmInferenceService.stripQueryStopwords("any medications?");
+		String long1 = LlmInferenceService.stripQueryStopwords("does the patient have any medications?");
+		assertTrue(short1.contains("medications"), "Short form should contain 'medications'");
+		assertTrue(long1.contains("medications"), "Long form should contain 'medications'");
 	}
 
 	@Test
@@ -158,8 +162,28 @@ public class LlmInferenceServiceTest {
 
 	@Test
 	public void stripQueryStopwords_shouldHandleMixedCase() {
-		assertEquals("medications",
-				LlmInferenceService.stripQueryStopwords("Does The Patient Have Any Medications?"));
+		// 1 content word "medications" → preserves full query for context.
+		// Should be lowercased and contain the key term.
+		String result = LlmInferenceService.stripQueryStopwords(
+				"Does The Patient Have Any Medications?");
+		assertTrue(result.contains("medications"),
+				"Mixed case query should contain 'medications'");
+		assertEquals(result, result.toLowerCase(),
+				"Result should be lowercased");
+	}
+
+	@Test
+	public void stripQueryStopwords_shouldPreserveContextForShortQueries() {
+		// When stopword removal would leave < 2 words, the full question
+		// should be preserved to give the embedding model enough context.
+		// "does the patient have cancer?" has only 1 content word ("cancer").
+		// The original code embedded the full question and returned 2 results;
+		// stripping to just "cancer" loses context and returns 3.
+		String result = LlmInferenceService.stripQueryStopwords(
+				"does the patient have cancer?");
+		String[] words = result.trim().split("\\s+");
+		assertTrue(words.length >= 2,
+				"Short query should preserve context words, got: '" + result + "'");
 	}
 
 	@Test

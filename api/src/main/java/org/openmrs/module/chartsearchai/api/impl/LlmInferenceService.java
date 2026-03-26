@@ -256,16 +256,42 @@ public class LlmInferenceService implements ChartSearchService {
 	 */
 	static String stripQueryStopwords(String question) {
 		String[] words = question.toLowerCase().replaceAll("[?!.,;:]", "").trim().split("\\s+");
-		StringBuilder sb = new StringBuilder();
+		List<String> contentWords = new ArrayList<String>();
+		List<String> allClean = new ArrayList<String>();
 		for (String word : words) {
-			if (!word.isEmpty() && !QUERY_STOPWORDS.contains(word)) {
+			if (!word.isEmpty()) {
+				allClean.add(word);
+				if (!QUERY_STOPWORDS.contains(word)) {
+					contentWords.add(word);
+				}
+			}
+		}
+		if (contentWords.size() >= 2) {
+			StringBuilder sb = new StringBuilder();
+			for (String w : contentWords) {
 				if (sb.length() > 0) {
 					sb.append(" ");
 				}
-				sb.append(word);
+				sb.append(w);
 			}
+			return sb.toString();
 		}
-		return sb.length() > 0 ? sb.toString() : question.toLowerCase().trim();
+		// Too few content words — preserve all cleaned words so the
+		// embedding model gets enough context. The full sentence
+		// "does the patient have cancer" produces a more specific
+		// embedding than the single word "cancer", helping the model
+		// differentiate cancer-related records from unrelated ones.
+		if (!allClean.isEmpty()) {
+			StringBuilder sb = new StringBuilder();
+			for (String w : allClean) {
+				if (sb.length() > 0) {
+					sb.append(" ");
+				}
+				sb.append(w);
+			}
+			return sb.toString();
+		}
+		return question.toLowerCase().trim();
 	}
 
 	private List<ChartEmbedding> findSimilar(Patient patient, String question, int topK) {
@@ -616,7 +642,7 @@ public class LlmInferenceService implements ChartSearchService {
 		String[] allTerms = normalizedQuery.toLowerCase().split("\\s+");
 		List<String> terms = new ArrayList<String>();
 		for (String term : allTerms) {
-			if (term.length() >= 2) {
+			if (term.length() >= 2 && !QUERY_STOPWORDS.contains(term)) {
 				terms.add(term);
 			}
 		}
