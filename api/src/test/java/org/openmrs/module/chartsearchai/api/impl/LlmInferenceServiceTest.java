@@ -627,6 +627,11 @@ public class LlmInferenceServiceTest {
 			candidates = LlmInferenceService.refineByKeywords(candidates, queryTermCount);
 		}
 
+		int maxResults = ChartSearchAiConstants.DEFAULT_MAX_RESULTS;
+		if (candidates.size() > maxResults) {
+			candidates = candidates.subList(0, maxResults);
+		}
+
 		return candidates.size();
 	}
 
@@ -867,6 +872,50 @@ public class LlmInferenceServiceTest {
 
 		assertEquals(2, refined.size(),
 				"6-term query: single-match records (0.17) should NOT pass the threshold (0.33)");
+	}
+
+	@Test
+	public void pipeline_noKeywordMatchesSmoothDistribution_shouldCapToMaxResults() {
+		// Models: "HB results over time" — the patient has NO HB results.
+		// All 93 records are vital signs with smooth, similar semantic scores
+		// and ZERO keyword matches. Gap detection won't trigger (smooth
+		// distribution), keyword refinement won't activate (0 matches < 2).
+		// The max results cap should prevent dumping the entire chart.
+		int recordCount = 93;
+		double[] semantic = new double[recordCount];
+		double[] keyword = new double[recordCount];
+		for (int i = 0; i < recordCount; i++) {
+			semantic[i] = 0.42 - i * 0.002;
+			keyword[i] = 0.0;
+		}
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 7);
+
+		assertEquals(ChartSearchAiConstants.DEFAULT_MAX_RESULTS, result,
+				"When no keywords match and gap detection can't discriminate, "
+						+ "the max results cap should limit output");
+	}
+
+	@Test
+	public void pipeline_keywordRefinementShouldNotBeClippedByMaxResults() {
+		// When keyword refinement successfully narrows to a subset that is
+		// smaller than DEFAULT_MAX_RESULTS, the cap should not interfere.
+		// Models: 10 conditions out of 25 total records.
+		double[] semantic = new double[25];
+		double[] keyword = new double[25];
+		for (int i = 0; i < 10; i++) {
+			semantic[i] = 0.55 - i * 0.02;
+			keyword[i] = 2.0 / 6;
+		}
+		for (int i = 0; i < 15; i++) {
+			semantic[10 + i] = 0.45 - i * 0.02;
+			keyword[10 + i] = 0.0;
+		}
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 6);
+
+		assertEquals(10, result,
+				"Keyword refinement result should not be clipped when it's within the cap");
 	}
 
 	private static Date makeDate(int year, int month, int day) {

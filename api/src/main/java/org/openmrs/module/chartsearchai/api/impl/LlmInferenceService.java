@@ -356,6 +356,15 @@ public class LlmInferenceService implements ChartSearchService {
 			candidates = refineByKeywords(candidates, queryTerms.length);
 		}
 
+		// Hard cap: safety net when both gap detection and keyword refinement
+		// fail to discriminate (e.g. query asks for "HB results" but the
+		// patient has none — all records score similarly and no keywords
+		// match). Prevents dumping the entire chart to the LLM.
+		int maxResults = getMaxResults();
+		if (candidates.size() > maxResults) {
+			candidates = candidates.subList(0, maxResults);
+		}
+
 		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
 		for (ScoredEmbedding se : candidates) {
 			results.add(se.embedding);
@@ -559,6 +568,23 @@ public class LlmInferenceService implements ChartSearchService {
 			return value;
 		}
 		return ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX;
+	}
+
+	private static int getMaxResults() {
+		String value = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_MAX_RESULTS);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				int parsed = Integer.parseInt(value.trim());
+				if (parsed >= 1) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid maxResults value '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_MAX_RESULTS;
 	}
 
 	/**
