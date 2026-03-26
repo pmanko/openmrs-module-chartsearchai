@@ -27,6 +27,8 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
@@ -83,7 +85,8 @@ public class LlmInferenceService implements ChartSearchService {
 		PatientChart chart = buildChart(patient, question);
 
 		if (chart.getText().isEmpty()) {
-			return new ChartAnswer(NO_RECORDS_ANSWER, Collections.emptyList());
+			String answer = buildNoMatchAnswer(question);
+			return new ChartAnswer(answer, Collections.emptyList());
 		}
 
 		LlmResponse response = llmProvider.search(chart.getText(), question);
@@ -98,14 +101,107 @@ public class LlmInferenceService implements ChartSearchService {
 		PatientChart chart = buildChart(patient, question);
 
 		if (chart.getText().isEmpty()) {
-			tokenConsumer.accept(NO_RECORDS_ANSWER);
-			return new ChartAnswer(NO_RECORDS_ANSWER, Collections.emptyList());
+			String answer = buildNoMatchAnswer(question);
+			tokenConsumer.accept(answer);
+			return new ChartAnswer(answer, Collections.emptyList());
 		}
 
 		LlmResponse response = llmProvider.searchStreaming(chart.getText(), question, tokenConsumer);
 
 		return new ChartAnswer(response.getAnswer(),
 				extractCitedReferences(response.getCitations(), chart.getMappings()));
+	}
+
+	/**
+	 * Builds a specific "no match" answer that names what was asked about,
+	 * rather than returning a generic "no records found" message. This
+	 * avoids an unnecessary LLM round-trip and gives the clinician a
+	 * clear signal about what data is absent.
+	 *
+	 * @param question the original user question
+	 * @return a human-readable answer naming the missing data
+	 */
+	static String buildNoMatchAnswer(String question) {
+		String terms = stripQueryStopwords(question);
+		if (terms.isEmpty()) {
+			return NO_RECORDS_ANSWER;
+		}
+		return "There are no records about " + terms + " in this patient's chart.";
+	}
+
+	private static final Pattern RECENCY_PATTERN = Pattern.compile(
+			"(?:last|past|previous|recent|most recent)\\s+(\\d+)", Pattern.CASE_INSENSITIVE);
+
+	/**
+	 * Extracts a numeric recency constraint from the question, e.g. "last 7
+	 * visits" returns 7. Returns 0 if no constraint is found.
+	 *
+	 * @param question the raw user question
+	 * @return the recency cap, or 0 if none detected
+	 */
+	static int extractRecencyCap(String question) {
+		Matcher m = RECENCY_PATTERN.matcher(question);
+		if (m.find()) {
+			try {
+				int n = Integer.parseInt(m.group(1));
+				return n > 0 ? n : 0;
+			}
+			catch (NumberFormatException e) {
+				return 0;
+			}
+		}
+		return 0;
+	}
+
+	/**
+	 * Caps the number of records per concept to {@code maxPerConcept}.
+	 * Groups records by their concept key (the text stripped of its
+	 * trailing numeric value, e.g. "Clinical observation: Test — Weight
+	 * (kg): 94.0" becomes "Clinical observation: Test — Weight (kg)").
+	 * Since the input list is already sorted most-recent-first, the first
+	 * N records per group are the most recent.
+	 *
+	 * <p>Records whose text does not end with a numeric value (e.g.
+	 * conditions, allergies) are treated as unique groups and always
+	 * kept — the recency cap only limits repeated measurements.
+	 *
+	 * @param records the filtered records, sorted most-recent-first
+	 * @param maxPerConcept maximum records to keep per concept group
+	 * @return the capped list, preserving the original sort order
+	 */
+	static List<SerializedRecord> capPerConcept(List<SerializedRecord> records,
+			int maxPerConcept) {
+		Map<String, Integer> groupCounts = new HashMap<String, Integer>();
+		List<SerializedRecord> capped = new ArrayList<SerializedRecord>();
+		for (SerializedRecord record : records) {
+			String key = conceptKey(record.getText());
+			int count = groupCounts.getOrDefault(key, 0);
+			if (count < maxPerConcept) {
+				capped.add(record);
+				groupCounts.put(key, count + 1);
+			}
+		}
+		return capped;
+	}
+
+	/**
+	 * Extracts a concept grouping key from record text by stripping the
+	 * trailing numeric value. For example:
+	 * <ul>
+	 * <li>"Clinical observation: Test — Weight (kg): 94.0"
+	 *     → "Clinical observation: Test — Weight (kg)"</li>
+	 * <li>"Clinical observation: Test — Systolic Blood Pressure: 137.0"
+	 *     → "Clinical observation: Test — Systolic Blood Pressure"</li>
+	 * </ul>
+	 * If the text does not end with a numeric value, the full text is
+	 * returned, making each such record its own group.
+	 */
+	static String conceptKey(String text) {
+		if (text == null) {
+			return "";
+		}
+		// Strip trailing numeric value like ": 94.0" or ": 137.0"
+		return text.replaceAll(":\\s*[\\d.]+\\s*$", "").trim();
 	}
 
 	private PatientChart buildChart(Patient patient, String question) {
@@ -154,6 +250,12 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 
 		log.debug("Pre-filtered {} records to {} using embeddings", allRecords.size(), filtered.size());
+
+		int recencyCap = extractRecencyCap(question);
+		if (recencyCap > 0) {
+			filtered = capPerConcept(filtered, recencyCap);
+			log.debug("Recency cap {} applied, {} records remain", recencyCap, filtered.size());
+		}
 
 		return chartSerializer.serialize(patient, filtered);
 	}

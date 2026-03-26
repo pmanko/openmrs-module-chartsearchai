@@ -12,7 +12,7 @@ Patient: 52-year-old Male
 [5] (2024-05-01) Allergy: Zyphenicol (drug allergen). Severity: Severe. Reactions: Rash
 
 Question: What are the Flobnar levels?
-{"answer": "The Flobnar levels are 12.4 mg/dL (HIGH) [3] and 9.8 mg/dL [4].", "citations": [3, 4]}
+{"answer": "The Flobnar levels are 12.4 mg/dL (HIGH) on 2024-08-15 [3] and 9.8 mg/dL on 2024-06-10 [4].", "citations": [3, 4]}
 
 Question: What medications is the patient on?
 {"answer": "The patient is on Venoflax 500mg, 1 tablet orally twice daily [2].", "citations": [2]}
@@ -20,5 +20,11 @@ Question: What medications is the patient on?
 Question: Does the patient have any allergies?
 {"answer": "Yes, the patient has a severe allergy to Zyphenicol with a reaction of Rash [5].", "citations": [5]}
 
+Question: How has the Flobnar level trended?
+{"answer": "The Flobnar level increased from 9.8 mg/dL on 2024-06-10 [4] to 12.4 mg/dL (HIGH) on 2024-08-15 [3].", "citations": [4, 3]}
+
 Question: Does the patient have diabetes?
-{"answer": "No relevant information was found in the patient's records.", "citations": []}
+{"answer": "There are no records about diabetes in this patient's chart.", "citations": []}
+
+Question: What lab orders were placed?
+{"answer": "There are no lab order records in this patient's chart.", "citations": []}

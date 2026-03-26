@@ -21,7 +21,9 @@ import java.util.Calendar;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
@@ -351,6 +353,147 @@ public class LlmInferenceServiceTest {
 		assertEquals(
 				LlmInferenceService.stripQueryStopwords("What is the current CD4 Count?"),
 				LlmInferenceService.stripQueryStopwords("What is the latest CD4 Count?"));
+	}
+
+	@Test
+	public void buildNoMatchAnswer_shouldIncludeQueryTermsInAnswer() {
+		String answer = LlmInferenceService.buildNoMatchAnswer(
+				"Were all lab orders placed for this patient resulted?");
+		assertTrue(answer.contains("lab") && answer.contains("orders"),
+				"Answer should name the missing data type, got: " + answer);
+		assertTrue(answer.startsWith("There are no records about"),
+				"Answer should use specific phrasing, got: " + answer);
+	}
+
+	@Test
+	public void buildNoMatchAnswer_shouldFallBackWhenQueryIsAllStopwords() {
+		String answer = LlmInferenceService.buildNoMatchAnswer("does the patient have any?");
+		// When stopword removal preserves the full query (< 2 content words),
+		// the answer should still be specific rather than generic.
+		assertFalse(answer.isEmpty());
+	}
+
+	@Test
+	public void buildNoMatchAnswer_shouldHandleEmptyQuestion() {
+		String answer = LlmInferenceService.buildNoMatchAnswer("");
+		assertEquals("No clinical records found for this patient.", answer);
+	}
+
+	@Test
+	public void extractRecencyCap_shouldExtractNumberFromLastN() {
+		assertEquals(7, LlmInferenceService.extractRecencyCap(
+				"How have vitals trended across the last 7 visits?"));
+	}
+
+	@Test
+	public void extractRecencyCap_shouldExtractFromPastN() {
+		assertEquals(3, LlmInferenceService.extractRecencyCap(
+				"Show past 3 lab results"));
+	}
+
+	@Test
+	public void extractRecencyCap_shouldExtractFromPreviousN() {
+		assertEquals(5, LlmInferenceService.extractRecencyCap(
+				"What were the previous 5 blood pressure readings?"));
+	}
+
+	@Test
+	public void extractRecencyCap_shouldExtractFromMostRecentN() {
+		assertEquals(10, LlmInferenceService.extractRecencyCap(
+				"List the most recent 10 observations"));
+	}
+
+	@Test
+	public void extractRecencyCap_shouldBeCaseInsensitive() {
+		assertEquals(7, LlmInferenceService.extractRecencyCap(
+				"LAST 7 visits"));
+	}
+
+	@Test
+	public void extractRecencyCap_shouldReturnZeroWhenNoPattern() {
+		assertEquals(0, LlmInferenceService.extractRecencyCap(
+				"What medications is the patient on?"));
+	}
+
+	@Test
+	public void extractRecencyCap_shouldReturnZeroForZero() {
+		assertEquals(0, LlmInferenceService.extractRecencyCap(
+				"last 0 visits"));
+	}
+
+	@Test
+	public void conceptKey_shouldStripTrailingNumericValue() {
+		assertEquals("Clinical observation: Test — Weight (kg)",
+				LlmInferenceService.conceptKey(
+						"Clinical observation: Test — Weight (kg): 94.0"));
+	}
+
+	@Test
+	public void conceptKey_shouldStripIntegerValue() {
+		assertEquals("Clinical observation: Test — Pulse",
+				LlmInferenceService.conceptKey(
+						"Clinical observation: Test — Pulse: 62.0"));
+	}
+
+	@Test
+	public void conceptKey_shouldPreserveTextWithoutNumericEnding() {
+		assertEquals("Medical condition: Condition: Tuberculosis. Status: ACTIVE",
+				LlmInferenceService.conceptKey(
+						"Medical condition: Condition: Tuberculosis. Status: ACTIVE"));
+	}
+
+	@Test
+	public void conceptKey_shouldHandleNull() {
+		assertEquals("", LlmInferenceService.conceptKey(null));
+	}
+
+	@Test
+	public void capPerConcept_shouldLimitRecordsPerConcept() {
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> records
+				= new ArrayList<>();
+		// 4 systolic BP records, 3 weight records
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 1, "Clinical observation: Test — Systolic Blood Pressure: 151.0", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 2, "Clinical observation: Test — Systolic Blood Pressure: 134.0", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 3, "Clinical observation: Test — Weight (kg): 68.0", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 4, "Clinical observation: Test — Systolic Blood Pressure: 117.0", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 5, "Clinical observation: Test — Weight (kg): 121.0", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 6, "Clinical observation: Test — Systolic Blood Pressure: 102.0", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 7, "Clinical observation: Test — Weight (kg): 94.0", null));
+
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> result
+				= LlmInferenceService.capPerConcept(records, 2);
+
+		// Should keep 2 SBP + 2 Weight = 4 records
+		assertEquals(4, result.size());
+		// First two should be the first 2 SBP records (ids 1, 2)
+		assertEquals(Integer.valueOf(1), result.get(0).getResourceId());
+		assertEquals(Integer.valueOf(2), result.get(1).getResourceId());
+		// Next two should be the first 2 Weight records (ids 3, 5)
+		assertEquals(Integer.valueOf(3), result.get(2).getResourceId());
+		assertEquals(Integer.valueOf(5), result.get(3).getResourceId());
+	}
+
+	@Test
+	public void capPerConcept_shouldNotAffectNonNumericRecords() {
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> records
+				= new ArrayList<>();
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"condition", 1, "Medical condition: Condition: Tuberculosis. Status: ACTIVE", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"condition", 2, "Medical condition: Condition: Hypertension. Status: ACTIVE", null));
+
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> result
+				= LlmInferenceService.capPerConcept(records, 1);
+
+		// Each condition has a unique key, so both are kept
+		assertEquals(2, result.size());
 	}
 
 	@Test
@@ -2353,6 +2496,73 @@ public class LlmInferenceServiceTest {
 				93, 94, 96, 101, 102, 107, 111, 113, 114, 126,
 				128, 129, 131, 137, 138, 143, 144, 147, 148, 150),
 				result, "Should return all 40 BP + weight + temperature records");
+	}
+
+	@Test
+	public void realModel_vitalsTrendQuery_recencyCapShouldLimit7PerConcept() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// The pipeline returns all 40 BP + weight + temp records.
+		// "last 7 visits" should trigger recency cap, keeping 7 per concept.
+		String question = "How have this patient's blood pressure, weight, and temperature "
+				+ "trended across their last 7 visits?";
+
+		assertEquals(7, LlmInferenceService.extractRecencyCap(question),
+				"Should detect 'last 7' pattern");
+
+		// Run the pipeline to get the 40 matching record indices
+		List<Integer> pipelineResult = runRealModelPipeline(question, 10);
+		assertTrue(pipelineResult.size() > 7,
+				"Pipeline should return more than 7 records before cap");
+
+		// Build SerializedRecords from the pipeline result (sorted most-recent-first).
+		// In production, records come sorted by date from PatientRecordLoader.
+		// Here we simulate that by using dataset index as a proxy — higher index
+		// means more recent (matching how the test dataset is ordered).
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> records
+				= new ArrayList<>();
+		// Sort indices descending to simulate most-recent-first
+		List<Integer> descending = new ArrayList<>(pipelineResult);
+		Collections.sort(descending, Collections.reverseOrder());
+		for (int idx : descending) {
+			records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+					"obs", idx, FULL_PATIENT_DATASET[idx], null));
+		}
+
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> capped
+				= LlmInferenceService.capPerConcept(records, 7);
+
+		// Count records per concept
+		Map<String, Integer> conceptCounts = new HashMap<>();
+		for (org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord r : capped) {
+			String key = LlmInferenceService.conceptKey(r.getText());
+			conceptCounts.put(key, conceptCounts.getOrDefault(key, 0) + 1);
+		}
+
+		// No concept should have more than 7 records
+		for (Map.Entry<String, Integer> entry : conceptCounts.entrySet()) {
+			assertTrue(entry.getValue() <= 7,
+					"Concept '" + entry.getKey() + "' has " + entry.getValue()
+					+ " records, expected <= 7");
+		}
+
+		// Should have significantly fewer records than the original 40
+		assertTrue(capped.size() < pipelineResult.size(),
+				"Capped result (" + capped.size() + ") should be smaller than "
+				+ "uncapped (" + pipelineResult.size() + ")");
+
+		// Verify the expected concepts are present:
+		// Systolic BP, Diastolic BP, Weight, Temperature
+		assertTrue(conceptCounts.containsKey(
+				"Clinical observation: Test — Systolic Blood Pressure"),
+				"Should contain Systolic BP records");
+		assertTrue(conceptCounts.containsKey(
+				"Clinical observation: Test — Weight (kg)"),
+				"Should contain Weight records");
+		assertTrue(conceptCounts.containsKey(
+				"Clinical observation: Test — Temperature (C)"),
+				"Should contain Temperature records");
 	}
 
 	@Test

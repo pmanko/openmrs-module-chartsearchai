@@ -74,9 +74,9 @@ public class LlmProviderTest {
 
 	@Test
 	public void extractResponse_shouldHandleEmptyCitations() {
-		String response = "{\"answer\": \"No relevant information was found.\", \"citations\": []}";
+		String response = "{\"answer\": \"There are no records about diabetes in this patient's chart.\", \"citations\": []}";
 		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
-		assertEquals("No relevant information was found.", result.getAnswer());
+		assertEquals("There are no records about diabetes in this patient's chart.", result.getAnswer());
 		assertTrue(result.getCitations().isEmpty());
 	}
 
@@ -126,8 +126,8 @@ public class LlmProviderTest {
 
 	@Test
 	public void extractResponse_shouldHandleWhitespaceInJson() {
-		String response = "{ \"answer\" : \"No relevant information was found.\" , \"citations\" : [] }";
-		assertEquals("No relevant information was found.",
+		String response = "{ \"answer\" : \"There are no records about diabetes in this patient's chart.\" , \"citations\" : [] }";
+		assertEquals("There are no records about diabetes in this patient's chart.",
 				LlmProvider.extractResponse(response).getAnswer());
 	}
 
