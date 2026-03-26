@@ -1523,6 +1523,79 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void pipeline_anemicQuery_realData_shouldReturnExactlyThreeRecords() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "is the patient anemic?" → expected: exactly 3 anemia records.
+		// "is", "the", "patient" are stopwords → only "anemic" remains (<2 content words
+		// → full query preserved for embedding). "anemic" is 6 chars (<7, no stem matching)
+		// and isn't a substring of "anemia", so keyword matching cannot help.
+		// This is a PURELY SEMANTIC query — gap detection + ratio floor must isolate
+		// the 3 anemia-related records.
+
+		String normalized = LlmInferenceService.stripQueryStopwords("is the patient anemic?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertArrayEquals(new String[] { "anemic" }, queryTerms,
+				"Only 'anemic' should remain after stopword removal");
+		assertTrue(normalized.contains("patient"),
+				"Full query should be preserved for embedding context");
+
+		String[] recordTexts = {
+				// 3 anemia records (expected results)
+				"Clinical observation: Assessment — Primary Diagnosis: Anemia",
+				"Clinical observation: Assessment — Primary Diagnosis: Anemia",
+				"Clinical diagnosis: Anemia. Certainty: PROVISIONAL. Rank: Secondary",
+				// Non-matching records
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
+				"Clinical diagnosis: Gastroenteritis. Certainty: PROVISIONAL",
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Medical condition: Hypertension. Status: ACTIVE",
+				"Clinical observation: Test — CD4 Count: 988.0",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Clinical observation: Test — Weight (kg): 94.0",
+				"Clinical observation: Test — Height (cm): 131.0",
+				"Patient allergy: Beef (food allergen). Severity: Severe",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.91",
+				"Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
+		};
+
+		// Verify no keyword matches ("anemic" ≠ "anemia" for keyword matching)
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+		for (int i = 0; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001,
+					"No keyword match expected — 'anemic' can't match 'anemia' at 6 chars");
+		}
+
+		// Semantic scores: anemia records score high, clear gap to other records
+		double[] semantic = {
+				0.48, // Assessment: Anemia (semantically close to "anemic")
+				0.46, // Assessment: Anemia
+				0.43, // Diagnosis: Anemia
+				0.28, // HIV Disease
+				0.26, // Gastroenteritis
+				0.25, // Tuberculosis
+				0.24, // Hypertension
+				0.19, // CD4 Count
+				0.17, // Pulse
+				0.16, // Weight
+				0.15, // Height
+				0.14, // Allergy
+				0.13, // Drug order
+				0.20, // Kaposi sarcoma
+				0.22, // Assessment: TB
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(3, result,
+				"Query 'is the patient anemic?' should return exactly 3 anemia records "
+						+ "via gap detection and ratio floor (no keyword help — 'anemic' ≠ 'anemia')");
+	}
+
+	@Test
 	public void pipeline_conditionsQuery_realData_shouldReturnExactlyTwoRecords() {
 		// Real patient dataset: 16-year-old Male with 153 records.
 		// Query: "any conditions" → expected: exactly 2 condition records.
