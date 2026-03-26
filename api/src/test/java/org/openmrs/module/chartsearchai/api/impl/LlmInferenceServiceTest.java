@@ -531,15 +531,20 @@ public class LlmInferenceServiceTest {
 	}
 
 	private static LlmInferenceService.ScoredEmbedding makeScoredEmbedding(double score) {
-		return makeScoredEmbedding(score, 0.0);
+		return makeScoredEmbedding(score, 0.0, score);
 	}
 
 	private static LlmInferenceService.ScoredEmbedding makeScoredEmbedding(double score,
 			double keywordScore) {
+		return makeScoredEmbedding(score, keywordScore, score);
+	}
+
+	private static LlmInferenceService.ScoredEmbedding makeScoredEmbedding(double score,
+			double keywordScore, double semanticScore) {
 		ChartEmbedding ce = new ChartEmbedding();
 		ce.setResourceType("obs");
 		ce.setTextContent("Test — Example: value");
-		return new LlmInferenceService.ScoredEmbedding(ce, score, keywordScore);
+		return new LlmInferenceService.ScoredEmbedding(ce, score, keywordScore, semanticScore);
 	}
 
 	@Test
@@ -608,9 +613,11 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void refineByKeywords_shouldIgnoreIncidentalSingleTermMatches() {
+	public void refineByKeywords_singleTermMatchesInLongQuery_shouldPassWhenMixed() {
 		// 2 records match 2/6 terms, 4 records match only 1/6.
-		// Threshold = min(2, max(1, 2))/6 = 0.333. Only the 2 strong matches should pass.
+		// With minMatchCount=1, threshold = 1/6 = 0.167. All 6 pass.
+		// Since 6/6 is NOT a proper subset, refinement doesn't activate —
+		// returns all candidates. Gap detection is the primary noise filter.
 		double strongMatch = 2.0 / 6; // 0.333...
 		double weakMatch = 1.0 / 6;   // 0.166...
 		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
@@ -624,8 +631,8 @@ public class LlmInferenceServiceTest {
 		List<LlmInferenceService.ScoredEmbedding> refined =
 				LlmInferenceService.refineByKeywords(candidates, 6);
 
-		assertEquals(2, refined.size(),
-				"Should not include records with only incidental single-term matches");
+		assertEquals(6, refined.size(),
+				"All candidates have keyword matches — refinement should not discriminate");
 	}
 
 	// --------------------------------------------------------
@@ -670,7 +677,7 @@ public class LlmInferenceServiceTest {
 		for (int i = 0; i < semanticScores.length; i++) {
 			double keywordBonus = keywordScores[i] >= bonusThreshold ? keywordScores[i] : 0.0;
 			double baseScore = semanticScores[i] + keywordWeight * keywordBonus;
-			scored.add(makeScoredEmbedding(baseScore, keywordScores[i]));
+			scored.add(makeScoredEmbedding(baseScore, keywordScores[i], semanticScores[i]));
 		}
 
 		Collections.sort(scored, new Comparator<LlmInferenceService.ScoredEmbedding>() {
@@ -782,10 +789,10 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void pipeline_incidentalKeywordMatches_shouldNotOverFilter() {
 		// Models: "HB results values moving normal range" — 6 terms.
-		// HB records match 2 terms ("hb" + one other). Some vital signs match
-		// only "normal" (1 term = 0.17). Keyword refinement threshold = 0.33
-		// should exclude the single-term "normal" matches. Gap detection should
-		// separate HB from everything else via the keyword boost.
+		// HB records match 2 terms ("hb" + one other) and get keyword bonus
+		// (≥2 matches). Some vital signs match only "normal" (1 term = 0.17)
+		// and get NO bonus. Gap detection separates the HB cluster (boosted
+		// to 0.69-0.75) from the "normal" cluster (0.38-0.48).
 		double[] semantic = new double[15];
 		double[] keyword = new double[15];
 		// 4 HB records: high semantic, keyword 2/6 = 0.33
@@ -942,9 +949,10 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void refineByKeywords_longQuerySingleMatchShouldFail() {
-		// For 6-term queries, threshold = min(2, max(1, 2))/6 = 0.33.
-		// A record matching only 1/6 terms (0.17) should NOT pass.
+	public void refineByKeywords_longQuerySingleMatchShouldPass() {
+		// For 6-term queries, threshold = 1/6 = 0.167. A record matching
+		// 1/6 terms (0.17) SHOULD pass — any keyword relevance is sufficient
+		// for refinement. Gap detection handles noise filtering.
 		double weakMatch = 1.0 / 6;
 		double strongMatch = 2.0 / 6;
 		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
@@ -957,8 +965,9 @@ public class LlmInferenceServiceTest {
 		List<LlmInferenceService.ScoredEmbedding> refined =
 				LlmInferenceService.refineByKeywords(candidates, 6);
 
-		assertEquals(2, refined.size(),
-				"6-term query: single-match records (0.17) should NOT pass the threshold (0.33)");
+		assertEquals(4, refined.size(),
+				"6-term query: single-match records (0.17) should pass refinement; " +
+				"zero-match records should not");
 	}
 
 	@Test
@@ -2193,6 +2202,83 @@ public class LlmInferenceServiceTest {
 
 		assertEquals(2, result,
 				"Query 'any allergies?' should return exactly 2 allergy records from real patient data");
+	}
+
+	@Test
+	public void pipeline_vitalsTrendQuery_realData_shouldReturnBpWeightAndTemperature() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "How have this patient's blood pressure, weight, and
+		// temperature trended across their last 7 visits?"
+		// Multi-concept query: should return blood pressure, weight, AND
+		// temperature records — not just blood pressure (which gets 2/N
+		// keyword matches vs 1/N for the others).
+
+		String normalized = LlmInferenceService.stripQueryStopwords(
+				"How have this patient's blood pressure, weight, and temperature "
+				+ "trended across their last 7 visits?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		// "patient's" → possessive stripped → "patient" → stopword → removed
+		// "how", "have", "this", "and", "across", "their" → stopwords
+		// "7" → single char → filtered by extractQueryTerms
+		assertTrue(queryTerms.length >= 4,
+				"Should have at least blood/pressure/weight/temperature as terms");
+		// Verify the core content terms are present
+		List<String> termList = Arrays.asList(queryTerms);
+		assertTrue(termList.contains("blood"), "Should contain 'blood'");
+		assertTrue(termList.contains("pressure"), "Should contain 'pressure'");
+		assertTrue(termList.contains("weight"), "Should contain 'weight'");
+		assertTrue(termList.contains("temperature"), "Should contain 'temperature'");
+
+		String[] recordTexts = {
+				"Clinical observation: Test — Systolic Blood Pressure: 97.0",
+				"Clinical observation: Test — Diastolic Blood Pressure: 99.0",
+				"Clinical observation: Test — Systolic Blood Pressure: 122.0",
+				"Clinical observation: Test — Diastolic Blood Pressure: 71.0",
+				"Clinical observation: Test — Weight (kg): 94.0",
+				"Clinical observation: Test — Weight (kg): 88.0",
+				"Clinical observation: Test — Temperature (C): 36.7",
+				"Clinical observation: Test — Temperature (C): 37.2",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Clinical observation: Test — CD4 Count: 988.0",
+				"Clinical observation: Test — Height (cm): 131.0",
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED",
+				"Medical condition: Hypertension. Status: ACTIVE",
+				"Patient allergy: Beef (food allergen). Severity: Severe",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
+		};
+
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+
+		// Blood pressure records match "blood" + "pressure" (2 terms)
+		assertTrue(keyword[0] > keyword[4],
+				"BP should have higher keyword score than weight");
+		// Weight and temperature match 1 term each
+		assertTrue(keyword[4] > 0, "Weight records should match 'weight'");
+		assertTrue(keyword[6] > 0, "Temperature records should match 'temperature'");
+		// Pulse, CD4, Height don't match any content term
+		assertEquals(0.0, keyword[8], 0.001, "Pulse should not match");
+		assertEquals(0.0, keyword[9], 0.001, "CD4 should not match");
+
+		// Semantic scores: all vitals-related records score well for a
+		// trending-vitals query. BP, weight, temperature cluster together.
+		double[] semantic = {
+				0.55, 0.54, 0.53, 0.52,  // BP records (4)
+				0.50, 0.49,               // Weight records (2)
+				0.48, 0.47,               // Temperature records (2)
+				0.40,                     // Pulse (related but not asked)
+				0.30,                     // CD4
+				0.38,                     // Height (related but not asked)
+				0.20, 0.19, 0.15, 0.14,  // Non-vitals
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		// Must return all 8 records: 4 BP + 2 weight + 2 temperature
+		assertTrue(result >= 8,
+				"Multi-concept query should return BP, weight, AND temperature records; got " + result);
 	}
 
 	private static Date makeDate(int year, int month, int day) {

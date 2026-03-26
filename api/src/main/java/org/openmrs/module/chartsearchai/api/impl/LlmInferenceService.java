@@ -255,7 +255,7 @@ public class LlmInferenceService implements ChartSearchService {
 	 * @param question the raw user question
 	 */
 	static String stripQueryStopwords(String question) {
-		String[] words = question.toLowerCase().replaceAll("[?!.,;:]", "").trim().split("\\s+");
+		String[] words = question.toLowerCase().replaceAll("'s\\b", "").replaceAll("[?!.,;:']", "").trim().split("\\s+");
 		List<String> contentWords = new ArrayList<String>();
 		List<String> allClean = new ArrayList<String>();
 		for (String word : words) {
@@ -359,7 +359,7 @@ public class LlmInferenceService implements ChartSearchService {
 				maxBaseScore = baseScore;
 			}
 
-			scored.add(new ScoredEmbedding(ce, baseScore, keywordScore));
+			scored.add(new ScoredEmbedding(ce, baseScore, keywordScore, semanticScore));
 		}
 
 		Collections.sort(scored, new Comparator<ScoredEmbedding>() {
@@ -462,18 +462,23 @@ public class LlmInferenceService implements ChartSearchService {
 
 	/**
 	 * Finds the adaptive cutoff point in a sorted list of scored embeddings by
-	 * detecting a significant gap in similarity scores. Walks the sorted scores
-	 * and tracks the running average gap between consecutive entries. When a gap
-	 * exceeds the average by more than the configured multiplier AND exceeds the
-	 * minimum absolute gap, the cluster boundary is found. The absolute minimum
-	 * prevents premature cutting on small gaps that only appear large relative
-	 * to a tight cluster. Always includes at least
-	 * {@link ChartSearchAiConstants#ADAPTIVE_MIN_RECORDS} records (if available
-	 * above the similarity floor) so the LLM has enough context.
+	 * detecting a significant gap in raw semantic similarity scores. Uses
+	 * semantic scores (not keyword-inflated combined scores) so that keyword
+	 * bonuses don't create artificial cluster boundaries — this ensures
+	 * multi-concept queries (e.g. "blood pressure, weight, and temperature")
+	 * don't get split by uneven keyword matching across concepts.
+	 * Walks the sorted scores and tracks the running average gap between
+	 * consecutive entries. When a gap exceeds the average by more than the
+	 * configured multiplier AND exceeds the minimum absolute gap, the cluster
+	 * boundary is found. The absolute minimum prevents premature cutting on
+	 * small gaps that only appear large relative to a tight cluster. Always
+	 * includes at least {@link ChartSearchAiConstants#ADAPTIVE_MIN_RECORDS}
+	 * records (if available above the similarity floor) so the LLM has enough
+	 * context.
 	 *
-	 * @param scored sorted list of scored embeddings (highest score first)
+	 * @param scored sorted list of scored embeddings (highest combined score first)
 	 * @param limit the maximum number of candidates to consider
-	 * @param minScore the absolute similarity floor
+	 * @param minScore the absolute similarity floor (applied to semantic scores)
 	 * @param gapMultiplier how many times larger than the average gap a score drop
 	 *        must be to trigger a cutoff
 	 * @param minGap the minimum absolute gap required to trigger a cutoff,
@@ -484,10 +489,20 @@ public class LlmInferenceService implements ChartSearchService {
 			double gapMultiplier, double minGap) {
 		int minRecords = ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS;
 
+		// Build a sorted list of semantic scores for gap detection.
+		// Records are passed in combined-score order, but gap detection
+		// uses semantic scores to find natural clusters without keyword
+		// bonus inflation.
+		List<Double> semanticSorted = new ArrayList<Double>();
+		for (int i = 0; i < limit; i++) {
+			semanticSorted.add(scored.get(i).semanticScore);
+		}
+		Collections.sort(semanticSorted, Collections.reverseOrder());
+
 		// Count how many records pass the similarity floor
 		int aboveFloor = 0;
-		for (int i = 0; i < limit; i++) {
-			if (scored.get(i).score >= minScore) {
+		for (int i = 0; i < semanticSorted.size(); i++) {
+			if (semanticSorted.get(i) >= minScore) {
 				aboveFloor++;
 			} else {
 				break;
@@ -498,16 +513,14 @@ public class LlmInferenceService implements ChartSearchService {
 			return 0;
 		}
 
-		// Walk through consecutive scores tracking the running average gap.
-		// Once a gap exceeds gapMultiplier * avgGap, cut there. All prior
-		// gaps feed the running average so that the baseline reflects the
-		// full score distribution, which prevents degenerate seeds (e.g. a
-		// single tied-score gap of 0.0) from making the detector overly
-		// trigger-happy.
+		// Walk through consecutive semantic scores tracking the running
+		// average gap. Once a gap exceeds gapMultiplier * avgGap, cut there.
+		// All prior gaps feed the running average so that the baseline
+		// reflects the full score distribution.
 		double gapSum = 0;
 		int cutoff = aboveFloor; // default: include everything above the floor
 		for (int i = 1; i < aboveFloor; i++) {
-			double gap = scored.get(i - 1).score - scored.get(i).score;
+			double gap = semanticSorted.get(i - 1) - semanticSorted.get(i);
 
 			// Only consider cutting after the minimum number of records, and
 			// only when we have at least 2 prior gaps to form a meaningful
@@ -560,13 +573,13 @@ public class LlmInferenceService implements ChartSearchService {
 		if (queryTermCount == 0) {
 			return candidates;
 		}
-		// Require at least 1 matching term for short queries (1-3 terms),
-		// scaling up to 2 for longer queries (6+ terms). This prevents
-		// incidental single-term matches from passing in long queries
-		// (e.g. "normal" in vital signs) while allowing short queries
-		// like "medications prescribed" to work with 1 discriminative match.
-		double minMatchCount = Math.min(2.0, Math.max(1.0, queryTermCount / 3.0));
-		double minKwScore = minMatchCount / queryTermCount;
+		// Require at least 1 matching query term — any keyword relevance
+		// is sufficient for refinement. Gap detection is the primary filter
+		// for noise; refinement separates "has keyword evidence" from
+		// "has no keyword evidence". This ensures multi-concept queries
+		// (e.g. "blood pressure, weight, and temperature") don't drop
+		// records matching a single concept like "weight" (1/N terms).
+		double minKwScore = 1.0 / queryTermCount;
 
 		List<ScoredEmbedding> keywordMatched = new ArrayList<ScoredEmbedding>();
 		for (ScoredEmbedding se : candidates) {
@@ -726,10 +739,14 @@ public class LlmInferenceService implements ChartSearchService {
 
 		final double keywordScore;
 
-		ScoredEmbedding(ChartEmbedding embedding, double score, double keywordScore) {
+		final double semanticScore;
+
+		ScoredEmbedding(ChartEmbedding embedding, double score, double keywordScore,
+				double semanticScore) {
 			this.embedding = embedding;
 			this.score = score;
 			this.keywordScore = keywordScore;
+			this.semanticScore = semanticScore;
 		}
 	}
 
