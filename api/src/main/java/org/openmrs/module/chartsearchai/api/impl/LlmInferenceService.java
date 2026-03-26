@@ -315,6 +315,7 @@ public class LlmInferenceService implements ChartSearchService {
 		double keywordWeight = getKeywordWeight();
 
 		double maxBaseScore = 0;
+		double maxSemanticScore = 0;
 
 		List<ScoredEmbedding> scored = new ArrayList<ScoredEmbedding>();
 		for (ChartEmbedding ce : allEmbeddings) {
@@ -345,6 +346,9 @@ public class LlmInferenceService implements ChartSearchService {
 			double keywordScore = computeKeywordScore(queryTerms, keywordText);
 			double baseScore = semanticScore + keywordWeight * keywordScore;
 
+			if (semanticScore > maxSemanticScore) {
+				maxSemanticScore = semanticScore;
+			}
 			if (baseScore > maxBaseScore) {
 				maxBaseScore = baseScore;
 			}
@@ -363,9 +367,9 @@ public class LlmInferenceService implements ChartSearchService {
 			return Collections.emptyList();
 		}
 
-		if (maxBaseScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
-			log.debug("Top score {} is below absolute floor {}, returning empty",
-					String.format("%.4f", maxBaseScore),
+		if (maxSemanticScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
+			log.debug("Top semantic score {} is below absolute floor {}, returning empty",
+					String.format("%.4f", maxSemanticScore),
 					ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR);
 			return Collections.emptyList();
 		}

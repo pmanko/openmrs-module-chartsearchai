@@ -652,6 +652,18 @@ public class LlmInferenceServiceTest {
 		double gapMultiplier = ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER;
 		double minGap = ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP;
 
+		// Gate check on raw semantic score — keywords must not rescue
+		// records the embedding model considers irrelevant
+		double maxSemanticScore = 0;
+		for (double s : semanticScores) {
+			if (s > maxSemanticScore) {
+				maxSemanticScore = s;
+			}
+		}
+		if (maxSemanticScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
+			return 0;
+		}
+
 		List<LlmInferenceService.ScoredEmbedding> scored =
 				new ArrayList<LlmInferenceService.ScoredEmbedding>();
 		for (int i = 0; i < semanticScores.length; i++) {
@@ -1387,6 +1399,76 @@ public class LlmInferenceServiceTest {
 
 		assertEquals(0, result,
 				"Query 'any fracture?' should return 0 records — nothing in the chart is related");
+	}
+
+	@Test
+	public void pipeline_familyHistoryOfCancerQuery_realData_shouldReturnNoRecords() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "Any family history of cancer?" → expected: 0 records.
+		// No record in the dataset is about family history of cancer.
+		// Individual keywords ("family", "history") coincidentally match
+		// unrelated records ("family planning", "immunization history"),
+		// but the gate check on raw SEMANTIC scores (all < 0.25) ensures
+		// keyword bonus cannot rescue irrelevant records.
+
+		String normalized = LlmInferenceService.stripQueryStopwords(
+				"Any family history of cancer?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertArrayEquals(new String[] { "family", "history", "cancer" }, queryTerms,
+				"Should have 'family', 'history', 'cancer' after stopword removal");
+
+		String[] recordTexts = {
+				"Clinical observation: Finding — Immunization history: Immunizations: "
+						+ "Polio vaccination, oral; Vaccination date: 2026-03-18",
+				"Clinical observation: Assessment — Method of family planning: Condoms",
+				"Clinical observation: Assessment — Method of family planning: Diaphragm",
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.91",
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED",
+				"Clinical observation: Test — CD4 Count: 988.0",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Patient allergy: Beef (food allergen). Severity: Severe",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
+				"Clinical observation: Test — Weight (kg): 94.0",
+				"Medical condition: Hypertension. Status: ACTIVE",
+		};
+
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+
+		// Verify coincidental keyword matches exist (this is the problem we're guarding against)
+		assertTrue(keyword[0] > 0, "Immunization history matches 'history' — coincidental");
+		assertTrue(keyword[1] > 0, "Family planning matches 'family' — coincidental");
+		assertTrue(keyword[2] > 0, "Family planning matches 'family' — coincidental");
+		for (int i = 3; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001, "Should not match");
+		}
+
+		// All semantic scores below ABSOLUTE_SIMILARITY_FLOOR (0.25):
+		// no record is about family history of cancer
+		double[] semantic = {
+				0.22, // Immunization history (model sees "history" but unrelated)
+				0.20, // Family planning: Condoms (model sees "family" but unrelated)
+				0.19, // Family planning: Diaphragm
+				0.24, // Kaposi sarcoma (IS cancer, but question is about family history)
+				0.18, // TB
+				0.16, // HIV
+				0.14, // CD4 Count
+				0.12, // Pulse
+				0.11, // Allergy
+				0.10, // Drug order
+				0.09, // Weight
+				0.15, // Hypertension
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(0, result,
+				"Query 'Any family history of cancer?' should return 0 records — "
+						+ "keyword coincidences ('family' in family planning, 'history' in "
+						+ "immunization history) must not rescue low semantic scores");
 	}
 
 	@Test
