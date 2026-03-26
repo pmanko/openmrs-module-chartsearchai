@@ -352,17 +352,30 @@ public class LlmInferenceService implements ChartSearchService {
 		// This catches cases where the score distribution is too smooth for
 		// gap detection (e.g. "conditions" query where condition records get
 		// a keyword boost but the gap to non-conditions is < minGap).
+		boolean refinementActivated = false;
 		if (keywordWeight > 0) {
-			candidates = refineByKeywords(candidates, queryTerms.length);
+			List<ScoredEmbedding> refined = refineByKeywords(candidates, queryTerms.length);
+			refinementActivated = refined.size() < candidates.size();
+			candidates = refined;
 		}
 
-		// Hard cap: safety net when both gap detection and keyword refinement
-		// fail to discriminate (e.g. query asks for "HB results" but the
-		// patient has none — all records score similarly and no keywords
-		// match). Prevents dumping the entire chart to the LLM.
-		int maxResults = getMaxResults();
-		if (candidates.size() > maxResults) {
-			candidates = candidates.subList(0, maxResults);
+		// When keyword refinement successfully identified a relevant subset,
+		// trust its judgment — those records ARE the answer. When it couldn't
+		// discriminate (no keywords matched or all records matched equally),
+		// fall back to the strict similarity floor + topK cap. This restores
+		// original precision for focused queries like "does the patient have
+		// cancer?" where only the semantically closest records should return.
+		if (!refinementActivated) {
+			List<ScoredEmbedding> strict = new ArrayList<ScoredEmbedding>();
+			for (ScoredEmbedding se : candidates) {
+				if (se.score >= ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
+					strict.add(se);
+				}
+			}
+			candidates = strict;
+			if (candidates.size() > topK) {
+				candidates = candidates.subList(0, topK);
+			}
 		}
 
 		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
@@ -570,23 +583,6 @@ public class LlmInferenceService implements ChartSearchService {
 			return value;
 		}
 		return ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX;
-	}
-
-	private static int getMaxResults() {
-		String value = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_MAX_RESULTS);
-		if (value != null && !value.trim().isEmpty()) {
-			try {
-				int parsed = Integer.parseInt(value.trim());
-				if (parsed >= 1) {
-					return parsed;
-				}
-			}
-			catch (NumberFormatException e) {
-				log.warn("Invalid maxResults value '{}', using default", value);
-			}
-		}
-		return ChartSearchAiConstants.DEFAULT_MAX_RESULTS;
 	}
 
 	/**

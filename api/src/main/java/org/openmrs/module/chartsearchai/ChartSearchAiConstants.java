@@ -58,17 +58,6 @@ public class ChartSearchAiConstants {
 
 	public static final int ADAPTIVE_MIN_RECORDS = 2;
 
-	/**
-	 * Hard cap on the number of records returned by the retrieval pipeline.
-	 * Acts as a safety net when both gap detection and keyword refinement
-	 * fail to discriminate (e.g. patient has no records of the requested
-	 * type, so all records score similarly). Configurable via
-	 * {@link #GP_EMBEDDING_MAX_RESULTS}.
-	 */
-	public static final int DEFAULT_MAX_RESULTS = 20;
-
-	public static final String GP_EMBEDDING_MAX_RESULTS = "chartsearchai.embedding.maxResults";
-
 	public static final double ABSOLUTE_SIMILARITY_FLOOR = 0.25;
 
 	public static final String GP_EMBEDDING_MIN_SCORE_GAP = "chartsearchai.embedding.minScoreGap";

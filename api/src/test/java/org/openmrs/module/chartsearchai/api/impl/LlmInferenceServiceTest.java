@@ -595,6 +595,11 @@ public class LlmInferenceServiceTest {
 	 */
 	private static int simulatePipeline(double[] semanticScores, double[] keywordScores,
 			double keywordWeight, int queryTermCount) {
+		return simulatePipeline(semanticScores, keywordScores, keywordWeight, queryTermCount, 10);
+	}
+
+	private static int simulatePipeline(double[] semanticScores, double[] keywordScores,
+			double keywordWeight, int queryTermCount, int topK) {
 		double minScore = ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2;
 		double gapMultiplier = ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER;
 		double minGap = ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP;
@@ -623,13 +628,26 @@ public class LlmInferenceServiceTest {
 			candidates.add(scored.get(i));
 		}
 
+		boolean refinementActivated = false;
 		if (keywordWeight > 0) {
-			candidates = LlmInferenceService.refineByKeywords(candidates, queryTermCount);
+			List<LlmInferenceService.ScoredEmbedding> refined =
+					LlmInferenceService.refineByKeywords(candidates, queryTermCount);
+			refinementActivated = refined.size() < candidates.size();
+			candidates = refined;
 		}
 
-		int maxResults = ChartSearchAiConstants.DEFAULT_MAX_RESULTS;
-		if (candidates.size() > maxResults) {
-			candidates = candidates.subList(0, maxResults);
+		if (!refinementActivated) {
+			List<LlmInferenceService.ScoredEmbedding> strict =
+					new ArrayList<LlmInferenceService.ScoredEmbedding>();
+			for (LlmInferenceService.ScoredEmbedding se : candidates) {
+				if (se.score >= ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
+					strict.add(se);
+				}
+			}
+			candidates = strict;
+			if (candidates.size() > topK) {
+				candidates = candidates.subList(0, topK);
+			}
 		}
 
 		return candidates.size();
@@ -676,10 +694,11 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void pipeline_genericQuery_shouldReturnBroadSet() {
+	public void pipeline_genericQuery_shouldCapToTopK() {
 		// Models: "tell me about this patient" — 2 terms after stopwords,
-		// no keyword matches. Gap detection should return all records with
-		// no gap in the smooth distribution.
+		// no keyword matches. Gap detection finds no gap in the smooth
+		// distribution. With no keyword discrimination, the pipeline falls
+		// back to strict floor + topK cap (default 10).
 		double[] semantic = new double[12];
 		double[] keyword = new double[12];
 		for (int i = 0; i < 12; i++) {
@@ -689,8 +708,8 @@ public class LlmInferenceServiceTest {
 
 		int result = simulatePipeline(semantic, keyword, 0.3, 2);
 
-		assertEquals(12, result,
-				"Generic query with no keyword matches should return full gap-detected set");
+		assertEquals(10, result,
+				"Generic query with no keyword matches should fall back to topK cap");
 	}
 
 	@Test
@@ -875,12 +894,15 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void pipeline_noKeywordMatchesSmoothDistribution_shouldCapToMaxResults() {
+	public void pipeline_noKeywordMatchesSmoothDistribution_shouldFallBackToStrictFloorAndTopK() {
 		// Models: "HB results over time" — the patient has NO HB results.
 		// All 93 records are vital signs with smooth, similar semantic scores
 		// and ZERO keyword matches. Gap detection won't trigger (smooth
 		// distribution), keyword refinement won't activate (0 matches < 2).
-		// The max results cap should prevent dumping the entire chart.
+		// The pipeline should fall back to the strict floor (0.25) + topK.
+		// Scores range from 0.42 down to 0.236 (step 0.002).
+		// Strict floor 0.25: records 0..85 pass (0.42 - 85*0.002 = 0.25),
+		// records 86..92 don't (< 0.25). Then topK=10 caps to 10.
 		int recordCount = 93;
 		double[] semantic = new double[recordCount];
 		double[] keyword = new double[recordCount];
@@ -891,15 +913,15 @@ public class LlmInferenceServiceTest {
 
 		int result = simulatePipeline(semantic, keyword, 0.3, 7);
 
-		assertEquals(ChartSearchAiConstants.DEFAULT_MAX_RESULTS, result,
-				"When no keywords match and gap detection can't discriminate, "
-						+ "the max results cap should limit output");
+		assertEquals(10, result,
+				"When no keywords match, should fall back to strict floor + topK cap");
 	}
 
 	@Test
-	public void pipeline_keywordRefinementShouldNotBeClippedByMaxResults() {
-		// When keyword refinement successfully narrows to a subset that is
-		// smaller than DEFAULT_MAX_RESULTS, the cap should not interfere.
+	public void pipeline_keywordRefinementBypassesStrictFloorAndTopK() {
+		// When keyword refinement successfully narrows to a subset, the strict
+		// floor + topK fallback should NOT apply. Keywords identified the
+		// relevant records — trust them even if count exceeds topK.
 		// Models: 10 conditions out of 25 total records.
 		double[] semantic = new double[25];
 		double[] keyword = new double[25];
@@ -915,7 +937,54 @@ public class LlmInferenceServiceTest {
 		int result = simulatePipeline(semantic, keyword, 0.3, 6);
 
 		assertEquals(10, result,
-				"Keyword refinement result should not be clipped when it's within the cap");
+				"Keyword refinement should not be clipped by strict floor or topK");
+	}
+
+	@Test
+	public void pipeline_focusedQueryStrictFloorFiltersNoise() {
+		// Models: "does the patient have cancer?" — 1 term "cancer" after
+		// stopwords. 2 Kaposi sarcoma records score high semantically (0.45),
+		// 18 other records score lower (0.22-0.18). No keyword "cancer" in
+		// any text. With strict floor=0.25, only the 2 cancer records pass.
+		double[] semantic = new double[20];
+		double[] keyword = new double[20];
+		// 2 Kaposi sarcoma: high semantic, no keyword match
+		semantic[0] = 0.45;
+		semantic[1] = 0.43;
+		keyword[0] = 0.0;
+		keyword[1] = 0.0;
+		// 18 unrelated vitals: below strict floor
+		for (int i = 0; i < 18; i++) {
+			semantic[2 + i] = 0.22 - i * 0.002;
+			keyword[2 + i] = 0.0;
+		}
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 1);
+
+		assertEquals(2, result,
+				"Focused query should return only records above strict floor when keywords can't help");
+	}
+
+	@Test
+	public void pipeline_keywordRefinementCanExceedTopK() {
+		// When keyword refinement identifies a relevant subset that exceeds
+		// topK (10), all keyword-matched records should still be returned.
+		// Models: 15 conditions out of 30 total records.
+		double[] semantic = new double[30];
+		double[] keyword = new double[30];
+		for (int i = 0; i < 15; i++) {
+			semantic[i] = 0.55 - i * 0.02;
+			keyword[i] = 2.0 / 6;
+		}
+		for (int i = 0; i < 15; i++) {
+			semantic[15 + i] = 0.45 - i * 0.02;
+			keyword[15 + i] = 0.0;
+		}
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 6);
+
+		assertEquals(15, result,
+				"Keyword refinement should return all 15 conditions even though topK is 10");
 	}
 
 	private static Date makeDate(int year, int month, int day) {
