@@ -170,4 +170,107 @@ public class QueryClassifierTest {
 		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION));
 		assertFalse(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS));
 	}
+
+	@Test
+	public void classify_shouldNotBeCategoryWhenIndicatorFarFromType() {
+		// "what" is 4+ words from "count", and "count"/"cd4" are specific
+		// concepts, not generic type keywords — should be focused
+		QueryIntent intent = QueryClassifier.classify("what is the latest CD4 count?");
+		assertFalse(intent.isCategoryQuery());
+		// Still detects obs type for boosting
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_OBS));
+	}
+
+	@Test
+	public void classify_shouldBeCategoryWhenIndicatorAdjacentToType() {
+		// "what" directly before "medications" → category
+		QueryIntent intent = QueryClassifier.classify("what medications does the patient take?");
+		assertTrue(intent.isCategoryQuery());
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_ORDER));
+	}
+
+	@Test
+	public void classify_shouldNotBeCategoryForSpecificConcept() {
+		// "does the patient have diabetes?" — specific concept, no indicator
+		// near a generic type word
+		QueryIntent intent = QueryClassifier.classify("does the patient have diabetes?");
+		assertFalse(intent.isCategoryQuery());
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION));
+	}
+
+	@Test
+	public void classify_shouldNotBeCategoryForSpecificVital() {
+		// "what is the blood pressure?" — specific vital, not generic "vitals"
+		QueryIntent intent = QueryClassifier.classify("what is the blood pressure?");
+		assertFalse(intent.isCategoryQuery());
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_OBS));
+	}
+
+	@Test
+	public void classify_shouldBeCategoryForShowWithProximity() {
+		// "show me the patient's allergies" — 3 words between indicator and type
+		QueryIntent intent = QueryClassifier.classify("show me the patient's allergies");
+		assertTrue(intent.isCategoryQuery());
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_ALLERGY));
+	}
+
+	@Test
+	public void classify_shouldBeCategoryForWhatAreTheLabs() {
+		QueryIntent intent = QueryClassifier.classify("what are the latest labs?");
+		assertTrue(intent.isCategoryQuery());
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_OBS));
+	}
+
+	@Test
+	public void classify_shouldNotBeCategoryForSingularTypeWord() {
+		// "what test" uses singular "test" — asking about a specific test,
+		// not listing all tests. Only plural forms trigger category.
+		QueryIntent intent = QueryClassifier.classify("what test did they run?");
+		assertFalse(intent.isCategoryQuery());
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_OBS));
+	}
+
+	@Test
+	public void classify_shouldNotBeCategoryForSingularDrug() {
+		QueryIntent intent = QueryClassifier.classify("which drug caused the reaction?");
+		assertFalse(intent.isCategoryQuery());
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_ORDER));
+	}
+
+	@Test
+	public void classify_shouldBeCategoryForEveryWithSingular() {
+		// "every" requires singular in English but is inherently exhaustive
+		QueryIntent intent = QueryClassifier.classify("every condition listed");
+		assertTrue(intent.isCategoryQuery());
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION));
+	}
+
+	@Test
+	public void classify_shouldBeCategoryForEachWithSingular() {
+		QueryIntent intent = QueryClassifier.classify("each medication in the regimen");
+		assertTrue(intent.isCategoryQuery());
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_ORDER));
+	}
+
+	@Test
+	public void classify_shouldNotBeCategoryForEveryWithNonType() {
+		// "every time" — "time" is not a type word
+		QueryIntent intent = QueryClassifier.classify("every time I visit the clinic");
+		assertFalse(intent.isCategoryQuery());
+	}
+
+	@Test
+	public void classify_shouldDetectIllnessesAsCondition() {
+		// "illnesses" (plural) must match CONDITION_PATTERN for type detection
+		QueryIntent intent = QueryClassifier.classify("illnesses");
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION));
+	}
+
+	@Test
+	public void classify_shouldBeCategoryForAnyIllnesses() {
+		// "any illnesses?" must trigger BOTH type detection AND category expansion
+		QueryIntent intent = QueryClassifier.classify("any illnesses?");
+		assertTrue(intent.isCategoryQuery());
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION));
+	}
 }

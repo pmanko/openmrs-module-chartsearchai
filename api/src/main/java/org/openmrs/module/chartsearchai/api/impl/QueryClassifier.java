@@ -9,8 +9,10 @@
  */
 package org.openmrs.module.chartsearchai.api.impl;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -21,6 +23,27 @@ import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
  * resource types most likely to contain the answer. Also detects broad "category"
  * queries (e.g., "any medications?") that expect exhaustive results rather than
  * just the top few matches.
+ *
+ * <h3>Vocabulary-driven design</h3>
+ * All clinical terms are defined <b>once</b> in vocabulary arrays at the top
+ * of this class. Type detection, category detection, and every/each patterns
+ * are then generated automatically. This eliminates synchronization bugs where
+ * a term is present in one pattern but missing from another.
+ *
+ * <h3>Adding new terms</h3>
+ * <ul>
+ *   <li><b>Generic terms</b> (trigger category expansion): add a
+ *       {@code {"singular", "plural"}} pair to the relevant {@code *_TERMS}
+ *       array. This automatically updates type detection, category detection,
+ *       and every/each detection — no other changes needed.</li>
+ *   <li><b>Specific terms</b> (type boosting only): add to the relevant
+ *       {@code *_SPECIFIC} array. These match for type detection but never
+ *       trigger category expansion — use for clinical concepts like
+ *       "cd4" or "diabetes" that name specific items, not categories.</li>
+ *   <li><b>Multi-word patterns</b> (regex, type detection only): add to
+ *       the relevant {@code *_MULTI_WORD} array. These may contain regex
+ *       operators (e.g. {@code blood\\s*pressure}).</li>
+ * </ul>
  *
  * <p>The classifier is intentionally simple — it uses regex keyword matching
  * rather than ML classification because the resource type vocabulary is small
@@ -59,47 +82,251 @@ public class QueryClassifier {
 		}
 	}
 
-	// Each entry maps a keyword pattern to resource types it implies.
-	// Patterns are tested against the lowercased, stopword-stripped query.
+	// =====================================================================
+	// VOCABULARY — single source of truth for all clinical term patterns.
+	//
+	// Each type group defines terms in up to three arrays:
+	//
+	//   *_TERMS (String[][]):
+	//     Generic {singular, plural} pairs. These appear in type detection
+	//     AND category detection. Category queries use PLURAL forms; the
+	//     "every/each" pattern uses SINGULAR forms. Adding a row here
+	//     updates all three automatically.
+	//
+	//   *_SPECIFIC (String[]):
+	//     Concepts for type detection/boosting ONLY. These never trigger
+	//     category expansion. Use for clinical terms that name specific
+	//     items (cd4, diabetes, hemoglobin) rather than record categories.
+	//
+	//   *_MULTI_WORD (String[]):
+	//     Regex patterns for compound terms (e.g. "blood\\s*pressure").
+	//     Type detection only. Cannot appear in category patterns because
+	//     the proximity regex requires single-word type anchors.
+	// =====================================================================
 
-	private static final Pattern MEDICATION_PATTERN = Pattern.compile(
-			"\\b(?:medication|medications|drug|drugs|prescription|prescriptions"
-					+ "|med|meds|rx|dose|dosing|dosage|pill|pills|tablet|tablets"
-					+ "|capsule|capsules|regimen|arv|arvs|antiretroviral)\\b");
+	// --- Medications ---------------------------------------------------
+	private static final String[][] MEDICATION_TERMS = {
+			{"medication", "medications"},
+			{"drug", "drugs"},
+			{"prescription", "prescriptions"},
+			{"med", "meds"},
+			{"pill", "pills"},
+			{"tablet", "tablets"},
+	};
+	private static final String[] MEDICATION_SPECIFIC = {
+			"capsule", "capsules", "rx", "dose", "dosing", "dosage",
+			"regimen", "arv", "arvs", "antiretroviral"
+	};
 
-	private static final Pattern DISPENSE_PATTERN = Pattern.compile(
-			"\\b(?:dispens|dispensed|dispensing|filled|refill|refills|pharmacy)\\b");
+	// --- Dispense (type detection only — no generic pairs, no category)
+	private static final String[] DISPENSE_SPECIFIC = {
+			"dispens", "dispensed", "dispensing", "filled",
+			"refill", "refills", "pharmacy"
+	};
 
-	private static final Pattern ALLERGY_PATTERN = Pattern.compile(
-			"\\b(?:allergy|allergies|allergic|allergen|allergens"
-					+ "|reaction|reactions|anaphylaxis|hypersensitivity|intolerance)\\b");
+	// --- Allergies -----------------------------------------------------
+	private static final String[][] ALLERGY_TERMS = {
+			{"allergy", "allergies"},
+			{"reaction", "reactions"},
+	};
+	private static final String[] ALLERGY_SPECIFIC = {
+			"allergic", "allergen", "allergens",
+			"anaphylaxis", "hypersensitivity", "intolerance"
+	};
 
-	private static final Pattern LAB_PATTERN = Pattern.compile(
-			"\\b(?:lab|labs|test|tests|result|results|level|levels|count|counts"
-					+ "|panel|panels|bloodwork|blood\\s*work|specimen|hba1c|hemoglobin"
-					+ "|glucose|creatinine|wbc|rbc|platelet|platelets|cd4)\\b");
+	// --- Labs / Tests --------------------------------------------------
+	private static final String[][] LAB_TERMS = {
+			{"lab", "labs"},
+			{"test", "tests"},
+			{"result", "results"},
+			{"panel", "panels"},
+			{"bloodwork", "bloodwork"},
+	};
+	private static final String[] LAB_SPECIFIC = {
+			"level", "levels", "count", "counts", "specimen",
+			"hba1c", "hemoglobin", "glucose", "creatinine",
+			"wbc", "rbc", "platelet", "platelets", "cd4"
+	};
+	private static final String[] LAB_MULTI_WORD = {"blood\\s*work"};
 
-	private static final Pattern CONDITION_PATTERN = Pattern.compile(
-			"\\b(?:condition|conditions|disease|diseases|illness"
-					+ "|problem|problems|comorbidity|comorbidities"
-					+ "|chronic|hypertension|diabetes|hiv|tb|malaria)\\b");
+	// --- Conditions ----------------------------------------------------
+	private static final String[][] CONDITION_TERMS = {
+			{"condition", "conditions"},
+			{"disease", "diseases"},
+			{"illness", "illnesses"},
+			{"problem", "problems"},
+			{"comorbidity", "comorbidities"},
+	};
+	private static final String[] CONDITION_SPECIFIC = {
+			"chronic", "hypertension", "diabetes", "hiv", "tb", "malaria"
+	};
 
-	private static final Pattern DIAGNOSIS_PATTERN = Pattern.compile(
-			"\\b(?:diagnosis|diagnoses|diagnosed)\\b");
+	// --- Diagnoses -----------------------------------------------------
+	private static final String[][] DIAGNOSIS_TERMS = {
+			{"diagnosis", "diagnoses"},
+	};
+	private static final String[] DIAGNOSIS_SPECIFIC = {"diagnosed"};
 
-	private static final Pattern PROGRAM_PATTERN = Pattern.compile(
-			"\\b(?:program|programs|enrolled|enrollment|enrolment"
-					+ "|treatment\\s*program|care\\s*program)\\b");
+	// --- Programs ------------------------------------------------------
+	private static final String[][] PROGRAM_TERMS = {
+			{"program", "programs"},
+	};
+	private static final String[] PROGRAM_SPECIFIC = {
+			"enrolled", "enrollment", "enrolment"
+	};
+	private static final String[] PROGRAM_MULTI_WORD = {
+			"treatment\\s*program", "care\\s*program"
+	};
 
-	private static final Pattern VITALS_PATTERN = Pattern.compile(
-			"\\b(?:vital|vitals|blood\\s*pressure|bp|systolic|diastolic"
-					+ "|temperature|temp|pulse|heart\\s*rate|respiratory\\s*rate"
-					+ "|weight|height|bmi|spo2|oxygen\\s*saturation)\\b");
+	// --- Vitals --------------------------------------------------------
+	private static final String[][] VITALS_TERMS = {
+			{"vital", "vitals"},
+	};
+	private static final String[] VITALS_SPECIFIC = {
+			"bp", "systolic", "diastolic", "temperature", "temp",
+			"pulse", "weight", "height", "bmi", "spo2"
+	};
+	private static final String[] VITALS_MULTI_WORD = {
+			"blood\\s*pressure", "heart\\s*rate",
+			"respiratory\\s*rate", "oxygen\\s*saturation"
+	};
 
-	// Broad category indicators — words that suggest the user wants ALL
-	// records of a type, not just the most relevant few.
-	private static final Pattern CATEGORY_INDICATOR = Pattern.compile(
-			"\\b(?:any|all|list|what|which|every|show|tell)\\b");
+	// =====================================================================
+	// TYPE DETECTION PATTERNS — generated from vocabulary above
+	// =====================================================================
+
+	private static final Pattern MEDICATION_PATTERN = buildTypePattern(
+			MEDICATION_TERMS, MEDICATION_SPECIFIC, null);
+
+	private static final Pattern DISPENSE_PATTERN = buildTypePattern(
+			null, DISPENSE_SPECIFIC, null);
+
+	private static final Pattern ALLERGY_PATTERN = buildTypePattern(
+			ALLERGY_TERMS, ALLERGY_SPECIFIC, null);
+
+	private static final Pattern LAB_PATTERN = buildTypePattern(
+			LAB_TERMS, LAB_SPECIFIC, LAB_MULTI_WORD);
+
+	private static final Pattern CONDITION_PATTERN = buildTypePattern(
+			CONDITION_TERMS, CONDITION_SPECIFIC, null);
+
+	private static final Pattern DIAGNOSIS_PATTERN = buildTypePattern(
+			DIAGNOSIS_TERMS, DIAGNOSIS_SPECIFIC, null);
+
+	private static final Pattern PROGRAM_PATTERN = buildTypePattern(
+			PROGRAM_TERMS, PROGRAM_SPECIFIC, PROGRAM_MULTI_WORD);
+
+	private static final Pattern VITALS_PATTERN = buildTypePattern(
+			VITALS_TERMS, VITALS_SPECIFIC, VITALS_MULTI_WORD);
+
+	// =====================================================================
+	// CATEGORY DETECTION PATTERNS — generated from *_TERMS arrays
+	//
+	// Category detection uses proximity: an indicator word must appear
+	// within a small window of a generic type keyword.
+	//
+	// Three structural signals prevent misclassification:
+	//   1. PROXIMITY: indicator must be within 4 words of a type keyword.
+	//      "what is the latest CD4 count?" — "what" is too far from any
+	//      generic type word.
+	//   2. PLURAL FORM: only plural type nouns trigger the main pattern.
+	//      "what test did they run?" uses singular "test", indicating a
+	//      specific instance. Category queries naturally use plural
+	//      nouns ("any tests?") because they ask for a list.
+	//   3. SPECIFIC EXCLUSION: clinical concepts (cd4, diabetes, etc.)
+	//      are in *_SPECIFIC arrays only, never in *_TERMS. They boost
+	//      type detection without triggering category expansion.
+	//
+	// Exception: "every/each" grammatically require SINGULAR nouns
+	// ("every condition", not "every conditions"), so they use a
+	// separate pattern with tighter proximity (2 words) and singular
+	// forms from column 0 of the TERMS arrays.
+	// =====================================================================
+
+	private static final Pattern CATEGORY_QUERY_PATTERN;
+
+	private static final Pattern EVERY_EACH_CATEGORY_PATTERN;
+
+	static {
+		String plurals = collectForms(1, MEDICATION_TERMS, ALLERGY_TERMS,
+				LAB_TERMS, CONDITION_TERMS, DIAGNOSIS_TERMS,
+				PROGRAM_TERMS, VITALS_TERMS);
+		String singulars = collectForms(0, MEDICATION_TERMS, ALLERGY_TERMS,
+				LAB_TERMS, CONDITION_TERMS, DIAGNOSIS_TERMS,
+				PROGRAM_TERMS, VITALS_TERMS);
+
+		CATEGORY_QUERY_PATTERN = Pattern.compile(
+				"\\b(?:any|all|list|every|show|what|which|tell)\\b"
+						+ "(?:\\s+\\S+){0,4}?\\s+"
+						+ "\\b(?:" + plurals + ")\\b");
+
+		EVERY_EACH_CATEGORY_PATTERN = Pattern.compile(
+				"\\b(?:every|each)\\b"
+						+ "(?:\\s+\\S+){0,2}?\\s+"
+						+ "\\b(?:" + singulars + ")\\b");
+	}
+
+	// =====================================================================
+	// PATTERN BUILDING HELPERS
+	// =====================================================================
+
+	/**
+	 * Builds a type detection regex from generic pairs, specific terms, and
+	 * optional multi-word patterns. All alternatives are combined into a
+	 * single {@code \\b(?:...)\\b} pattern.
+	 */
+	private static Pattern buildTypePattern(String[][] pairs, String[] specific,
+			String[] multiWord) {
+		List<String> terms = new ArrayList<String>();
+		if (pairs != null) {
+			for (String[] pair : pairs) {
+				terms.add(pair[0]);
+				if (!pair[0].equals(pair[1])) {
+					terms.add(pair[1]);
+				}
+			}
+		}
+		if (specific != null) {
+			for (String s : specific) {
+				terms.add(s);
+			}
+		}
+		if (multiWord != null) {
+			for (String mw : multiWord) {
+				terms.add(mw);
+			}
+		}
+		return Pattern.compile("\\b(?:" + joinPipe(terms) + ")\\b");
+	}
+
+	/**
+	 * Collects either singular (column 0) or plural (column 1) forms from
+	 * multiple term arrays into a pipe-delimited alternation string.
+	 */
+	private static String collectForms(int column, String[][]... termArrays) {
+		List<String> forms = new ArrayList<String>();
+		Set<String> seen = new HashSet<String>();
+		for (String[][] terms : termArrays) {
+			for (String[] pair : terms) {
+				if (!seen.contains(pair[column])) {
+					forms.add(pair[column]);
+					seen.add(pair[column]);
+				}
+			}
+		}
+		return joinPipe(forms);
+	}
+
+	private static String joinPipe(List<String> items) {
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < items.size(); i++) {
+			if (i > 0) {
+				sb.append("|");
+			}
+			sb.append(items.get(i));
+		}
+		return sb.toString();
+	}
 
 	private QueryClassifier() {
 	}
@@ -156,11 +383,13 @@ public class QueryClassifier {
 			types.add(ChartSearchAiConstants.RESOURCE_TYPE_OBS);
 		}
 
-		// A category query has a broad indicator AND targets specific types.
-		// "any medications?" → category. "tell me about the patient" → not
-		// category (no specific type matched).
+		// A category query requires a category indicator NEAR a generic type
+		// keyword (structural proximity). This prevents "what is the latest
+		// CD4 count?" from triggering category expansion — the indicator
+		// "what" is too far from any generic type word.
 		boolean isCategory = !types.isEmpty()
-				&& CATEGORY_INDICATOR.matcher(lower).find();
+				&& (CATEGORY_QUERY_PATTERN.matcher(lower).find()
+						|| EVERY_EACH_CATEGORY_PATTERN.matcher(lower).find());
 
 		return new QueryIntent(types, isCategory);
 	}
