@@ -180,23 +180,6 @@ public class LlmInferenceService implements ChartSearchService {
 		return ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K;
 	}
 
-	private double getSimilarityRatio() {
-		String value = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_SIMILARITY_RATIO);
-		if (value != null && !value.trim().isEmpty()) {
-			try {
-				double parsed = Double.parseDouble(value.trim());
-				if (parsed > 0 && parsed < 1) {
-					return parsed;
-				}
-			}
-			catch (NumberFormatException e) {
-				log.warn("Invalid similarityRatio value '{}', using default", value);
-			}
-		}
-		return ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO;
-	}
-
 	private static final Set<String> QUERY_STOPWORDS = loadStopwords("query-stopwords.txt");
 
 	private static Set<String> loadStopwords(String fileName) {
@@ -287,14 +270,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 		String[] queryTerms = extractQueryTerms(normalizedQuery);
 		double keywordWeight = getKeywordWeight();
-		// Classify the question for TYPE DETECTION. Category vs focused is
-		// handled below by gap detection within type-matched records.
-		QueryClassifier.QueryIntent intent = QueryClassifier.classify(question);
-		double typeBoostFactor = intent.getTargetTypes().isEmpty() ? 1.0
-				: getTypeBoostFactor();
 
-		// Track the highest un-boosted score so thresholds are not inflated
-		// by the type boost. The boost only affects ranking, not filtering.
 		double maxBaseScore = 0;
 
 		List<ScoredEmbedding> scored = new ArrayList<ScoredEmbedding>();
@@ -325,14 +301,7 @@ public class LlmInferenceService implements ChartSearchService {
 				maxBaseScore = baseScore;
 			}
 
-			// Type boost for ranking: promotes records of the classified
-			// resource type but is NOT used for threshold computation.
-			double rankScore = baseScore;
-			if (intent.getTargetTypes().contains(ce.getResourceType())) {
-				rankScore = baseScore * typeBoostFactor;
-			}
-
-			scored.add(new ScoredEmbedding(ce, rankScore));
+			scored.add(new ScoredEmbedding(ce, baseScore));
 		}
 
 		Collections.sort(scored, new Comparator<ScoredEmbedding>() {
@@ -346,118 +315,36 @@ public class LlmInferenceService implements ChartSearchService {
 			return Collections.emptyList();
 		}
 
-		// Use the un-boosted top score for threshold computation so the
-		// type boost doesn't inflate the floor and cut non-boosted records.
-		double topScore = maxBaseScore;
-		if (topScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
+		if (maxBaseScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
 			log.debug("Top score {} is below absolute floor {}, returning empty",
-					String.format("%.4f", topScore),
+					String.format("%.4f", maxBaseScore),
 					ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR);
 			return Collections.emptyList();
 		}
 
-		int limit = Math.min(topK, scored.size());
-		double similarityRatio = getSimilarityRatio();
-		double ratioFloor = topScore * similarityRatio;
-		double minScore;
-		// When the top score is high (> 0.50), the query matched a specific
-		// record strongly and the ratio-based floor is reliable. When the top
-		// score is moderate, queries are fuzzier and OOV vocabulary can depress
-		// relevant records — the range-based floor provides needed leniency.
-		if (topScore > 0.50) {
-			minScore = ratioFloor;
-		} else {
-			double scoreRange = topScore - scored.get(limit - 1).score;
-			double rangeFloor = topScore - similarityRatio * scoreRange;
-			minScore = Math.min(ratioFloor, rangeFloor);
-		}
+		// Permissive floor: gap detection handles the real cutoff based on
+		// score distribution. The floor just excludes near-zero noise so
+		// the gap detector has a clean signal.
+		double minScore = ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2;
 
-		// Adaptive cutoff: find the natural cluster boundary using score gap
-		// detection. When the drop between consecutive scores exceeds a
-		// multiplier of the running average gap, that signals the end of the
-		// relevant cluster. The similarity ratio threshold and topK ceiling
-		// still apply as hard limits.
-		int adaptiveCutoff = findAdaptiveCutoff(scored, limit, minScore, getScoreGapMultiplier());
+		// Gap detection considers ALL records above the floor — no topK cap
+		// on the search window. The embedding model naturally clusters
+		// records by relevance: for specific queries ("HB results"), the
+		// relevant records score high and the gap appears early. For broad
+		// queries ("list all medications"), all type-matched records cluster
+		// together and the gap appears after the entire cluster. The score
+		// distribution itself determines how many records to return.
+		int adaptiveCutoff = findAdaptiveCutoff(scored, scored.size(),
+				minScore, getScoreGapMultiplier());
 
-		// --- Type-aware gap detection ---
-		// Instead of classifying queries as "category" vs "focused" (which
-		// requires fragile word-pattern heuristics), we apply the existing
-		// gap detection algorithm WITHIN type-matched records. The score
-		// distribution itself reveals the query's breadth:
-		//
-		// - Broad ("list all medications"): all medication records cluster at
-		//   similar scores → gap detector finds no significant drop → all
-		//   included automatically.
-		//
-		// - Specific ("HB results"): HB records score high, other OBS records
-		//   score low → gap detector finds the drop-off and stops.
-		//
-		// This eliminates the entire class of bugs where query wording
-		// ("results", "each", "every", indicator proximity) caused incorrect
-		// category/focused classification.
 		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
-		Set<String> includedKeys = new HashSet<String>();
-
-		if (!intent.getTargetTypes().isEmpty()) {
-			// Extract type-matched records (already sorted by score)
-			List<ScoredEmbedding> typeMatched = new ArrayList<ScoredEmbedding>();
-			for (ScoredEmbedding se : scored) {
-				if (intent.getTargetTypes().contains(
-						se.embedding.getResourceType())) {
-					typeMatched.add(se);
-				}
-			}
-
-			if (!typeMatched.isEmpty()) {
-				// Use a permissive floor for type-matched records: the type
-				// filter already provides a relevance signal, so we rely on
-				// gap detection for the cutoff rather than a strict floor.
-				double typeFloor = ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2;
-				int typeCutoff = findAdaptiveCutoff(typeMatched,
-						typeMatched.size(), typeFloor, getScoreGapMultiplier());
-
-				for (int i = 0; i < typeCutoff; i++) {
-					ChartEmbedding ce = typeMatched.get(i).embedding;
-					String key = ce.getResourceType() + ":"
-							+ ce.getResourceId();
-					if (!includedKeys.contains(key)) {
-						results.add(ce);
-						includedKeys.add(key);
-					}
-				}
-			}
-
-			// Fill remaining topK slots with contextual records from the
-			// global adaptive cutoff (e.g., assessment notes that provide
-			// context for the type-matched records).
-			for (int i = 0; i < adaptiveCutoff && results.size() < topK; i++) {
-				ChartEmbedding ce = scored.get(i).embedding;
-				String key = ce.getResourceType() + ":" + ce.getResourceId();
-				if (!includedKeys.contains(key)) {
-					results.add(ce);
-					includedKeys.add(key);
-				}
-			}
-
-			log.debug("Type-aware retrieval for types {}: {} type-matched + {} contextual = {} total (topK={})",
-					intent.getTargetTypes(),
-					(int) results.stream().filter(r -> intent.getTargetTypes()
-							.contains(r.getResourceType())).count(),
-					(int) results.stream().filter(r -> !intent.getTargetTypes()
-							.contains(r.getResourceType())).count(),
-					results.size(), topK);
-		} else {
-			// Untyped query: use global gap detection, capped at topK
-			for (int i = 0; i < adaptiveCutoff; i++) {
-				ChartEmbedding ce = scored.get(i).embedding;
-				results.add(ce);
-				includedKeys.add(ce.getResourceType() + ":"
-						+ ce.getResourceId());
-			}
+		for (int i = 0; i < adaptiveCutoff; i++) {
+			results.add(scored.get(i).embedding);
 		}
 
+		int logLimit = Math.min(topK, scored.size());
 		StringBuilder scores = new StringBuilder();
-		for (int i = 0; i < limit; i++) {
+		for (int i = 0; i < logLimit; i++) {
 			if (i > 0) {
 				scores.append(", ");
 			}
@@ -466,11 +353,11 @@ public class LlmInferenceService implements ChartSearchService {
 					.append(":").append(se.embedding.getResourceId())
 					.append("=").append(String.format("%.4f", se.score));
 		}
-		log.debug("Similarity scores: [{}], threshold: {}, adaptiveCutoff: {}", scores,
-				String.format("%.4f", minScore), adaptiveCutoff);
-		log.debug("Returning {} of {} candidates (topScore={}, minScore={}, max={})",
+		log.debug("Similarity scores: [{}], minScore: {}, adaptiveCutoff: {}",
+				scores, String.format("%.4f", minScore), adaptiveCutoff);
+		log.debug("Returning {} of {} candidates (topScore={})",
 				results.size(), scored.size(),
-				String.format("%.4f", topScore), String.format("%.4f", minScore), topK);
+				String.format("%.4f", maxBaseScore));
 		return results;
 	}
 
@@ -570,23 +457,6 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 		return ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT;
-	}
-
-	private static double getTypeBoostFactor() {
-		String value = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_TYPE_BOOST_FACTOR);
-		if (value != null && !value.trim().isEmpty()) {
-			try {
-				double parsed = Double.parseDouble(value.trim());
-				if (parsed >= 1.0 && parsed <= 3.0) {
-					return parsed;
-				}
-			}
-			catch (NumberFormatException e) {
-				log.warn("Invalid typeBoostFactor value '{}', using default", value);
-			}
-		}
-		return ChartSearchAiConstants.DEFAULT_TYPE_BOOST_FACTOR;
 	}
 
 	private static String getQueryPrefix() {
