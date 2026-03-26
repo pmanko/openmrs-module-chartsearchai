@@ -637,10 +637,14 @@ public class LlmInferenceServiceTest {
 		}
 
 		if (!refinementActivated) {
+			double maxScore = scored.isEmpty() ? 0 : scored.get(0).score;
+			double ratioFloor = maxScore * ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO;
+			double effectiveFloor = Math.max(ratioFloor,
+					ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR);
 			List<LlmInferenceService.ScoredEmbedding> strict =
 					new ArrayList<LlmInferenceService.ScoredEmbedding>();
 			for (LlmInferenceService.ScoredEmbedding se : candidates) {
-				if (se.score >= ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
+				if (se.score >= effectiveFloor) {
 					strict.add(se);
 				}
 			}
@@ -698,7 +702,8 @@ public class LlmInferenceServiceTest {
 		// Models: "tell me about this patient" — 2 terms after stopwords,
 		// no keyword matches. Gap detection finds no gap in the smooth
 		// distribution. With no keyword discrimination, the pipeline falls
-		// back to strict floor + topK cap (default 10).
+		// back to the ratio-based floor (topScore*0.80 = 0.40*0.80 = 0.32)
+		// + topK cap. Records scoring below 0.32 are filtered out.
 		double[] semantic = new double[12];
 		double[] keyword = new double[12];
 		for (int i = 0; i < 12; i++) {
@@ -708,8 +713,8 @@ public class LlmInferenceServiceTest {
 
 		int result = simulatePipeline(semantic, keyword, 0.3, 2);
 
-		assertEquals(10, result,
-				"Generic query with no keyword matches should fall back to topK cap");
+		assertTrue(result >= 8 && result <= 9,
+				"Generic query should return records above ratio floor (0.32), got " + result);
 	}
 
 	@Test
@@ -773,7 +778,8 @@ public class LlmInferenceServiceTest {
 		// Models: "vital signs" — semantic similarity separates relevant
 		// records but no keyword matches (record text doesn't contain
 		// "vital" or "signs"). With smooth scores and no keyword signal,
-		// the pipeline should return everything above the floor.
+		// the ratio floor (0.50*0.80=0.40) filters out the 2 lowest
+		// records (0.38 and 0.36) that are < 80% of the top score.
 		double[] semantic = new double[8];
 		double[] keyword = new double[8];
 		for (int i = 0; i < 8; i++) {
@@ -783,15 +789,15 @@ public class LlmInferenceServiceTest {
 
 		int result = simulatePipeline(semantic, keyword, 0.3, 2);
 
-		assertEquals(8, result,
-				"Smooth distribution with no keywords should return all records above floor");
+		assertEquals(6, result,
+				"Ratio floor (topScore*0.80=0.40) should exclude records below 80% of top score");
 	}
 
 	@Test
 	public void pipeline_keywordWeightZero_shouldDisableRefinement() {
 		// When keywordWeight is 0, keyword refinement should be completely
-		// disabled. Even if some records would have keyword matches, the
-		// pipeline should return the full gap-detected set.
+		// disabled. The pipeline falls back to the ratio floor
+		// (0.55*0.80=0.44) which keeps only the records within 80% of top.
 		double[] semantic = new double[8];
 		double[] keyword = new double[8];
 		for (int i = 0; i < 3; i++) {
@@ -805,8 +811,8 @@ public class LlmInferenceServiceTest {
 
 		int result = simulatePipeline(semantic, keyword, 0.0, 4);
 
-		assertEquals(8, result,
-				"With keywordWeight=0, keyword refinement should be disabled");
+		assertTrue(result >= 5 && result <= 6,
+				"With keywordWeight=0, ratio floor should filter low scores, got " + result);
 	}
 
 	@Test
@@ -839,8 +845,8 @@ public class LlmInferenceServiceTest {
 	public void pipeline_medicationQueryNoDrugOrders_shouldReturnContext() {
 		// Models: "medications prescribed started" — 3 terms. Patient has NO
 		// drug orders, so no records match keyword "medication". The pipeline
-		// should return the gap-detected set as context so the LLM can say
-		// "no medications found."
+		// falls back to the ratio floor (0.40*0.80=0.32) which still returns
+		// enough context for the LLM to say "no medications found."
 		double[] semantic = new double[10];
 		double[] keyword = new double[10];
 		for (int i = 0; i < 10; i++) {
@@ -850,8 +856,8 @@ public class LlmInferenceServiceTest {
 
 		int result = simulatePipeline(semantic, keyword, 0.3, 3);
 
-		assertEquals(10, result,
-				"When no records match keywords, should return full gap-detected set as context");
+		assertTrue(result >= 8 && result <= 9,
+				"No keyword matches should still return context via ratio floor, got " + result);
 	}
 
 	@Test
@@ -963,6 +969,34 @@ public class LlmInferenceServiceTest {
 
 		assertEquals(2, result,
 				"Focused query should return only records above strict floor when keywords can't help");
+	}
+
+	@Test
+	public void pipeline_focusedQueryRatioFloorExcludesMarginalRecords() {
+		// Regression test: "does the patient have cancer?" returned 3 records
+		// instead of 2. Photoallergy diagnosis scored 0.28 — above the
+		// absolute floor (0.25) but below topScore * similarityRatio
+		// (0.38 * 0.80 = 0.304). Scores are close enough that gap detection
+		// cannot separate them (gap 0.07 < minGap 0.10), so the strict
+		// fallback must use the ratio-based floor to exclude marginal records.
+		double[] semantic = new double[20];
+		double[] keyword = new double[20];
+		// 2 Kaposi sarcoma: moderately high semantic (close together)
+		semantic[0] = 0.38;
+		semantic[1] = 0.35;
+		// 1 Photoallergy: above absolute floor (0.25) but below ratio floor
+		semantic[2] = 0.28;
+		// 17 other records: below absolute floor
+		for (int i = 0; i < 17; i++) {
+			semantic[3 + i] = 0.22 - i * 0.002;
+		}
+		// No keyword matches for "cancer" in any record
+		Arrays.fill(keyword, 0.0);
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 1);
+
+		assertEquals(2, result,
+				"Ratio-based floor (topScore*0.80=0.304) should exclude Photoallergy at 0.28");
 	}
 
 	@Test

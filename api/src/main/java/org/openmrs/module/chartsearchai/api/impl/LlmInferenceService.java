@@ -180,6 +180,23 @@ public class LlmInferenceService implements ChartSearchService {
 		return ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K;
 	}
 
+	private double getSimilarityRatio() {
+		String value = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_SIMILARITY_RATIO);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				double parsed = Double.parseDouble(value.trim());
+				if (parsed > 0 && parsed < 1) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid similarityRatio value '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO;
+	}
+
 	private static final Set<String> QUERY_STOPWORDS = loadStopwords("query-stopwords.txt");
 
 	private static Set<String> loadStopwords(String fileName) {
@@ -362,13 +379,18 @@ public class LlmInferenceService implements ChartSearchService {
 		// When keyword refinement successfully identified a relevant subset,
 		// trust its judgment — those records ARE the answer. When it couldn't
 		// discriminate (no keywords matched or all records matched equally),
-		// fall back to the strict similarity floor + topK cap. This restores
-		// original precision for focused queries like "does the patient have
-		// cancer?" where only the semantically closest records should return.
+		// fall back to a ratio-based floor + topK cap. The ratio floor
+		// (topScore * similarityRatio, default 0.80) adapts to the model's
+		// confidence: high top scores set a strict bar, filtering out marginal
+		// records that the absolute floor would let through. The absolute
+		// floor (0.25) still acts as a safety net for low-confidence queries.
 		if (!refinementActivated) {
+			double ratioFloor = maxBaseScore * getSimilarityRatio();
+			double effectiveFloor = Math.max(ratioFloor,
+					ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR);
 			List<ScoredEmbedding> strict = new ArrayList<ScoredEmbedding>();
 			for (ScoredEmbedding se : candidates) {
-				if (se.score >= ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
+				if (se.score >= effectiveFloor) {
 					strict.add(se);
 				}
 			}
