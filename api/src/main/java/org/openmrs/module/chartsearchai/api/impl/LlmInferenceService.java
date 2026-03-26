@@ -348,7 +348,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// gap detection (e.g. "conditions" query where condition records get
 		// a keyword boost but the gap to non-conditions is < minGap).
 		if (keywordWeight > 0) {
-			candidates = refineByKeywords(candidates);
+			candidates = refineByKeywords(candidates, queryTerms.length);
 		}
 
 		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
@@ -445,36 +445,49 @@ public class LlmInferenceService implements ChartSearchService {
 
 	/**
 	 * Refines the gap-detected result set by keeping only records that have
-	 * keyword matches, when keyword matches identify a clear subset. This
-	 * catches cases where the score distribution is too smooth for gap
+	 * strong keyword matches, when those matches identify a clear subset.
+	 * This catches cases where the score distribution is too smooth for gap
 	 * detection to find a cutoff, but keyword matching provides a
 	 * discriminative type signal (e.g., "conditions" matching "Condition:"
 	 * in record text).
 	 *
-	 * <p>The refinement only activates when:
+	 * <p>The refinement requires at least 2 query terms to match (or half
+	 * for very short queries) to avoid false positives from incidental
+	 * single-term matches (e.g., "normal" appearing in many vital sign
+	 * interpretations). It only activates when:
 	 * <ul>
 	 * <li>At least {@link ChartSearchAiConstants#ADAPTIVE_MIN_RECORDS} records
-	 * have keyword matches (enough to be meaningful)</li>
+	 * have strong keyword matches (enough to be meaningful)</li>
 	 * <li>The keyword-matched records are a proper subset of the candidates
 	 * (not all records match, which would mean keywords aren't
 	 * discriminative)</li>
 	 * </ul>
 	 *
 	 * @param candidates the gap-detected result set with keyword scores
+	 * @param queryTermCount the number of query terms used for scoring
 	 * @return the refined set (keyword-matched only) or the original set
 	 *         if refinement conditions are not met
 	 */
-	static List<ScoredEmbedding> refineByKeywords(List<ScoredEmbedding> candidates) {
+	static List<ScoredEmbedding> refineByKeywords(List<ScoredEmbedding> candidates,
+			int queryTermCount) {
+		if (queryTermCount == 0) {
+			return candidates;
+		}
+		// Require at least 2 query terms to match (or half for short queries).
+		// This prevents records with incidental single-term matches (e.g.,
+		// "normal" in vital sign interpretations) from passing the filter.
+		double minKwScore = Math.min(2.0 / queryTermCount, 0.5);
+
 		List<ScoredEmbedding> keywordMatched = new ArrayList<ScoredEmbedding>();
 		for (ScoredEmbedding se : candidates) {
-			if (se.keywordScore > 0) {
+			if (se.keywordScore >= minKwScore) {
 				keywordMatched.add(se);
 			}
 		}
 		int minRecords = ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS;
 		if (keywordMatched.size() >= minRecords && keywordMatched.size() < candidates.size()) {
-			log.debug("Keyword refinement: keeping {} keyword-matched records out of {} candidates",
-					keywordMatched.size(), candidates.size());
+			log.debug("Keyword refinement: keeping {} of {} (minKwScore={})",
+					keywordMatched.size(), candidates.size(), String.format("%.3f", minKwScore));
 			return keywordMatched;
 		}
 		return candidates;

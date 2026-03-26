@@ -13,9 +13,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 
@@ -473,16 +475,18 @@ public class LlmInferenceServiceTest {
 
 	@Test
 	public void refineByKeywords_shouldFilterToKeywordMatchedSubset() {
-		// 3 records have keyword matches, 2 don't — should keep only the 3
+		// 3 records have strong keyword matches (2/6 terms), 2 don't.
+		// With queryTermCount=6, threshold = min(2/6, 0.5) = 0.333...
+		double kwMatch = 2.0 / 6; // exact fraction avoids floating-point mismatch
 		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
-				makeScoredEmbedding(0.70, 0.33),
-				makeScoredEmbedding(0.65, 0.33),
+				makeScoredEmbedding(0.70, kwMatch),
+				makeScoredEmbedding(0.65, kwMatch),
 				makeScoredEmbedding(0.60, 0.0),
-				makeScoredEmbedding(0.55, 0.33),
+				makeScoredEmbedding(0.55, kwMatch),
 				makeScoredEmbedding(0.50, 0.0));
 
 		List<LlmInferenceService.ScoredEmbedding> refined =
-				LlmInferenceService.refineByKeywords(candidates);
+				LlmInferenceService.refineByKeywords(candidates, 6);
 
 		assertEquals(3, refined.size(),
 				"Should keep only keyword-matched records when they form a proper subset");
@@ -494,10 +498,10 @@ public class LlmInferenceServiceTest {
 		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
 				makeScoredEmbedding(0.70, 0.50),
 				makeScoredEmbedding(0.65, 0.33),
-				makeScoredEmbedding(0.60, 0.17));
+				makeScoredEmbedding(0.60, 0.33));
 
 		List<LlmInferenceService.ScoredEmbedding> refined =
-				LlmInferenceService.refineByKeywords(candidates);
+				LlmInferenceService.refineByKeywords(candidates, 6);
 
 		assertEquals(3, refined.size(),
 				"Should return all records when keywords aren't discriminative");
@@ -512,7 +516,7 @@ public class LlmInferenceServiceTest {
 				makeScoredEmbedding(0.60, 0.0));
 
 		List<LlmInferenceService.ScoredEmbedding> refined =
-				LlmInferenceService.refineByKeywords(candidates);
+				LlmInferenceService.refineByKeywords(candidates, 6);
 
 		assertEquals(3, refined.size(),
 				"Should return all records when no keyword signal exists");
@@ -528,10 +532,236 @@ public class LlmInferenceServiceTest {
 				makeScoredEmbedding(0.55, 0.0));
 
 		List<LlmInferenceService.ScoredEmbedding> refined =
-				LlmInferenceService.refineByKeywords(candidates);
+				LlmInferenceService.refineByKeywords(candidates, 6);
 
 		assertEquals(4, refined.size(),
 				"Should return all records when too few have keyword matches");
+	}
+
+	@Test
+	public void refineByKeywords_shouldIgnoreIncidentalSingleTermMatches() {
+		// 2 records match 2/6 terms, 4 records match only 1/6.
+		// Threshold = min(2/6, 0.5) = 0.333. Only the 2 strong matches should pass.
+		double strongMatch = 2.0 / 6; // 0.333...
+		double weakMatch = 1.0 / 6;   // 0.166...
+		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+				makeScoredEmbedding(0.70, strongMatch),
+				makeScoredEmbedding(0.65, weakMatch),
+				makeScoredEmbedding(0.60, weakMatch),
+				makeScoredEmbedding(0.55, strongMatch),
+				makeScoredEmbedding(0.50, weakMatch),
+				makeScoredEmbedding(0.45, weakMatch));
+
+		List<LlmInferenceService.ScoredEmbedding> refined =
+				LlmInferenceService.refineByKeywords(candidates, 6);
+
+		assertEquals(2, refined.size(),
+				"Should not include records with only incidental single-term matches");
+	}
+
+	// --------------------------------------------------------
+	// Pipeline regression tests: verify the full scoring →
+	// gap detection → keyword refinement chain produces
+	// correct results for representative clinical query types.
+	// These tests should break if ANY future change causes a
+	// regression for a previously working query type.
+	// --------------------------------------------------------
+
+	/**
+	 * Simulates the full retrieval pipeline: combines semantic and keyword
+	 * scores, sorts, applies gap detection, then keyword refinement.
+	 * Returns the number of records in the final result set.
+	 */
+	private static int simulatePipeline(double[] semanticScores, double[] keywordScores,
+			double keywordWeight, int queryTermCount) {
+		double minScore = ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2;
+		double gapMultiplier = ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER;
+		double minGap = ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP;
+
+		List<LlmInferenceService.ScoredEmbedding> scored =
+				new ArrayList<LlmInferenceService.ScoredEmbedding>();
+		for (int i = 0; i < semanticScores.length; i++) {
+			double baseScore = semanticScores[i] + keywordWeight * keywordScores[i];
+			scored.add(makeScoredEmbedding(baseScore, keywordScores[i]));
+		}
+
+		Collections.sort(scored, new Comparator<LlmInferenceService.ScoredEmbedding>() {
+			@Override
+			public int compare(LlmInferenceService.ScoredEmbedding a,
+					LlmInferenceService.ScoredEmbedding b) {
+				return Double.compare(b.score, a.score);
+			}
+		});
+
+		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, scored.size(),
+				minScore, gapMultiplier, minGap);
+
+		List<LlmInferenceService.ScoredEmbedding> candidates =
+				new ArrayList<LlmInferenceService.ScoredEmbedding>();
+		for (int i = 0; i < cutoff; i++) {
+			candidates.add(scored.get(i));
+		}
+
+		if (keywordWeight > 0) {
+			candidates = LlmInferenceService.refineByKeywords(candidates, queryTermCount);
+		}
+
+		return candidates.size();
+	}
+
+	@Test
+	public void pipeline_specificLabQuery_shouldReturnOnlyMatchingRecords() {
+		// Models: "latest CD4 count" — 3 terms, CD4 records match 2/3.
+		// Gap detection should separate the 3 high-scoring CD4 records from
+		// the lower-scoring non-CD4 records. Keyword refinement should not
+		// interfere because all gap-detected records have keyword matches.
+		double[] semantic = { 0.72, 0.70, 0.68, 0.35, 0.33, 0.31, 0.29, 0.27 };
+		double[] keyword  = { 0.67, 0.67, 0.67, 0.00, 0.00, 0.00, 0.00, 0.00 };
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 3);
+
+		assertEquals(3, result,
+				"Specific lab query should return only matching records via gap detection");
+	}
+
+	@Test
+	public void pipeline_broadCategoryQuery_shouldReturnKeywordMatchedRecords() {
+		// Models: "active conditions first recorded resolved escalated" — 6 terms,
+		// conditions match 2/6 ("condition" + "active"). Scores overlap with
+		// non-conditions so gap detection can't separate them. Keyword refinement
+		// should filter to the 10 condition records.
+		double[] semantic = new double[25];
+		double[] keyword = new double[25];
+		// 10 conditions: semantic 0.55..0.37, keyword 2/6 = 0.333...
+		for (int i = 0; i < 10; i++) {
+			semantic[i] = 0.55 - i * 0.02;
+			keyword[i] = 2.0 / 6;
+		}
+		// 15 non-conditions: semantic 0.50..0.22, keyword 0
+		for (int i = 0; i < 15; i++) {
+			semantic[10 + i] = 0.50 - i * 0.02;
+			keyword[10 + i] = 0.0;
+		}
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 6);
+
+		assertEquals(10, result,
+				"Broad category query should return keyword-matched records when gap detection fails");
+	}
+
+	@Test
+	public void pipeline_genericQuery_shouldReturnBroadSet() {
+		// Models: "tell me about this patient" — 2 terms after stopwords,
+		// no keyword matches. Gap detection should return all records with
+		// no gap in the smooth distribution.
+		double[] semantic = new double[12];
+		double[] keyword = new double[12];
+		for (int i = 0; i < 12; i++) {
+			semantic[i] = 0.40 - i * 0.01;
+			keyword[i] = 0.0;
+		}
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 2);
+
+		assertEquals(12, result,
+				"Generic query with no keyword matches should return full gap-detected set");
+	}
+
+	@Test
+	public void pipeline_incidentalKeywordMatches_shouldNotOverFilter() {
+		// Models: "HB results values moving normal range" — 6 terms.
+		// HB records match 2 terms ("hb" + one other). Some vital signs match
+		// only "normal" (1 term = 0.17). Keyword refinement threshold = 0.33
+		// should exclude the single-term "normal" matches. Gap detection should
+		// separate HB from everything else via the keyword boost.
+		double[] semantic = new double[15];
+		double[] keyword = new double[15];
+		// 4 HB records: high semantic, keyword 2/6 = 0.33
+		for (int i = 0; i < 4; i++) {
+			semantic[i] = 0.65 - i * 0.02;
+			keyword[i] = 2.0 / 6;
+		}
+		// 6 records matching just "normal": medium semantic, keyword 1/6 = 0.17
+		for (int i = 0; i < 6; i++) {
+			semantic[4 + i] = 0.48 - i * 0.02;
+			keyword[4 + i] = 1.0 / 6;
+		}
+		// 5 records with no keyword match: low semantic
+		for (int i = 0; i < 5; i++) {
+			semantic[10 + i] = 0.35 - i * 0.02;
+			keyword[10 + i] = 0.0;
+		}
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 6);
+
+		assertTrue(result <= 4,
+				"Should not include records with only incidental 'normal' keyword matches; got " + result);
+	}
+
+	@Test
+	public void pipeline_gapDetectionWorks_keywordRefinementShouldNotInterfere() {
+		// Models: a query where gap detection correctly separates relevant
+		// records (with keyword matches) from irrelevant (without). The
+		// keyword refinement should NOT further reduce the set because all
+		// gap-detected records already have keyword matches.
+		double[] semantic = new double[10];
+		double[] keyword = new double[10];
+		// 5 relevant: high semantic, keyword 2/3 = 0.67
+		for (int i = 0; i < 5; i++) {
+			semantic[i] = 0.70 - i * 0.02;
+			keyword[i] = 2.0 / 3;
+		}
+		// 5 irrelevant: low semantic, no keyword match
+		for (int i = 0; i < 5; i++) {
+			semantic[5 + i] = 0.35 - i * 0.02;
+			keyword[5 + i] = 0.0;
+		}
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 3);
+
+		assertEquals(5, result,
+				"When gap detection works, keyword refinement should not reduce the result set");
+	}
+
+	@Test
+	public void pipeline_smoothDistributionNoKeywords_shouldReturnAllAboveFloor() {
+		// Models: "vital signs" — semantic similarity separates relevant
+		// records but no keyword matches (record text doesn't contain
+		// "vital" or "signs"). With smooth scores and no keyword signal,
+		// the pipeline should return everything above the floor.
+		double[] semantic = new double[8];
+		double[] keyword = new double[8];
+		for (int i = 0; i < 8; i++) {
+			semantic[i] = 0.50 - i * 0.02;
+			keyword[i] = 0.0;
+		}
+
+		int result = simulatePipeline(semantic, keyword, 0.3, 2);
+
+		assertEquals(8, result,
+				"Smooth distribution with no keywords should return all records above floor");
+	}
+
+	@Test
+	public void pipeline_keywordWeightZero_shouldDisableRefinement() {
+		// When keywordWeight is 0, keyword refinement should be completely
+		// disabled. Even if some records would have keyword matches, the
+		// pipeline should return the full gap-detected set.
+		double[] semantic = new double[8];
+		double[] keyword = new double[8];
+		for (int i = 0; i < 3; i++) {
+			semantic[i] = 0.55 - i * 0.02;
+			keyword[i] = 0.50;
+		}
+		for (int i = 0; i < 5; i++) {
+			semantic[3 + i] = 0.48 - i * 0.02;
+			keyword[3 + i] = 0.0;
+		}
+
+		int result = simulatePipeline(semantic, keyword, 0.0, 4);
+
+		assertEquals(8, result,
+				"With keywordWeight=0, keyword refinement should be disabled");
 	}
 
 	private static Date makeDate(int year, int month, int day) {
