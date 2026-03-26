@@ -1342,6 +1342,71 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void pipeline_coughQuery_realData_shouldReturnExactlyOneRecord() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "any cough?" → expected: exactly 1 record mentioning cough.
+		// "any" is a stopword, "cough" is 5 chars (<7, no stem matching).
+		// Only record #51 mentions "cough": "New complaint of persistent cough for 2 weeks."
+
+		String normalized = LlmInferenceService.stripQueryStopwords("any cough?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertArrayEquals(new String[] { "cough" }, queryTerms,
+				"Only 'cough' should remain after stopword removal");
+
+		String[] recordTexts = {
+				"Clinical diagnosis: Fetishism: New complaint of persistent cough for 2 weeks.",
+				"Clinical diagnosis: Fetishism: Annual physical examination. Labs ordered.",
+				"Clinical diagnosis: Fetishism: Patient stable on current regimen.",
+				"Clinical diagnosis: Fetishism: Presenting with fever and body aches for 3 days.",
+				"Clinical diagnosis: Fetishism: Patient presents with mild symptoms. Advised rest and fluids.",
+				"Clinical diagnosis: Fetishism: Routine checkup. No significant findings.",
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Clinical diagnosis: HIV Disease. Certainty: CONFIRMED",
+				"Clinical diagnosis: Gastroenteritis. Certainty: PROVISIONAL",
+				"Clinical observation: Test — Respiratory Rate: 18.0",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Clinical observation: Test — Temperature (C): 36.7",
+				"Patient allergy: Beef (food allergen). Severity: Severe",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
+				"Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
+		};
+
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+
+		assertEquals(1.0, keyword[0], 0.001, "Cough record should match 'cough' exactly");
+		for (int i = 1; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001,
+					"Non-cough record should not match: " + recordTexts[i].substring(0, 30));
+		}
+
+		double[] semantic = {
+				0.48, // cough complaint (direct match)
+				0.30, // annual physical
+				0.28, // stable on regimen
+				0.32, // fever and body aches (respiratory-adjacent)
+				0.29, // mild symptoms
+				0.25, // routine checkup
+				0.33, // TB (associated with cough)
+				0.24, // HIV
+				0.22, // Gastroenteritis
+				0.26, // Respiratory Rate (respiratory-adjacent)
+				0.18, // Pulse
+				0.17, // Temperature
+				0.15, // Allergy
+				0.14, // Drug order
+				0.20, // Assessment
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(1, result,
+				"Query 'any cough?' should return exactly 1 cough record");
+	}
+
+	@Test
 	public void pipeline_doesPatientHaveAllergiesQuery_realData_shouldReturnExactlyTwoRecords() {
 		// Variant: "does the patient have any allergies?" — all words except "allergies"
 		// are stopwords → <2 content words → full query preserved for embedding.
