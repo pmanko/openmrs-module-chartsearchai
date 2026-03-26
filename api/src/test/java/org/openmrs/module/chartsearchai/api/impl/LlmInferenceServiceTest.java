@@ -9,6 +9,7 @@
  */
 package org.openmrs.module.chartsearchai.api.impl;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -1092,6 +1093,75 @@ public class LlmInferenceServiceTest {
 
 		assertEquals(2, result,
 				"Allergy query should return only allergy records via stem-based keyword refinement");
+	}
+
+	@Test
+	public void pipeline_cd4CountQuery_realData_shouldReturnExactlyTwoRecords() {
+		// Real patient dataset: 16-year-old Male with 153 records.
+		// Query: "What is the current CD4 Count?" → expected: exactly 2 CD4 records.
+
+		// Step 1: Normalize query and extract terms
+		String normalized = LlmInferenceService.stripQueryStopwords("What is the current CD4 Count?");
+		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
+		assertArrayEquals(new String[] { "cd4", "count" }, queryTerms,
+				"Should have 'cd4' and 'count' after stopword removal");
+
+		// Step 2: Representative records with actual text (prefix + content)
+		String[] recordTexts = {
+				"Clinical observation: Test — CD4 Count: 988.0",
+				"Clinical observation: Test — CD4 Count: 1191.0",
+				"Clinical observation: Test — Pulse: 95.0",
+				"Clinical observation: Test — Temperature (C): 36.7",
+				"Clinical observation: Test — Weight (kg): 94.0",
+				"Clinical observation: Test — Height (cm): 131.0",
+				"Clinical observation: Test — Respiratory Rate: 18.0",
+				"Clinical observation: Test — Systolic Blood Pressure: 97.0",
+				"Clinical observation: Test — Diastolic Blood Pressure: 99.0",
+				"Clinical observation: Test — Blood Oxygen Saturation: 88.0",
+				"Clinical diagnosis: Kaposi sarcoma oral: 3.91",
+				"Medical condition: Tuberculosis. Status: ACTIVE",
+				"Medical condition: Hypertension. Status: ACTIVE",
+				"Patient allergy: Beef (food allergen). Severity: Severe",
+				"Medication prescription: Drug order: Azithromycin. Dose: 2.0",
+		};
+
+		// Step 3: Compute ACTUAL keyword scores
+		double[] keyword = new double[recordTexts.length];
+		for (int i = 0; i < recordTexts.length; i++) {
+			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, recordTexts[i]);
+		}
+
+		// Verify keyword matching: only CD4 Count records match both terms
+		assertEquals(1.0, keyword[0], 0.001, "CD4 Count #1 should match both 'cd4' and 'count'");
+		assertEquals(1.0, keyword[1], 0.001, "CD4 Count #2 should match both 'cd4' and 'count'");
+		for (int i = 2; i < keyword.length; i++) {
+			assertEquals(0.0, keyword[i], 0.001,
+					"Non-CD4 record should not match: " + recordTexts[i].substring(0, 30));
+		}
+
+		// Step 4: Simulate pipeline with realistic semantic scores
+		double[] semantic = {
+				0.58, // CD4 Count: 988.0 (high - exact concept match)
+				0.54, // CD4 Count: 1191.0
+				0.30, // Pulse (generic test observation)
+				0.28, // Temperature
+				0.27, // Weight
+				0.26, // Height
+				0.25, // Respiratory Rate
+				0.24, // Systolic BP
+				0.23, // Diastolic BP
+				0.22, // Blood Oxygen Saturation
+				0.20, // Kaposi sarcoma
+				0.18, // Tuberculosis
+				0.17, // Hypertension
+				0.15, // Allergy
+				0.14, // Drug order
+		};
+
+		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+
+		assertEquals(2, result,
+				"Query 'What is the current CD4 Count?' should return exactly 2 CD4 records");
 	}
 
 	@Test
