@@ -11,6 +11,7 @@ package org.openmrs.module.chartsearchai.api.impl;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -2425,6 +2426,26 @@ public class LlmInferenceServiceTest {
 
 		assertEquals(Collections.emptyList(),
 				result, "Should return no records — dataset has no HB/hemoglobin data");
+	}
+
+	@Test
+	public void realModel_cancerQuery_zScoreGateShouldNotBlock() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "cancer?" has zero keyword matches but z-score > 2.0, so the
+		// z-score gate should let it through. The dataset contains a
+		// Kaposi sarcoma diagnosis which is semantically close to cancer.
+		List<Integer> result = runRealModelPipeline(
+				"does the patient have cancer?", 10);
+
+		assertFalse(result.isEmpty(),
+				"Z-score gate should pass — cancer query has a genuine "
+				+ "semantic outlier (Kaposi sarcoma)");
+		// Records 11 and 88 are "Diagnosis — Kaposi sarcoma oral" (0-indexed)
+		assertTrue(result.contains(11) || result.contains(88),
+				"Should include at least one Kaposi sarcoma record (11 or 88), "
+				+ "got: " + result);
 	}
 
 	@Test
