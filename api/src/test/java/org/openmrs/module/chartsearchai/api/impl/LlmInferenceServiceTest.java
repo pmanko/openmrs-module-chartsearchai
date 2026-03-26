@@ -808,11 +808,18 @@ public class LlmInferenceServiceTest {
 	 */
 	private static int simulatePipeline(double[] semanticScores, double[] keywordScores,
 			double keywordWeight, int queryTermCount) {
-		return simulatePipeline(semanticScores, keywordScores, keywordWeight, queryTermCount, 10);
+		return simulatePipelineIndices(semanticScores, keywordScores, keywordWeight,
+				queryTermCount, 10).size();
 	}
 
 	private static int simulatePipeline(double[] semanticScores, double[] keywordScores,
 			double keywordWeight, int queryTermCount, int topK) {
+		return simulatePipelineIndices(semanticScores, keywordScores, keywordWeight,
+				queryTermCount, topK).size();
+	}
+
+	private static List<Integer> simulatePipelineIndices(double[] semanticScores,
+			double[] keywordScores, double keywordWeight, int queryTermCount, int topK) {
 		double minScore = ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2;
 		double gapMultiplier = ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER;
 		double minGap = ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP;
@@ -826,7 +833,7 @@ public class LlmInferenceServiceTest {
 			}
 		}
 		if (maxSemanticScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
-			return 0;
+			return new ArrayList<Integer>();
 		}
 
 		List<LlmInferenceService.ScoredEmbedding> scored =
@@ -835,7 +842,10 @@ public class LlmInferenceServiceTest {
 		for (int i = 0; i < semanticScores.length; i++) {
 			double keywordBonus = keywordScores[i] >= bonusThreshold ? keywordScores[i] : 0.0;
 			double baseScore = semanticScores[i] + keywordWeight * keywordBonus;
-			scored.add(makeScoredEmbedding(baseScore, keywordScores[i], semanticScores[i]));
+			LlmInferenceService.ScoredEmbedding se =
+					makeScoredEmbedding(baseScore, keywordScores[i], semanticScores[i]);
+			se.embedding.setTextContent(String.valueOf(i));
+			scored.add(se);
 		}
 
 		Collections.sort(scored, new Comparator<LlmInferenceService.ScoredEmbedding>() {
@@ -881,7 +891,12 @@ public class LlmInferenceServiceTest {
 			}
 		}
 
-		return candidates.size();
+		List<Integer> indices = new ArrayList<Integer>();
+		for (LlmInferenceService.ScoredEmbedding se : candidates) {
+			indices.add(Integer.parseInt(se.embedding.getTextContent()));
+		}
+		Collections.sort(indices);
+		return indices;
 	}
 
 	@Test
@@ -1314,10 +1329,11 @@ public class LlmInferenceServiceTest {
 		semantic[  4] = 0.15; // [  5]
 		semantic[  0] = 0.14; // [  1]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(2, result,
-				"Should return exactly 2 record(s)");
+		// [9] CD4 Count: 988, [86] CD4 Count: 1191
+		assertEquals(Arrays.asList(8, 85),
+				result, "Should return exactly 2 record(s)");
 	}
 
 	@Test
@@ -1352,10 +1368,11 @@ public class LlmInferenceServiceTest {
 		semantic[ 11] = 0.19; // [ 12]
 		semantic[  7] = 0.17; // [  8]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(2, result,
-				"Should return exactly 2 record(s)");
+		// [9] CD4 Count: 988, [86] CD4 Count: 1191
+		assertEquals(Arrays.asList(8, 85),
+				result, "Should return exactly 2 record(s)");
 	}
 
 	@Test
@@ -1400,10 +1417,11 @@ public class LlmInferenceServiceTest {
 		semantic[ 29] = 0.16; // [ 30]
 		semantic[ 55] = 0.16; // [ 56]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(2, result,
-				"Should return exactly 2 record(s)");
+		// [12] Kaposi sarcoma: 3.91, [89] Kaposi sarcoma: 3.5
+		assertEquals(Arrays.asList(11, 88),
+				result, "Should return exactly 2 record(s)");
 	}
 
 	@Test
@@ -1441,10 +1459,11 @@ public class LlmInferenceServiceTest {
 		semantic[ 62] = 0.17; // [ 63]
 		semantic[ 72] = 0.16; // [ 73]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(2, result,
-				"Should return exactly 2 record(s)");
+		// [12] Kaposi sarcoma: 3.91, [89] Kaposi sarcoma: 3.5
+		assertEquals(Arrays.asList(11, 88),
+				result, "Should return exactly 2 record(s)");
 	}
 
 	@Test
@@ -1477,10 +1496,11 @@ public class LlmInferenceServiceTest {
 		semantic[ 12] = 0.17; // [ 13]
 		semantic[ 62] = 0.17; // [ 63]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(2, result,
-				"Should return exactly 2 record(s)");
+		// [12] Kaposi sarcoma: 3.91, [89] Kaposi sarcoma: 3.5
+		assertEquals(Arrays.asList(11, 88),
+				result, "Should return exactly 2 record(s)");
 	}
 
 	@Test
@@ -1507,9 +1527,9 @@ public class LlmInferenceServiceTest {
 		double[] semantic = new double[FULL_PATIENT_DATASET.length];
 		Arrays.fill(semantic, 0.15);
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(0, result,
+		assertEquals(Collections.emptyList(), result,
 				"Should return no record(s)");
 	}
 
@@ -1538,9 +1558,9 @@ public class LlmInferenceServiceTest {
 		double[] semantic = new double[FULL_PATIENT_DATASET.length];
 		Arrays.fill(semantic, 0.15);
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(0, result,
+		assertEquals(Collections.emptyList(), result,
 				"Should return no record(s)");
 	}
 
@@ -1583,10 +1603,11 @@ public class LlmInferenceServiceTest {
 		semantic[ 11] = 0.15; // [ 12]
 		semantic[ 88] = 0.14; // [ 89]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(4, result,
-				"Should return exactly 4 record(s)");
+		// [1] Drug order: Azithromycin (REVISE), [2] Drug order: Azithromycin (NEW), [57] Visit note: Medication adjusted, [92] Visit note: Medication adjusted
+		assertEquals(Arrays.asList(0, 1, 56, 91),
+				result, "Should return exactly 4 record(s)");
 	}
 
 	@Test
@@ -1623,10 +1644,11 @@ public class LlmInferenceServiceTest {
 		semantic[ 12] = 0.17; // [ 13]
 		semantic[ 62] = 0.17; // [ 63]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(2, result,
-				"Should return exactly 2 record(s)");
+		// [8] Condition: TB, [55] Condition: Hypertension
+		assertEquals(Arrays.asList(7, 54),
+				result, "Should return exactly 2 record(s)");
 	}
 
 	@Test
@@ -1670,10 +1692,11 @@ public class LlmInferenceServiceTest {
 		semantic[  8] = 0.14; // [  9]
 		semantic[ 85] = 0.14; // [ 86]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(3, result,
-				"Should return exactly 3 record(s)");
+		// [30] Assessment: Anemia, [56] Assessment: Anemia, [73] Dx: Anemia (PROVISIONAL)
+		assertEquals(Arrays.asList(29, 55, 72),
+				result, "Should return exactly 3 record(s)");
 	}
 
 	@Test
@@ -1707,10 +1730,11 @@ public class LlmInferenceServiceTest {
 		semantic[ 12] = 0.17; // [ 13]
 		semantic[ 62] = 0.17; // [ 63]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(2, result,
-				"Should return exactly 2 record(s)");
+		// [8] Condition: TB, [55] Condition: Hypertension
+		assertEquals(Arrays.asList(7, 54),
+				result, "Should return exactly 2 record(s)");
 	}
 
 	@Test
@@ -1763,10 +1787,11 @@ public class LlmInferenceServiceTest {
 		semantic[ 11] = 0.14; // [ 12]
 		semantic[ 88] = 0.14; // [ 89]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(6, result,
-				"Should return exactly 6 record(s)");
+		// [40] Dx: HIV Disease (CONFIRMED), [41] Assessment: HIV Disease, [69] Assessment: HIV Disease, [70] Dx: HIV Disease (PROVISIONAL), [72] Dx: HIV Disease (CONFIRMED), [111] Dx: HIV Disease (CONFIRMED)
+		assertEquals(Arrays.asList(39, 40, 68, 69, 71, 110),
+				result, "Should return exactly 6 record(s)");
 	}
 
 	@Test
@@ -1801,10 +1826,11 @@ public class LlmInferenceServiceTest {
 		semantic[ 11] = 0.15; // [ 12]
 		semantic[ 88] = 0.14; // [ 89]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(2, result,
-				"Should return exactly 2 record(s)");
+		// [5] Allergy: Beef, [54] Allergy: Fomepizole
+		assertEquals(Arrays.asList(4, 53),
+				result, "Should return exactly 2 record(s)");
 	}
 
 	@Test
@@ -1839,10 +1865,11 @@ public class LlmInferenceServiceTest {
 		semantic[ 52] = 0.16; // [ 53]
 		semantic[ 12] = 0.15; // [ 13]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(1, result,
-				"Should return exactly 1 record(s)");
+		// [51] Cough visit note
+		assertEquals(Arrays.asList(50),
+				result, "Should return exactly 1 record(s)");
 	}
 
 	@Test
@@ -1875,10 +1902,11 @@ public class LlmInferenceServiceTest {
 		semantic[ 39] = 0.18; // [ 40]
 		semantic[ 11] = 0.15; // [ 12]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(2, result,
-				"Should return exactly 2 record(s)");
+		// [5] Allergy: Beef, [54] Allergy: Fomepizole
+		assertEquals(Arrays.asList(4, 53),
+				result, "Should return exactly 2 record(s)");
 	}
 
 	@Test
@@ -1909,10 +1937,11 @@ public class LlmInferenceServiceTest {
 		semantic[ 54] = 0.19; // [ 55]
 		semantic[ 39] = 0.18; // [ 40]
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(2, result,
-				"Should return exactly 2 record(s)");
+		// [5] Allergy: Beef, [54] Allergy: Fomepizole
+		assertEquals(Arrays.asList(4, 53),
+				result, "Should return exactly 2 record(s)");
 	}
 
 
@@ -1972,10 +2001,11 @@ public class LlmInferenceServiceTest {
 		semantic[ 17] = 0.50; // [ 18] Temperature: 36.7
 		semantic[ 25] = 0.50; // [ 26] Temperature: 37.7
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(8, result,
-				"Should return exactly 8 records: 4 BP + 2 weight + 2 temperature");
+		// [18] Temperature: 36.7, [19] Weight: 94.0, [23] Systolic BP: 97.0, [24] Diastolic BP: 99.0, [26] Temperature: 37.7, [27] Weight: 107.0, [37] Systolic BP: 122.0, [49] Diastolic BP: 99.0
+		assertEquals(Arrays.asList(17, 18, 22, 23, 25, 26, 36, 48),
+				result, "Should return exactly 8 records: 4 BP + 2 weight + 2 temperature");
 	}
 
 	@Test
@@ -2057,10 +2087,11 @@ public class LlmInferenceServiceTest {
 		semantic[8]   = 0.14; // [9] CD4 Count
 		semantic[85]  = 0.14; // [86] CD4 Count
 
-		int result = simulatePipeline(semantic, keyword, 0.3, queryTerms.length);
+		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
-		assertEquals(2, result,
-				"Query 'any history of cancer?' should return exactly 2 Kaposi sarcoma records");
+		// [12] Kaposi sarcoma: 3.91, [89] Kaposi sarcoma: 3.5
+		assertEquals(Arrays.asList(11, 88),
+				result, "Query 'any history of cancer?' should return exactly 2 Kaposi sarcoma records");
 	}
 
 
