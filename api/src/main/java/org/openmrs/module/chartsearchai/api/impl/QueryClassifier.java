@@ -138,13 +138,14 @@ public class QueryClassifier {
 	private static final String[][] LAB_TERMS = {
 			{"lab", "labs"},
 			{"test", "tests"},
-			{"result", "results"},
 			{"panel", "panels"},
 			{"bloodwork", "bloodwork"},
 	};
 	private static final String[] LAB_SPECIFIC = {
+			"result", "results",
 			"level", "levels", "count", "counts", "specimen",
-			"hba1c", "hemoglobin", "glucose", "creatinine",
+			"hba1c", "hemoglobin", "haemoglobin", "hb",
+			"glucose", "creatinine",
 			"wbc", "rbc", "platelet", "platelets", "cd4"
 	};
 	private static final String[] LAB_MULTI_WORD = {"blood\\s*work"};

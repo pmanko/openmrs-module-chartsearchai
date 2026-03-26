@@ -283,4 +283,28 @@ public class QueryClassifierTest {
 		assertTrue(intent.isCategoryQuery());
 		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION));
 	}
+
+	@Test
+	public void classify_shouldNotBeCategoryForSpecificLabWithResults() {
+		// "HB results over time" asks about a specific lab — "results" is a
+		// qualifier, not a category signal. Must be focused.
+		QueryIntent intent = QueryClassifier.classify(
+				"What are this patient's HB results over time?");
+		assertFalse(intent.isCategoryQuery());
+		assertTrue(intent.getTargetTypes().contains(ChartSearchAiConstants.RESOURCE_TYPE_OBS));
+	}
+
+	@Test
+	public void classify_shouldBeCategoryForPluralLabs() {
+		// "labs" (plural TERMS word) IS a category signal
+		QueryIntent intent = QueryClassifier.classify("show all labs");
+		assertTrue(intent.isCategoryQuery());
+	}
+
+	@Test
+	public void classify_shouldBeCategoryForPluralTests() {
+		// "tests" (plural TERMS word) IS a category signal
+		QueryIntent intent = QueryClassifier.classify("list all tests");
+		assertTrue(intent.isCategoryQuery());
+	}
 }
