@@ -587,7 +587,7 @@ public class LlmInferenceService implements ChartSearchService {
 			double gap = semanticSorted.get(i - 1) - semanticSorted.get(i);
 
 			// Only consider cutting after the minimum number of records, and
-			// only when we have at least 2 prior gaps to form a meaningful
+			// only when we have at least 1 prior gap to compute a baseline
 			// average (i - 1 gaps have been accumulated at this point).
 			if (i >= minRecords && i >= 2) {
 				double avgGap = gapSum / (i - 1);
@@ -613,11 +613,11 @@ public class LlmInferenceService implements ChartSearchService {
 	 * discriminative type signal (e.g., "conditions" matching "Condition:"
 	 * in record text).
 	 *
-	 * <p>The refinement requires at least 1 matching term for short queries
-	 * (1-3 terms), scaling up to 2 for longer queries (4+ terms). This
-	 * avoids false positives from incidental single-term matches (e.g.,
-	 * "normal" appearing in many vital sign interpretations) while allowing
-	 * short queries to work with a single discriminative match. It only
+	 * <p>The refinement requires at least 1 matching query term for any
+	 * query length ({@code minKwScore = 1.0 / queryTermCount}). Any keyword
+	 * relevance is sufficient because gap detection is the primary noise
+	 * filter — refinement only separates "has keyword evidence" from "has
+	 * no keyword evidence". It only
 	 * activates when:
 	 * <ul>
 	 * <li>At least {@link ChartSearchAiConstants#ADAPTIVE_MIN_RECORDS} records

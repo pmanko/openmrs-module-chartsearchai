@@ -940,11 +940,9 @@ public class LlmInferenceServiceTest {
 			}
 		}
 
-		// Inter-candidate coherence filter (mirrors production pipeline)
-		if (candidates.size() >= 3
-				&& !candidates.isEmpty()
-				&& candidates.get(0).embedding.getEmbedding() != null
-				&& candidates.get(0).embedding.getEmbedding().length > 0) {
+		// Inter-candidate coherence filter (mirrors production pipeline).
+		// filterByCoherence validates embedding vectors internally.
+		if (candidates.size() >= 3) {
 			candidates = LlmInferenceService.filterByCoherence(candidates);
 		}
 
