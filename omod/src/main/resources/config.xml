@@ -136,6 +136,12 @@ Question: Does the patient have diabetes?
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.embedding.minScoreGap</property>
+		<defaultValue>0.10</defaultValue>
+		<description>Minimum absolute gap between consecutive similarity scores required for the adaptive cutoff detector to trigger. Prevents premature cutting when a relatively large gap (compared to a tight cluster's running average) is still small in absolute terms. Only applies when gap detection is active via chartsearchai.embedding.scoreGapMultiplier. Default: 0.10.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.embedding.modelFilePath</property>
 		<defaultValue>chartsearchai/model.onnx</defaultValue>
 		<description>Relative path, including the filename, within the OpenMRS application data directory to the ONNX embedding model file. Required when embedding pre-filtering is enabled (chartsearchai.embedding.preFilter is true, the default). Example: chartsearchai/all-MiniLM-L6-v2.onnx (resolves to &lt;application-data-directory&gt;/chartsearchai/all-MiniLM-L6-v2.onnx). Download the model.onnx file from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 and rename it. Path traversal (e.g. "..") is not allowed.</description>
