@@ -121,6 +121,22 @@ When `chartsearchai.embedding.preFilter` is `true` (default), patient records ar
 
 **Elasticsearch pipeline** (`chartsearchai.retrieval.pipeline=elasticsearch`): Uses Elasticsearch hybrid search combining BM25 text search with kNN dense vector search via Reciprocal Rank Fusion (RRF). Requires Elasticsearch 8.14+ configured in OpenMRS (set `hibernate.search.backend.uris` in runtime properties). Also requires the ONNX embedding model (same as the embedding pipeline) to compute vectors for the kNN side of the hybrid search. Patient records are indexed into a shared `chartsearchai-patient-records` Elasticsearch index with both text and embedding vector fields. The RRF algorithm fuses rankings from both signals — this means queries like "any cancer?" can find semantic matches (e.g. Kaposi sarcoma) via kNN even when the literal term is absent from the records, while also benefiting from BM25's lexical matching. If Elasticsearch is not available at query time, the pipeline automatically falls back to the embedding pipeline. After switching embedding models, delete the `chartsearchai-patient-records` index from Elasticsearch — it will be recreated with the new model's dimensions on the next patient access.
 
+**Choosing a pipeline:**
+
+| Consideration | Embedding *(default)* | Lucene | Elasticsearch |
+|--------------|----------------------|--------|---------------|
+| External dependencies | ONNX model files only | None | Elasticsearch 8.14+ cluster + ONNX model files |
+| Semantic matching (e.g., "cancer" finds "Kaposi sarcoma") | Yes | No | Yes (via kNN) |
+| Absent-data detection (returns "no records about X" instead of false positives) | Yes (z-score gate) | No | No |
+| Type-aware auto-expand (e.g., "any conditions?" returns all conditions) | Yes | No | No |
+| Adaptive result filtering (gap detection, similarity ratio) | Yes | No | No |
+| Keyword matching | Yes (hybrid scoring) | Yes (BM25 with stemming) | Yes (BM25 + kNN via RRF) |
+| Tunable parameters | Many (topK, similarityRatio, scoreGapMultiplier, keywordWeight, etc.) | Few (topK only) | Few (topK only; scoring delegated to Elasticsearch) |
+| Compute location | In-process (JVM) | In-process (JVM) | Elasticsearch cluster |
+| Graceful fallback | N/A (default) | Falls back to full chart on error | Falls back to embedding pipeline |
+
+The **embedding pipeline** is recommended for most deployments — it runs entirely in-process, has the most sophisticated filtering (z-score gate for absent-data detection, gap detection for adaptive result cutoff, type-aware expansion), and requires no external services. The **Lucene pipeline** is the simplest option when the ONNX model is unavailable, but lacks semantic understanding. The **Elasticsearch pipeline** is best when you already have an ES cluster in your infrastructure and want to offload retrieval compute, but it lacks the embedding pipeline's absent-data detection and adaptive filtering — RRF always returns results from at least the kNN side, even when the patient has no relevant records.
+
 ### Testing the Elasticsearch pipeline locally
 
 To test the Elasticsearch pipeline with the OpenMRS SDK:
