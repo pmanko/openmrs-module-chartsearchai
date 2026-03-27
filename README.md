@@ -33,10 +33,11 @@ Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<op
 | Model | RAM Needed | Chat Template | Download |
 |-------|-----------|---------------|----------|
 | Llama 3.2 3B | ~6GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) |
+| MedGemma 4B | ~5GB total | `gemma` | [GGUF](https://huggingface.co/bartowski/google_medgemma-4b-it-GGUF) |
 | Llama 3.3 8B *(default)* | ~10GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF) |
 | Mistral Nemo 12B | ~12GB total | `mistral` | [GGUF](https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF) |
 
-Larger models produce more accurate answers with better instruction following. Smaller models use less RAM but may produce lower quality responses. To switch models, update `chartsearchai.llm.modelFilePath` and `chartsearchai.llm.chatTemplate` — no rebuild needed.
+MedGemma is a medical-domain fine-tune of Gemma 3 by Google, trained on clinical text comprehension — it may produce more accurate clinical answers than general-purpose models of similar size. Larger models produce more accurate answers with better instruction following. Smaller models use less RAM but may produce lower quality responses. To switch models, update `chartsearchai.llm.modelFilePath` and `chartsearchai.llm.chatTemplate` — no rebuild needed.
 
 ### 3. Download the embedding model
 
@@ -269,3 +270,5 @@ See [docs/adr.md](docs/adr.md) for architectural decisions and design rationale.
 This project is licensed under the [MPL 2.0](http://openmrs.org/license/).
 
 Llama 3.3 is licensed under the [Llama 3.2 Community License](https://www.llama.com/llama3_2/license/), Copyright (C) Meta Platforms, Inc. All Rights Reserved.
+
+MedGemma is licensed under the [Health AI Developer Foundations License](https://developers.google.com/health-ai-developer-foundations/terms), Copyright (C) Google LLC. All Rights Reserved.
