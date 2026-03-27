@@ -39,7 +39,7 @@
 	<!-- Global Properties -->
 	<globalProperty>
 		<property>chartsearchai.llm.modelFilePath</property>
-		<defaultValue>chartsearchai/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf</defaultValue>
+		<defaultValue>chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf</defaultValue>
 		<description>Relative path, including the filename, within the OpenMRS application data directory to the GGUF LLM model file used for inference. Example: chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf (resolves to &lt;application-data-directory&gt;/chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf). The recommended model is Llama 3.3 8B Instruct (Q4_K_M quantization, ~5GB). Download from https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF. Path traversal (e.g. "..") is not allowed.</description>
 	</globalProperty>
 
@@ -65,8 +65,8 @@
 		<property>chartsearchai.llm.systemPrompt</property>
 		<defaultValue>You are a clinical assistant helping a clinician review a patient's chart. Answer ONLY the specific question asked. Use only the patient records below (sorted most recent first). Never infer, assume, or add information not explicitly stated in the records. Include the relevant details from the records in your answer and cite EVERY record you use by its number in brackets (e.g. [1], [3]). Keep your answer concise while including all relevant details. Respond with ONLY a JSON object with an "answer" string and a "citations" array listing every record number you cited.
 
-If no records are relevant, respond with:
-{"answer": "No relevant information was found in the patient's records.", "citations": []}
+If no records are relevant, name what is missing. For example:
+{"answer": "There are no records about diabetes in this patient's chart.", "citations": []}
 
 Examples:
 
@@ -80,7 +80,7 @@ Patient: 52-year-old Male
 [5] (2024-05-01) Allergy: Zyphenicol (drug allergen). Severity: Severe. Reactions: Rash
 
 Question: What are the Flobnar levels?
-{"answer": "The Flobnar levels are 12.4 mg/dL (HIGH) [3] and 9.8 mg/dL [4].", "citations": [3, 4]}
+{"answer": "The Flobnar levels are 12.4 mg/dL (HIGH) on 2024-08-15 [3] and 9.8 mg/dL on 2024-06-10 [4].", "citations": [3, 4]}
 
 Question: What medications is the patient on?
 {"answer": "The patient is on Venoflax 500mg, 1 tablet orally twice daily [2].", "citations": [2]}
@@ -88,8 +88,14 @@ Question: What medications is the patient on?
 Question: Does the patient have any allergies?
 {"answer": "Yes, the patient has a severe allergy to Zyphenicol with a reaction of Rash [5].", "citations": [5]}
 
+Question: How has the Flobnar level trended?
+{"answer": "The Flobnar level increased from 9.8 mg/dL on 2024-06-10 [4] to 12.4 mg/dL (HIGH) on 2024-08-15 [3].", "citations": [4, 3]}
+
 Question: Does the patient have diabetes?
-{"answer": "No relevant information was found in the patient's records.", "citations": []}</defaultValue>
+{"answer": "There are no records about diabetes in this patient's chart.", "citations": []}
+
+Question: What lab orders were placed?
+{"answer": "There are no lab order records in this patient's chart.", "citations": []}</defaultValue>
 		<description>System prompt sent to the LLM before patient records and the question. Customize this to adjust the LLM's behavior, tone, or citation format.</description>
 	</globalProperty>
 
@@ -133,6 +139,30 @@ Question: Does the patient have diabetes?
 		<property>chartsearchai.embedding.scoreGapMultiplier</property>
 		<defaultValue>2.5</defaultValue>
 		<description>Controls adaptive topK by detecting natural cluster boundaries in similarity scores. When the gap between consecutive scores exceeds this multiplier times the running average gap, the cluster boundary is found and lower-scoring records are excluded. Higher values (e.g. 3.0) are more permissive (include more records); lower values (e.g. 2.0) are more aggressive at cutting. Set to a very large value (e.g. 999) to effectively disable gap detection and rely solely on the similarity ratio threshold. Default: 2.5.</description>
+	</globalProperty>
+
+	<globalProperty>
+		<property>chartsearchai.embedding.keywordWeight</property>
+		<defaultValue>0.3</defaultValue>
+		<description>Additive keyword bonus weight in the hybrid retrieval formula: finalScore = semanticScore + weight * keywordScore. Keyword overlap can only increase the score, never decrease it. Set to 0 to disable keyword matching. Default: 0.3.</description>
+	</globalProperty>
+
+	<globalProperty>
+		<property>chartsearchai.embedding.typeBoostFactor</property>
+		<defaultValue>1.0</defaultValue>
+		<description>Score multiplier applied to records whose resource type matches the query intent (e.g., drug orders when the query is about medications). Set to 1.0 to disable type boosting (default). Values like 1.2-1.5 provide moderate boosting. Must be between 1.0 and 3.0. Default: 1.0.</description>
+	</globalProperty>
+
+	<globalProperty>
+		<property>chartsearchai.embedding.queryPrefix</property>
+		<defaultValue></defaultValue>
+		<description>Prefix prepended to the user query before embedding. Leave empty for models like all-MiniLM-L6-v2 that were not trained with instruction prefixes. Set to "search_query: " or "Represent this sentence for searching relevant passages: " for models that support instruction-aware queries (e.g., BGE). Default: empty.</description>
+	</globalProperty>
+
+	<globalProperty>
+		<property>chartsearchai.embedding.maxSequenceLength</property>
+		<defaultValue>256</defaultValue>
+		<description>Maximum WordPiece token sequence length for embedding input. Increase when using models that support longer contexts (e.g., 512 for BGE models). Must be between 32 and 8192. Default: 256.</description>
 	</globalProperty>
 
 	<globalProperty>
