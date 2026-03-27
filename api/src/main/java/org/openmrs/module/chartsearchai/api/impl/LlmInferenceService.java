@@ -34,6 +34,7 @@ import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.api.EmbeddingIndexer;
+import org.openmrs.module.chartsearchai.api.ElasticsearchIndexer;
 import org.openmrs.module.chartsearchai.api.LuceneIndexer;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
@@ -78,6 +79,9 @@ public class LlmInferenceService implements ChartSearchService {
 
 	@Autowired
 	private LuceneIndexer luceneIndexer;
+
+	@Autowired
+	private ElasticsearchIndexer elasticsearchIndexer;
 
 	@Autowired
 	private LlmProvider llmProvider;
@@ -213,6 +217,9 @@ public class LlmInferenceService implements ChartSearchService {
 			return chartSerializer.serialize(patient);
 		}
 
+		if (isElasticsearchPipeline()) {
+			return buildChartWithElasticsearch(patient, question);
+		}
 		if (isLucenePipeline()) {
 			return buildChartWithLucene(patient, question);
 		}
@@ -293,6 +300,58 @@ public class LlmInferenceService implements ChartSearchService {
 		return filterAndSerialize(patient, question, relevantKeys);
 	}
 
+	private PatientChart buildChartWithElasticsearch(Patient patient, String question) {
+		if (!elasticsearchIndexer.isAvailable()) {
+			log.warn("Elasticsearch not available, falling back to embedding pipeline");
+			return buildChartWithEmbeddings(patient, question);
+		}
+
+		if (!elasticsearchIndexer.hasIndex(patient)) {
+			log.info("No ES index for patient [id={}], indexing now", patient.getPatientId());
+			try {
+				elasticsearchIndexer.indexPatient(patient);
+			}
+			catch (Exception e) {
+				log.error("Failed to ES-index patient [id={}], falling back to embeddings",
+						patient.getPatientId(), e);
+				return buildChartWithEmbeddings(patient, question);
+			}
+		}
+
+		String normalizedQuery = stripQueryStopwords(question);
+		if (normalizedQuery.isEmpty()) {
+			return chartSerializer.serialize(patient);
+		}
+
+		float[] queryVector;
+		try {
+			queryVector = embeddingProvider.embed(getQueryPrefix() + normalizedQuery);
+		}
+		catch (Exception e) {
+			log.error("Failed to embed query for ES search, falling back to embeddings", e);
+			return buildChartWithEmbeddings(patient, question);
+		}
+
+		List<ElasticsearchIndexer.ElasticsearchSearchResult> results =
+				elasticsearchIndexer.search(patient, normalizedQuery, queryVector, getTopK());
+
+		if (results.isEmpty()) {
+			log.debug("Elasticsearch returned no results for query '{}', returning empty chart",
+					normalizedQuery);
+			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
+		}
+
+		Set<String> relevantKeys = new HashSet<String>();
+		for (ElasticsearchIndexer.ElasticsearchSearchResult result : results) {
+			relevantKeys.add(result.getResourceType() + ":" + result.getResourceId());
+		}
+
+		log.debug("Elasticsearch returned {} results for query '{}'",
+				relevantKeys.size(), normalizedQuery);
+
+		return filterAndSerialize(patient, question, relevantKeys);
+	}
+
 	private PatientChart filterAndSerialize(Patient patient, String question,
 			Set<String> relevantKeys) {
 		List<SerializedRecord> allRecords = recordLoader.loadAll(patient);
@@ -305,7 +364,8 @@ public class LlmInferenceService implements ChartSearchService {
 
 		log.debug("Pre-filtered {} records to {} using {}",
 				allRecords.size(), filtered.size(),
-				isLucenePipeline() ? "Lucene" : "embeddings");
+				isElasticsearchPipeline() ? "Elasticsearch" :
+						isLucenePipeline() ? "Lucene" : "embeddings");
 
 		int recencyCap = extractRecencyCap(question);
 		if (recencyCap > 0) {
@@ -314,6 +374,13 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 
 		return chartSerializer.serialize(patient, filtered);
+	}
+
+	boolean isElasticsearchPipeline() {
+		String pipeline = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE);
+		return ChartSearchAiConstants.PIPELINE_ELASTICSEARCH.equalsIgnoreCase(
+				pipeline != null ? pipeline.trim() : "");
 	}
 
 	boolean isLucenePipeline() {

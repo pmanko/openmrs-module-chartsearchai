@@ -117,6 +117,8 @@ public class ChartSearchAiConstants {
 
 	public static final String PIPELINE_LUCENE = "lucene";
 
+	public static final String PIPELINE_ELASTICSEARCH = "elasticsearch";
+
 	public static final String GP_AUDIT_LOG_RETENTION_DAYS = "chartsearchai.auditLogRetentionDays";
 
 	public static final int DEFAULT_AUDIT_LOG_RETENTION_DAYS = 90;

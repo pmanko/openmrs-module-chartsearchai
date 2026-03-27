@@ -52,7 +52,7 @@
 	<globalProperty>
 		<property>chartsearchai.retrieval.pipeline</property>
 		<defaultValue>embedding</defaultValue>
-		<description>Selects the retrieval pipeline used to pre-filter patient records before sending them to the LLM. Options: "embedding" (default) uses vector similarity via an ONNX model with custom scoring; "lucene" uses Apache Lucene BM25 text search. Both require chartsearchai.embedding.preFilter to be true. Records are indexed automatically on first access. Changing this setting takes effect on the next query.</description>
+		<description>Selects the retrieval pipeline used to pre-filter patient records before sending them to the LLM. Options: "embedding" (default) uses vector similarity via an ONNX model with custom scoring; "lucene" uses Apache Lucene BM25 text search; "elasticsearch" uses Elasticsearch hybrid search combining BM25 text and kNN vector search via Reciprocal Rank Fusion (requires Elasticsearch 8.14+ configured in OpenMRS). All require chartsearchai.embedding.preFilter to be true. Records are indexed automatically on first access. Changing this setting takes effect on the next query.</description>
 	</globalProperty>
 
 	<globalProperty>

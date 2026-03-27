@@ -47,7 +47,7 @@ Fine-tune a small model to generate SQL or API calls from natural language.
 #### Option C: Traditional search (no LLM at all)
 Full-text search index (Lucene/Solr/Elasticsearch) over patient data.
 
-**Now implemented as an alternative retrieval pipeline.** Solves 70% of the problem with 20% of the complexity. No hallucination risk from retrieval errors, no extra model files required, works offline. Weakness: no semantic understanding — relies on lexical matching with stemming. Implemented using Apache Lucene 8.11.2 (already on the classpath via Hibernate Search) with `EnglishAnalyzer` for Porter stemming. Selectable via the `chartsearchai.retrieval.pipeline` global property. See Decision 13 for details.
+**Now implemented as an alternative retrieval pipeline.** Solves 70% of the problem with 20% of the complexity. No hallucination risk from retrieval errors, no extra model files required, works offline. Weakness: no semantic understanding — relies on lexical matching with stemming. Implemented using Apache Lucene 8.11.2 (already on the classpath via Hibernate Search) with `EnglishAnalyzer` for Porter stemming. Selectable via the `chartsearchai.retrieval.pipeline` global property. See Decision 13 for details. An Elasticsearch pipeline (Decision 14) addresses the semantic gap by combining BM25 text search with kNN vector search via Reciprocal Rank Fusion.
 
 #### Option D: Agent/tool-use pattern
 Give the LLM access to OpenMRS APIs as tools and let it autonomously decide what to call.
@@ -825,6 +825,39 @@ Add Lucene BM25 as an alternative retrieval pipeline, selectable via the `charts
 **Why not replace the embedding pipeline?** The embedding pipeline captures semantic similarity that BM25 cannot. For example, the query "any cancer?" against a patient chart containing Kaposi sarcoma records returns zero results from Lucene — no record contains the literal word "cancer", so BM25 has nothing to match. The embedding pipeline finds the Kaposi sarcoma records because the embedding model understands the semantic relationship between "cancer" and "Kaposi sarcoma". Similarly, "any infections?" would find "tuberculosis" and "malaria" records via embeddings but miss them via Lucene. The Lucene pipeline excels at queries where the terms appear literally in the records (e.g., "any conditions?" matches all records prefixed with "Medical condition:"), but it fails on queries that require medical concept understanding. Both pipelines are kept so their retrieval quality can be compared on real patient data.
 
 **Why Lucene 8.11.2 with `scope: provided`?** OpenMRS Platform bundles this version via Hibernate Search. Using the same version with `provided` scope avoids classpath conflicts and doesn't increase the module's `.omod` size.
+
+## Decision 14: Elasticsearch hybrid search pipeline with RRF
+
+### Context
+
+The embedding pipeline (Decision 3) uses a custom scoring system with cosine similarity, keyword matching, gap detection, z-score gating, coherence filtering, and type boosting. While effective, this hand-rolled scoring logic is complex — many tunable parameters, subtle interactions between stages, and edge cases that require careful calibration. The Lucene pipeline (Decision 13) demonstrated that BM25 alone misses semantic matches: "any cancer?" returns nothing when the patient has Kaposi sarcoma records, because no record contains the literal word "cancer".
+
+OpenMRS Platform 2.8+ supports Elasticsearch 8.17 via Hibernate Search, configured through the `OMRS_SEARCH=elasticsearch` environment variable which sets `hibernate.search.backend.type=elasticsearch` and `hibernate.search.backend.uris` in runtime properties. The low-level `elasticsearch-rest-client` is already on the classpath.
+
+Elasticsearch 8.14+ provides a native Reciprocal Rank Fusion (RRF) retriever that combines multiple ranking signals in a single query. RRF is an established algorithm: `score = Σ 1/(k + rank_i)` where `k` is a constant (typically 60) and `rank_i` is the document's position in each ranking. This fuses BM25 text search with kNN approximate nearest neighbor search without requiring custom scoring code.
+
+### Decision
+
+Add an Elasticsearch hybrid search pipeline as a third retrieval option (`chartsearchai.retrieval.pipeline=elasticsearch`). This pipeline:
+
+1. **Indexes both text and vectors** — each patient record is stored as an Elasticsearch document with a `text` field (for BM25, using the `english` analyzer) and a `dense_vector` field (for kNN, using cosine similarity). The same prefixed text and embedding computation as the other pipelines is reused.
+
+2. **Searches via RRF** — a single Elasticsearch query uses the retriever API with two sub-retrievers:
+   - A `standard` retriever running BM25 on the `text` field (handles literal keyword matches)
+   - A `knn` retriever running approximate nearest neighbor search on the `embedding` field (handles semantic matches)
+   - RRF fuses the rankings: a document that appears in both rankings scores higher than one in only one
+
+3. **No custom scoring code** — all scoring, ranking, and fusion is delegated to Elasticsearch. The module's custom gap detection, keyword weighting, z-score gating, and coherence filtering are not needed — RRF replaces all of that with a single, well-tested algorithm.
+
+4. **Graceful fallback** — if Elasticsearch is not available (not configured or unreachable), the pipeline falls back to the embedding pipeline at query time. This makes it safe to set `pipeline=elasticsearch` even in environments where ES may be temporarily unavailable.
+
+5. **Connection from runtime properties** — reads `hibernate.search.backend.uris` from `Context.getRuntimeProperties()` to find the ES cluster. No additional configuration beyond what OpenMRS already provides for Hibernate Search.
+
+**Why RRF over a weighted linear combination?** RRF is rank-based, not score-based. It doesn't require normalizing BM25 scores (which are unbounded) against cosine similarity scores (which range 0–1). This avoids the calibration problem that made the embedding pipeline's `keywordWeight` parameter sensitive to tune.
+
+**Why not replace the embedding pipeline?** The embedding pipeline works without any external services — it runs entirely in-process with the ONNX model. The Elasticsearch pipeline requires a running ES cluster, which not all OpenMRS deployments have. The embedding pipeline remains the default for self-contained deployments.
+
+**Why `provided` scope for the ES REST client?** The `elasticsearch-rest-client` JAR is already on the classpath via `hibernate-search-backend-elasticsearch`. Using `provided` scope avoids bundling a duplicate in the `.omod` and prevents version conflicts.
 
 ## Planned future work
 

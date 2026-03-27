@@ -62,6 +62,7 @@ public class ObsIndexingAdvice implements AfterReturningAdvice {
 		}
 
 		reindexLucene(patient);
+		reindexElasticsearch(patient);
 	}
 
 	private void reindexLucene(Patient patient) {
@@ -73,12 +74,31 @@ public class ObsIndexingAdvice implements AfterReturningAdvice {
 		try {
 			LuceneIndexer luceneIndexer = Context.getRegisteredComponent(
 					"luceneIndexer", LuceneIndexer.class);
-			if (luceneIndexer.hasIndex(patient)) {
+			if (luceneIndexer != null && luceneIndexer.hasIndex(patient)) {
 				luceneIndexer.indexPatient(patient);
 			}
 		}
 		catch (Exception e) {
 			log.error("Failed to re-index Lucene for patient [id={}]",
+					patient.getPatientId(), e);
+		}
+	}
+
+	private void reindexElasticsearch(Patient patient) {
+		String pipeline = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
+		if (!ChartSearchAiConstants.PIPELINE_ELASTICSEARCH.equalsIgnoreCase(pipeline.trim())) {
+			return;
+		}
+		try {
+			ElasticsearchIndexer esIndexer = Context.getRegisteredComponent(
+					"elasticsearchIndexer", ElasticsearchIndexer.class);
+			if (esIndexer != null && esIndexer.hasIndex(patient)) {
+				esIndexer.indexPatient(patient);
+			}
+		}
+		catch (Exception e) {
+			log.error("Failed to re-index Elasticsearch for patient [id={}]",
 					patient.getPatientId(), e);
 		}
 	}

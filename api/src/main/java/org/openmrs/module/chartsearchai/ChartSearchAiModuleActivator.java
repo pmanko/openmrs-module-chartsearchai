@@ -15,6 +15,7 @@ import org.openmrs.api.context.Context;
 import org.openmrs.module.BaseModuleActivator;
 import org.openmrs.module.chartsearchai.api.AuditLogPurgeTask;
 import org.openmrs.module.chartsearchai.api.EmbeddingIndexTask;
+import org.openmrs.module.chartsearchai.api.ElasticsearchIndexer;
 import org.openmrs.module.chartsearchai.api.impl.LlmProvider;
 import org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider;
 import org.openmrs.scheduler.SchedulerService;
@@ -62,6 +63,16 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 		}
 		catch (Exception e) {
 			log.warn("Error closing ONNX embedding provider", e);
+		}
+		try {
+			ElasticsearchIndexer esIndexer = Context.getRegisteredComponent(
+					"elasticsearchIndexer", ElasticsearchIndexer.class);
+			if (esIndexer != null) {
+				esIndexer.close();
+			}
+		}
+		catch (Exception e) {
+			log.warn("Error closing Elasticsearch indexer", e);
 		}
 		log.info("Chart Search AI Module stopped");
 	}

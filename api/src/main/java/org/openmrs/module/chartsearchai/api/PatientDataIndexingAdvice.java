@@ -95,6 +95,7 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 		}
 
 		reindexLucene(patient);
+		reindexElasticsearch(patient);
 	}
 
 	private void handleMergePatients(Object[] args) {
@@ -116,6 +117,8 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 
 		reindexLucene(preferred);
 		deleteLuceneIndex(notPreferred);
+		reindexElasticsearch(preferred);
+		deleteElasticsearchIndex(notPreferred);
 	}
 
 	private void reindexLucene(Patient patient) {
@@ -127,7 +130,7 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 		try {
 			LuceneIndexer luceneIndexer = Context.getRegisteredComponent(
 					"luceneIndexer", LuceneIndexer.class);
-			if (luceneIndexer.hasIndex(patient)) {
+			if (luceneIndexer != null && luceneIndexer.hasIndex(patient)) {
 				luceneIndexer.indexPatient(patient);
 			}
 		}
@@ -146,10 +149,50 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 		try {
 			LuceneIndexer luceneIndexer = Context.getRegisteredComponent(
 					"luceneIndexer", LuceneIndexer.class);
-			luceneIndexer.deletePatientIndex(patient);
+			if (luceneIndexer != null) {
+				luceneIndexer.deletePatientIndex(patient);
+			}
 		}
 		catch (Exception e) {
 			log.error("Failed to delete Lucene index for patient [id={}]",
+					patient.getPatientId(), e);
+		}
+	}
+
+	private void reindexElasticsearch(Patient patient) {
+		String pipeline = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
+		if (!ChartSearchAiConstants.PIPELINE_ELASTICSEARCH.equalsIgnoreCase(pipeline.trim())) {
+			return;
+		}
+		try {
+			ElasticsearchIndexer esIndexer = Context.getRegisteredComponent(
+					"elasticsearchIndexer", ElasticsearchIndexer.class);
+			if (esIndexer != null && esIndexer.hasIndex(patient)) {
+				esIndexer.indexPatient(patient);
+			}
+		}
+		catch (Exception e) {
+			log.error("Failed to re-index Elasticsearch for patient [id={}]",
+					patient.getPatientId(), e);
+		}
+	}
+
+	private void deleteElasticsearchIndex(Patient patient) {
+		String pipeline = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
+		if (!ChartSearchAiConstants.PIPELINE_ELASTICSEARCH.equalsIgnoreCase(pipeline.trim())) {
+			return;
+		}
+		try {
+			ElasticsearchIndexer esIndexer = Context.getRegisteredComponent(
+					"elasticsearchIndexer", ElasticsearchIndexer.class);
+			if (esIndexer != null) {
+				esIndexer.deletePatientIndex(patient);
+			}
+		}
+		catch (Exception e) {
+			log.error("Failed to delete Elasticsearch index for patient [id={}]",
 					patient.getPatientId(), e);
 		}
 	}
