@@ -859,6 +859,34 @@ Add an Elasticsearch hybrid search pipeline as a third retrieval option (`charts
 
 **Why `provided` scope for the ES REST client?** The `elasticsearch-rest-client` JAR is already on the classpath via `hibernate-search-backend-elasticsearch`. Using `provided` scope avoids bundling a duplicate in the `.omod` and prevents version conflicts.
 
+## Decision 15: LangChain / LangChain4j not adopted
+
+### Context
+
+LangChain (Python) and LangChain4j (Java) are popular frameworks that provide abstractions for RAG pipelines: document loaders, text splitters, embedding models, vector stores, retrievers, LLM clients, output parsers, and chain orchestration. Since this module implements a RAG pipeline, using one of these frameworks was evaluated.
+
+### Decision
+
+Do not adopt LangChain or LangChain4j. The module's purpose-built pipeline already covers every component these frameworks provide, with domain-specific optimizations that generic abstractions would make harder to maintain.
+
+| LangChain concept | Existing implementation |
+|---|---|
+| Document loaders | `PatientRecordLoader` + per-type text serializers |
+| Text splitting | Not needed — clinical records are discrete units |
+| Embeddings | `OnnxEmbeddingProvider` (in-process ONNX Runtime) |
+| Vector store | Hibernate-backed `chart_embedding` table |
+| Retrievers | 3 pipelines with z-score gate, gap detection, type-aware expansion |
+| LLM client | `LlmProvider` via java-llama.cpp |
+| Output parsing | GBNF grammar constraint + JSON extraction |
+| Prompt templates | System prompt with few-shot clinical examples |
+| RAG chain | `LlmInferenceService.buildChart()` → retrieve → serialize → prompt → infer |
+
+**Why not LangChain (Python)?** Would require a separate process or service, breaking the module's "runs entirely in-process with no external services" deployment model. OpenMRS is a Java ecosystem — adding a Python dependency would significantly complicate deployment for the typical OpenMRS site.
+
+**Why not LangChain4j?** Removes the language mismatch, but the module's custom retrieval logic (z-score gating for absent-data detection, adaptive gap detection, type-aware auto-expansion, GBNF constrained decoding) has no equivalent in LangChain4j's standard retrievers. Adopting LangChain4j would mean either losing these features or bypassing its retrieval abstractions entirely and using it only as a thin LLM client wrapper — not worth the dependency. The one feature LangChain4j would simplify — swapping cloud LLM providers via its `ChatLanguageModel` interface — can be achieved more simply by adding a provider interface to the existing `LlmProvider` if that need arises.
+
+**When to revisit:** If the module needs to support multiple LLM backends (local + cloud) or agent/tool-use patterns for multi-step reasoning, a framework like LangChain4j may become worthwhile. Until then, the purpose-built pipeline is simpler to deploy, easier to debug, has fewer dependencies, and gives full control over clinical-domain-specific scoring.
+
 ## Planned future work
 
 - **Incremental embedding indexing**: Currently, `indexPatient()` deletes all embeddings for a patient and recomputes them from scratch on every data change. This is simple and guarantees consistency, but recomputes embeddings for records that haven't changed. An incremental approach would track which record maps to which embedding row and only add, update, or delete the specific embeddings affected. This matters for patients with large charts where AOP hooks fire frequently.
