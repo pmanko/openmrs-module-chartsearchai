@@ -118,6 +118,61 @@ When `chartsearchai.embedding.preFilter` is `true` (default), patient records ar
 
 **Elasticsearch pipeline** (`chartsearchai.retrieval.pipeline=elasticsearch`): Uses Elasticsearch hybrid search combining BM25 text search with kNN dense vector search via Reciprocal Rank Fusion (RRF). Requires Elasticsearch 8.14+ configured in OpenMRS (set `hibernate.search.backend.uris` in runtime properties). Also requires the ONNX embedding model (same as the embedding pipeline) to compute vectors for the kNN side of the hybrid search. Patient records are indexed into a shared `chartsearchai-patient-records` Elasticsearch index with both text and embedding vector fields. The RRF algorithm fuses rankings from both signals — this means queries like "any cancer?" can find semantic matches (e.g. Kaposi sarcoma) via kNN even when the literal term is absent from the records, while also benefiting from BM25's lexical matching. If Elasticsearch is not available at query time, the pipeline automatically falls back to the embedding pipeline. After switching embedding models, delete the `chartsearchai-patient-records` index from Elasticsearch — it will be recreated with the new model's dimensions on the next patient access.
 
+### Testing the Elasticsearch pipeline locally
+
+To test the Elasticsearch pipeline with the OpenMRS SDK:
+
+**1. Start Elasticsearch 8.14+ with Docker:**
+
+```
+docker run -d --name elasticsearch \
+  -p 9200:9200 \
+  -e "discovery.type=single-node" \
+  -e "xpack.security.enabled=false" \
+  elasticsearch:8.17.2
+```
+
+Verify it's running: `curl http://localhost:9200/_cluster/health`
+
+**2. Configure OpenMRS to use Elasticsearch:**
+
+Add to your OpenMRS runtime properties file (e.g., `~/openmrs/openmrs-runtime.properties`):
+
+```
+hibernate.search.backend.type=elasticsearch
+hibernate.search.backend.uris=http://localhost:9200
+```
+
+Or if using the SDK with Docker, pass the environment variable when running the server:
+
+```
+OMRS_SEARCH=elasticsearch mvn openmrs-sdk:run
+```
+
+**3. Set the retrieval pipeline:**
+
+In **Admin > Settings**, set:
+
+| Property | Value |
+|----------|-------|
+| `chartsearchai.retrieval.pipeline` | `elasticsearch` |
+
+Also ensure the ONNX embedding model and vocab files are configured (same as the default embedding pipeline).
+
+**4. Query a patient** — records are indexed automatically on first access. To verify indexing, check the ES index:
+
+```
+curl http://localhost:9200/chartsearchai-patient-records/_count
+```
+
+**5. To reset and re-index**, delete the ES index:
+
+```
+curl -X DELETE http://localhost:9200/chartsearchai-patient-records
+```
+
+Records will be re-indexed on the next patient access.
+
 ## API
 
 ### Search
