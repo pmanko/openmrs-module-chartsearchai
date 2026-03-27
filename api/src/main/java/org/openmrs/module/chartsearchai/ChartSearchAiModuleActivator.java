@@ -74,6 +74,17 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 		catch (Exception e) {
 			log.warn("Error closing Elasticsearch indexer", e);
 		}
+		try {
+			org.openmrs.module.chartsearchai.api.LuceneIndexer luceneIndexer =
+					Context.getRegisteredComponent("luceneIndexer",
+							org.openmrs.module.chartsearchai.api.LuceneIndexer.class);
+			if (luceneIndexer != null) {
+				luceneIndexer.close();
+			}
+		}
+		catch (Exception e) {
+			log.warn("Error closing Lucene indexer", e);
+		}
 		log.info("Chart Search AI Module stopped");
 	}
 

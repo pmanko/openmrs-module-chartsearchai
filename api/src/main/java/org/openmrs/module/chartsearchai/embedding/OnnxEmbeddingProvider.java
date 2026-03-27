@@ -45,7 +45,7 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 	private WordPieceTokenizer tokenizer;
 
-	private int detectedDimensions = -1;
+	private volatile int detectedDimensions = -1;
 
 	private String explicitModelPath;
 

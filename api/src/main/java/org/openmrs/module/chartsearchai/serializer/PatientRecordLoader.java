@@ -112,8 +112,11 @@ public class PatientRecordLoader {
 			}
 		}
 
-		// Orders
+		// Orders (skip voided — getAllOrdersByPatient includes voided orders)
 		for (Order order : Context.getOrderService().getAllOrdersByPatient(patient)) {
+			if (Boolean.TRUE.equals(order.getVoided())) {
+				continue;
+			}
 			String text = orderSerializer.toText(order);
 			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_ORDER, order.getOrderId(), seenKeys)) {
 				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_ORDER, order.getOrderId(), text, order.getDateActivated()));

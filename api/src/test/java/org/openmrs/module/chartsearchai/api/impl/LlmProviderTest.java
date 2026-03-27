@@ -172,28 +172,10 @@ public class LlmProviderTest {
 	}
 
 	@Test
-	public void stripSlashSynonyms_shouldKeepFirstTerm() {
-		assertEquals("allergic to fomepizole [2]",
-				LlmProvider.stripSlashSynonyms("allergic to fomepizole/fomeject [2]"));
-	}
-
-	@Test
-	public void stripSlashSynonyms_shouldHandleMultipleSlashSynonyms() {
-		assertEquals("beef [1] and fomepizole [2]",
-				LlmProvider.stripSlashSynonyms("beef/bovine [1] and fomepizole/fomeject [2]"));
-	}
-
-	@Test
-	public void stripSlashSynonyms_shouldNotAffectTextWithoutSlashes() {
-		assertEquals("The patient has Diabetes [1].",
-				LlmProvider.stripSlashSynonyms("The patient has Diabetes [1]."));
-	}
-
-	@Test
-	public void extractResponse_shouldStripSlashSynonymsFromAnswer() {
-		String response = "{\"answer\": \"The patient is allergic to beef [1] and fomepizole/fomeject [2].\", \"citations\": [1, 2]}";
+	public void extractResponse_shouldPreserveClinicalSlashTerms() {
+		String response = "{\"answer\": \"The patient has HIV/AIDS [1] and nausea/vomiting [2].\", \"citations\": [1, 2]}";
 		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
-		assertEquals("The patient is allergic to beef [1] and fomepizole [2].", result.getAnswer());
+		assertEquals("The patient has HIV/AIDS [1] and nausea/vomiting [2].", result.getAnswer());
 	}
 
 	@Test

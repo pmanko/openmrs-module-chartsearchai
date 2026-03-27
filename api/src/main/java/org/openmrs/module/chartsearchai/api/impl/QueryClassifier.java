@@ -122,7 +122,7 @@ public class QueryClassifier {
 
 	// --- Dispense (type detection only — no generic pairs, no category)
 	private static final String[] DISPENSE_SPECIFIC = {
-			"dispens", "dispensed", "dispensing", "filled",
+			"dispense", "dispensed", "dispensing", "filled",
 			"refill", "refills", "pharmacy"
 	};
 
@@ -276,6 +276,9 @@ public class QueryClassifier {
 	 * @return the classification result (never null; targetTypes may be empty)
 	 */
 	public static QueryIntent classify(String rawQuery) {
+		if (rawQuery == null || rawQuery.trim().isEmpty()) {
+			return new QueryIntent(Collections.emptySet(), false);
+		}
 		String lower = rawQuery.toLowerCase();
 
 		Set<String> types = new HashSet<String>();

@@ -135,6 +135,16 @@ public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {
 		if (concept instanceof ConceptNumeric) {
 			return ((ConceptNumeric) concept).getUnits();
 		}
+		// Hibernate proxies don't pass instanceof; check the datatype and
+		// fetch the real ConceptNumeric from the service
+		if (concept != null && concept.getDatatype() != null
+				&& concept.getDatatype().isNumeric()) {
+			ConceptNumeric cn = org.openmrs.api.context.Context.getConceptService()
+					.getConceptNumeric(concept.getConceptId());
+			if (cn != null) {
+				return cn.getUnits();
+			}
+		}
 		return null;
 	}
 

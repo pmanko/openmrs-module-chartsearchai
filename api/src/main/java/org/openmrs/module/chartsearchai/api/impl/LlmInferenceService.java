@@ -562,9 +562,9 @@ public class LlmInferenceService implements ChartSearchService {
 		List<ScoredEmbedding> scored = new ArrayList<ScoredEmbedding>();
 		for (ChartEmbedding ce : allEmbeddings) {
 			float[] vector = ce.getEmbeddingVector();
-			if (vector.length != queryVector.length) {
+			if (vector == null || vector.length != queryVector.length) {
 				log.warn("Skipping embedding [id={}] with mismatched dimensions ({} vs expected {})",
-						ce.getEmbeddingId(), vector.length, queryVector.length);
+						ce.getEmbeddingId(), vector == null ? "null" : vector.length, queryVector.length);
 				continue;
 			}
 			double semanticScore = cosineSimilarity(queryVector, vector);
@@ -883,7 +883,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// All prior gaps feed the running average so that the baseline
 		// reflects the full score distribution.
 		double gapSum = 0;
-		int cutoff = aboveFloor; // default: include everything above the floor
+		int semanticCutoff = aboveFloor; // default: include everything above the floor
 		for (int i = 1; i < aboveFloor; i++) {
 			double gap = semanticSorted.get(i - 1) - semanticSorted.get(i);
 
@@ -893,7 +893,7 @@ public class LlmInferenceService implements ChartSearchService {
 			if (i >= minRecords && i >= 2) {
 				double avgGap = gapSum / (i - 1);
 				if (gap > avgGap * gapMultiplier && gap > minGap) {
-					cutoff = i;
+					semanticCutoff = i;
 					log.debug("Score gap detected at position {}: gap={}, avgGap={}, multiplier={}",
 							i, String.format("%.4f", gap), String.format("%.4f", avgGap),
 							gapMultiplier);
@@ -903,7 +903,23 @@ public class LlmInferenceService implements ChartSearchService {
 			gapSum += gap;
 		}
 
-		return cutoff;
+		// Map the semantic cluster back to the combined-score-sorted input.
+		// The gap was detected in semantic-score order; find the lowest
+		// semantic score in the cluster and include all input records whose
+		// semantic score meets this threshold. This ensures the cutoff index
+		// aligns with scored[0..cutoff-1] rather than using a position from
+		// a differently-sorted list.
+		double clusterThreshold = semanticSorted.get(semanticCutoff - 1);
+		int cutoff = 0;
+		int found = 0;
+		for (int i = 0; i < limit && found < semanticCutoff; i++) {
+			cutoff = i + 1;
+			if (scored.get(i).semanticScore >= clusterThreshold) {
+				found++;
+			}
+		}
+
+		return Math.max(cutoff, Math.min(minRecords, aboveFloor));
 	}
 
 	/**

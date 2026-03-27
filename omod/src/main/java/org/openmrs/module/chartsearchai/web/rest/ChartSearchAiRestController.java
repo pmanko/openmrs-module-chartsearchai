@@ -489,7 +489,13 @@ public class ChartSearchAiRestController {
 	}
 
 	private void writeSseEvent(OutputStream out, String event, String data) throws IOException {
-		out.write(("event: " + event + "\ndata: " + data + "\n\n").getBytes("UTF-8"));
+		StringBuilder sb = new StringBuilder();
+		sb.append("event: ").append(event).append('\n');
+		for (String line : data.split("\n", -1)) {
+			sb.append("data: ").append(line).append('\n');
+		}
+		sb.append('\n');
+		out.write(sb.toString().getBytes("UTF-8"));
 		out.flush();
 	}
 

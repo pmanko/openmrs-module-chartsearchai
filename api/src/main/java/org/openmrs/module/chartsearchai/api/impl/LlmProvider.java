@@ -206,10 +206,6 @@ public class LlmProvider {
 
 	private static final Pattern SLASH_CITATION = Pattern.compile("\\[(\\d+(?:/\\d+)+)\\]");
 
-	// Matches echoed slash-synonyms like "fomepizole/fomeject" in LLM answers.
-	// Captures word/word patterns (not inside brackets, which are citations).
-	private static final Pattern SLASH_SYNONYM = Pattern.compile("(?<=\\s|^)(\\w[\\w\\s]*?)/(\\w[\\w\\s]*?)(?=[\\s.,;:!?\\])]|$)");
-
 	/**
 	 * Extracts the answer and citations from the JSON response produced by the
 	 * grammar-constrained LLM. Expected format: {"answer": "...", "citations": [1, 2]}
@@ -225,7 +221,7 @@ public class LlmProvider {
 			JsonNode root = MAPPER.readTree(trimmed);
 			JsonNode answerNode = root.get("answer");
 			if (answerNode != null && answerNode.isTextual()) {
-				String answer = stripSlashSynonyms(normalizeSlashCitations(answerNode.asText().trim()));
+				String answer = normalizeSlashCitations(answerNode.asText().trim());
 				List<Integer> citations = new ArrayList<>();
 				JsonNode citationsNode = root.get("citations");
 				if (citationsNode != null && citationsNode.isArray()) {
@@ -268,14 +264,6 @@ public class LlmProvider {
 		}
 		matcher.appendTail(sb);
 		return sb.toString();
-	}
-
-	/**
-	 * Removes echoed slash-synonyms from the LLM answer, keeping only the first term.
-	 * For example, "fomepizole/fomeject" becomes "fomepizole".
-	 */
-	static String stripSlashSynonyms(String text) {
-		return SLASH_SYNONYM.matcher(text).replaceAll("$1");
 	}
 
 	/**
