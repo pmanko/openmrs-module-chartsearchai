@@ -47,7 +47,7 @@ Fine-tune a small model to generate SQL or API calls from natural language.
 #### Option C: Traditional search (no LLM at all)
 Full-text search index (Lucene/Solr/Elasticsearch) over patient data.
 
-**Deferred.** Solves 70% of the problem with 20% of the complexity. No hallucination risk, no compute requirements, works offline. Weakness: no natural language understanding or synthesis. Could serve as a fallback for environments that cannot run the LLM.
+**Now implemented as an alternative retrieval pipeline.** Solves 70% of the problem with 20% of the complexity. No hallucination risk from retrieval errors, no extra model files required, works offline. Weakness: no semantic understanding — relies on lexical matching with stemming. Implemented using Apache Lucene 8.11.2 (already on the classpath via Hibernate Search) with `EnglishAnalyzer` for Porter stemming. Selectable via the `chartsearchai.retrieval.pipeline` global property. See Decision 13 for details.
 
 #### Option D: Agent/tool-use pattern
 Give the LLM access to OpenMRS APIs as tools and let it autonomously decide what to call.
@@ -802,6 +802,29 @@ For the initial release targeting small clinics with low concurrent usage, the s
 ## Known limitations
 
 - **Counting questions**: LLMs are unreliable at precise counting tasks (e.g., "how many weight records in the last 10 years?"). The model may undercount or overcount even when all relevant records are provided. Larger, more capable models perform better at counting but are still not perfectly reliable. This is a fundamental limitation of LLM inference, not a retrieval issue. Questions that require exact counts are better suited to structured queries.
+
+## Decision 13: Lucene BM25 as an alternative retrieval pipeline
+
+### Context
+
+The embedding pipeline (Decision 3) uses a custom scoring system: cosine similarity from an ONNX model combined with keyword matching, gap detection, and type boosting. This produces high-quality retrieval but requires downloading model files (~90MB ONNX model + vocabulary), and the custom scoring logic is complex with many tunable parameters.
+
+Apache Lucene is already on the classpath — OpenMRS Platform bundles Lucene 8.11.2 via Hibernate Search 6.2.4. Lucene's BM25 scoring is a well-tested information retrieval algorithm that handles term frequency, document length normalization, and inverse document frequency automatically.
+
+### Decision
+
+Add Lucene BM25 as an alternative retrieval pipeline, selectable via the `chartsearchai.retrieval.pipeline` global property (`embedding` or `lucene`). Both pipelines coexist — no code is removed. The embedding pipeline remains the default.
+
+**Lucene pipeline design:**
+- **Shared index directory** at `<appDataDir>/chartsearchai/lucene-index/` with an `IntPoint` `patient_id` field for per-patient filtering.
+- **`EnglishAnalyzer`** for both indexing and search, which includes Porter stemming — "conditions" matches "condition", "allergies" matches "allergy", etc.
+- **Same prefixed text** as the embedding pipeline (e.g., `"Medical condition: Condition: Tuberculosis. Status: ACTIVE"`) so Lucene gets the same type signals.
+- **Lazy indexing** — the Lucene index is built on first patient access, same as the embedding pipeline. AOP advice classes trigger incremental re-indexing for both pipelines when data changes.
+- **No score cutoff** — all BM25 results up to `topK * 10` are returned. Lucene's BM25 naturally ranks relevant results higher, and the LLM handles moderate noise. This avoids reimplementing the embedding pipeline's gap detection logic.
+
+**Why not replace the embedding pipeline?** The embedding pipeline captures semantic similarity that BM25 cannot — for example, "any infections?" finding "tuberculosis" and "malaria" records that don't contain the word "infection". The Lucene pipeline only finds lexical matches (with stemming). Both pipelines are kept so their retrieval quality can be compared on real patient data.
+
+**Why Lucene 8.11.2 with `scope: provided`?** OpenMRS Platform bundles this version via Hibernate Search. Using the same version with `provided` scope avoids classpath conflicts and doesn't increase the module's `.omod` size.
 
 ## Planned future work
 

@@ -57,11 +57,19 @@ Set these global properties in **Admin > Settings**:
 |----------|-------------|
 | `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf` |
 
-#### Embedding pre-filter
+#### Retrieval pipeline
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `chartsearchai.embedding.preFilter` | `true` | When `true`, uses embedding similarity to narrow patient records to the most relevant ones before sending to the LLM. Set to `false` to send the full chart instead |
+| `chartsearchai.embedding.preFilter` | `true` | When `true`, uses the selected retrieval pipeline to narrow patient records to the most relevant ones before sending to the LLM. Set to `false` to send the full chart instead |
+| `chartsearchai.retrieval.pipeline` | `embedding` | Selects the retrieval pipeline: `embedding` (default) uses vector similarity via an ONNX model with custom scoring; `lucene` uses Apache Lucene BM25 text search. Both require `preFilter` to be `true`. Records are indexed automatically on first access. Changing this setting takes effect on the next query |
+
+#### Embedding pipeline tuning
+
+These settings only apply when `chartsearchai.retrieval.pipeline` is `embedding` (the default). They have no effect on the Lucene pipeline.
+
+| Property | Default | Description |
+|----------|---------|-------------|
 | `chartsearchai.embedding.topK` | `15` | Maximum number of records sent to the LLM per query. For **focused queries** (e.g., "does the patient have diabetes?") this is the hard cap. For **category queries** (e.g., "any conditions?") all type-matched records are included regardless of topK (auto-expand), and remaining topK slots are filled with contextual records |
 | `chartsearchai.embedding.similarityRatio` | `0.80` | Minimum similarity score as a fraction of the top result's score. Records scoring below this ratio are excluded even if within the topK limit. Must be between 0 and 1 |
 | `chartsearchai.embedding.scoreGapMultiplier` | `2.5` | Controls adaptive topK by detecting natural cluster boundaries in similarity scores. Higher values include more records; lower values cut more aggressively. Set to a very large value (e.g. 999) to disable gap detection |
@@ -69,8 +77,8 @@ Set these global properties in **Admin > Settings**:
 | `chartsearchai.embedding.typeBoostFactor` | `1.0` | Score multiplier applied to records whose resource type matches the query intent (e.g., drug orders when the query is about medications). Set to `1.0` to disable type boosting (default). Values like `1.2`–`1.5` provide moderate boosting. Must be between 1.0 and 3.0 |
 | `chartsearchai.embedding.queryPrefix` | *(empty)* | Prefix prepended to the user query before embedding. Leave empty for models like all-MiniLM-L6-v2 that were not trained with instruction prefixes. Set to `search_query: ` or `Represent this sentence for searching relevant passages: ` for models that support instruction-aware queries (e.g., BGE) |
 | `chartsearchai.embedding.maxSequenceLength` | `256` | Maximum WordPiece token sequence length for embedding input. Increase when using models that support longer contexts (e.g., 512 for BGE models). Must be between 32 and 8192 |
-| `chartsearchai.embedding.modelFilePath` | — | Required when pre-filtering is enabled. Relative path to the ONNX model file (all-MiniLM-L6-v2), e.g. `chartsearchai/all-MiniLM-L6-v2.onnx` |
-| `chartsearchai.embedding.vocabFilePath` | — | Required when pre-filtering is enabled. Relative path to the WordPiece `vocab.txt` file, e.g. `chartsearchai/vocab.txt` |
+| `chartsearchai.embedding.modelFilePath` | — | Required when using the embedding pipeline. Relative path to the ONNX model file (all-MiniLM-L6-v2), e.g. `chartsearchai/all-MiniLM-L6-v2.onnx`. Not needed for the Lucene pipeline |
+| `chartsearchai.embedding.vocabFilePath` | — | Required when using the embedding pipeline. Relative path to the WordPiece `vocab.txt` file, e.g. `chartsearchai/vocab.txt`. Not needed for the Lucene pipeline |
 
 #### LLM tuning
 
@@ -100,11 +108,13 @@ Set these global properties in **Admin > Settings**:
 | **AI Query Patient Data** | Execute chart search queries |
 | **View AI Audit Logs** | Access the audit log endpoint |
 
-### 7. Embeddings
+### 7. Indexing
 
-When `chartsearchai.embedding.preFilter` is `true` (default), patient records are automatically indexed on first chart access. Subsequent data changes trigger automatic re-indexing via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, program enrollment, medication dispense, and patient merge operations. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is also available in **Admin > Scheduler > Manage Scheduler** if you prefer to pre-index all patients at once.
+When `chartsearchai.embedding.preFilter` is `true` (default), patient records are automatically indexed on first chart access for whichever retrieval pipeline is active. Subsequent data changes trigger automatic re-indexing via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, program enrollment, medication dispense, and patient merge operations.
 
-**Switching embedding models:** The default model is all-MiniLM-L6-v2 (general-purpose, 384 dimensions). Any BERT-based ONNX embedding model can be used as a drop-in replacement by updating `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. Embedding dimensions are auto-detected from the model output, so models with any dimension size work without code changes. After switching models, existing embeddings are incompatible — run the **"Chart Search AI - Embedding Backfill"** task to re-index all patients with the new model.
+**Embedding pipeline** (default): Uses an ONNX embedding model for vector similarity search. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is available in **Admin > Scheduler > Manage Scheduler** to pre-index all patients. The default model is all-MiniLM-L6-v2 (general-purpose, 384 dimensions). Any BERT-based ONNX embedding model can be used as a drop-in replacement by updating `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. Embedding dimensions are auto-detected from the model output, so models with any dimension size work without code changes. After switching models, existing embeddings are incompatible — run the backfill task to re-index all patients with the new model.
+
+**Lucene pipeline** (`chartsearchai.retrieval.pipeline=lucene`): Uses Apache Lucene BM25 text search with English stemming. No ONNX model files are required. The Lucene index is stored at `<openmrs-application-data-directory>/chartsearchai/lucene-index/` and is built automatically on first patient access. This pipeline is simpler to set up (no model download needed) and may be preferred for environments where the ONNX model is unavailable.
 
 ## API
 
