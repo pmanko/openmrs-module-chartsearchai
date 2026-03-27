@@ -21,6 +21,7 @@ import org.openmrs.module.chartsearchai.model.ChartEmbedding;
 import org.openmrs.module.chartsearchai.model.ChartSearchAuditLog;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public class HibernateChartSearchAiDAO implements ChartSearchAiDAO {
@@ -60,6 +61,15 @@ public class HibernateChartSearchAiDAO implements ChartSearchAiDAO {
 				.createQuery("delete from ChartEmbedding where patient = :patient")
 				.setParameter("patient", patient)
 				.executeUpdate();
+	}
+
+	@Override
+	@Transactional
+	public void replacePatientEmbeddings(Patient patient, List<ChartEmbedding> embeddings) {
+		deleteByPatient(patient);
+		for (ChartEmbedding ce : embeddings) {
+			sessionFactory.getCurrentSession().saveOrUpdate(ce);
+		}
 	}
 
 	@Override

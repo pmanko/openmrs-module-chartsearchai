@@ -39,7 +39,6 @@ import org.springframework.transaction.annotation.Transactional;
  * Supports both full patient re-indexing and incremental encounter indexing.
  */
 @Component
-@Transactional
 public class EmbeddingIndexer {
 
 	private static final Logger log = LoggerFactory.getLogger(EmbeddingIndexer.class);
@@ -99,11 +98,9 @@ public class EmbeddingIndexer {
 					failed, records.size(), patient.getPatientId());
 		}
 
-		// Delete old and insert new within the same transaction
-		dao.deleteByPatient(patient);
-		for (ChartEmbedding ce : newEmbeddings) {
-			dao.saveChartEmbedding(ce);
-		}
+		// Delete old and insert new atomically in a single transaction,
+		// without holding the transaction open during embedding computation above.
+		dao.replacePatientEmbeddings(patient, newEmbeddings);
 
 		log.info("Finished indexing patient [id={}] ({} of {} records)",
 				patient.getPatientId(), newEmbeddings.size(), records.size());
@@ -115,6 +112,7 @@ public class EmbeddingIndexer {
 	 *
 	 * @param patient the patient whose embeddings to delete
 	 */
+	@Transactional
 	public void deletePatientEmbeddings(Patient patient) {
 		log.info("Deleting all embeddings for patient [id={}]", patient.getPatientId());
 		dao.deleteByPatient(patient);
@@ -126,6 +124,7 @@ public class EmbeddingIndexer {
 	 *
 	 * @param encounter the encounter to index
 	 */
+	@Transactional
 	public void indexEncounter(Encounter encounter) {
 		Patient patient = encounter.getPatient();
 		if (patient == null) {
@@ -145,7 +144,13 @@ public class EmbeddingIndexer {
 				}
 				String text = obsSerializer.toText(obs);
 				if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
-					upsertEmbedding(patient, ChartSearchAiConstants.RESOURCE_TYPE_OBS, obs.getObsId(), text, now);
+					try {
+						upsertEmbedding(patient, ChartSearchAiConstants.RESOURCE_TYPE_OBS, obs.getObsId(), text, now);
+					}
+					catch (Exception e) {
+						log.warn("Failed to embed obs [id={}] for patient [id={}]: {}",
+								obs.getObsId(), patient.getPatientId(), e.getMessage());
+					}
 				}
 			}
 		}
@@ -154,7 +159,13 @@ public class EmbeddingIndexer {
 			for (Diagnosis diagnosis : encounter.getDiagnoses()) {
 				String text = diagnosisSerializer.toText(diagnosis);
 				if (text != null && !text.trim().isEmpty() && seenText.add(text)) {
-					upsertEmbedding(patient, ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS, diagnosis.getDiagnosisId(), text, now);
+					try {
+						upsertEmbedding(patient, ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS, diagnosis.getDiagnosisId(), text, now);
+					}
+					catch (Exception e) {
+						log.warn("Failed to embed diagnosis [id={}] for patient [id={}]: {}",
+								diagnosis.getDiagnosisId(), patient.getPatientId(), e.getMessage());
+					}
 				}
 			}
 		}

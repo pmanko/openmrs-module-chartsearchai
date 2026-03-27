@@ -27,11 +27,11 @@ import java.util.regex.Pattern;
  */
 public class WordPieceTokenizer {
 
-	private static final int CLS_TOKEN_ID = 101;
+	private static final String CLS_TOKEN = "[CLS]";
 
-	private static final int SEP_TOKEN_ID = 102;
+	private static final String SEP_TOKEN = "[SEP]";
 
-	private static final int UNK_TOKEN_ID = 100;
+	private static final String UNK_TOKEN = "[UNK]";
 
 	private static final String SUBWORD_PREFIX = "##";
 
@@ -46,9 +46,26 @@ public class WordPieceTokenizer {
 
 	private final int maxSequenceLength;
 
+	private final int clsTokenId;
+
+	private final int sepTokenId;
+
+	private final int unkTokenId;
+
 	public WordPieceTokenizer(String vocabFilePath, int maxSequenceLength) throws IOException {
 		this.maxSequenceLength = maxSequenceLength;
 		this.vocab = loadVocab(vocabFilePath);
+		this.clsTokenId = lookupRequired(CLS_TOKEN);
+		this.sepTokenId = lookupRequired(SEP_TOKEN);
+		this.unkTokenId = lookupRequired(UNK_TOKEN);
+	}
+
+	private int lookupRequired(String token) {
+		Integer id = vocab.get(token);
+		if (id == null) {
+			throw new IllegalStateException("Vocabulary is missing required token: " + token);
+		}
+		return id;
 	}
 
 	/**
@@ -59,7 +76,7 @@ public class WordPieceTokenizer {
 	 */
 	public TokenizedInput tokenize(String text) {
 		List<Integer> tokenIds = new ArrayList<Integer>();
-		tokenIds.add(CLS_TOKEN_ID);
+		tokenIds.add(clsTokenId);
 
 		String normalized = text.toLowerCase().trim();
 		// Insert spaces around punctuation so it becomes a separate token
@@ -81,7 +98,7 @@ public class WordPieceTokenizer {
 		if (tokenIds.size() > maxSequenceLength - 1) {
 			tokenIds = new ArrayList<Integer>(tokenIds.subList(0, maxSequenceLength - 1));
 		}
-		tokenIds.add(SEP_TOKEN_ID);
+		tokenIds.add(sepTokenId);
 
 		int seqLen = tokenIds.size();
 		long[] inputIds = new long[seqLen];
@@ -99,7 +116,7 @@ public class WordPieceTokenizer {
 
 	private void tokenizeWord(String word, List<Integer> tokenIds) {
 		if (word.length() > MAX_WORD_LENGTH) {
-			tokenIds.add(UNK_TOKEN_ID);
+			tokenIds.add(unkTokenId);
 			return;
 		}
 
@@ -134,7 +151,7 @@ public class WordPieceTokenizer {
 		}
 
 		if (isBad) {
-			tokenIds.add(UNK_TOKEN_ID);
+			tokenIds.add(unkTokenId);
 		} else {
 			tokenIds.addAll(subTokens);
 		}
@@ -148,7 +165,7 @@ public class WordPieceTokenizer {
 			String line;
 			int index = 0;
 			while ((line = reader.readLine()) != null) {
-				vocabMap.put(line.trim(), index);
+				vocabMap.put(line.replace("\r", ""), index);
 				index++;
 			}
 		}

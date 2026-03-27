@@ -331,7 +331,36 @@ public class LlmProvider {
 
 	static String formatPrompt(String templateValue, String systemPrompt, String userMessage) {
 		String template = PRESET_TEMPLATES.getOrDefault(templateValue.toLowerCase(), templateValue);
-		return template.replace("{system}", systemPrompt).replace("{user}", userMessage);
+		// Sanitize user-controlled content to prevent prompt injection via
+		// special tokens. Strip tokens that could break out of the user role
+		// in any of the supported chat templates.
+		String safeUser = stripSpecialTokens(userMessage);
+		return template.replace("{system}", systemPrompt).replace("{user}", safeUser);
+	}
+
+	/**
+	 * Strips chat template special tokens from user-controlled text to prevent
+	 * prompt injection. Covers all preset template formats.
+	 */
+	static String stripSpecialTokens(String text) {
+		if (text == null) {
+			return "";
+		}
+		return text
+				// llama3 tokens
+				.replace("<|begin_of_text|>", "").replace("<|end_of_text|>", "")
+				.replace("<|start_header_id|>", "").replace("<|end_header_id|>", "")
+				.replace("<|eot_id|>", "")
+				// mistral tokens
+				.replace("[INST]", "").replace("[/INST]", "")
+				.replace("</s>", "")
+				// phi3 tokens
+				.replace("<|system|>", "").replace("<|user|>", "")
+				.replace("<|assistant|>", "").replace("<|end|>", "")
+				// chatml tokens
+				.replace("<|im_start|>", "").replace("<|im_end|>", "")
+				// gemma tokens
+				.replace("<start_of_turn>", "").replace("<end_of_turn>", "");
 	}
 
 	static String[] resolveStopStrings(String templateValue) {

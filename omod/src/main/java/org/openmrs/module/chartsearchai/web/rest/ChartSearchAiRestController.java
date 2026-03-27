@@ -373,7 +373,12 @@ public class ChartSearchAiRestController {
 			}
 		}
 
-		out.flush();
+		try {
+			out.flush();
+		}
+		catch (IOException e) {
+			log.debug("Could not flush SSE stream, client likely disconnected");
+		}
 	}
 
 	@RequestMapping(value = "/auditlog", method = RequestMethod.GET)

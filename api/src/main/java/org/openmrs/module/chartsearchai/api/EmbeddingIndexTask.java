@@ -65,6 +65,11 @@ public class EmbeddingIndexTask extends AbstractTask {
 
 		ChartSearchAiDAO dao = Context.getRegisteredComponent("hibernateChartSearchAiDAO", ChartSearchAiDAO.class);
 		EmbeddingIndexer indexer = Context.getRegisteredComponent("embeddingIndexer", EmbeddingIndexer.class);
+		if (dao == null || indexer == null) {
+			log.error("Required components not available (dao={}, indexer={}), skipping backfill",
+					dao != null ? "ok" : "null", indexer != null ? "ok" : "null");
+			return;
+		}
 
 		Set<Integer> alreadyIndexed = new HashSet<Integer>(dao.getIndexedPatientIds());
 		log.info("Starting embedding backfill ({} patients already indexed)", alreadyIndexed.size());

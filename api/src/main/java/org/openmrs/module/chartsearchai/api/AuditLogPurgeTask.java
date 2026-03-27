@@ -43,6 +43,10 @@ public class AuditLogPurgeTask extends AbstractTask {
 
 		AuditLogService service = Context.getRegisteredComponent(
 				"chartSearchAi.auditLogService", AuditLogService.class);
+		if (service == null) {
+			log.error("AuditLogService not available, skipping audit log purge");
+			return;
+		}
 
 		int deleted = service.deleteAuditLogsBefore(cutoffDate);
 		log.info("Audit log purge completed: deleted {} entries older than {} days",

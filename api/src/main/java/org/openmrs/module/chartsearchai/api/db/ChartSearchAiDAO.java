@@ -27,6 +27,12 @@ public interface ChartSearchAiDAO {
 
 	void deleteByPatient(Patient patient);
 
+	/**
+	 * Atomically replaces all embeddings for a patient: deletes existing
+	 * embeddings and inserts the new ones within a single transaction.
+	 */
+	void replacePatientEmbeddings(Patient patient, List<ChartEmbedding> embeddings);
+
 	ChartSearchAuditLog saveAuditLog(ChartSearchAuditLog auditLog);
 
 	List<Integer> getIndexedPatientIds();

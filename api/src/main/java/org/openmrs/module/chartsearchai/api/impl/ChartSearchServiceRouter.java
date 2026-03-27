@@ -100,8 +100,23 @@ public class ChartSearchServiceRouter implements ChartSearchService {
 		String pipeline = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE,
 						ChartSearchAiConstants.PIPELINE_EMBEDDING);
+		String topK = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_TOP_K, "");
+		String similarityRatio = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_SIMILARITY_RATIO, "");
+		String keywordWeight = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_KEYWORD_WEIGHT, "");
+		String scoreGapMultiplier = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_SCORE_GAP_MULTIPLIER, "");
+		String minScoreGap = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_MIN_SCORE_GAP, "");
 		return patient.getUuid() + "::" + preFilter.trim().toLowerCase()
 				+ "::" + pipeline.trim().toLowerCase()
+				+ "::" + topK.trim()
+				+ "::" + similarityRatio.trim()
+				+ "::" + keywordWeight.trim()
+				+ "::" + scoreGapMultiplier.trim()
+				+ "::" + minScoreGap.trim()
 				+ "::" + question.trim().toLowerCase();
 	}
 

@@ -909,13 +909,15 @@ public class LlmInferenceService implements ChartSearchService {
 		// semantic score meets this threshold. This ensures the cutoff index
 		// aligns with scored[0..cutoff-1] rather than using a position from
 		// a differently-sorted list.
+		// Find all items in the combined-score list whose semantic score is
+		// at or above the cluster boundary. We track the highest index that
+		// qualifies so that the returned cutoff is a contiguous prefix
+		// (scored[0..cutoff-1]) containing every cluster member.
 		double clusterThreshold = semanticSorted.get(semanticCutoff - 1);
 		int cutoff = 0;
-		int found = 0;
-		for (int i = 0; i < limit && found < semanticCutoff; i++) {
-			cutoff = i + 1;
+		for (int i = 0; i < limit; i++) {
 			if (scored.get(i).semanticScore >= clusterThreshold) {
-				found++;
+				cutoff = i + 1;
 			}
 		}
 

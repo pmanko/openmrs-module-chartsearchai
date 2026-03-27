@@ -122,23 +122,38 @@ public class LuceneIndexer implements Closeable {
 	public void indexPatient(Patient patient) {
 		log.info("Lucene: indexing patient [id={}]", patient.getPatientId());
 		List<SerializedRecord> records = recordLoader.loadAll(patient);
-		try {
-			IndexWriter w = getWriter();
-			// Delete existing documents for this patient
-			w.deleteDocuments(IntPoint.newExactQuery(
-					FIELD_PATIENT_ID, patient.getPatientId()));
+		synchronized (lock) {
+			try {
+				IndexWriter w = getWriter();
+				// Delete existing documents for this patient
+				w.deleteDocuments(IntPoint.newExactQuery(
+						FIELD_PATIENT_ID, patient.getPatientId()));
 
-			for (SerializedRecord record : records) {
-				Document doc = buildDocument(patient, record);
-				w.addDocument(doc);
+				for (SerializedRecord record : records) {
+					Document doc = buildDocument(patient, record);
+					w.addDocument(doc);
+				}
+				w.commit();
+				log.info("Lucene: indexed {} records for patient [id={}]",
+						records.size(), patient.getPatientId());
 			}
-			w.commit();
-			log.info("Lucene: indexed {} records for patient [id={}]",
-					records.size(), patient.getPatientId());
-		}
-		catch (IOException e) {
-			log.error("Lucene: failed to index patient [id={}]",
-					patient.getPatientId(), e);
+			catch (IOException e) {
+				log.error("Lucene: failed to index patient [id={}]",
+						patient.getPatientId(), e);
+				// Roll back uncommitted deletes and partial adds so that a
+				// subsequent commit (from another indexPatient call) does not
+				// apply this patient's partial state.
+				try {
+					if (writer != null && writer.isOpen()) {
+						writer.rollback();
+					}
+					writer = null;
+				}
+				catch (IOException rollbackEx) {
+					log.error("Lucene: rollback also failed for patient [id={}]",
+							patient.getPatientId(), rollbackEx);
+				}
+			}
 		}
 	}
 

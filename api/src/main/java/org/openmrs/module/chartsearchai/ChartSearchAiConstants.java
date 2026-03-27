@@ -211,6 +211,10 @@ public class ChartSearchAiConstants {
 	 *         or the file does not exist
 	 */
 	public static String resolveModelPath(String relativePath, String globalPropertyName) {
+		if (relativePath == null || relativePath.trim().isEmpty()) {
+			throw new IllegalStateException(
+					"Model path is not configured: " + globalPropertyName);
+		}
 		if (relativePath.contains("..")) {
 			throw new IllegalStateException(
 					"Model path must not contain '..': " + globalPropertyName);
