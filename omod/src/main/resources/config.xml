@@ -50,6 +50,12 @@
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.retrieval.pipeline</property>
+		<defaultValue>embedding</defaultValue>
+		<description>Selects the retrieval pipeline used to pre-filter patient records before sending them to the LLM. Options: "embedding" (default) uses vector similarity via an ONNX model with custom scoring; "lucene" uses Apache Lucene BM25 text search. Both require chartsearchai.embedding.preFilter to be true. Records are indexed automatically on first access. Changing this setting takes effect on the next query.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.llm.chatTemplate</property>
 		<defaultValue>llama3</defaultValue>
 		<description>Chat template for formatting prompts sent to the LLM. Use a preset name (llama3, mistral, phi3, chatml, gemma) or a custom template string with {system} and {user} placeholders. Default: llama3.</description>

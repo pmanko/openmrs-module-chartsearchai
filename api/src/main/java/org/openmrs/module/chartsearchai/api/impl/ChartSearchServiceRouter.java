@@ -97,7 +97,11 @@ public class ChartSearchServiceRouter implements ChartSearchService {
 	protected String buildCacheKey(Patient patient, String question) {
 		String preFilter = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
+		String pipeline = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE,
+						ChartSearchAiConstants.PIPELINE_EMBEDDING);
 		return patient.getUuid() + "::" + preFilter.trim().toLowerCase()
+				+ "::" + pipeline.trim().toLowerCase()
 				+ "::" + question.trim().toLowerCase();
 	}
 

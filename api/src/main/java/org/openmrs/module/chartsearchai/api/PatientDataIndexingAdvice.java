@@ -93,6 +93,8 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 			log.error("Failed to re-index patient [id={}] after {} call",
 					patient.getPatientId(), methodName, e);
 		}
+
+		reindexLucene(patient);
 	}
 
 	private void handleMergePatients(Object[] args) {
@@ -110,6 +112,45 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 		catch (Exception e) {
 			log.error("Failed to re-index after mergePatients [preferred={}, notPreferred={}]",
 					preferred.getPatientId(), notPreferred.getPatientId(), e);
+		}
+
+		reindexLucene(preferred);
+		deleteLuceneIndex(notPreferred);
+	}
+
+	private void reindexLucene(Patient patient) {
+		String pipeline = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
+		if (!ChartSearchAiConstants.PIPELINE_LUCENE.equalsIgnoreCase(pipeline.trim())) {
+			return;
+		}
+		try {
+			LuceneIndexer luceneIndexer = Context.getRegisteredComponent(
+					"luceneIndexer", LuceneIndexer.class);
+			if (luceneIndexer.hasIndex(patient)) {
+				luceneIndexer.indexPatient(patient);
+			}
+		}
+		catch (Exception e) {
+			log.error("Failed to re-index Lucene for patient [id={}]",
+					patient.getPatientId(), e);
+		}
+	}
+
+	private void deleteLuceneIndex(Patient patient) {
+		String pipeline = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
+		if (!ChartSearchAiConstants.PIPELINE_LUCENE.equalsIgnoreCase(pipeline.trim())) {
+			return;
+		}
+		try {
+			LuceneIndexer luceneIndexer = Context.getRegisteredComponent(
+					"luceneIndexer", LuceneIndexer.class);
+			luceneIndexer.deletePatientIndex(patient);
+		}
+		catch (Exception e) {
+			log.error("Failed to delete Lucene index for patient [id={}]",
+					patient.getPatientId(), e);
 		}
 	}
 

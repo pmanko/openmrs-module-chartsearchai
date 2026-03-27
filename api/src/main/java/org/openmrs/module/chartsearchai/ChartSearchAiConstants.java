@@ -111,6 +111,12 @@ public class ChartSearchAiConstants {
 	 * coherence outlier detection. */
 	public static final double COHERENCE_ADAPTIVE_GAP_RATIO = 0.20;
 
+	public static final String GP_RETRIEVAL_PIPELINE = "chartsearchai.retrieval.pipeline";
+
+	public static final String PIPELINE_EMBEDDING = "embedding";
+
+	public static final String PIPELINE_LUCENE = "lucene";
+
 	public static final String GP_AUDIT_LOG_RETENTION_DAYS = "chartsearchai.auditLogRetentionDays";
 
 	public static final int DEFAULT_AUDIT_LOG_RETENTION_DAYS = 90;

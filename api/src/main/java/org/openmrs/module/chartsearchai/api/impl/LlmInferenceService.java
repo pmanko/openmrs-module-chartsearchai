@@ -34,6 +34,7 @@ import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.api.EmbeddingIndexer;
+import org.openmrs.module.chartsearchai.api.LuceneIndexer;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
@@ -74,6 +75,9 @@ public class LlmInferenceService implements ChartSearchService {
 
 	@Autowired
 	private EmbeddingIndexer embeddingIndexer;
+
+	@Autowired
+	private LuceneIndexer luceneIndexer;
 
 	@Autowired
 	private LlmProvider llmProvider;
@@ -209,6 +213,13 @@ public class LlmInferenceService implements ChartSearchService {
 			return chartSerializer.serialize(patient);
 		}
 
+		if (isLucenePipeline()) {
+			return buildChartWithLucene(patient, question);
+		}
+		return buildChartWithEmbeddings(patient, question);
+	}
+
+	private PatientChart buildChartWithEmbeddings(Patient patient, String question) {
 		int topK = getTopK();
 		// findSimilar returns null when no embeddings exist (needs indexing),
 		// or an empty list when embeddings exist but nothing matched the query.
@@ -241,6 +252,49 @@ public class LlmInferenceService implements ChartSearchService {
 			relevantKeys.add(ce.getResourceType() + ":" + ce.getResourceId());
 		}
 
+		return filterAndSerialize(patient, question, relevantKeys);
+	}
+
+	private PatientChart buildChartWithLucene(Patient patient, String question) {
+		if (!luceneIndexer.hasIndex(patient)) {
+			log.info("No Lucene index for patient [id={}], indexing now", patient.getPatientId());
+			try {
+				luceneIndexer.indexPatient(patient);
+			}
+			catch (Exception e) {
+				log.error("Failed to Lucene-index patient [id={}], falling back to full chart",
+						patient.getPatientId(), e);
+				return chartSerializer.serialize(patient);
+			}
+		}
+
+		String normalizedQuery = stripQueryStopwords(question);
+		if (normalizedQuery.isEmpty()) {
+			return chartSerializer.serialize(patient);
+		}
+
+		List<LuceneIndexer.LuceneSearchResult> results = luceneIndexer.search(
+				patient, normalizedQuery, getTopK() * 10);
+
+		if (results.isEmpty()) {
+			log.debug("Lucene returned no results for query '{}', returning empty chart",
+					normalizedQuery);
+			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
+		}
+
+		Set<String> relevantKeys = new HashSet<String>();
+		for (LuceneIndexer.LuceneSearchResult result : results) {
+			relevantKeys.add(result.getResourceType() + ":" + result.getResourceId());
+		}
+
+		log.debug("Lucene returned {} results for query '{}'",
+				relevantKeys.size(), normalizedQuery);
+
+		return filterAndSerialize(patient, question, relevantKeys);
+	}
+
+	private PatientChart filterAndSerialize(Patient patient, String question,
+			Set<String> relevantKeys) {
 		List<SerializedRecord> allRecords = recordLoader.loadAll(patient);
 		List<SerializedRecord> filtered = new ArrayList<SerializedRecord>();
 		for (SerializedRecord record : allRecords) {
@@ -249,7 +303,9 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
-		log.debug("Pre-filtered {} records to {} using embeddings", allRecords.size(), filtered.size());
+		log.debug("Pre-filtered {} records to {} using {}",
+				allRecords.size(), filtered.size(),
+				isLucenePipeline() ? "Lucene" : "embeddings");
 
 		int recencyCap = extractRecencyCap(question);
 		if (recencyCap > 0) {
@@ -258,6 +314,13 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 
 		return chartSerializer.serialize(patient, filtered);
+	}
+
+	boolean isLucenePipeline() {
+		String pipeline = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE);
+		return ChartSearchAiConstants.PIPELINE_LUCENE.equalsIgnoreCase(
+				pipeline != null ? pipeline.trim() : "");
 	}
 
 	private boolean usePreFilter() {
@@ -592,18 +655,40 @@ public class LlmInferenceService implements ChartSearchService {
 		// (e.g., 2 Kaposi sarcoma records for "cancer?" query). Then
 		// apply ratio floor + topK as a safety net.
 		if (refinementActivated) {
-			double maxSemanticRefined = 0;
+			// The second-pass gap detection exists to split genuine keyword
+			// matches from coincidental ones (e.g. "Chronic disease
+			// management" matching "disease" in an STD query). But when
+			// keyword scores across the refined set are uniform, all
+			// candidates matched the same keyword pattern — the second gap
+			// would only be splitting on semantic score variance, which is
+			// noise for records that are all equally keyword-relevant.
+			// Skip the gap when keyword score variance is zero (or near
+			// zero due to floating-point), preserving the full refined set.
+			double kwMin = Double.MAX_VALUE;
+			double kwMax = 0;
 			for (ScoredEmbedding se : candidates) {
-				if (se.semanticScore > maxSemanticRefined) {
-					maxSemanticRefined = se.semanticScore;
+				if (se.keywordScore < kwMin) {
+					kwMin = se.keywordScore;
+				}
+				if (se.keywordScore > kwMax) {
+					kwMax = se.keywordScore;
 				}
 			}
-			double adaptiveMinGap = Math.max(
-					maxSemanticRefined * ChartSearchAiConstants.REFINEMENT_ADAPTIVE_GAP_RATIO,
-					ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
-			int refinedCutoff = findAdaptiveCutoff(candidates, candidates.size(),
-					minScore, getScoreGapMultiplier(), adaptiveMinGap);
-			candidates = new ArrayList<ScoredEmbedding>(candidates.subList(0, refinedCutoff));
+			boolean uniformKeywords = (kwMax - kwMin) < 0.01;
+			if (!uniformKeywords) {
+				double maxSemanticRefined = 0;
+				for (ScoredEmbedding se : candidates) {
+					if (se.semanticScore > maxSemanticRefined) {
+						maxSemanticRefined = se.semanticScore;
+					}
+				}
+				double adaptiveMinGap = Math.max(
+						maxSemanticRefined * ChartSearchAiConstants.REFINEMENT_ADAPTIVE_GAP_RATIO,
+						ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
+				int refinedCutoff = findAdaptiveCutoff(candidates, candidates.size(),
+						minScore, getScoreGapMultiplier(), adaptiveMinGap);
+				candidates = new ArrayList<ScoredEmbedding>(candidates.subList(0, refinedCutoff));
+			}
 		} else {
 			// Sensitive second-pass: lower multiplier and small absolute
 			// minGap to detect tight clusters that the first pass missed.

@@ -60,6 +60,27 @@ public class ObsIndexingAdvice implements AfterReturningAdvice {
 		catch (Exception e) {
 			log.error("Failed to re-index patient after {} call", method.getName(), e);
 		}
+
+		reindexLucene(patient);
+	}
+
+	private void reindexLucene(Patient patient) {
+		String pipeline = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
+		if (!ChartSearchAiConstants.PIPELINE_LUCENE.equalsIgnoreCase(pipeline.trim())) {
+			return;
+		}
+		try {
+			LuceneIndexer luceneIndexer = Context.getRegisteredComponent(
+					"luceneIndexer", LuceneIndexer.class);
+			if (luceneIndexer.hasIndex(patient)) {
+				luceneIndexer.indexPatient(patient);
+			}
+		}
+		catch (Exception e) {
+			log.error("Failed to re-index Lucene for patient [id={}]",
+					patient.getPatientId(), e);
+		}
 	}
 
 	Patient getPatientFromArgs(Object returnValue, Object[] args) {

@@ -191,6 +191,78 @@ public class LlmInferenceServiceTest {
 			/* [153] */ "Clinical observation: Test — Respiratory Rate: 15.0",
 	};
 
+	// Second 67-record dataset from a 4-year-old Male patient chart.
+	// Used by integration tests that exercise the pipeline on a different patient.
+	private static final String[] SECOND_PATIENT_DATASET = {
+			/* [ 1] */ "Clinical observation: Assessment — Text of encounter note: Est sit amet facilisis magna etiam tempor. Sed vulputate odio ut enim blandit volutpat. Eget est lorem ipsum dolor sit amet. Arcu vitae elementum curabitur vitae nunc sed velit. Venenatis cras sed felis eget velit.",
+			/* [ 2] */ "Medical condition: Condition: Nonparalytic stroke. Status: ACTIVE",
+			/* [ 3] */ "Medical condition: Condition: Scarring Alopecia. Status: ACTIVE",
+			/* [ 4] */ "Clinical diagnosis: Diagnosis: Nonparalytic stroke. Certainty: PROVISIONAL. Rank: Primary",
+			/* [ 5] */ "Clinical diagnosis: Diagnosis: Scarring Alopecia. Certainty: CONFIRMED. Rank: Primary",
+			/* [ 6] */ "Clinical observation: Finding — Temperature (c)): 38.9 (CRITICALLY_HIGH)",
+			/* [ 7] */ "Clinical observation: Finding — Systolic blood pressure: 133.0 (HIGH)",
+			/* [ 8] */ "Clinical observation: Finding — Diastolic blood pressure: 57.0 (NORMAL)",
+			/* [ 9] */ "Clinical observation: Finding — Pulse: 100.0 (NORMAL)",
+			/* [10] */ "Clinical observation: Finding — Arterial blood oxygen saturation (pulse oximeter): 96.6",
+			/* [11] */ "Clinical observation: Finding — Weight (kg): 68.0",
+			/* [12] */ "Clinical observation: Finding — Respiratory rate: 17.0 (CRITICALLY_LOW)",
+			/* [13] */ "Clinical observation: Finding — Height (cm): 168.0",
+			/* [14] */ "Clinical observation: Test — High-density lipoprotein cholesterol measurement (mmol/L), High-density lipoprotein cholesterol): 96.0",
+			/* [15] */ "Lab test order: Test order: High-density lipoprotein cholesterol measurement (mmol/L), High-density lipoprotein cholesterol). Action: NEW. Urgency: ROUTINE",
+			/* [16] */ "Clinical observation: Assessment — Text of encounter note: Neque convallis a cras semper auctor neque vitae. Proin nibh nisl condimentum id venenatis a condimentum vitae. Viverra accumsan in nisl nisi scelerisque eu ultrices vitae. Ac tincidunt vitae semper quis lectus nulla.",
+			/* [17] */ "Medical condition: Condition: Granuloma annulare. Status: ACTIVE",
+			/* [18] */ "Medical condition: Condition: Syphilitic Cirrhosis. Status: ACTIVE",
+			/* [19] */ "Clinical diagnosis: Diagnosis: Granuloma annulare. Certainty: PROVISIONAL. Rank: Primary",
+			/* [20] */ "Clinical diagnosis: Diagnosis: Syphilitic Cirrhosis. Certainty: CONFIRMED. Rank: Primary",
+			/* [21] */ "Clinical observation: Finding — Temperature (c)): 37.2 (NORMAL)",
+			/* [22] */ "Clinical observation: Finding — Systolic blood pressure: 104.0 (NORMAL)",
+			/* [23] */ "Clinical observation: Finding — Diastolic blood pressure: 52.0 (NORMAL)",
+			/* [24] */ "Clinical observation: Finding — Pulse: 108.0 (NORMAL)",
+			/* [25] */ "Clinical observation: Finding — Arterial blood oxygen saturation (pulse oximeter): 93.0 (LOW)",
+			/* [26] */ "Clinical observation: Finding — Weight (kg): 49.0",
+			/* [27] */ "Clinical observation: Finding — Respiratory rate: 22.0 (NORMAL)",
+			/* [28] */ "Clinical observation: Finding — Height (cm): 186.0",
+			/* [29] */ "Clinical observation: Assessment — Text of encounter note: Faucibus et molestie ac feugiat sed lectus. Condimentum lacinia quis vel eros donec ac. Urna porttitor rhoncus dolor purus.",
+			/* [30] */ "Medical condition: Condition: Atherosclerosis. Status: ACTIVE",
+			/* [31] */ "Medical condition: Condition: Complete tear of ligament of ankle or foot. Status: ACTIVE",
+			/* [32] */ "Medical condition: Condition: Mild depressive episode. Status: ACTIVE",
+			/* [33] */ "Clinical diagnosis: Diagnosis: Atherosclerosis. Certainty: PROVISIONAL. Rank: Primary",
+			/* [34] */ "Clinical diagnosis: Diagnosis: Complete tear of ligament of ankle or foot. Certainty: CONFIRMED. Rank: Primary",
+			/* [35] */ "Clinical diagnosis: Diagnosis: Mild depressive episode. Certainty: CONFIRMED. Rank: Primary",
+			/* [36] */ "Clinical observation: Finding — Temperature (c)): 38.7 (CRITICALLY_HIGH)",
+			/* [37] */ "Clinical observation: Finding — Systolic blood pressure: 105.0 (NORMAL)",
+			/* [38] */ "Clinical observation: Finding — Diastolic blood pressure: 60.0 (NORMAL)",
+			/* [39] */ "Clinical observation: Finding — Pulse: 65.0 (CRITICALLY_LOW)",
+			/* [40] */ "Clinical observation: Finding — Arterial blood oxygen saturation (pulse oximeter): 99.6",
+			/* [41] */ "Clinical observation: Finding — Weight (kg): 72.0",
+			/* [42] */ "Clinical observation: Finding — Respiratory rate: 9.0 (CRITICALLY_LOW)",
+			/* [43] */ "Clinical observation: Finding — Height (cm): 186.0",
+			/* [44] */ "Clinical observation: Assessment — Text of encounter note: Est sit amet facilisis magna etiam tempor. Sed vulputate odio ut enim blandit volutpat. Eget est lorem ipsum dolor sit amet. Arcu vitae elementum curabitur vitae nunc sed velit. Venenatis cras sed felis eget velit.",
+			/* [45] */ "Medical condition: Condition: Female infertility. Status: ACTIVE",
+			/* [46] */ "Clinical diagnosis: Diagnosis: Female infertility. Certainty: PROVISIONAL. Rank: Primary",
+			/* [47] */ "Clinical observation: Finding — Temperature (c)): 36.0 (NORMAL)",
+			/* [48] */ "Clinical observation: Finding — Systolic blood pressure: 128.0 (HIGH)",
+			/* [49] */ "Clinical observation: Finding — Diastolic blood pressure: 86.0 (HIGH)",
+			/* [50] */ "Clinical observation: Finding — Pulse: 70.0 (LOW)",
+			/* [51] */ "Clinical observation: Finding — Arterial blood oxygen saturation (pulse oximeter): 89.3 (CRITICALLY_LOW)",
+			/* [52] */ "Clinical observation: Finding — Weight (kg): 50.0",
+			/* [53] */ "Clinical observation: Finding — Respiratory rate: 16.0 (CRITICALLY_LOW)",
+			/* [54] */ "Clinical observation: Finding — Height (cm): 185.0",
+			/* [55] */ "Clinical observation: Assessment — Text of encounter note: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Vulputate enim nulla aliquet porttitor. Fermentum iaculis eu non diam phasellus vestibulum lorem sed. Orci ac auctor augue mauris augue neque. Fames ac turpis egestas sed tempus urna. Sit amet justo donec enim diam vulputate. Tortor aliquam nulla facilisi cras fermentum. Aliquet eget sit amet tellus. Elit ullamcorper dignissim cras tincidunt lobortis feugiat. Nisl tincidunt eget nullam non nisi est. Volutpat maecenas volutpat blandit aliquam etiam erat.",
+			/* [56] */ "Medical condition: Condition: Personal history of blood transfusion. Status: ACTIVE",
+			/* [57] */ "Medical condition: Condition: Chronic fatigue. Status: ACTIVE",
+			/* [58] */ "Clinical diagnosis: Diagnosis: Personal history of blood transfusion. Certainty: PROVISIONAL. Rank: Primary",
+			/* [59] */ "Clinical diagnosis: Diagnosis: Chronic fatigue. Certainty: CONFIRMED. Rank: Primary",
+			/* [60] */ "Clinical observation: Finding — Temperature (c)): 36.5 (NORMAL)",
+			/* [61] */ "Clinical observation: Finding — Systolic blood pressure: 131.0 (HIGH)",
+			/* [62] */ "Clinical observation: Finding — Diastolic blood pressure: 60.0 (NORMAL)",
+			/* [63] */ "Clinical observation: Finding — Pulse: 63.0 (CRITICALLY_LOW)",
+			/* [64] */ "Clinical observation: Finding — Arterial blood oxygen saturation (pulse oximeter): 89.7 (CRITICALLY_LOW)",
+			/* [65] */ "Clinical observation: Finding — Weight (kg): 50.0",
+			/* [66] */ "Clinical observation: Finding — Respiratory rate: 8.0 (CRITICALLY_LOW)",
+			/* [67] */ "Clinical observation: Finding — Height (cm): 196.0",
+	};
+
 	@Test
 	public void extractCitedReferences_shouldExtractReferencesFromCitations() {
 		List<RecordMapping> mappings = Arrays.asList(
@@ -1068,21 +1140,34 @@ public class LlmInferenceServiceTest {
 		}
 
 		if (refinementActivated) {
-			double maxSemanticRefined = 0;
+			double kwMin = Double.MAX_VALUE;
+			double kwMax = 0;
 			for (LlmInferenceService.ScoredEmbedding se : candidates) {
-				if (se.semanticScore > maxSemanticRefined) {
-					maxSemanticRefined = se.semanticScore;
+				if (se.keywordScore < kwMin) {
+					kwMin = se.keywordScore;
+				}
+				if (se.keywordScore > kwMax) {
+					kwMax = se.keywordScore;
 				}
 			}
-			double adaptiveMinGap = Math.max(
-					maxSemanticRefined
-							* ChartSearchAiConstants.REFINEMENT_ADAPTIVE_GAP_RATIO,
-					ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
-			int refinedCutoff = LlmInferenceService.findAdaptiveCutoff(
-					candidates, candidates.size(), minScore, gapMultiplier,
-					adaptiveMinGap);
-			candidates = new ArrayList<LlmInferenceService.ScoredEmbedding>(
-					candidates.subList(0, refinedCutoff));
+			boolean uniformKeywords = (kwMax - kwMin) < 0.01;
+			if (!uniformKeywords) {
+				double maxSemanticRefined = 0;
+				for (LlmInferenceService.ScoredEmbedding se : candidates) {
+					if (se.semanticScore > maxSemanticRefined) {
+						maxSemanticRefined = se.semanticScore;
+					}
+				}
+				double adaptiveMinGap = Math.max(
+						maxSemanticRefined
+								* ChartSearchAiConstants.REFINEMENT_ADAPTIVE_GAP_RATIO,
+						ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
+				int refinedCutoff = LlmInferenceService.findAdaptiveCutoff(
+						candidates, candidates.size(), minScore, gapMultiplier,
+						adaptiveMinGap);
+				candidates = new ArrayList<LlmInferenceService.ScoredEmbedding>(
+						candidates.subList(0, refinedCutoff));
+			}
 		} else {
 			int secondCutoff = LlmInferenceService.findAdaptiveCutoff(
 					candidates, candidates.size(), minScore,
@@ -2419,7 +2504,8 @@ public class LlmInferenceServiceTest {
 	private static double[] computeRealSemanticScores(
 			org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider provider,
 			String query) {
-		return computeRealSemanticScoresWithVectors(provider, query, null);
+		return computeRealSemanticScoresWithVectors(provider, query,
+				FULL_PATIENT_DATASET, null);
 	}
 
 	/**
@@ -2428,13 +2514,13 @@ public class LlmInferenceServiceTest {
 	 */
 	private static double[] computeRealSemanticScoresWithVectors(
 			org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider provider,
-			String query, float[][] embeddingVectors) {
+			String query, String[] dataset, float[][] embeddingVectors) {
 		String normalizedQuery = LlmInferenceService.stripQueryStopwords(query);
 		float[] queryVector = provider.embed(normalizedQuery);
 
-		double[] scores = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			String text = FULL_PATIENT_DATASET[i];
+		double[] scores = new double[dataset.length];
+		for (int i = 0; i < dataset.length; i++) {
+			String text = dataset[i];
 			float[] docVector = provider.embed(text);
 			if (embeddingVectors != null) {
 				embeddingVectors[i] = docVector;
@@ -2456,21 +2542,26 @@ public class LlmInferenceServiceTest {
 	 * ONNX model combined with keyword scores from the dataset.
 	 */
 	private static List<Integer> runRealModelPipeline(String query, int topK) {
+		return runRealModelPipeline(query, topK, FULL_PATIENT_DATASET);
+	}
+
+	private static List<Integer> runRealModelPipeline(String query, int topK,
+			String[] dataset) {
 		org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider provider =
 				new org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider(
 						MODEL_PATH, VOCAB_PATH);
 		try {
-			float[][] embeddingVectors = new float[FULL_PATIENT_DATASET.length][];
+			float[][] embeddingVectors = new float[dataset.length][];
 			double[] semantic = computeRealSemanticScoresWithVectors(
-					provider, query, embeddingVectors);
+					provider, query, dataset, embeddingVectors);
 
 			String normalized = LlmInferenceService.stripQueryStopwords(query);
 			String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
 
-			double[] keyword = new double[FULL_PATIENT_DATASET.length];
-			for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
+			double[] keyword = new double[dataset.length];
+			for (int i = 0; i < dataset.length; i++) {
 				keyword[i] = LlmInferenceService.computeKeywordScore(
-						queryTerms, FULL_PATIENT_DATASET[i]);
+						queryTerms, dataset[i]);
 			}
 
 			return simulatePipelineIndices(semantic, keyword, 0.3,
@@ -2656,6 +2747,22 @@ public class LlmInferenceServiceTest {
 		assertTrue(result.contains(11) || result.contains(88),
 				"Should include at least one Kaposi sarcoma record (11 or 88), "
 				+ "got: " + result);
+	}
+
+	@Test
+	public void realModel_conditionsQuery_shouldReturnAllConditionRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"any conditions?", 10, SECOND_PATIENT_DATASET);
+
+		// All 10 "Medical condition:" records in the second dataset.
+		// Keyword rescue ensures conditions like Scarring Alopecia and
+		// Granuloma annulare aren't dropped by semantic gap detection
+		// when they have perfect keyword matches on "condition".
+		assertEquals(Arrays.asList(1, 2, 16, 17, 29, 30, 31, 44, 55, 56),
+				result, "Should return all 10 condition records from second dataset");
 	}
 
 	@Test
