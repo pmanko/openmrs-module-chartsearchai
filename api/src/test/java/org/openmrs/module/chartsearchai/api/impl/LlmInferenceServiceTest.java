@@ -1043,19 +1043,43 @@ public class LlmInferenceServiceTest {
 	private static List<Integer> simulatePipelineIndices(double[] semanticScores,
 			double[] keywordScores, double keywordWeight, int queryTermCount,
 			int topK, float[][] embeddingVectors) {
-		double minScore = ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2;
 		double gapMultiplier = ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER;
 		double minGap = ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP;
 
-		// Gate check on raw semantic score — keywords must not rescue
-		// records the embedding model considers irrelevant
 		double maxSemanticScore = 0;
 		for (double s : semanticScores) {
 			if (s > maxSemanticScore) {
 				maxSemanticScore = s;
 			}
 		}
-		if (maxSemanticScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
+
+		// Compute maxBaseScore for the floor gate.
+		double bonusThresholdForGate = queryTermCount >= 4
+				? 1.0 / queryTermCount
+				: queryTermCount == 0 ? 1.0
+				: (double) Math.min(2, queryTermCount) / queryTermCount;
+		double maxBaseScore = 0;
+		int keywordMatchCount = 0;
+		for (int i = 0; i < semanticScores.length; i++) {
+			double kwBonus = keywordScores[i] >= bonusThresholdForGate
+					? keywordScores[i] : 0.0;
+			double kwPenalty = 0.0;
+			if (queryTermCount <= 2 && keywordScores[i] > 0
+					&& keywordScores[i] < bonusThresholdForGate) {
+				kwPenalty = keywordScores[i];
+			}
+			double combined = semanticScores[i] + keywordWeight * kwBonus
+					- keywordWeight * kwPenalty;
+			if (combined > maxBaseScore) {
+				maxBaseScore = combined;
+			}
+			if (keywordScores[i] > 0) {
+				keywordMatchCount++;
+			}
+		}
+
+		double floorScore = Math.max(maxSemanticScore, maxBaseScore);
+		if (floorScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
 			return new ArrayList<Integer>();
 		}
 
@@ -1064,12 +1088,6 @@ public class LlmInferenceServiceTest {
 		if (queryTermCount > 0
 				&& semanticScores.length
 				>= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
-			int keywordMatchCount = 0;
-			for (double kw : keywordScores) {
-				if (kw > 0) {
-					keywordMatchCount++;
-				}
-			}
 			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
 				double sumSem = 0;
 				for (double s : semanticScores) {
@@ -1122,6 +1140,9 @@ public class LlmInferenceServiceTest {
 			}
 		});
 
+		double minScore = Math.min(
+				ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2,
+				maxSemanticScore / 2);
 		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, scored.size(),
 				minScore, gapMultiplier, minGap);
 
@@ -2773,15 +2794,16 @@ public class LlmInferenceServiceTest {
 		List<Integer> result = runRealModelPipeline(
 				"any episodes?", 10, SECOND_PATIENT_DATASET);
 
-		// "episodes" has keyword matches (plural stem → "episode") on records
-		// 32 and 35, but the embedding model scores "any episodes?" with a max
-		// semantic similarity of ~0.16 against this dataset — below the
-		// ABSOLUTE_SIMILARITY_FLOOR (0.25). The floor gate exits before keyword
-		// rescue can help. This is a known limitation: very short, generic
-		// queries where the embedding model sees no semantic relationship
-		// cannot be rescued by keyword matching alone.
-		assertTrue(result.isEmpty(),
-				"Should return empty — semantic floor blocks before keyword rescue, got: " + result);
+		// Pipeline returns 0-indexed values. Records at 1-indexed positions
+		// 32 and 35 are 0-indexed 31 and 34:
+		// [31] Medical condition: Condition: Mild depressive episode. Status: ACTIVE
+		// [34] Clinical diagnosis: Diagnosis: Mild depressive episode. Certainty: CONFIRMED
+		// Keyword rescue (plural stem "episodes" → "episode") bypasses the
+		// semantic floor gate when enough keyword matches exist.
+		assertTrue(result.contains(31),
+				"Should include condition record for Mild depressive episode, got: " + result);
+		assertTrue(result.contains(34),
+				"Should include diagnosis record for Mild depressive episode, got: " + result);
 	}
 
 	@Test

@@ -621,11 +621,29 @@ public class LlmInferenceService implements ChartSearchService {
 			return Collections.emptyList();
 		}
 
-		if (maxSemanticScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
-			log.debug("Top semantic score {} is below absolute floor {}, returning empty",
+		// Floor gate: if neither the best semantic score nor the best
+		// combined score reaches the floor, there is no relevance signal.
+		// Using max(semantic, combined) handles both normal queries (where
+		// semantic score is the signal) and keyword rescue scenarios (where
+		// keyword bonus lifts the combined score above the floor even when
+		// semantic scores are low, e.g. "any episodes?" matching "Mild
+		// depressive episode" via plural stemming).
+		double floorScore = Math.max(maxSemanticScore, maxBaseScore);
+		if (floorScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
+			log.debug("Top score {} (semantic={}, combined={}) is below "
+					+ "absolute floor {}, returning empty",
+					String.format("%.4f", floorScore),
 					String.format("%.4f", maxSemanticScore),
+					String.format("%.4f", maxBaseScore),
 					ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR);
 			return Collections.emptyList();
+		}
+
+		int keywordMatchCount = 0;
+		for (ScoredEmbedding se : scored) {
+			if (se.keywordScore > 0) {
+				keywordMatchCount++;
+			}
 		}
 
 		// Stricter gate when too few records match any query keyword:
@@ -639,12 +657,6 @@ public class LlmInferenceService implements ChartSearchService {
 		// (gap detection, ratio floor, topK) provide sufficient filtering.
 		if (queryTerms.length > 0
 				&& scored.size() >= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
-			int keywordMatchCount = 0;
-			for (ScoredEmbedding se : scored) {
-				if (se.keywordScore > 0) {
-					keywordMatchCount++;
-				}
-			}
 			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
 				double sumSem = 0;
 				for (ScoredEmbedding se : scored) {
@@ -677,8 +689,14 @@ public class LlmInferenceService implements ChartSearchService {
 
 		// Permissive floor: gap detection handles the real cutoff based on
 		// score distribution. The floor just excludes near-zero noise so
-		// the gap detector has a clean signal.
-		double minScore = ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2;
+		// the gap detector has a clean signal. Use the lower of the fixed
+		// floor and a fraction of the max semantic score so the floor
+		// adapts when all semantic scores are low (e.g. keyword rescue
+		// scenarios where the combined score passed the gate but individual
+		// semantic scores are well below the fixed floor).
+		double minScore = Math.min(
+				ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2,
+				maxSemanticScore / 2);
 
 		// Gap detection considers ALL records above the floor — no topK cap
 		// on the search window. The embedding model naturally clusters
