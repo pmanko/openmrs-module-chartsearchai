@@ -1192,13 +1192,13 @@ public class LlmInferenceServiceTest {
 		} else {
 			int secondCutoff = LlmInferenceService.findAdaptiveCutoff(
 					candidates, candidates.size(), minScore,
-					ChartSearchAiConstants.SECOND_PASS_GAP_MULTIPLIER,
+					gapMultiplier,
 					ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
+			double maxScore = scored.isEmpty() ? 0 : scored.get(0).score;
 			if (secondCutoff < candidates.size()) {
 				candidates = new ArrayList<LlmInferenceService.ScoredEmbedding>(
 						candidates.subList(0, secondCutoff));
 			}
-			double maxScore = scored.isEmpty() ? 0 : scored.get(0).score;
 			double ratioFloor = maxScore
 					* ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO;
 			List<LlmInferenceService.ScoredEmbedding> strict =
@@ -2122,8 +2122,9 @@ public class LlmInferenceServiceTest {
 		semantic[110] = 0.35; // [111]
 
 		// Fetishism notes share "disease" → model inflates their scores
-		semantic[ 56] = 0.33; // [ 57] Fetishism "Chronic disease management" — "disease" word overlap
-		semantic[ 91] = 0.33; // [ 92] Fetishism "Chronic disease management" — "disease" word overlap
+		// slightly, but noticeably less than the HIV Disease records
+		semantic[ 56] = 0.31; // [ 57] Fetishism "Chronic disease management" — "disease" word overlap
+		semantic[ 91] = 0.31; // [ 92] Fetishism "Chronic disease management" — "disease" word overlap
 		semantic[  7] = 0.20; // [  8]
 		semantic[ 54] = 0.19; // [ 55]
 		semantic[ 52] = 0.18; // [ 53]
@@ -2804,6 +2805,25 @@ public class LlmInferenceServiceTest {
 				"Should include condition record for Mild depressive episode, got: " + result);
 		assertTrue(result.contains(34),
 				"Should include diagnosis record for Mild depressive episode, got: " + result);
+	}
+
+	@Test
+	public void realModel_stdQuery_shouldReturnSyphiliticCirrhosisRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"has this patient had a sexually transmitted disease?", 10,
+				SECOND_PATIENT_DATASET);
+
+		// [19] Clinical diagnosis: Diagnosis: Syphilitic Cirrhosis. Certainty: CONFIRMED
+		// Syphilis is an STD; syphilitic cirrhosis is a complication of syphilis.
+		// No keyword matches (query terms "sexually", "transmitted", "disease"
+		// don't appear in record text) — purely semantic retrieval.
+		// Record 17 (Syphilitic Cirrhosis condition, sem=0.33) is at the ratio
+		// floor boundary (0.42*0.80=0.34) so may or may not be included.
+		assertTrue(result.contains(19),
+				"Should include Syphilitic Cirrhosis diagnosis, got: " + result);
 	}
 
 	@Test

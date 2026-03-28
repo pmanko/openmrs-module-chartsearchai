@@ -775,10 +775,12 @@ public class LlmInferenceService implements ChartSearchService {
 				candidates = new ArrayList<ScoredEmbedding>(candidates.subList(0, refinedCutoff));
 			}
 		} else {
-			// Sensitive second-pass: lower multiplier and small absolute
-			// minGap to detect tight clusters that the first pass missed.
+			// Sensitive second-pass: same multiplier as the first pass, but
+			// with a much lower absolute floor (SECOND_PASS_MIN_GAP vs
+			// DEFAULT_MIN_SCORE_GAP). This detects tight clusters that the
+			// first pass missed because their gaps were below the 0.10 floor.
 			int secondCutoff = findAdaptiveCutoff(candidates, candidates.size(),
-					minScore, ChartSearchAiConstants.SECOND_PASS_GAP_MULTIPLIER,
+					minScore, getScoreGapMultiplier(),
 					ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
 			if (secondCutoff < candidates.size()) {
 				candidates = new ArrayList<ScoredEmbedding>(candidates.subList(0, secondCutoff));
@@ -1248,8 +1250,18 @@ public class LlmInferenceService implements ChartSearchService {
 		// range. The multiplier (2.0) is moderate — we only remove clear
 		// outliers, not borderline records.
 		double maxCoherence = coherence[sortedIdx[0]];
-		double coherenceMinGap = maxCoherence
-				* ChartSearchAiConstants.COHERENCE_ADAPTIVE_GAP_RATIO;
+		// Scale the gap ratio by sample size: with fewer candidates, each
+		// coherence score averages fewer pairwise similarities, so the
+		// estimates have higher variance. The ratio is scaled up by
+		// √(referencePairs / actualPairs) to require a proportionally
+		// larger gap for small sets. Capped at 1.0 so large sets never
+		// get a ratio below the calibrated base.
+		int refPairs = ChartSearchAiConstants.COHERENCE_REFERENCE_N - 1;
+		double scaleFactor = Math.max(1.0,
+				Math.sqrt((double) refPairs / (n - 1)));
+		double gapRatio = ChartSearchAiConstants.COHERENCE_ADAPTIVE_GAP_RATIO
+				* scaleFactor;
+		double coherenceMinGap = maxCoherence * gapRatio;
 		int keepCount = n;
 		double gapSum = 0;
 		for (int i = 1; i < n; i++) {

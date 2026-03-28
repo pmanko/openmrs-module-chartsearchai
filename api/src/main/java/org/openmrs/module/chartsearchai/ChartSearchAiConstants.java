@@ -88,14 +88,13 @@ public class ChartSearchAiConstants {
 	 */
 	public static final double DEFAULT_MIN_SCORE_GAP = 0.10;
 
-	/** Gap multiplier for the sensitive second-pass gap detection in the
-	 * non-refinement path. Lower than the primary multiplier to detect
-	 * tight clusters (e.g. 2 Kaposi sarcoma records for a cancer query). */
-	public static final double SECOND_PASS_GAP_MULTIPLIER = 1.5;
-
-	/** Minimum gap for the sensitive second-pass gap detection. Very low to
-	 * allow detection of small but meaningful gaps (e.g. 0.014 between
-	 * cancer-related and unrelated records). */
+	/** Minimum gap for the second-pass gap detection. The second pass
+	 * reuses the primary gap multiplier ({@link #DEFAULT_SCORE_GAP_MULTIPLIER})
+	 * but with a much lower absolute floor than the first pass
+	 * ({@link #DEFAULT_MIN_SCORE_GAP}). This is what makes it "sensitive":
+	 * both passes require the same relative anomaly (2.5× the running
+	 * average), but the second pass can detect gaps as small as 0.01
+	 * whereas the first pass ignores anything below 0.10. */
 	public static final double SECOND_PASS_MIN_GAP = 0.01;
 
 	/** Fraction of max semantic score used as the adaptive minimum gap in
@@ -110,6 +109,13 @@ public class ChartSearchAiConstants {
 	/** Fraction of max coherence used as the adaptive minimum gap for
 	 * coherence outlier detection. */
 	public static final double COHERENCE_ADAPTIVE_GAP_RATIO = 0.20;
+
+	/** Reference candidate count for coherence gap ratio calibration.
+	 * {@link #COHERENCE_ADAPTIVE_GAP_RATIO} was calibrated for candidate
+	 * sets of this size. For smaller sets, the gap ratio is scaled up by
+	 * √((REFERENCE−1) / (n−1)) to account for the higher variance in
+	 * coherence estimates (fewer pairwise comparisons per candidate). */
+	public static final int COHERENCE_REFERENCE_N = 10;
 
 	public static final String GP_RETRIEVAL_PIPELINE = "chartsearchai.retrieval.pipeline";
 
