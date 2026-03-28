@@ -188,6 +188,13 @@
       "expectedAbsent": true,
       "expectedAnswerContains": ["metabolic"],
       "tags": ["absent", "edge", "verbose"]
+    },
+    {
+      "id": "absent-episodes",
+      "question": "any episodes?",
+      "expectedAbsent": true,
+      "expectedAnswerContains": ["episodes"],
+      "tags": ["absent"]
     }
   ]
 }
