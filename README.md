@@ -277,6 +277,40 @@ By default, any user with the **"AI Query Patient Data"** privilege can query an
 
 This overrides the default permissive implementation.
 
+## Evals
+
+The project includes an eval framework that tests retrieval quality, citation accuracy, absent-data detection, and prompt injection resistance without requiring a running LLM or external services.
+
+### Running evals
+
+```
+mvn test -pl api -Dtest="*EvalTest"
+```
+
+Or run a specific suite:
+
+```
+mvn test -pl api -Dtest="RetrievalQualityEvalTest"
+mvn test -pl api -Dtest="CitationEvalTest"
+mvn test -pl api -Dtest="AbsentDataEvalTest"
+mvn test -pl api -Dtest="PromptInjectionEvalTest"
+```
+
+### Adding cases
+
+Each suite is driven by a JSON dataset in `api/src/test/resources/eval/`. To add a case, append an entry to the relevant file:
+
+| File | What it tests |
+|------|---------------|
+| `retrieval-eval-dataset.json` | Query → expected record indices (recall\@30) |
+| `citation-eval-dataset.json` | Simulated LLM JSON → expected citation indices (F1) |
+| `absent-data-eval-dataset.json` | Query → expected keywords in "no records" answer |
+| `prompt-injection-eval-dataset.json` | Adversarial payload → special tokens stripped |
+
+### Metrics report
+
+Each run appends per-case and summary metrics to `api/target/eval-results.csv` for tracking regressions over time.
+
 ## Architecture
 
 See [docs/adr.md](docs/adr.md) for architectural decisions and design rationale.
