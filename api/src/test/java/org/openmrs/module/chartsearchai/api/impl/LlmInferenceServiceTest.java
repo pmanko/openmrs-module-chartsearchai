@@ -35,7 +35,7 @@ public class LlmInferenceServiceTest {
 
 	// Full 153-record dataset from a real 16-year-old Male patient chart.
 	// Used by integration tests that need the complete patient record set.
-	private static final String[] FULL_PATIENT_DATASET = {
+	static final String[] FULL_PATIENT_DATASET = {
 			/* [  1] */ "Medication prescription: Drug order: Azithromycin. Dose: 2.0 Tablet) Intravenous Every six hours. Duration: 5 Days. Quantity: 4.0 Tablet). As needed (subject to heart attack). Dosing: Take after eating. Action: REVISE. Urgency: ROUTINE. Reason: Spectrum",
 			/* [  2] */ "Medication prescription: Drug order: Azithromycin. Dose: 2.0 Tablet) Intravenous Thrice daily. Duration: 5 Days. Quantity: 4.0 Tablet). As needed (subject to heart attack). Dosing: Take after eating. Action: NEW. Urgency: ROUTINE. Reason: Spectrum. Stopped: 2026-03-18",
 			/* [  3] */ "Program enrollment: Program: PMTCT. Enrolled: 2026-03-18. Status: Active",

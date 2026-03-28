@@ -1,0 +1,78 @@
+{
+  "dataset": "retrieval-quality-v1",
+  "description": "Tests that retrieval pipelines return the correct records for clinical queries against the 153-record patient dataset",
+  "cases": [
+    {
+      "id": "retrieval-cd4",
+      "question": "What is the CD4 count?",
+      "expectedRecordIndices": [9, 86],
+      "tags": ["specific", "lab"]
+    },
+    {
+      "id": "retrieval-tuberculosis",
+      "question": "Does the patient have tuberculosis?",
+      "expectedRecordIndices": [8, 13, 53, 135, 136],
+      "tags": ["condition", "diagnosis"]
+    },
+    {
+      "id": "retrieval-allergies",
+      "question": "What allergies does the patient have?",
+      "expectedRecordIndices": [5, 54],
+      "tags": ["allergy"]
+    },
+    {
+      "id": "retrieval-blood-pressure",
+      "question": "What is the blood pressure?",
+      "expectedRecordIndices": [23, 24, 32, 37, 48, 49, 59, 65, 74, 75, 82, 94, 95, 103, 108, 112, 127, 129, 130, 138, 139, 145, 148, 149],
+      "tags": ["vitals", "broad"]
+    },
+    {
+      "id": "retrieval-medications",
+      "question": "What medications is the patient on?",
+      "expectedRecordIndices": [1, 2],
+      "tags": ["medication"]
+    },
+    {
+      "id": "retrieval-hiv",
+      "question": "Does the patient have HIV?",
+      "expectedRecordIndices": [40, 41, 69, 70, 72, 111],
+      "tags": ["condition", "diagnosis"]
+    },
+    {
+      "id": "retrieval-conditions",
+      "question": "List all active conditions",
+      "expectedRecordIndices": [8, 55],
+      "tags": ["condition", "broad"]
+    },
+    {
+      "id": "retrieval-temperature",
+      "question": "What is the temperature?",
+      "expectedRecordIndices": [18, 26, 39, 77, 97, 114, 132, 144, 151],
+      "tags": ["vitals", "specific"]
+    },
+    {
+      "id": "retrieval-programs",
+      "question": "What programs is the patient enrolled in?",
+      "expectedRecordIndices": [3],
+      "tags": ["program"]
+    },
+    {
+      "id": "retrieval-weight",
+      "question": "What is the patient's weight?",
+      "expectedRecordIndices": [19, 27, 34, 64, 78, 102, 115],
+      "tags": ["vitals", "specific"]
+    },
+    {
+      "id": "retrieval-cancer-absent",
+      "question": "Does the patient have cancer?",
+      "expectedRecordIndices": [12, 89],
+      "tags": ["semantic", "cancer"]
+    },
+    {
+      "id": "retrieval-diabetes",
+      "question": "Does the patient have diabetes?",
+      "expectedRecordIndices": [50, 68, 147],
+      "tags": ["condition", "diagnosis"]
+    }
+  ]
+}

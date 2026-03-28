@@ -1,0 +1,89 @@
+{
+  "dataset": "citation-accuracy-v1",
+  "description": "Tests that citation extraction correctly parses LLM JSON output and maps to record references",
+  "records": [
+    { "index": 1, "resourceType": "order", "resourceId": 101, "text": "Drug order: Azithromycin" },
+    { "index": 2, "resourceType": "order", "resourceId": 102, "text": "Drug order: Azithromycin (stopped)" },
+    { "index": 3, "resourceType": "program", "resourceId": 301, "text": "Program: PMTCT" },
+    { "index": 4, "resourceType": "obs", "resourceId": 401, "text": "Immunization history" },
+    { "index": 5, "resourceType": "allergy", "resourceId": 501, "text": "Allergy: Beef" },
+    { "index": 6, "resourceType": "obs", "resourceId": 601, "text": "Method of family planning: Condoms" },
+    { "index": 7, "resourceType": "obs", "resourceId": 701, "text": "Method of family planning: Diaphragm" },
+    { "index": 8, "resourceType": "condition", "resourceId": 801, "text": "Condition: Tuberculosis. Status: ACTIVE" },
+    { "index": 9, "resourceType": "obs", "resourceId": 901, "text": "CD4 Count: 988.0" },
+    { "index": 10, "resourceType": "obs", "resourceId": 1001, "text": "CD4 Count: 1191.0" }
+  ],
+  "cases": [
+    {
+      "id": "citation-correct-single",
+      "question": "Does the patient have tuberculosis?",
+      "simulatedLlmResponse": "{\"answer\": \"Yes, the patient has Tuberculosis with an ACTIVE status [8].\", \"citations\": [8]}",
+      "expectedRecordIndices": [8],
+      "tags": ["citation", "exact"]
+    },
+    {
+      "id": "citation-correct-multiple",
+      "question": "What are the CD4 counts?",
+      "simulatedLlmResponse": "{\"answer\": \"The CD4 counts are 988.0 [9] and 1191.0 [10].\", \"citations\": [9, 10]}",
+      "expectedRecordIndices": [9, 10],
+      "tags": ["citation", "exact"]
+    },
+    {
+      "id": "citation-hallucinated-extra",
+      "question": "What are the CD4 counts?",
+      "simulatedLlmResponse": "{\"answer\": \"The CD4 counts are 988.0 [9] and 1191.0 [10].\", \"citations\": [9, 10, 3]}",
+      "simulatedCitations": [9, 10, 3],
+      "expectedRecordIndices": [9, 10],
+      "tags": ["citation", "hallucination"]
+    },
+    {
+      "id": "citation-missing",
+      "question": "Does the patient have tuberculosis?",
+      "simulatedLlmResponse": "{\"answer\": \"Yes, the patient has Tuberculosis.\", \"citations\": []}",
+      "expectedRecordIndices": [8],
+      "tags": ["citation", "missing"]
+    },
+    {
+      "id": "citation-out-of-range",
+      "question": "What medications is the patient on?",
+      "simulatedLlmResponse": "{\"answer\": \"The patient takes Azithromycin [1] [99].\", \"citations\": [1, 99]}",
+      "expectedRecordIndices": [1],
+      "tags": ["citation", "out-of-range"]
+    },
+    {
+      "id": "citation-slash-format",
+      "question": "What are the CD4 counts?",
+      "simulatedLlmResponse": "{\"answer\": \"The CD4 counts are 988.0 and 1191.0 [9/10].\", \"citations\": [9, 10]}",
+      "expectedRecordIndices": [9, 10],
+      "tags": ["citation", "slash-format"]
+    },
+    {
+      "id": "citation-duplicate",
+      "question": "What allergies does the patient have?",
+      "simulatedLlmResponse": "{\"answer\": \"The patient is allergic to Beef [5]. Beef allergy is severe [5].\", \"citations\": [5, 5]}",
+      "expectedRecordIndices": [5],
+      "tags": ["citation", "dedup"]
+    },
+    {
+      "id": "citation-empty-no-records",
+      "question": "Does the patient have cancer?",
+      "simulatedLlmResponse": "{\"answer\": \"There are no records about cancer in this patient's chart.\", \"citations\": []}",
+      "expectedRecordIndices": [],
+      "tags": ["citation", "absent"]
+    },
+    {
+      "id": "citation-malformed-json",
+      "question": "What medications?",
+      "simulatedLlmResponse": "The patient takes Azithromycin.",
+      "expectedRecordIndices": [],
+      "tags": ["citation", "malformed"]
+    },
+    {
+      "id": "citation-family-planning",
+      "question": "What family planning methods are used?",
+      "simulatedLlmResponse": "{\"answer\": \"The patient uses Condoms [6] and Diaphragm [7].\", \"citations\": [6, 7]}",
+      "expectedRecordIndices": [6, 7],
+      "tags": ["citation", "exact"]
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "dataset": "absent-data-detection-v1",
+  "description": "Tests that the system correctly detects when patient data is absent and names what is missing",
+  "cases": [
+    {
+      "id": "absent-cancer",
+      "question": "Does the patient have cancer?",
+      "expectedAbsent": true,
+      "expectedAnswerContains": ["cancer"],
+      "expectedAnswerNotContains": ["CD4", "tuberculosis"],
+      "tags": ["absent"]
+    },
+    {
+      "id": "absent-imaging",
+      "question": "What imaging studies were done?",
+      "expectedAbsent": true,
+      "expectedAnswerContains": ["imaging"],
+      "tags": ["absent"]
+    },
+    {
+      "id": "absent-surgery",
+      "question": "Has the patient had any surgeries?",
+      "expectedAbsent": true,
+      "expectedAnswerContains": ["surgeries"],
+      "tags": ["absent"]
+    },
+    {
+      "id": "absent-smoking",
+      "question": "Does the patient smoke?",
+      "expectedAbsent": true,
+      "expectedAnswerContains": ["smoke"],
+      "tags": ["absent"]
+    },
+    {
+      "id": "absent-all-stopwords",
+      "question": "does the patient have any?",
+      "expectedAbsent": true,
+      "expectedAnswerContains": ["no"],
+      "tags": ["absent", "stopwords"]
+    },
+    {
+      "id": "absent-vaccination-history",
+      "question": "What vaccines has the patient received?",
+      "expectedAbsent": true,
+      "expectedAnswerContains": ["vaccines"],
+      "tags": ["absent"]
+    },
+    {
+      "id": "absent-mental-health",
+      "question": "Any mental health diagnoses?",
+      "expectedAbsent": true,
+      "expectedAnswerContains": ["mental", "health"],
+      "tags": ["absent"]
+    },
+    {
+      "id": "present-tb-should-not-be-absent",
+      "question": "Does the patient have tuberculosis?",
+      "expectedAbsent": false,
+      "tags": ["present"]
+    },
+    {
+      "id": "present-cd4-should-not-be-absent",
+      "question": "What is the CD4 count?",
+      "expectedAbsent": false,
+      "tags": ["present"]
+    },
+    {
+      "id": "present-allergies-should-not-be-absent",
+      "question": "What allergies does the patient have?",
+      "expectedAbsent": false,
+      "tags": ["present"]
+    }
+  ]
+}
