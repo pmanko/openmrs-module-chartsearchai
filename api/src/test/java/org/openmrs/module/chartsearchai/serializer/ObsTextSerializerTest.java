@@ -145,8 +145,8 @@ public class ObsTextSerializerTest extends BaseModuleContextSensitiveTest {
 		concept.addName(conceptName("Date of Symptom Onset"));
 		obs.setConcept(concept);
 
-		java.util.Calendar cal = java.util.Calendar.getInstance();
-		cal.set(2024, java.util.Calendar.FEBRUARY, 10);
+		java.util.Calendar cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
+		cal.set(2024, java.util.Calendar.FEBRUARY, 10, 12, 0, 0);
 		obs.setValueDatetime(cal.getTime());
 
 		String result = serializer.toText(obs);

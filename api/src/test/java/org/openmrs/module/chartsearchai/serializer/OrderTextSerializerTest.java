@@ -124,8 +124,8 @@ public class OrderTextSerializerTest extends BaseModuleContextSensitiveTest {
 		order.setUrgency(Order.Urgency.ROUTINE);
 		order.setDateActivated(new Date());
 
-		java.util.Calendar cal = java.util.Calendar.getInstance();
-		cal.set(2024, java.util.Calendar.JUNE, 20);
+		java.util.Calendar cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
+		cal.set(2024, java.util.Calendar.JUNE, 20, 12, 0, 0);
 		ReflectionTestUtils.setField(order, "dateStopped", cal.getTime());
 
 		String result = serializer.toText(order);

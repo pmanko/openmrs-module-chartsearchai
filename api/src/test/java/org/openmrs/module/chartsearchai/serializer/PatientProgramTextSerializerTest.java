@@ -38,8 +38,8 @@ public class PatientProgramTextSerializerTest extends BaseModuleContextSensitive
 		program.setName("HIV Treatment");
 		pp.setProgram(program);
 
-		Calendar cal = Calendar.getInstance();
-		cal.set(2024, Calendar.JANUARY, 15);
+		Calendar cal = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
+		cal.set(2024, Calendar.JANUARY, 15, 12, 0, 0);
 		pp.setDateEnrolled(cal.getTime());
 
 		String result = serializer.toText(pp);
@@ -55,10 +55,10 @@ public class PatientProgramTextSerializerTest extends BaseModuleContextSensitive
 		program.setName("TB Treatment");
 		pp.setProgram(program);
 
-		Calendar cal = Calendar.getInstance();
-		cal.set(2023, Calendar.MARCH, 1);
+		Calendar cal = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
+		cal.set(2023, Calendar.MARCH, 1, 12, 0, 0);
 		pp.setDateEnrolled(cal.getTime());
-		cal.set(2023, Calendar.SEPTEMBER, 15);
+		cal.set(2023, Calendar.SEPTEMBER, 15, 12, 0, 0);
 		pp.setDateCompleted(cal.getTime());
 
 		String result = serializer.toText(pp);
@@ -74,10 +74,10 @@ public class PatientProgramTextSerializerTest extends BaseModuleContextSensitive
 		program.setName("TB Treatment");
 		pp.setProgram(program);
 
-		Calendar cal = Calendar.getInstance();
-		cal.set(2023, Calendar.MARCH, 1);
+		Calendar cal = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
+		cal.set(2023, Calendar.MARCH, 1, 12, 0, 0);
 		pp.setDateEnrolled(cal.getTime());
-		cal.set(2023, Calendar.SEPTEMBER, 15);
+		cal.set(2023, Calendar.SEPTEMBER, 15, 12, 0, 0);
 		pp.setDateCompleted(cal.getTime());
 
 		Concept outcome = new Concept();

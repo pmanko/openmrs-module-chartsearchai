@@ -117,8 +117,8 @@ public class MedicationDispenseTextSerializerTest extends BaseModuleContextSensi
 		drug.setName("Lisinopril 10mg");
 		dispense.setDrug(drug);
 
-		Calendar cal = Calendar.getInstance();
-		cal.set(2024, Calendar.JUNE, 15);
+		Calendar cal = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
+		cal.set(2024, Calendar.JUNE, 15, 12, 0, 0);
 		dispense.setDateHandedOver(cal.getTime());
 
 		String result = serializer.toText(dispense);
