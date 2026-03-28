@@ -14,13 +14,20 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.openmrs.module.chartsearchai.eval.EvalCase;
 import org.openmrs.module.chartsearchai.eval.EvalDataset;
+import org.openmrs.module.chartsearchai.eval.EvalReporter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,74 +47,89 @@ public class PromptInjectionEvalTest {
 
 	private static EvalDataset dataset;
 
-	@BeforeAll
-	static void loadDataset() throws IOException {
-		dataset = EvalDataset.load("eval/prompt-injection-eval-dataset.json");
-	}
-
-	@Test
-	public void stripSpecialTokens_shouldRemoveAllKnownTokens() {
-		int passed = 0;
-		int total = 0;
-
-		for (EvalCase evalCase : dataset.getCases()) {
-			total++;
-			String payload = evalCase.getPayload();
-			String sanitized = LlmProvider.stripSpecialTokens(payload);
-
-			boolean hasTokens = SPECIAL_TOKEN_PATTERN.matcher(sanitized).find();
-			if (!hasTokens) {
-				passed++;
-			} else {
-				log.warn("[{}] FAILED: sanitized still contains tokens: {}",
-						evalCase.getId(), sanitized);
+	private static EvalDataset getDataset() {
+		if (dataset == null) {
+			try {
+				dataset = EvalDataset.load("eval/prompt-injection-eval-dataset.json");
+			}
+			catch (IOException e) {
+				throw new RuntimeException(e);
 			}
 		}
-
-		log.info("Prompt injection eval: {}/{} payloads fully sanitized", passed, total);
-		assertEquals(total, passed,
-				"All payloads should be fully sanitized but " + (total - passed) + " still contain tokens");
+		return dataset;
 	}
 
-	@Test
-	public void formatPrompt_shouldPreserveSystemPromptIntegrity() {
-		String systemPrompt = "You are a clinical assistant.";
+	static Stream<Arguments> injectionPayloads() {
+		List<Arguments> args = new ArrayList<>();
+		for (EvalCase evalCase : getDataset().getCases()) {
+			args.add(Arguments.of(evalCase.getId(), evalCase));
+		}
+		return args.stream();
+	}
 
+	static Stream<Arguments> payloadTemplateCombinations() {
+		List<Arguments> args = new ArrayList<>();
 		for (Map.Entry<String, String> entry : LlmProvider.PRESET_TEMPLATES.entrySet()) {
 			String templateName = entry.getKey();
-
-			for (EvalCase evalCase : dataset.getCases()) {
-				String payload = evalCase.getPayload();
-				if (payload == null || payload.isEmpty()) {
-					continue;
-				}
-
-				String prompt = LlmProvider.formatPrompt(templateName, systemPrompt, payload);
-
-				// System prompt should appear exactly once
-				int firstIdx = prompt.indexOf(systemPrompt);
-				int lastIdx = prompt.lastIndexOf(systemPrompt);
-				assertTrue(firstIdx >= 0,
-						evalCase.getId() + "/" + templateName + ": system prompt missing");
-				assertEquals(firstIdx, lastIdx,
-						evalCase.getId() + "/" + templateName + ": system prompt appears multiple times");
-
-				// Verify that the sanitized user content is in the prompt,
-				// meaning stripSpecialTokens was applied to the payload.
-				String sanitizedPayload = LlmProvider.stripSpecialTokens(payload);
-				assertTrue(prompt.contains(sanitizedPayload),
-						evalCase.getId() + "/" + templateName
-						+ ": sanitized payload not found in prompt");
-
-				// The original unsanitized payload should NOT appear if it
-				// differed from the sanitized version (i.e., tokens were removed)
-				if (!payload.equals(sanitizedPayload) && !sanitizedPayload.isEmpty()) {
-					assertFalse(prompt.contains(payload),
-							evalCase.getId() + "/" + templateName
-							+ ": original unsanitized payload found in prompt");
+			for (EvalCase evalCase : getDataset().getCases()) {
+				if (evalCase.getPayload() != null && !evalCase.getPayload().isEmpty()) {
+					args.add(Arguments.of(evalCase.getId() + "/" + templateName,
+							evalCase, templateName));
 				}
 			}
 		}
+		return args.stream();
+	}
+
+	@ParameterizedTest(name = "[{index}] {0}")
+	@MethodSource("injectionPayloads")
+	public void stripSpecialTokens_perPayload(String caseId, EvalCase evalCase) {
+		String payload = evalCase.getPayload();
+		String sanitized = LlmProvider.stripSpecialTokens(payload);
+
+		boolean hasTokens = SPECIAL_TOKEN_PATTERN.matcher(sanitized).find();
+
+		log.info("[{}] hasTokensAfterSanitize={}", caseId, hasTokens);
+
+		Map<String, Object> metrics = new LinkedHashMap<>();
+		metrics.put("sanitized", !hasTokens);
+		EvalReporter.appendResult("prompt-injection-strip", caseId, metrics);
+
+		assertFalse(hasTokens,
+				caseId + ": sanitized output still contains special tokens: " + sanitized);
+	}
+
+	@ParameterizedTest(name = "[{index}] {0}")
+	@MethodSource("payloadTemplateCombinations")
+	public void formatPrompt_perPayloadTemplate(String label, EvalCase evalCase,
+			String templateName) {
+		String systemPrompt = "You are a clinical assistant.";
+		String payload = evalCase.getPayload();
+
+		String prompt = LlmProvider.formatPrompt(templateName, systemPrompt, payload);
+
+		// System prompt should appear exactly once
+		int firstIdx = prompt.indexOf(systemPrompt);
+		int lastIdx = prompt.lastIndexOf(systemPrompt);
+		assertTrue(firstIdx >= 0,
+				label + ": system prompt missing");
+		assertEquals(firstIdx, lastIdx,
+				label + ": system prompt appears multiple times");
+
+		// Verify that the sanitized user content is in the prompt
+		String sanitizedPayload = LlmProvider.stripSpecialTokens(payload);
+		assertTrue(prompt.contains(sanitizedPayload),
+				label + ": sanitized payload not found in prompt");
+
+		// The original unsanitized payload should NOT appear if tokens were removed
+		if (!payload.equals(sanitizedPayload) && !sanitizedPayload.isEmpty()) {
+			assertFalse(prompt.contains(payload),
+					label + ": original unsanitized payload found in prompt");
+		}
+
+		Map<String, Object> metrics = new LinkedHashMap<>();
+		metrics.put("systemPromptIntact", true);
+		EvalReporter.appendResult("prompt-injection-format", label, metrics);
 	}
 
 	@Test
