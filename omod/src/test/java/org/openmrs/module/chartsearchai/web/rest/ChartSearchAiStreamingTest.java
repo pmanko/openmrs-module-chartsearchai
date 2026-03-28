@@ -42,54 +42,53 @@ public class ChartSearchAiStreamingTest {
 
 	@Test
 	public void streamingEndpoint_shouldNotUseBackgroundThreads() throws Exception {
-		String sourceFile = "omod/src/main/java/org/openmrs/module/chartsearchai"
-				+ "/web/rest/ChartSearchAiRestController.java";
-		java.io.File file = new java.io.File(sourceFile);
-		if (!file.exists()) {
-			file = new java.io.File("../" + sourceFile);
-		}
-		if (file.exists()) {
-			String source = new String(java.nio.file.Files.readAllBytes(file.toPath()));
-			assertTrue(!source.contains("new Thread("),
-					"Streaming must not create background threads");
-			assertTrue(!source.contains("import org.springframework.web.servlet.mvc.method.annotation.SseEmitter"),
-					"Streaming must not import SseEmitter");
-			assertTrue(!source.contains("addProxyPrivilege"),
-					"Streaming must not use proxy privileges");
-			assertTrue(!source.contains("setUserContext"),
-					"Must not share UserContext across threads");
-		}
+		java.io.File file = resolveSourceFile();
+		String source = new String(java.nio.file.Files.readAllBytes(file.toPath()));
+		assertTrue(!source.contains("new Thread("),
+				"Streaming must not create background threads");
+		assertTrue(!source.contains("import org.springframework.web.servlet.mvc.method.annotation.SseEmitter"),
+				"Streaming must not import SseEmitter");
+		assertTrue(!source.contains("addProxyPrivilege"),
+				"Streaming must not use proxy privileges");
+		assertTrue(!source.contains("setUserContext"),
+				"Must not share UserContext across threads");
 	}
 
 	@Test
 	public void authorizationCheck_shouldHappenBeforeStreaming() throws Exception {
+		java.io.File file = resolveSourceFile();
+		String source = new String(java.nio.file.Files.readAllBytes(file.toPath()));
+
+		int streamMethodIdx = source.indexOf("public void searchStream");
+		assertTrue(streamMethodIdx >= 0, "searchStream method must exist");
+
+		int requirePriv = source.indexOf(
+				"Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA)",
+				streamMethodIdx);
+		int canAccess = source.indexOf("patientAccessCheck.canAccess(",
+				streamMethodIdx);
+		int searchStreaming = source.indexOf("searchStreaming(", streamMethodIdx);
+
+		assertTrue(requirePriv >= 0, "Must check PRIV_QUERY_PATIENT_DATA");
+		assertTrue(canAccess >= 0, "Must check patient access");
+		assertTrue(searchStreaming >= 0, "Must call searchStreaming");
+
+		assertTrue(requirePriv < searchStreaming,
+				"Privilege check must happen before streaming");
+		assertTrue(canAccess < searchStreaming,
+				"Patient access check must happen before streaming");
+	}
+
+	private static java.io.File resolveSourceFile() {
 		String sourceFile = "omod/src/main/java/org/openmrs/module/chartsearchai"
 				+ "/web/rest/ChartSearchAiRestController.java";
 		java.io.File file = new java.io.File(sourceFile);
 		if (!file.exists()) {
 			file = new java.io.File("../" + sourceFile);
 		}
-		if (file.exists()) {
-			String source = new String(java.nio.file.Files.readAllBytes(file.toPath()));
-
-			int streamMethodIdx = source.indexOf("public void searchStream");
-			assertTrue(streamMethodIdx >= 0, "searchStream method must exist");
-
-			int requirePriv = source.indexOf(
-					"Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA)",
-					streamMethodIdx);
-			int canAccess = source.indexOf("patientAccessCheck.canAccess(",
-					streamMethodIdx);
-			int searchStreaming = source.indexOf("searchStreaming(", streamMethodIdx);
-
-			assertTrue(requirePriv >= 0, "Must check PRIV_QUERY_PATIENT_DATA");
-			assertTrue(canAccess >= 0, "Must check patient access");
-			assertTrue(searchStreaming >= 0, "Must call searchStreaming");
-
-			assertTrue(requirePriv < searchStreaming,
-					"Privilege check must happen before streaming");
-			assertTrue(canAccess < searchStreaming,
-					"Patient access check must happen before streaming");
-		}
+		org.junit.jupiter.api.Assumptions.assumeTrue(file.exists(),
+				"Source file not found at " + file.getAbsolutePath()
+				+ " — skipping source-based test");
+		return file;
 	}
 }

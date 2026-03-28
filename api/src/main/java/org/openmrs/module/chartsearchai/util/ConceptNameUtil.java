@@ -9,7 +9,10 @@
  */
 package org.openmrs.module.chartsearchai.util;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -114,19 +117,26 @@ public final class ConceptNameUtil {
 			locale = Locale.ENGLISH;
 		}
 		String localeLanguage = locale.getLanguage();
-		Set<String> synonyms = new LinkedHashSet<>();
-
+		// Sort candidate names alphabetically for deterministic synonym ordering
+		// across JVM restarts (concept.getNames() returns a HashSet).
+		List<String> candidateNames = new ArrayList<>();
 		for (ConceptName cn : concept.getNames()) {
-			if (synonyms.size() >= MAX_SYNONYMS) {
-				break;
-			}
 			if (cn.getLocale() != null && !cn.getLocale().getLanguage().equals(localeLanguage)) {
 				continue;
 			}
 			String name = cn.getName();
 			if (name != null && !name.equals(preferredText)) {
-				synonyms.add(name);
+				candidateNames.add(name);
 			}
+		}
+		Collections.sort(candidateNames);
+
+		Set<String> synonyms = new LinkedHashSet<>();
+		for (String name : candidateNames) {
+			if (synonyms.size() >= MAX_SYNONYMS) {
+				break;
+			}
+			synonyms.add(name);
 		}
 
 		if (synonyms.isEmpty()) {

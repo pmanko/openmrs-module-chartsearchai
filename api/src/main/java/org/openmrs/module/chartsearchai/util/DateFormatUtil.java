@@ -27,6 +27,6 @@ public final class DateFormatUtil {
 		if (date == null) {
 			return "unknown";
 		}
-		return date.toInstant().atZone(ZoneId.systemDefault()).toLocalDate().format(DATE_FORMAT);
+		return date.toInstant().atZone(ZoneId.of("UTC")).toLocalDate().format(DATE_FORMAT);
 	}
 }

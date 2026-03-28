@@ -354,8 +354,13 @@ public class ChartSearchAiRestController {
 		}
 		catch (IllegalStateException e) {
 			log.error("Chart search configuration error during streaming", e);
-			writeSseEvent(out, "error",
-					"Chart search is not properly configured. Contact your administrator.");
+			try {
+				writeSseEvent(out, "error",
+						"Chart search is not properly configured. Contact your administrator.");
+			}
+			catch (IOException ioe) {
+				log.debug("Could not send config error event, client likely disconnected");
+			}
 		}
 		catch (Exception e) {
 			if (e.getCause() instanceof IOException) {

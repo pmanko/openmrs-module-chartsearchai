@@ -19,11 +19,11 @@
 
 		<property name="answer" column="answer" type="text" not-null="true"/>
 
-		<property name="referenceCount" column="reference_count" type="int"/>
+		<property name="referenceCount" column="reference_count" type="java.lang.Integer"/>
 
 		<property name="searchMode" column="search_mode" type="string" length="20" not-null="true"/>
 
-		<property name="responseTimeMs" column="response_time_ms" type="long"/>
+		<property name="responseTimeMs" column="response_time_ms" type="java.lang.Long"/>
 
 		<property name="dateCreated" column="date_created" type="timestamp" not-null="true"/>
 

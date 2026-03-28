@@ -158,7 +158,21 @@ public class ElasticsearchIndexer implements Closeable {
 	 */
 	void ensureIndex() throws IOException {
 		if (indexCreated) {
-			return;
+			// Verify the index still exists to handle external deletion
+			RestClient c = getClient();
+			if (c != null) {
+				try {
+					c.performRequest(new Request("HEAD", "/" + INDEX_NAME));
+					return;
+				}
+				catch (ResponseException e) {
+					if (e.getResponse().getStatusLine().getStatusCode() == 404) {
+						indexCreated = false;
+					} else {
+						throw e;
+					}
+				}
+			}
 		}
 		synchronized (lock) {
 			if (indexCreated) {
@@ -245,8 +259,10 @@ public class ElasticsearchIndexer implements Closeable {
 				return;
 			}
 
+			int bulkBatchSize = 100;
 			StringBuilder bulk = new StringBuilder();
 			int indexed = 0;
+			int batchCount = 0;
 			for (SerializedRecord record : records) {
 				try {
 					String prefixedText = ChartSearchAiConstants.getEmbeddingPrefix(
@@ -273,23 +289,22 @@ public class ElasticsearchIndexer implements Closeable {
 					}
 					bulk.append(mapper.writeValueAsString(doc)).append('\n');
 					indexed++;
+					batchCount++;
 				}
 				catch (Exception e) {
 					log.warn("Failed to prepare ES document for {} [id={}]: {}",
 							record.getResourceType(), record.getResourceId(), e.getMessage());
 				}
+
+				if (batchCount >= bulkBatchSize) {
+					sendBulkRequest(c, bulk.toString(), patient.getPatientId());
+					bulk.setLength(0);
+					batchCount = 0;
+				}
 			}
 
-			if (indexed > 0) {
-				Request bulkReq = new Request("POST", "/_bulk");
-				bulkReq.setJsonEntity(bulk.toString());
-				Response response = c.performRequest(bulkReq);
-				String responseBody = EntityUtils.toString(response.getEntity());
-				JsonNode responseJson = mapper.readTree(responseBody);
-				if (responseJson.has("errors") && responseJson.get("errors").asBoolean()) {
-					log.warn("Elasticsearch bulk index had errors for patient [id={}]",
-							patient.getPatientId());
-				}
+			if (batchCount > 0) {
+				sendBulkRequest(c, bulk.toString(), patient.getPatientId());
 			}
 
 			c.performRequest(new Request("POST", "/" + INDEX_NAME + "/_refresh"));
@@ -300,6 +315,22 @@ public class ElasticsearchIndexer implements Closeable {
 		catch (IOException e) {
 			log.error("Elasticsearch: failed to index patient [id={}]",
 					patient.getPatientId(), e);
+		}
+	}
+
+	private void sendBulkRequest(RestClient c, String body, int patientId) throws IOException {
+		Request bulkReq = new Request("POST", "/_bulk");
+		bulkReq.setJsonEntity(body);
+		Response response = c.performRequest(bulkReq);
+		try {
+			String responseBody = EntityUtils.toString(response.getEntity());
+			JsonNode responseJson = mapper.readTree(responseBody);
+			if (responseJson.has("errors") && responseJson.get("errors").asBoolean()) {
+				log.warn("Elasticsearch bulk index had errors for patient [id={}]", patientId);
+			}
+		}
+		finally {
+			EntityUtils.consumeQuietly(response.getEntity());
 		}
 	}
 

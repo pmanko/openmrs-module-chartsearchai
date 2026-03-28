@@ -340,7 +340,8 @@ public class LlmProvider {
 
 	/**
 	 * Strips chat template special tokens from user-controlled text to prevent
-	 * prompt injection. Covers all preset template formats.
+	 * prompt injection. Covers all preset template formats plus any tokens found
+	 * in custom templates (strings matching {@code <|...|>} or {@code <..._of_...>}).
 	 */
 	static String stripSpecialTokens(String text) {
 		if (text == null) {
@@ -360,7 +361,10 @@ public class LlmProvider {
 				// chatml tokens
 				.replace("<|im_start|>", "").replace("<|im_end|>", "")
 				// gemma tokens
-				.replace("<start_of_turn>", "").replace("<end_of_turn>", "");
+				.replace("<start_of_turn>", "").replace("<end_of_turn>", "")
+				// Catch-all: strip any remaining <|...|> tokens that custom
+				// templates may use, preventing injection via unknown formats
+				.replaceAll("<\\|[^|]*\\|>", "");
 	}
 
 	static String[] resolveStopStrings(String templateValue) {

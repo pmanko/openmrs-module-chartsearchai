@@ -18,7 +18,7 @@ import org.openmrs.Patient;
 
 /**
  * Persistent entity representing a vector embedding for a single OpenMRS clinical record.
- * Maps to the {@code chart_embedding} table.
+ * Maps to the {@code chartsearchai_embedding} table.
  */
 public class ChartEmbedding implements Serializable {
 

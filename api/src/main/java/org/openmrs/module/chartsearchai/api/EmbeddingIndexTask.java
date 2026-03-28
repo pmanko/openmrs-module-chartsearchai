@@ -79,7 +79,7 @@ public class EmbeddingIndexTask extends AbstractTask {
 		int totalFailed = 0;
 		int offset = 0;
 
-		List<Patient> batch = Context.getPatientService().getPatients("", offset, BATCH_SIZE);
+		List<Patient> batch = Context.getPatientService().getPatients(null, offset, BATCH_SIZE);
 		while (!batch.isEmpty()) {
 			for (Patient patient : batch) {
 				if (!isExecuting()) {
@@ -110,7 +110,7 @@ public class EmbeddingIndexTask extends AbstractTask {
 			Context.clearSession();
 
 			offset += BATCH_SIZE;
-			batch = Context.getPatientService().getPatients("", offset, BATCH_SIZE);
+			batch = Context.getPatientService().getPatients(null, offset, BATCH_SIZE);
 		}
 
 		log.info("Embedding backfill completed: {} indexed, {} skipped, {} failed",

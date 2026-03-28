@@ -193,33 +193,39 @@ public class LuceneIndexer implements Closeable {
 			DirectoryReader reader = DirectoryReader.open(dir);
 			try {
 				IndexSearcher searcher = new IndexSearcher(reader);
-				QueryParser parser = new QueryParser(FIELD_TEXT, newAnalyzer());
-				parser.setDefaultOperator(QueryParser.Operator.OR);
-				parser.setAllowLeadingWildcard(false);
+				Analyzer analyzer = newAnalyzer();
+				try {
+					QueryParser parser = new QueryParser(FIELD_TEXT, analyzer);
+					parser.setDefaultOperator(QueryParser.Operator.OR);
+					parser.setAllowLeadingWildcard(false);
 
-				// Sanitize the query text: remove Lucene special characters
-				// but keep words intact so the analyzer can tokenize them.
-				String sanitized = queryText.replaceAll("[+\\-!(){}\\[\\]^\"~*?:\\\\/]", " ")
-						.trim();
-				if (sanitized.isEmpty()) {
-					return results;
+					// Sanitize the query text: remove Lucene special characters
+					// but keep words intact so the analyzer can tokenize them.
+					String sanitized = queryText.replaceAll("[+\\-!(){}\\[\\]^\"~*?:\\\\/]", " ")
+							.trim();
+					if (sanitized.isEmpty()) {
+						return results;
+					}
+					Query textQuery = parser.parse(sanitized);
+					Query patientFilter = IntPoint.newExactQuery(
+							FIELD_PATIENT_ID, patient.getPatientId());
+
+					BooleanQuery combined = new BooleanQuery.Builder()
+							.add(patientFilter, BooleanClause.Occur.FILTER)
+							.add(textQuery, BooleanClause.Occur.MUST)
+							.build();
+
+					TopDocs topDocs = searcher.search(combined, maxResults);
+					for (ScoreDoc scoreDoc : topDocs.scoreDocs) {
+						Document doc = searcher.doc(scoreDoc.doc);
+						results.add(new LuceneSearchResult(
+								doc.get(FIELD_RESOURCE_TYPE),
+								Integer.parseInt(doc.get(FIELD_RESOURCE_ID)),
+								scoreDoc.score));
+					}
 				}
-				Query textQuery = parser.parse(sanitized);
-				Query patientFilter = IntPoint.newExactQuery(
-						FIELD_PATIENT_ID, patient.getPatientId());
-
-				BooleanQuery combined = new BooleanQuery.Builder()
-						.add(patientFilter, BooleanClause.Occur.FILTER)
-						.add(textQuery, BooleanClause.Occur.MUST)
-						.build();
-
-				TopDocs topDocs = searcher.search(combined, maxResults);
-				for (ScoreDoc scoreDoc : topDocs.scoreDocs) {
-					Document doc = searcher.doc(scoreDoc.doc);
-					results.add(new LuceneSearchResult(
-							doc.get(FIELD_RESOURCE_TYPE),
-							Integer.parseInt(doc.get(FIELD_RESOURCE_ID)),
-							scoreDoc.score));
+				finally {
+					analyzer.close();
 				}
 			}
 			finally {

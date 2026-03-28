@@ -67,8 +67,13 @@ public class HibernateChartSearchAiDAO implements ChartSearchAiDAO {
 	@Transactional
 	public void replacePatientEmbeddings(Patient patient, List<ChartEmbedding> embeddings) {
 		deleteByPatient(patient);
-		for (ChartEmbedding ce : embeddings) {
-			sessionFactory.getCurrentSession().saveOrUpdate(ce);
+		int batchSize = 50;
+		for (int i = 0; i < embeddings.size(); i++) {
+			sessionFactory.getCurrentSession().saveOrUpdate(embeddings.get(i));
+			if ((i + 1) % batchSize == 0) {
+				sessionFactory.getCurrentSession().flush();
+				sessionFactory.getCurrentSession().clear();
+			}
 		}
 	}
 
