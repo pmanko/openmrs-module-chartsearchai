@@ -197,7 +197,13 @@ The `UNIQUE KEY (resource_type, resource_id)` constraint prevents duplicate embe
 
 ### CQRS separation
 
-The module applies the CQRS (Command Query Responsibility Segregation) principle in relation to OpenMRS patient data. The transactional store (OpenMRS's normalized relational tables — `obs`, `orders`, `conditions`, etc.) serves clinical workflows and CRUD operations. The query store (`chartsearchai_embedding`) is a separate, denormalized projection containing pre-serialized text and embedding vectors, optimized for semantic similarity search. AOP advice hooks on clinical services act as the event bridge, triggering projection rebuilds to keep the query store eventually consistent with the transactional source. The module never writes to OpenMRS clinical tables.
+The module applies the CQRS (Command Query Responsibility Segregation) principle in relation to OpenMRS patient data. The transactional store (OpenMRS's normalized relational tables — `obs`, `orders`, `conditions`, etc.) serves clinical workflows and CRUD operations. The query stores are separate, denormalized projections optimized for search:
+
+- **Embedding store** (`chartsearchai_embedding` table) — pre-serialized text and embedding vectors for cosine similarity search
+- **Lucene store** (on-disk index) — BM25 full-text index with English stemming, using the same serialized text
+- **Elasticsearch store** (external cluster) — combines BM25 text search with kNN dense vector search via Reciprocal Rank Fusion
+
+Only one query store is active at a time, selected via the `chartsearchai.retrieval.pipeline` global property. AOP advice hooks (`PatientDataIndexingAdvice`, `ObsIndexingAdvice`, `EncounterIndexingAdvice`) on clinical services act as the event bridge, triggering projection rebuilds in the active query store to keep it eventually consistent with the transactional source. The module never writes to OpenMRS clinical tables.
 
 ## Decision 8: Index population strategy
 
