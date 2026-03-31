@@ -110,6 +110,9 @@ public class ChartSearchServiceRouter implements ChartSearchService {
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_SCORE_GAP_MULTIPLIER, "");
 		String minScoreGap = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_MIN_SCORE_GAP, "");
+		String gapValidationCosine = Context.getAdministrationService()
+				.getGlobalProperty(
+						ChartSearchAiConstants.GP_EMBEDDING_GAP_VALIDATION_COSINE_THRESHOLD, "");
 		return patient.getUuid() + "::" + preFilter.trim().toLowerCase()
 				+ "::" + pipeline.trim().toLowerCase()
 				+ "::" + topK.trim()
@@ -117,6 +120,7 @@ public class ChartSearchServiceRouter implements ChartSearchService {
 				+ "::" + keywordWeight.trim()
 				+ "::" + scoreGapMultiplier.trim()
 				+ "::" + minScoreGap.trim()
+				+ "::" + gapValidationCosine.trim()
 				+ "::" + question.trim().toLowerCase();
 	}
 

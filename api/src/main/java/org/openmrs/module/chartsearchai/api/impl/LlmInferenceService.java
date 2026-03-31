@@ -92,7 +92,7 @@ public class LlmInferenceService implements ChartSearchService {
 	public ChartAnswer search(Patient patient, String question) {
 		PatientChart chart = buildChart(patient, question);
 
-		if (chart.getText().isEmpty()) {
+		if (chart.getMappings().isEmpty()) {
 			String answer = buildNoMatchAnswer(question);
 			return new ChartAnswer(answer, Collections.emptyList());
 		}
@@ -108,7 +108,7 @@ public class LlmInferenceService implements ChartSearchService {
 			Consumer<String> tokenConsumer) {
 		PatientChart chart = buildChart(patient, question);
 
-		if (chart.getText().isEmpty()) {
+		if (chart.getMappings().isEmpty()) {
 			String answer = buildNoMatchAnswer(question);
 			tokenConsumer.accept(answer);
 			return new ChartAnswer(answer, Collections.emptyList());
@@ -137,12 +137,39 @@ public class LlmInferenceService implements ChartSearchService {
 		return "There are no records about " + terms + " in this patient's chart.";
 	}
 
+	private static final String NUMBER_GROUP =
+			"(\\d+|one|two|three|four|five|six|seven|eight|nine|ten)";
+
+	private static final String KEYWORD_GROUP =
+			"(?:last|latest|past|previous|recent|most recent)";
+
 	private static final Pattern RECENCY_PATTERN = Pattern.compile(
-			"(?:last|past|previous|recent|most recent)\\s+(\\d+)", Pattern.CASE_INSENSITIVE);
+			KEYWORD_GROUP + "\\s+" + NUMBER_GROUP
+			+ "|" + NUMBER_GROUP + "\\s+" + KEYWORD_GROUP,
+			Pattern.CASE_INSENSITIVE);
+
+	private static final Map<String, Integer> WORD_NUMBERS;
+
+	static {
+		Map<String, Integer> m = new HashMap<String, Integer>();
+		m.put("one", 1);
+		m.put("two", 2);
+		m.put("three", 3);
+		m.put("four", 4);
+		m.put("five", 5);
+		m.put("six", 6);
+		m.put("seven", 7);
+		m.put("eight", 8);
+		m.put("nine", 9);
+		m.put("ten", 10);
+		WORD_NUMBERS = Collections.unmodifiableMap(m);
+	}
 
 	/**
 	 * Extracts a numeric recency constraint from the question, e.g. "last 7
-	 * visits" returns 7. Returns 0 if no constraint is found.
+	 * visits" or "latest two weights" returns the number. Supports both
+	 * digits and word numbers (one through ten). Returns 0 if no constraint
+	 * is found.
 	 *
 	 * @param question the raw user question
 	 * @return the recency cap, or 0 if none detected
@@ -150,8 +177,14 @@ public class LlmInferenceService implements ChartSearchService {
 	static int extractRecencyCap(String question) {
 		Matcher m = RECENCY_PATTERN.matcher(question);
 		if (m.find()) {
+			// Group 1 = keyword-first ("last 7"), group 2 = number-first ("7 most recent")
+			String value = (m.group(1) != null ? m.group(1) : m.group(2)).toLowerCase();
+			Integer wordNum = WORD_NUMBERS.get(value);
+			if (wordNum != null) {
+				return wordNum;
+			}
 			try {
-				int n = Integer.parseInt(m.group(1));
+				int n = Integer.parseInt(value);
 				return n > 0 ? n : 0;
 			}
 			catch (NumberFormatException e) {
@@ -194,22 +227,25 @@ public class LlmInferenceService implements ChartSearchService {
 
 	/**
 	 * Extracts a concept grouping key from record text by stripping the
-	 * trailing numeric value. For example:
+	 * date prefix and trailing numeric value with optional unit. For example:
 	 * <ul>
-	 * <li>"Clinical observation: Test — Weight (kg): 94.0"
+	 * <li>"Clinical observation: (2025-10-30) Test — Weight (kg): 94.0 kg"
 	 *     → "Clinical observation: Test — Weight (kg)"</li>
-	 * <li>"Clinical observation: Test — Systolic Blood Pressure: 137.0"
+	 * <li>"Clinical observation: (2025-09-17) Test — Systolic Blood Pressure: 137.0 mmHg"
 	 *     → "Clinical observation: Test — Systolic Blood Pressure"</li>
 	 * </ul>
-	 * If the text does not end with a numeric value, the full text is
-	 * returned, making each such record its own group.
+	 * If the text does not end with a numeric value, the full text (minus
+	 * date) is returned, making each such record its own group.
 	 */
 	static String conceptKey(String text) {
 		if (text == null) {
 			return "";
 		}
-		// Strip trailing numeric value like ": 94.0" or ": 137.0"
-		return text.replaceAll(":\\s*[\\d.]+\\s*$", "").trim();
+		// Strip date like "(2025-10-30) " that appears after the type prefix
+		String stripped = text.replaceAll("\\(\\d{4}-\\d{2}-\\d{2}\\)\\s*", "");
+		// Strip trailing numeric value and optional unit like ": 94.0 kg"
+		// or ": 36.7 DEG C" or ": 988.0 cells/mmL"
+		return stripped.replaceAll(":\\s*[\\d.]+(?:\\s+\\S+)*\\s*$", "").trim();
 	}
 
 	private PatientChart buildChart(Patient patient, String question) {
@@ -527,25 +563,97 @@ public class LlmInferenceService implements ChartSearchService {
 		return question.toLowerCase().trim();
 	}
 
-	private List<ChartEmbedding> findSimilar(Patient patient, String question, int topK) {
-		String normalizedQuery = stripQueryStopwords(question);
-		log.debug("Normalized query for embedding: '{}' -> '{}'", question, normalizedQuery);
-		float[] queryVector;
-		try {
-			queryVector = embeddingProvider.embed(getQueryPrefix() + normalizedQuery);
-		}
-		catch (Exception e) {
-			log.debug("Embedding provider not available, falling back to full chart", e);
-			return null;
-		}
+	List<ChartEmbedding> findSimilar(Patient patient, String question) {
+		return findSimilar(patient, question, getTopK());
+	}
 
+	private List<ChartEmbedding> findSimilar(Patient patient, String question, int topK) {
 		List<ChartEmbedding> allEmbeddings = dao.getByPatient(patient);
 		if (allEmbeddings.isEmpty()) {
 			return null;
 		}
 
+		PipelineConfig config = new PipelineConfig(
+				getKeywordWeight(), getScoreGapMultiplier(), getMinScoreGap(),
+				getGapValidationCosineThreshold(), getSimilarityRatio());
+
+		try {
+			return findSimilar(allEmbeddings, embeddingProvider, question, topK,
+					getQueryPrefix(), config);
+		}
+		catch (Exception e) {
+			log.debug("Embedding provider not available, falling back to full chart", e);
+			return null;
+		}
+	}
+
+	/**
+	 * Static query pipeline that runs the exact same logic as the instance
+	 * {@link #findSimilar(Patient, String, int)} but without DAO or Spring
+	 * dependencies. Accepts pre-loaded embeddings and an embedding provider,
+	 * making it directly callable from integration tests with zero simulation.
+	 *
+	 * @param allEmbeddings the patient's chart embeddings (as stored by
+	 *        {@link EmbeddingIndexer#indexPatient})
+	 * @param provider embedding provider for query vectorization
+	 * @param question the natural language question
+	 * @param topK maximum records to return
+	 * @param queryPrefix prefix prepended to the query before embedding
+	 * @param config pipeline tuning parameters
+	 * @return filtered list of relevant embeddings, or null if empty
+	 */
+	static List<ChartEmbedding> findSimilar(List<ChartEmbedding> allEmbeddings,
+			EmbeddingProvider provider, String question, int topK,
+			String queryPrefix, PipelineConfig config) {
+		String normalizedQuery = stripQueryStopwords(question);
 		String[] queryTerms = extractQueryTerms(normalizedQuery);
-		double keywordWeight = getKeywordWeight();
+		String embeddingQuery = buildEmbeddingQuery(normalizedQuery);
+		float[] queryVector = provider.embed(queryPrefix + embeddingQuery);
+
+		double[] semanticScores = new double[allEmbeddings.size()];
+		double[] keywordScores = new double[allEmbeddings.size()];
+		ChartEmbedding[] embeddings = new ChartEmbedding[allEmbeddings.size()];
+		int validCount = 0;
+		for (int i = 0; i < allEmbeddings.size(); i++) {
+			ChartEmbedding ce = allEmbeddings.get(i);
+			float[] vector = ce.getEmbeddingVector();
+			if (vector == null || vector.length != queryVector.length) {
+				continue;
+			}
+			embeddings[validCount] = ce;
+			semanticScores[validCount] = cosineSimilarity(queryVector, vector);
+			String keywordText = ChartSearchAiConstants.getEmbeddingPrefix(
+					ce.getResourceType(), ce.getTextContent()) + ce.getTextContent();
+			keywordScores[validCount] = computeKeywordScore(queryTerms, keywordText);
+			validCount++;
+		}
+		if (validCount < embeddings.length) {
+			embeddings = java.util.Arrays.copyOf(embeddings, validCount);
+			semanticScores = java.util.Arrays.copyOf(semanticScores, validCount);
+			keywordScores = java.util.Arrays.copyOf(keywordScores, validCount);
+		}
+
+		return filterPipeline(semanticScores, keywordScores, embeddings,
+				queryTerms.length, topK, config);
+	}
+
+	/**
+	 * Pure filtering pipeline: scores, gates, gap detection, keyword
+	 * refinement, coherence filtering, and below-floor rescue. Takes
+	 * pre-computed scores and config parameters — no dependency on
+	 * OpenMRS Context, making it directly testable.
+	 *
+	 * @param semanticScores cosine similarity between query and each record
+	 * @param keywordScores keyword overlap fraction for each record
+	 * @param embeddings the chart embeddings (parallel to score arrays)
+	 * @param queryTermCount number of query terms after stopword removal
+	 * @param topK maximum records to return (safety cap)
+	 * @param config pipeline tuning parameters
+	 * @return filtered list of relevant embeddings, or empty list
+	 */
+	static List<ChartEmbedding> filterPipeline(double[] semanticScores,
+			double[] keywordScores, ChartEmbedding[] embeddings,
+			int queryTermCount, int topK, PipelineConfig config) {
 
 		double maxBaseScore = 0;
 		double maxSemanticScore = 0;
@@ -555,50 +663,29 @@ public class LlmInferenceService implements ChartSearchService {
 		// for "history of cancer") are penalized. For longer multi-concept
 		// queries (N≥4), matching ANY term is legitimate — the query spans
 		// multiple concepts and each record type may only match its own concept.
-		double bonusThreshold = queryTerms.length >= 4
-				? 1.0 / queryTerms.length
-				: queryTerms.length == 0 ? 1.0
-				: (double) Math.min(2, queryTerms.length) / queryTerms.length;
+		double bonusThreshold = queryTermCount >= 4
+				? 1.0 / queryTermCount
+				: queryTermCount == 0 ? 1.0
+				: (double) Math.min(2, queryTermCount) / queryTermCount;
 		List<ScoredEmbedding> scored = new ArrayList<ScoredEmbedding>();
-		for (ChartEmbedding ce : allEmbeddings) {
-			float[] vector = ce.getEmbeddingVector();
-			if (vector == null || vector.length != queryVector.length) {
-				log.warn("Skipping embedding [id={}] with mismatched dimensions ({} vs expected {})",
-						ce.getEmbeddingId(), vector == null ? "null" : vector.length, queryVector.length);
-				continue;
-			}
-			double semanticScore = cosineSimilarity(queryVector, vector);
+		for (int i = 0; i < embeddings.length; i++) {
+			double semanticScore = semanticScores[i];
+			double keywordScore = keywordScores[i];
 
 			// Additive keyword bonus increases the score when enough terms
 			// match. For N≤2 queries, a partial keyword match (below the
 			// bonus threshold) applies a penalty instead, suppressing
 			// coincidental single-word overlaps like "history" in
 			// "immunization history" for "history of cancer?".
-			// Include the embedding prefix in keyword matching so that
-			// type-specific terms (e.g. "medication") match the prefix
-			// "Medication prescription: ..." on drug orders.
-			String keywordText = ChartSearchAiConstants.getEmbeddingPrefix(
-					ce.getResourceType(), ce.getTextContent()) + ce.getTextContent();
-			double keywordScore = computeKeywordScore(queryTerms, keywordText);
-			// Only apply keyword bonus when enough terms match. In multi-word
-			// queries, a single coincidental keyword match (e.g. "history" in
-			// "immunization history" for "history of cancer") should not inflate
-			// the ranking score. Require ≥2 term matches for multi-word queries
-			// (N≤3), or any match for multi-concept queries (N≥4).
 			double keywordBonus = keywordScore >= bonusThreshold ? keywordScore : 0.0;
 			// Partial keyword penalty for short queries (N≤2): when a record
 			// matches some keywords but not enough for bonus, penalize it.
-			// This suppresses false positives like "Immunization history"
-			// matching "history" in "history of cancer?". For longer queries
-			// (N≥3), partial matches are common and legitimate (e.g. "disease"
-			// in "sexually transmitted disease?" matching HIV Disease), so
-			// penalty is not applied.
 			double keywordPenalty = 0.0;
-			if (queryTerms.length <= 2 && keywordScore > 0 && keywordScore < bonusThreshold) {
+			if (queryTermCount <= 2 && keywordScore > 0 && keywordScore < bonusThreshold) {
 				keywordPenalty = keywordScore;
 			}
-			double baseScore = semanticScore + keywordWeight * keywordBonus
-					- keywordWeight * keywordPenalty;
+			double baseScore = semanticScore + config.keywordWeight * keywordBonus
+					- config.keywordWeight * keywordPenalty;
 
 			if (semanticScore > maxSemanticScore) {
 				maxSemanticScore = semanticScore;
@@ -607,7 +694,7 @@ public class LlmInferenceService implements ChartSearchService {
 				maxBaseScore = baseScore;
 			}
 
-			scored.add(new ScoredEmbedding(ce, baseScore, keywordScore, semanticScore));
+			scored.add(new ScoredEmbedding(embeddings[i], baseScore, keywordScore, semanticScore));
 		}
 
 		Collections.sort(scored, new Comparator<ScoredEmbedding>() {
@@ -623,11 +710,6 @@ public class LlmInferenceService implements ChartSearchService {
 
 		// Floor gate: if neither the best semantic score nor the best
 		// combined score reaches the floor, there is no relevance signal.
-		// Using max(semantic, combined) handles both normal queries (where
-		// semantic score is the signal) and keyword rescue scenarios (where
-		// keyword bonus lifts the combined score above the floor even when
-		// semantic scores are low, e.g. "any episodes?" matching "Mild
-		// depressive episode" via plural stemming).
 		double floorScore = Math.max(maxSemanticScore, maxBaseScore);
 		if (floorScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
 			log.debug("Top score {} (semantic={}, combined={}) is below "
@@ -649,13 +731,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// Stricter gate when too few records match any query keyword:
 		// check whether the top semantic score is a statistical outlier
 		// (z-score ≥ threshold) rather than part of the noise floor.
-		// This automatically adapts to any embedding model and dataset
-		// — no model-specific magic numbers. A z-score of 2.0 means the
-		// best match is in the top 2.3% of the score distribution.
-		// Requires at least 30 records for the z-score to be statistically
-		// meaningful; with fewer records, the pipeline's other stages
-		// (gap detection, ratio floor, topK) provide sufficient filtering.
-		if (queryTerms.length > 0
+		if (queryTermCount > 0
 				&& scored.size() >= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
 			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
 				double sumSem = 0;
@@ -689,24 +765,14 @@ public class LlmInferenceService implements ChartSearchService {
 
 		// Permissive floor: gap detection handles the real cutoff based on
 		// score distribution. The floor just excludes near-zero noise so
-		// the gap detector has a clean signal. Use the lower of the fixed
-		// floor and a fraction of the max semantic score so the floor
-		// adapts when all semantic scores are low (e.g. keyword rescue
-		// scenarios where the combined score passed the gate but individual
-		// semantic scores are well below the fixed floor).
+		// the gap detector has a clean signal.
 		double minScore = Math.min(
 				ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2,
 				maxSemanticScore / 2);
 
-		// Gap detection considers ALL records above the floor — no topK cap
-		// on the search window. The embedding model naturally clusters
-		// records by relevance: for specific queries ("HB results"), the
-		// relevant records score high and the gap appears early. For broad
-		// queries ("list all medications"), all type-matched records cluster
-		// together and the gap appears after the entire cluster. The score
-		// distribution itself determines how many records to return.
+		// Gap detection considers ALL records above the floor — no topK cap.
 		int adaptiveCutoff = findAdaptiveCutoff(scored, scored.size(),
-				minScore, getScoreGapMultiplier(), getMinScoreGap());
+				minScore, config.scoreGapMultiplier, config.minScoreGap);
 
 		List<ScoredEmbedding> candidates = new ArrayList<ScoredEmbedding>();
 		for (int i = 0; i < adaptiveCutoff; i++) {
@@ -715,40 +781,25 @@ public class LlmInferenceService implements ChartSearchService {
 
 		// Keyword refinement: when gap detection returns a broad set but
 		// keyword matches identify a specific subset, prefer those records.
-		// This catches cases where the score distribution is too smooth for
-		// gap detection (e.g. "conditions" query where condition records get
-		// a keyword boost but the gap to non-conditions is < minGap).
 		boolean refinementActivated = false;
-		if (keywordWeight > 0) {
-			List<ScoredEmbedding> refined = refineByKeywords(candidates, queryTerms.length);
+		if (config.keywordWeight > 0) {
+			List<ScoredEmbedding> refined = refineByKeywords(candidates, queryTermCount);
 			refinementActivated = refined.size() < candidates.size();
 			candidates = refined;
 		}
+
+		log.debug("Pipeline: adaptiveCutoff={}, afterRefinement={}, refinementActivated={}",
+				adaptiveCutoff, candidates.size(), refinementActivated);
 
 		// Post-processing with two paths:
 		//
 		// REFINEMENT PATH: Keyword refinement identified a relevant subset.
 		// Run a second-pass gap detection within the refined set to separate
-		// genuine keyword matches from false positives (e.g., Fetishism
-		// "Chronic disease management" matching "disease" in STD query).
-		// Uses adaptive minGap proportional to max semantic score so the
-		// threshold scales with the score range of the current query.
+		// genuine keyword matches from false positives.
 		//
-		// NON-REFINEMENT PATH: No keyword subset was found (either all or
-		// no records have keywords). Run a sensitive second-pass gap
-		// detection on the full candidate set to find tight clusters
-		// (e.g., 2 Kaposi sarcoma records for "cancer?" query). Then
-		// apply ratio floor + topK as a safety net.
+		// NON-REFINEMENT PATH: No keyword subset was found. Run a sensitive
+		// second-pass gap detection, then ratio floor + topK as a safety net.
 		if (refinementActivated) {
-			// The second-pass gap detection exists to split genuine keyword
-			// matches from coincidental ones (e.g. "Chronic disease
-			// management" matching "disease" in an STD query). But when
-			// keyword scores across the refined set are uniform, all
-			// candidates matched the same keyword pattern — the second gap
-			// would only be splitting on semantic score variance, which is
-			// noise for records that are all equally keyword-relevant.
-			// Skip the gap when keyword score variance is zero (or near
-			// zero due to floating-point), preserving the full refined set.
 			double kwMin = Double.MAX_VALUE;
 			double kwMax = 0;
 			for (ScoredEmbedding se : candidates) {
@@ -760,6 +811,8 @@ public class LlmInferenceService implements ChartSearchService {
 				}
 			}
 			boolean uniformKeywords = (kwMax - kwMin) < 0.01;
+			log.debug("Pipeline refinement: kwMin={}, kwMax={}, uniform={}",
+					String.format("%.4f", kwMin), String.format("%.4f", kwMax), uniformKeywords);
 			if (!uniformKeywords) {
 				double maxSemanticRefined = 0;
 				for (ScoredEmbedding se : candidates) {
@@ -771,8 +824,35 @@ public class LlmInferenceService implements ChartSearchService {
 						maxSemanticRefined * ChartSearchAiConstants.REFINEMENT_ADAPTIVE_GAP_RATIO,
 						ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
 				int refinedCutoff = findAdaptiveCutoff(candidates, candidates.size(),
-						minScore, getScoreGapMultiplier(), adaptiveMinGap);
-				candidates = new ArrayList<ScoredEmbedding>(candidates.subList(0, refinedCutoff));
+						minScore, config.scoreGapMultiplier, adaptiveMinGap);
+				if (refinedCutoff < candidates.size()) {
+					// Validate: if records on both sides of the gap belong
+					// to the same broad topic (high cross-boundary cosine),
+					// the gap is intra-topic and should not be used as a
+					// cutoff. Instead, fall back to a semantic ratio floor
+					// that separates genuinely relevant records from
+					// coincidental keyword matches (e.g. "blood" in
+					// "Blood Oxygen" for a "blood pressure" query).
+					if (isGapCoherent(candidates, refinedCutoff,
+							config.gapValidationCosineThreshold)) {
+						double semanticFloor = maxSemanticRefined
+								* ChartSearchAiConstants.REFINEMENT_SEMANTIC_RATIO;
+						List<ScoredEmbedding> floored = new ArrayList<ScoredEmbedding>();
+						for (ScoredEmbedding se : candidates) {
+							if (se.semanticScore >= semanticFloor) {
+								floored.add(se);
+							}
+						}
+						log.debug("Refinement gap is intra-topic, "
+								+ "using semantic floor {} instead: {} -> {}",
+								String.format("%.4f", semanticFloor),
+								candidates.size(), floored.size());
+						candidates = floored;
+					} else {
+						candidates = new ArrayList<ScoredEmbedding>(
+								candidates.subList(0, refinedCutoff));
+					}
+				}
 			}
 		} else {
 			// Sensitive second-pass: same multiplier as the first pass, but
@@ -780,12 +860,26 @@ public class LlmInferenceService implements ChartSearchService {
 			// DEFAULT_MIN_SCORE_GAP). This detects tight clusters that the
 			// first pass missed because their gaps were below the 0.10 floor.
 			int secondCutoff = findAdaptiveCutoff(candidates, candidates.size(),
-					minScore, getScoreGapMultiplier(),
+					minScore, config.scoreGapMultiplier,
 					ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
 			if (secondCutoff < candidates.size()) {
-				candidates = new ArrayList<ScoredEmbedding>(candidates.subList(0, secondCutoff));
+				// Validate the gap: if records above and below belong to
+				// the same topic (high cross-boundary cosine), the gap is
+				// intra-topic and should not be used as a cutoff. This
+				// prevents abbreviation queries like "STD" from splitting
+				// same-topic records that the embedding model scored
+				// differently due to text format variations (e.g.
+				// "Diagnosis: HIV Disease" vs "Assessment: HIV Disease").
+				if (isGapCoherent(candidates, secondCutoff,
+						config.gapValidationCosineThreshold)) {
+					log.debug("Second-pass gap at {} is intra-topic, skipping cut",
+							secondCutoff);
+				} else {
+					candidates = new ArrayList<ScoredEmbedding>(
+							candidates.subList(0, secondCutoff));
+				}
 			}
-			double ratioFloor = maxBaseScore * getSimilarityRatio();
+			double ratioFloor = maxBaseScore * config.similarityRatio;
 			List<ScoredEmbedding> strict = new ArrayList<ScoredEmbedding>();
 			for (ScoredEmbedding se : candidates) {
 				if (se.score >= ratioFloor) {
@@ -814,11 +908,34 @@ public class LlmInferenceService implements ChartSearchService {
 
 		// Inter-candidate coherence filter: remove "topic outliers" that
 		// scored similarly to the query by coincidence but are unrelated to
-		// the other results. Requires at least 3 candidates to form a
-		// meaningful cluster comparison. The filter itself validates that
-		// all candidates have embedding vectors, returning unmodified if not.
-		if (candidates.size() >= 3) {
+		// the other results.
+		//
+		// At n=3 the filter is restricted to tight clusters: it only
+		// removes the outlier if its semantic score is ≥ 90% of the top
+		// candidate's score. In tight clusters (e.g. 0.279 vs 0.276 for
+		// "cancer") the embedding model can't distinguish relevant from
+		// irrelevant, so coherence is the right tie-breaker. When the
+		// outlier's score is significantly lower (< 90%), it's likely a
+		// genuine different-topic result (e.g. Syphilitic Cirrhosis
+		// at 83% of top for an STD query) that should be kept.
+		if (candidates.size() >= 4) {
 			candidates = filterByCoherence(candidates);
+		} else if (candidates.size() == 3) {
+			double topSemantic = candidates.get(0).semanticScore;
+			for (ScoredEmbedding se : candidates) {
+				if (se.semanticScore > topSemantic) {
+					topSemantic = se.semanticScore;
+				}
+			}
+			double lowestSemantic = candidates.get(0).semanticScore;
+			for (ScoredEmbedding se : candidates) {
+				if (se.semanticScore < lowestSemantic) {
+					lowestSemantic = se.semanticScore;
+				}
+			}
+			if (topSemantic > 0 && lowestSemantic / topSemantic >= 0.90) {
+				candidates = filterByCoherence(candidates);
+			}
 		}
 
 		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
@@ -1033,6 +1150,25 @@ public class LlmInferenceService implements ChartSearchService {
 		return ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP;
 	}
 
+	private static double getGapValidationCosineThreshold() {
+		String value = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(
+						ChartSearchAiConstants.GP_EMBEDDING_GAP_VALIDATION_COSINE_THRESHOLD);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				double parsed = Double.parseDouble(value.trim());
+				if (parsed >= 0 && parsed <= 1) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid gapValidationCosineThreshold value '{}', "
+						+ "using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD;
+	}
+
 	private static double getKeywordWeight() {
 		String value = org.openmrs.api.context.Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_KEYWORD_WEIGHT);
@@ -1057,6 +1193,27 @@ public class LlmInferenceService implements ChartSearchService {
 			return value;
 		}
 		return ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX;
+	}
+
+	/**
+	 * Builds the query string used for embedding by stripping stopwords
+	 * from the normalized query. This removes filler words like "any" or
+	 * "does" that dilute the embedding signal, while keeping all
+	 * non-stopword tokens (including short terms like numbers).
+	 * Falls back to the full normalized query when all words are stopwords.
+	 */
+	static String buildEmbeddingQuery(String normalizedQuery) {
+		String[] words = normalizedQuery.split("\\s+");
+		StringBuilder sb = new StringBuilder();
+		for (String w : words) {
+			if (!QUERY_STOPWORDS.contains(w.toLowerCase())) {
+				if (sb.length() > 0) {
+					sb.append(" ");
+				}
+				sb.append(w);
+			}
+		}
+		return sb.length() > 0 ? sb.toString() : normalizedQuery;
 	}
 
 	/**
@@ -1159,6 +1316,114 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
+	 * Grows a cluster starting from the initial {@code seedSize} records by
+	 * adding candidates whose embedding has cosine similarity &ge; threshold
+	 * with at least one existing cluster member. Iterates until no more
+	 * records can be added (fixed-point). Records are tested in score order
+	 * (highest first) so higher-scoring candidates are prioritized.
+	 *
+	 * @param candidates all candidates (sorted by combined score descending)
+	 * @param seedSize number of initial cluster records (the top seedSize)
+	 * @param cosineThreshold minimum cosine similarity to join the cluster
+	 * @return the grown cluster, preserving the original score order
+	 */
+	static List<ScoredEmbedding> growCluster(List<ScoredEmbedding> candidates,
+			int seedSize, double cosineThreshold) {
+		if (seedSize >= candidates.size()) {
+			return candidates;
+		}
+		boolean[] inCluster = new boolean[candidates.size()];
+		float[][] vectors = new float[candidates.size()][];
+		for (int i = 0; i < candidates.size(); i++) {
+			vectors[i] = candidates.get(i).embedding.getEmbeddingVector();
+			inCluster[i] = i < seedSize;
+		}
+
+		// Iteratively add candidates that are coherent with the cluster
+		boolean added = true;
+		while (added) {
+			added = false;
+			for (int i = seedSize; i < candidates.size(); i++) {
+				if (inCluster[i] || vectors[i] == null) {
+					continue;
+				}
+				for (int j = 0; j < candidates.size(); j++) {
+					if (!inCluster[j] || vectors[j] == null
+							|| vectors[j].length != vectors[i].length) {
+						continue;
+					}
+					if (cosineSimilarity(vectors[i], vectors[j]) >= cosineThreshold) {
+						inCluster[i] = true;
+						added = true;
+						break;
+					}
+				}
+			}
+		}
+
+		List<ScoredEmbedding> result = new ArrayList<ScoredEmbedding>();
+		for (int i = 0; i < candidates.size(); i++) {
+			if (inCluster[i]) {
+				result.add(candidates.get(i));
+			}
+		}
+		return result;
+	}
+
+	/**
+	 * Validates whether a gap in the score distribution at the given cutoff
+	 * position is intra-topic (both sides belong to the same broad topic)
+	 * by computing the average cosine similarity between records just above
+	 * and just below the gap boundary. Uses a small window (up to 3
+	 * records on each side) to get a robust estimate that doesn't depend
+	 * on a single pair.
+	 *
+	 * <p>When the average cross-boundary cosine meets or exceeds the
+	 * threshold, the gap is intra-topic and should NOT be used as a cutoff.
+	 * For example, a gap between Respiratory Rate records (high score) and
+	 * SpO2 records (slightly lower score) has high cross-boundary cosine
+	 * because both are clinical vital sign observations.
+	 *
+	 * @param scored the sorted candidate list
+	 * @param cutoff the gap position (records 0..cutoff-1 above, cutoff+ below)
+	 * @param cosineThreshold minimum average cosine for the gap to be intra-topic
+	 * @return true if the gap is intra-topic (should NOT cut here)
+	 */
+	static boolean isGapCoherent(List<ScoredEmbedding> scored, int cutoff,
+			double cosineThreshold) {
+		if (cutoff <= 0 || cutoff >= scored.size()) {
+			return false;
+		}
+
+		// Use a small window on each side of the gap for robustness
+		int windowSize = Math.min(3, Math.min(cutoff, scored.size() - cutoff));
+		double sumCosine = 0;
+		int pairs = 0;
+
+		for (int a = cutoff - windowSize; a < cutoff; a++) {
+			float[] vecA = scored.get(a).embedding.getEmbeddingVector();
+			if (vecA == null) {
+				continue;
+			}
+			for (int b = cutoff; b < cutoff + windowSize; b++) {
+				float[] vecB = scored.get(b).embedding.getEmbeddingVector();
+				if (vecB == null || vecB.length != vecA.length) {
+					continue;
+				}
+				sumCosine += cosineSimilarity(vecA, vecB);
+				pairs++;
+			}
+		}
+
+		if (pairs == 0) {
+			return false;
+		}
+
+		double avgCosine = sumCosine / pairs;
+		return avgCosine >= cosineThreshold;
+	}
+
+	/**
 	 * Filters the final candidate set by inter-candidate coherence to
 	 * remove "topic outliers" — records that scored similarly to the query
 	 * by coincidence but are conceptually unrelated to the other results.
@@ -1250,18 +1515,25 @@ public class LlmInferenceService implements ChartSearchService {
 		// range. The multiplier (2.0) is moderate — we only remove clear
 		// outliers, not borderline records.
 		double maxCoherence = coherence[sortedIdx[0]];
-		// Scale the gap ratio by sample size: with fewer candidates, each
-		// coherence score averages fewer pairwise similarities, so the
-		// estimates have higher variance. The ratio is scaled up by
-		// √(referencePairs / actualPairs) to require a proportionally
-		// larger gap for small sets. Capped at 1.0 so large sets never
-		// get a ratio below the calibrated base.
+		double minCoherence = coherence[sortedIdx[n - 1]];
+		double coherenceRange = maxCoherence - minCoherence;
 		int refPairs = ChartSearchAiConstants.COHERENCE_REFERENCE_N - 1;
 		double scaleFactor = Math.max(1.0,
 				Math.sqrt((double) refPairs / (n - 1)));
-		double gapRatio = ChartSearchAiConstants.COHERENCE_ADAPTIVE_GAP_RATIO
+		// For small candidate sets (n ≤ COHERENCE_REFERENCE_N), coherence
+		// values compress into a narrow band (especially with production-
+		// format embeddings that omit dates). Range-based minGap adapts to
+		// the actual spread, allowing the detector to find gaps that are
+		// small in absolute terms but significant relative to the
+		// distribution. For larger sets, the distribution is stable and
+		// max-based minGap prevents over-cutting homogeneous groups
+		// (e.g. 40 vitals records with a modest intra-type gap).
+		double base = n <= ChartSearchAiConstants.COHERENCE_REFERENCE_N
+				? coherenceRange : maxCoherence;
+		double coherenceMinGap = base
+				* ChartSearchAiConstants.COHERENCE_ADAPTIVE_GAP_RATIO
 				* scaleFactor;
-		double coherenceMinGap = maxCoherence * gapRatio;
+
 		int keepCount = n;
 		double gapSum = 0;
 		for (int i = 1; i < n; i++) {
@@ -1286,6 +1558,24 @@ public class LlmInferenceService implements ChartSearchService {
 			return candidates;
 		}
 
+		// Absolute coherence floor: if the highest-coherence candidate being
+		// removed still has high absolute coherence with the group, it belongs
+		// to the same topic and should not be removed. This prevents duplicate
+		// embeddings (identical text → cosine 1.0) from inflating the coherence
+		// range and making a same-topic record look like an outlier (e.g.
+		// "Diagnosis: Anemia" vs two identical "Assessment: Anemia" records).
+		// Threshold of 0.70 was determined empirically: same-topic candidates
+		// removed incorrectly have coherence ~0.91+, while true cross-topic
+		// outliers have coherence ~0.49-.
+		double highestRemovedCoherence = coherence[sortedIdx[keepCount]];
+		if (highestRemovedCoherence >= ChartSearchAiConstants.COHERENCE_SAME_TOPIC_FLOOR) {
+			log.debug("Coherence cut suppressed: removed candidate coherence {}"
+					+ " >= same-topic floor {} — not a true outlier",
+					String.format("%.4f", highestRemovedCoherence),
+					ChartSearchAiConstants.COHERENCE_SAME_TOPIC_FLOOR);
+			return candidates;
+		}
+
 		// Build the set of indices to keep, then filter preserving
 		// the original combined-score order
 		Set<Integer> keepSet = new HashSet<Integer>();
@@ -1299,6 +1589,132 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 		return filtered;
+	}
+
+	/**
+	 * Rescues records that scored below the similarity floor but are
+	 * coherent with the surviving candidate cluster. Computes each
+	 * below-floor record's average cosine similarity to the cluster
+	 * members and includes it if that coherence is at least as high as
+	 * the lowest coherence within the cluster itself. This ensures
+	 * rescued records are genuinely topically identical (e.g. temperature
+	 * readings for a "vitals" query) rather than unrelated records that
+	 * happened to score below the floor.
+	 *
+	 * @param candidates the post-coherence-filtered cluster
+	 * @param scored all scored records (including below-floor ones)
+	 * @param adaptiveCutoff the first-pass cutoff (records above the floor)
+	 * @return the original candidates plus any rescued below-floor records
+	 */
+	static List<ScoredEmbedding> rescueBelowFloor(List<ScoredEmbedding> candidates,
+			List<ScoredEmbedding> scored, int adaptiveCutoff) {
+		if (adaptiveCutoff >= scored.size()) {
+			return candidates;
+		}
+
+		// Collect cluster embedding vectors
+		float[][] clusterVecs = new float[candidates.size()][];
+		boolean allValid = true;
+		for (int i = 0; i < candidates.size(); i++) {
+			byte[] raw = candidates.get(i).embedding.getEmbedding();
+			if (raw == null || raw.length == 0) {
+				allValid = false;
+				break;
+			}
+			clusterVecs[i] = candidates.get(i).embedding.getEmbeddingVector();
+		}
+		if (!allValid) {
+			return candidates;
+		}
+
+		// Compute the minimum within-cluster coherence as the rescue threshold.
+		// A below-floor record must be at least as coherent with the cluster
+		// as the least coherent existing member.
+		double minClusterCoherence = Double.MAX_VALUE;
+		for (int i = 0; i < clusterVecs.length; i++) {
+			double sum = 0;
+			for (int j = 0; j < clusterVecs.length; j++) {
+				if (j != i) {
+					sum += cosineSimilarity(clusterVecs[i], clusterVecs[j]);
+				}
+			}
+			double coherence = sum / (clusterVecs.length - 1);
+			if (coherence < minClusterCoherence) {
+				minClusterCoherence = coherence;
+			}
+		}
+
+		// Identify which records are already in the cluster
+		Set<Integer> inCluster = new HashSet<Integer>();
+		for (ScoredEmbedding se : candidates) {
+			inCluster.add(se.embedding.getEmbeddingId());
+		}
+
+		// Check below-floor records for coherence with the cluster
+		List<ScoredEmbedding> rescued = new ArrayList<ScoredEmbedding>();
+		for (int i = adaptiveCutoff; i < scored.size(); i++) {
+			ScoredEmbedding se = scored.get(i);
+			if (inCluster.contains(se.embedding.getEmbeddingId())) {
+				continue;
+			}
+			byte[] raw = se.embedding.getEmbedding();
+			if (raw == null || raw.length == 0) {
+				continue;
+			}
+			float[] vec = se.embedding.getEmbeddingVector();
+			double sum = 0;
+			for (float[] cv : clusterVecs) {
+				sum += cosineSimilarity(vec, cv);
+			}
+			double coherence = sum / clusterVecs.length;
+			if (coherence >= minClusterCoherence) {
+				rescued.add(se);
+			}
+		}
+
+		if (rescued.isEmpty()) {
+			return candidates;
+		}
+
+		log.debug("Below-floor rescue: recovered {} records "
+				+ "(minClusterCoherence={})",
+				rescued.size(), String.format("%.4f", minClusterCoherence));
+		List<ScoredEmbedding> result = new ArrayList<ScoredEmbedding>(candidates);
+		result.addAll(rescued);
+		return result;
+	}
+
+	/**
+	 * Holds all configurable pipeline parameters, decoupling the filtering
+	 * logic from the OpenMRS Context so the pipeline can be tested without
+	 * a running application server.
+	 */
+	static class PipelineConfig {
+		final double keywordWeight;
+		final double scoreGapMultiplier;
+		final double minScoreGap;
+		final double gapValidationCosineThreshold;
+		final double similarityRatio;
+
+		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
+				double minScoreGap, double gapValidationCosineThreshold,
+				double similarityRatio) {
+			this.keywordWeight = keywordWeight;
+			this.scoreGapMultiplier = scoreGapMultiplier;
+			this.minScoreGap = minScoreGap;
+			this.gapValidationCosineThreshold = gapValidationCosineThreshold;
+			this.similarityRatio = similarityRatio;
+		}
+
+		/** Returns a config using all default constant values. */
+		static PipelineConfig defaults() {
+			return new PipelineConfig(
+					ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
+					ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
+					ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
+					ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
+					ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO);
+		}
 	}
 
 	static class ScoredEmbedding {

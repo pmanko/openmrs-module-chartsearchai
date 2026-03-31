@@ -36,159 +36,159 @@ public class LlmInferenceServiceTest {
 	// Full 153-record dataset from a real 16-year-old Male patient chart.
 	// Used by integration tests that need the complete patient record set.
 	static final String[] FULL_PATIENT_DATASET = {
-			/* [  1] */ "Medication prescription: Drug order: Azithromycin. Dose: 2.0 Tablet) Intravenous Every six hours. Duration: 5 Days. Quantity: 4.0 Tablet). As needed (subject to heart attack). Dosing: Take after eating. Action: REVISE. Urgency: ROUTINE. Reason: Spectrum",
-			/* [  2] */ "Medication prescription: Drug order: Azithromycin. Dose: 2.0 Tablet) Intravenous Thrice daily. Duration: 5 Days. Quantity: 4.0 Tablet). As needed (subject to heart attack). Dosing: Take after eating. Action: NEW. Urgency: ROUTINE. Reason: Spectrum. Stopped: 2026-03-18",
-			/* [  3] */ "Program enrollment: Program: PMTCT. Enrolled: 2026-03-18. Status: Active",
-			/* [  4] */ "Clinical observation: Finding — Immunization history: Immunizations: Polio vaccination, oral, Oral polio vacc); Vaccination date: 2026-03-18; Immunization sequence number: 1.0",
-			/* [  5] */ "Patient allergy: Allergy: Beef (food allergen). Severity: Severe. Reactions: Diarrhea, Itching. Comments: Happens during pregnancy",
-			/* [  6] */ "Clinical observation: Assessment — Method of family planning: Condoms",
-			/* [  7] */ "Clinical observation: Assessment — Method of family planning: Diaphragm. Note: in bathroom",
-			/* [  8] */ "Medical condition: Condition: Tuberculosis. Status: ACTIVE",
-			/* [  9] */ "Clinical observation: Test — CD4 Count: 988.0",
-			/* [ 10] */ "Clinical observation: Drug — Pyrimethamine / sulfadoxine: 11.58",
-			/* [ 11] */ "Clinical observation: Units of Measure — Syringe): 65.0",
-			/* [ 12] */ "Clinical observation: Diagnosis — Kaposi sarcoma oral: 3.91",
-			/* [ 13] */ "Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
-			/* [ 14] */ "Clinical observation: Frequency — Every twenty-four hours: Every four hours",
-			/* [ 15] */ "Clinical observation: Test — Height (cm): 131.0",
-			/* [ 16] */ "Clinical observation: Test — Respiratory Rate: 18.0",
-			/* [ 17] */ "Clinical observation: Test — Pulse: 95.0",
-			/* [ 18] */ "Clinical observation: Test — Temperature (C): 36.7",
-			/* [ 19] */ "Clinical observation: Test — Weight (kg): 94.0",
-			/* [ 20] */ "Clinical observation: Diagnosis — Fetishism: Patient presents with mild symptoms. Advised rest and fluids.",
-			/* [ 21] */ "Clinical observation: Frequency — Every twenty-four hours: Every eight hours",
-			/* [ 22] */ "Clinical diagnosis: Diagnosis: Gastroenteritis. Certainty: PROVISIONAL. Rank: Primary",
-			/* [ 23] */ "Clinical observation: Test — Systolic Blood Pressure: 97.0",
-			/* [ 24] */ "Clinical observation: Test — Diastolic Blood Pressure: 99.0",
-			/* [ 25] */ "Clinical observation: Test — Pulse: 62.0",
-			/* [ 26] */ "Clinical observation: Test — Temperature (C): 37.7",
-			/* [ 27] */ "Clinical observation: Test — Weight (kg): 107.0",
-			/* [ 28] */ "Clinical observation: Test — Height (cm): 137.0",
-			/* [ 29] */ "Clinical observation: Test — Respiratory Rate: 24.0",
-			/* [ 30] */ "Clinical observation: Assessment — Primary Diagnosis: Anemia",
-			/* [ 31] */ "Clinical observation: Frequency — Every twenty-four hours: Every five hours",
-			/* [ 32] */ "Clinical observation: Test — Diastolic Blood Pressure: 92.0",
-			/* [ 33] */ "Clinical observation: Test — Respiratory Rate: 32.0",
-			/* [ 34] */ "Clinical observation: Test — Weight (kg): 139.0",
-			/* [ 35] */ "Clinical observation: Test — Blood Oxygen Saturation: 88.0",
-			/* [ 36] */ "Clinical observation: Diagnosis — Fetishism: Annual physical examination. Labs ordered.",
-			/* [ 37] */ "Clinical observation: Test — Systolic Blood Pressure: 122.0",
-			/* [ 38] */ "Clinical observation: Test — Height (cm): 103.0",
-			/* [ 39] */ "Clinical observation: Test — Temperature (C): 40.3",
-			/* [ 40] */ "Clinical diagnosis: Diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
-			/* [ 41] */ "Clinical observation: Assessment — Primary Diagnosis: HIV Disease",
-			/* [ 42] */ "Clinical observation: Diagnosis — Fetishism: Patient stable on current regimen.",
-			/* [ 43] */ "Clinical observation: Frequency — Every twenty-four hours: Married",
-			/* [ 44] */ "Clinical observation: Test — Pulse: 62.0",
-			/* [ 45] */ "Clinical observation: Test — Respiratory Rate: 23.0",
-			/* [ 46] */ "Clinical observation: Test — Blood Oxygen Saturation: 92.0",
-			/* [ 47] */ "Clinical observation: Test — Height (cm): 126.0",
-			/* [ 48] */ "Clinical observation: Test — Systolic Blood Pressure: 101.0",
-			/* [ 49] */ "Clinical observation: Test — Diastolic Blood Pressure: 99.0",
-			/* [ 50] */ "Clinical observation: Assessment — Primary Diagnosis: Diabetes Mellitus",
-			/* [ 51] */ "Clinical observation: Diagnosis — Fetishism: New complaint of persistent cough for 2 weeks.",
-			/* [ 52] */ "Clinical diagnosis: Diagnosis: Urinary Tract Infection. Certainty: PROVISIONAL. Rank: Primary",
-			/* [ 53] */ "Clinical diagnosis: Diagnosis: Tuberculosis. Certainty: CONFIRMED. Rank: Secondary",
-			/* [ 54] */ "Patient allergy: Allergy: Fomepizole (drug allergen)",
-			/* [ 55] */ "Medical condition: Condition: Hypertension. Status: ACTIVE",
-			/* [ 56] */ "Clinical observation: Assessment — Primary Diagnosis: Anemia",
-			/* [ 57] */ "Clinical observation: Diagnosis — Fetishism: Chronic disease management visit. Medication adjusted.",
-			/* [ 58] */ "Clinical observation: Test — Height (cm): 101.0",
-			/* [ 59] */ "Clinical observation: Test — Systolic Blood Pressure: 123.0",
-			/* [ 60] */ "Clinical observation: Test — Blood Oxygen Saturation: 86.0",
-			/* [ 61] */ "Clinical observation: Test — Pulse: 51.0",
-			/* [ 62] */ "Clinical diagnosis: Diagnosis: Skin Infection. Certainty: CONFIRMED. Rank: Primary",
-			/* [ 63] */ "Clinical observation: Assessment — Primary Diagnosis: Pneumonia",
-			/* [ 64] */ "Clinical observation: Test — Weight (kg): 38.0",
-			/* [ 65] */ "Clinical observation: Test — Diastolic Blood Pressure: 71.0",
-			/* [ 66] */ "Clinical observation: Test — Respiratory Rate: 16.0",
-			/* [ 67] */ "Clinical diagnosis: Diagnosis: Malaria. Certainty: PROVISIONAL. Rank: Primary",
-			/* [ 68] */ "Clinical diagnosis: Diagnosis: Diabetes Mellitus. Certainty: CONFIRMED. Rank: Secondary",
-			/* [ 69] */ "Clinical observation: Assessment — Primary Diagnosis: HIV Disease",
-			/* [ 70] */ "Clinical diagnosis: Diagnosis: HIV Disease. Certainty: PROVISIONAL. Rank: Primary",
-			/* [ 71] */ "Clinical observation: Diagnosis — Fetishism: Presenting with fever and body aches for 3 days.",
-			/* [ 72] */ "Clinical diagnosis: Diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
-			/* [ 73] */ "Clinical diagnosis: Diagnosis: Anemia. Certainty: PROVISIONAL. Rank: Secondary",
-			/* [ 74] */ "Clinical observation: Test — Systolic Blood Pressure: 137.0",
-			/* [ 75] */ "Clinical observation: Test — Diastolic Blood Pressure: 67.0",
-			/* [ 76] */ "Clinical observation: Test — Pulse: 86.0",
-			/* [ 77] */ "Clinical observation: Test — Temperature (C): 39.3",
-			/* [ 78] */ "Clinical observation: Test — Weight (kg): 146.0",
-			/* [ 79] */ "Clinical observation: Test — Height (cm): 107.0",
-			/* [ 80] */ "Clinical observation: Test — Blood Oxygen Saturation: 86.0",
-			/* [ 81] */ "Clinical observation: Test — Respiratory Rate: 30.0",
-			/* [ 82] */ "Clinical observation: Test — Diastolic Blood Pressure: 105.0",
-			/* [ 83] */ "Clinical observation: Test — Pulse: 70.0",
-			/* [ 84] */ "Clinical observation: Test — Blood Oxygen Saturation: 100.0",
-			/* [ 85] */ "Clinical observation: Test — Respiratory Rate: 40.0",
-			/* [ 86] */ "Clinical observation: Test — CD4 Count: 1191.0",
-			/* [ 87] */ "Clinical observation: Units of Measure — Syringe): 339.0",
-			/* [ 88] */ "Clinical observation: Misc — Milligram per meter squared: 47.0",
-			/* [ 89] */ "Clinical observation: Diagnosis — Kaposi sarcoma oral: 3.5",
-			/* [ 90] */ "Clinical observation: Diagnosis — Photoallergy: 9.93",
-			/* [ 91] */ "Clinical observation: Assessment — Primary Diagnosis: Urinary Tract Infection",
-			/* [ 92] */ "Clinical observation: Diagnosis — Fetishism: Chronic disease management visit. Medication adjusted.",
-			/* [ 93] */ "Clinical diagnosis: Diagnosis: Hypertension. Certainty: PROVISIONAL. Rank: Primary",
-			/* [ 94] */ "Clinical observation: Test — Systolic Blood Pressure: 147.0",
-			/* [ 95] */ "Clinical observation: Test — Diastolic Blood Pressure: 58.0",
-			/* [ 96] */ "Clinical observation: Test — Pulse: 53.0",
-			/* [ 97] */ "Clinical observation: Test — Temperature (C): 36.4",
-			/* [ 98] */ "Clinical observation: Test — Height (cm): 163.0",
-			/* [ 99] */ "Clinical observation: Test — Respiratory Rate: 19.0",
-			/* [100] */ "Clinical observation: Assessment — Primary Diagnosis: Headache",
-			/* [101] */ "Clinical observation: Test — Pulse: 83.0",
-			/* [102] */ "Clinical observation: Test — Weight (kg): 68.0",
-			/* [103] */ "Clinical observation: Test — Diastolic Blood Pressure: 50.0",
-			/* [104] */ "Clinical observation: Test — Blood Oxygen Saturation: 94.0",
-			/* [105] */ "Clinical observation: Test — Respiratory Rate: 40.0",
-			/* [106] */ "Clinical observation: Assessment — Primary Diagnosis: Malaria",
-			/* [107] */ "Clinical observation: Diagnosis — Fetishism: Well-child visit. Growth and development normal.",
-			/* [108] */ "Clinical observation: Test — Diastolic Blood Pressure: 93.0",
-			/* [109] */ "Clinical observation: Test — Blood Oxygen Saturation: 95.0",
-			/* [110] */ "Clinical observation: Test — Respiratory Rate: 36.0",
-			/* [111] */ "Clinical diagnosis: Diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
-			/* [112] */ "Clinical observation: Test — Systolic Blood Pressure: 98.0",
-			/* [113] */ "Clinical observation: Test — Pulse: 66.0",
-			/* [114] */ "Clinical observation: Test — Temperature (C): 37.8",
-			/* [115] */ "Clinical observation: Test — Weight (kg): 121.0",
-			/* [116] */ "Clinical observation: Test — Height (cm): 173.0",
-			/* [117] */ "Clinical observation: Test — Blood Oxygen Saturation: 94.0",
-			/* [118] */ "Clinical observation: Test — Respiratory Rate: 29.0",
-			/* [119] */ "Clinical observation: Assessment — Primary Diagnosis: Urinary Tract Infection",
-			/* [120] */ "Clinical observation: Diagnosis — Fetishism: Presenting with fever and body aches for 3 days.",
-			/* [121] */ "Clinical observation: Diagnosis — Fetishism: Patient counseled on lifestyle modifications.",
-			/* [122] */ "Clinical observation: Frequency — Every twenty-four hours: Every four hours",
-			/* [123] */ "Clinical observation: Assessment — Primary Diagnosis: Skin Infection",
-			/* [124] */ "Clinical observation: Diagnosis — Fetishism: Annual physical examination. Labs ordered.",
-			/* [125] */ "Clinical observation: Test — Height (cm): 137.0",
-			/* [126] */ "Clinical observation: Test — Respiratory Rate: 28.0",
-			/* [127] */ "Clinical observation: Test — Systolic Blood Pressure: 134.0",
-			/* [128] */ "Clinical diagnosis: Diagnosis: Asthma. Certainty: CONFIRMED. Rank: Primary",
-			/* [129] */ "Clinical observation: Test — Systolic Blood Pressure: 117.0",
-			/* [130] */ "Clinical observation: Test — Diastolic Blood Pressure: 70.0",
-			/* [131] */ "Clinical observation: Test — Pulse: 115.0",
-			/* [132] */ "Clinical observation: Test — Temperature (C): 40.1",
-			/* [133] */ "Clinical observation: Test — Height (cm): 186.0",
-			/* [134] */ "Clinical observation: Test — Respiratory Rate: 22.0",
-			/* [135] */ "Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
-			/* [136] */ "Clinical observation: Assessment — Primary Diagnosis: Tuberculosis",
-			/* [137] */ "Clinical observation: Test — Respiratory Rate: 28.0",
-			/* [138] */ "Clinical observation: Test — Diastolic Blood Pressure: 76.0",
-			/* [139] */ "Clinical observation: Test — Systolic Blood Pressure: 102.0",
-			/* [140] */ "Clinical observation: Units of Measure — Syringe): 237.0",
-			/* [141] */ "Clinical observation: Misc — Milligram per meter squared: 17.0",
-			/* [142] */ "Clinical observation: Diagnosis — Photoallergy: 8.27",
-			/* [143] */ "Clinical observation: Diagnosis — Fetishism: Routine checkup. No significant findings.",
-			/* [144] */ "Clinical observation: Test — Temperature (C): 39.3",
-			/* [145] */ "Clinical observation: Test — Diastolic Blood Pressure: 78.0",
-			/* [146] */ "Clinical observation: Test — Blood Oxygen Saturation: 88.0",
-			/* [147] */ "Clinical diagnosis: Diagnosis: Diabetes Mellitus. Certainty: PROVISIONAL. Rank: Primary",
-			/* [148] */ "Clinical observation: Test — Systolic Blood Pressure: 151.0",
-			/* [149] */ "Clinical observation: Test — Diastolic Blood Pressure: 53.0",
-			/* [150] */ "Clinical observation: Test — Pulse: 117.0",
-			/* [151] */ "Clinical observation: Test — Temperature (C): 39.4",
-			/* [152] */ "Clinical observation: Test — Blood Oxygen Saturation: 88.0",
-			/* [153] */ "Clinical observation: Test — Respiratory Rate: 15.0",
+			/* [  1] */ "Medication prescription: (2026-03-18) Drug order: Azithromycin. Dose: 2.0 Tablet) Intravenous Every six hours. Duration: 5 Days. Quantity: 4.0 Tablet). As needed (subject to heart attack). Dosing: Take after eating. Action: REVISE. Urgency: ROUTINE. Reason: Spectrum",
+			/* [  2] */ "Medication prescription: (2026-03-18) Drug order: Azithromycin. Dose: 2.0 Tablet) Intravenous Thrice daily. Duration: 5 Days. Quantity: 4.0 Tablet). As needed (subject to heart attack). Dosing: Take after eating. Action: NEW. Urgency: ROUTINE. Reason: Spectrum. Stopped: 2026-03-18",
+			/* [  3] */ "Program enrollment: (2026-03-18) Program: PMTCT. Enrolled: 2026-03-18. Status: Active",
+			/* [  4] */ "Clinical observation: (2026-03-18) Finding — Immunization history: Immunizations: Polio vaccination, oral, Oral polio vacc, Polio immunization, oral); Vaccination date: 2026-03-17; Immunization sequence number: 1.0",
+			/* [  5] */ "Patient allergy: (2026-03-18) Allergy: Beef (food allergen). Severity: Severe. Reactions: Diarrhea, Itching. Comments: Happens during pregnancy",
+			/* [  6] */ "Clinical observation: (2026-03-05) Assessment — Method of family planning: Condoms",
+			/* [  7] */ "Clinical observation: (2026-03-05) Assessment — Method of family planning: Diaphragm. Note: in bathroom",
+			/* [  8] */ "Medical condition: (2025-11-12) Condition: Tuberculosis. Status: ACTIVE",
+			/* [  9] */ "Clinical observation: (2025-10-30) Test — CD4 Count: 988.0 cells/mmL",
+			/* [ 10] */ "Clinical observation: (2025-10-30) Drug — Pyrimethamine / sulfadoxine: 11.58",
+			/* [ 11] */ "Clinical observation: (2025-10-30) Units of Measure — Syringe): 65.0",
+			/* [ 12] */ "Clinical observation: (2025-10-30) Diagnosis — Kaposi sarcoma oral: 3.91",
+			/* [ 13] */ "Clinical observation: (2025-10-30) Assessment — Primary Diagnosis: Tuberculosis",
+			/* [ 14] */ "Clinical observation: (2025-10-30) Frequency — Every twenty-four hours: Every four hours",
+			/* [ 15] */ "Clinical observation: (2025-10-30) Test — Height (cm): 131.0 cm",
+			/* [ 16] */ "Clinical observation: (2025-10-30) Test — Respiratory Rate: 18.0 breaths/min",
+			/* [ 17] */ "Clinical observation: (2025-10-30) Test — Pulse: 95.0 beats/min",
+			/* [ 18] */ "Clinical observation: (2025-10-30) Test — Temperature (C): 36.7 DEG C",
+			/* [ 19] */ "Clinical observation: (2025-10-30) Test — Weight (kg): 94.0 kg",
+			/* [ 20] */ "Clinical observation: (2025-09-17) Diagnosis — Fetishism: Patient presents with mild symptoms. Advised rest and fluids.",
+			/* [ 21] */ "Clinical observation: (2025-09-17) Frequency — Every twenty-four hours: Every eight hours",
+			/* [ 22] */ "Clinical diagnosis: (2025-09-17) Diagnosis: Gastroenteritis. Certainty: PROVISIONAL. Rank: Primary",
+			/* [ 23] */ "Clinical observation: (2025-09-17) Test — Systolic Blood Pressure: 97.0 mmHg",
+			/* [ 24] */ "Clinical observation: (2025-09-17) Test — Diastolic Blood Pressure: 99.0 mmHg",
+			/* [ 25] */ "Clinical observation: (2025-09-17) Test — Pulse: 62.0 beats/min",
+			/* [ 26] */ "Clinical observation: (2025-09-17) Test — Temperature (C): 37.7 DEG C",
+			/* [ 27] */ "Clinical observation: (2025-09-17) Test — Weight (kg): 107.0 kg",
+			/* [ 28] */ "Clinical observation: (2025-09-17) Test — Height (cm): 137.0 cm",
+			/* [ 29] */ "Clinical observation: (2025-09-17) Test — Respiratory Rate: 24.0 breaths/min",
+			/* [ 30] */ "Clinical observation: (2025-09-17) Assessment — Primary Diagnosis: Anemia",
+			/* [ 31] */ "Clinical observation: (2025-09-17) Frequency — Every twenty-four hours: Every five hours",
+			/* [ 32] */ "Clinical observation: (2025-09-17) Test — Diastolic Blood Pressure: 92.0 mmHg",
+			/* [ 33] */ "Clinical observation: (2025-09-17) Test — Respiratory Rate: 32.0 breaths/min",
+			/* [ 34] */ "Clinical observation: (2025-09-17) Test — Weight (kg): 139.0 kg",
+			/* [ 35] */ "Clinical observation: (2025-09-17) Test — Blood Oxygen Saturation: 88.0 %",
+			/* [ 36] */ "Clinical observation: (2025-06-29) Diagnosis — Fetishism: Annual physical examination. Labs ordered.",
+			/* [ 37] */ "Clinical observation: (2025-06-29) Test — Systolic Blood Pressure: 122.0 mmHg",
+			/* [ 38] */ "Clinical observation: (2025-06-29) Test — Height (cm): 103.0 cm",
+			/* [ 39] */ "Clinical observation: (2025-06-29) Test — Temperature (C): 40.3 DEG C",
+			/* [ 40] */ "Clinical diagnosis: (2025-06-29) Diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
+			/* [ 41] */ "Clinical observation: (2025-06-28) Assessment — Primary Diagnosis: HIV Disease",
+			/* [ 42] */ "Clinical observation: (2025-06-28) Diagnosis — Fetishism: Patient stable on current regimen.",
+			/* [ 43] */ "Clinical observation: (2025-06-28) Frequency — Every twenty-four hours: Married",
+			/* [ 44] */ "Clinical observation: (2025-06-28) Test — Pulse: 62.0 beats/min",
+			/* [ 45] */ "Clinical observation: (2025-06-28) Test — Respiratory Rate: 23.0 breaths/min",
+			/* [ 46] */ "Clinical observation: (2025-06-28) Test — Blood Oxygen Saturation: 92.0 %",
+			/* [ 47] */ "Clinical observation: (2025-06-28) Test — Height (cm): 126.0 cm",
+			/* [ 48] */ "Clinical observation: (2025-06-28) Test — Systolic Blood Pressure: 101.0 mmHg",
+			/* [ 49] */ "Clinical observation: (2025-06-28) Test — Diastolic Blood Pressure: 99.0 mmHg",
+			/* [ 50] */ "Clinical observation: (2025-06-28) Assessment — Primary Diagnosis: Diabetes Mellitus",
+			/* [ 51] */ "Clinical observation: (2025-06-28) Diagnosis — Fetishism: New complaint of persistent cough for 2 weeks.",
+			/* [ 52] */ "Clinical diagnosis: (2025-06-28) Diagnosis: Urinary Tract Infection. Certainty: PROVISIONAL. Rank: Primary",
+			/* [ 53] */ "Clinical diagnosis: (2025-06-28) Diagnosis: Tuberculosis. Certainty: CONFIRMED. Rank: Secondary",
+			/* [ 54] */ "Patient allergy: (2024-12-29) Allergy: Fomepizole (drug allergen)",
+			/* [ 55] */ "Medical condition: (2024-09-08) Condition: Hypertension. Status: ACTIVE",
+			/* [ 56] */ "Clinical observation: (2023-04-30) Assessment — Primary Diagnosis: Anemia",
+			/* [ 57] */ "Clinical observation: (2023-04-30) Diagnosis — Fetishism: Chronic disease management visit. Medication adjusted.",
+			/* [ 58] */ "Clinical observation: (2023-04-30) Test — Height (cm): 101.0 cm",
+			/* [ 59] */ "Clinical observation: (2023-04-30) Test — Systolic Blood Pressure: 123.0 mmHg",
+			/* [ 60] */ "Clinical observation: (2023-04-30) Test — Blood Oxygen Saturation: 86.0 %",
+			/* [ 61] */ "Clinical observation: (2023-04-30) Test — Pulse: 51.0 beats/min",
+			/* [ 62] */ "Clinical diagnosis: (2023-04-30) Diagnosis: Skin Infection. Certainty: CONFIRMED. Rank: Primary",
+			/* [ 63] */ "Clinical observation: (2023-04-29) Assessment — Primary Diagnosis: Pneumonia",
+			/* [ 64] */ "Clinical observation: (2023-04-29) Test — Weight (kg): 38.0 kg",
+			/* [ 65] */ "Clinical observation: (2023-04-29) Test — Diastolic Blood Pressure: 71.0 mmHg",
+			/* [ 66] */ "Clinical observation: (2023-04-29) Test — Respiratory Rate: 16.0 breaths/min",
+			/* [ 67] */ "Clinical diagnosis: (2023-04-29) Diagnosis: Malaria. Certainty: PROVISIONAL. Rank: Primary",
+			/* [ 68] */ "Clinical diagnosis: (2023-04-29) Diagnosis: Diabetes Mellitus. Certainty: CONFIRMED. Rank: Secondary",
+			/* [ 69] */ "Clinical observation: (2022-11-09) Assessment — Primary Diagnosis: HIV Disease",
+			/* [ 70] */ "Clinical diagnosis: (2022-11-09) Diagnosis: HIV Disease. Certainty: PROVISIONAL. Rank: Primary",
+			/* [ 71] */ "Clinical observation: (2022-10-07) Diagnosis — Fetishism: Presenting with fever and body aches for 3 days.",
+			/* [ 72] */ "Clinical diagnosis: (2022-10-07) Diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
+			/* [ 73] */ "Clinical diagnosis: (2022-10-07) Diagnosis: Anemia. Certainty: PROVISIONAL. Rank: Secondary",
+			/* [ 74] */ "Clinical observation: (2022-10-07) Test — Systolic Blood Pressure: 137.0 mmHg",
+			/* [ 75] */ "Clinical observation: (2022-10-07) Test — Diastolic Blood Pressure: 67.0 mmHg",
+			/* [ 76] */ "Clinical observation: (2022-10-07) Test — Pulse: 86.0 beats/min",
+			/* [ 77] */ "Clinical observation: (2022-10-07) Test — Temperature (C): 39.3 DEG C",
+			/* [ 78] */ "Clinical observation: (2022-10-07) Test — Weight (kg): 146.0 kg",
+			/* [ 79] */ "Clinical observation: (2022-10-07) Test — Height (cm): 107.0 cm",
+			/* [ 80] */ "Clinical observation: (2022-10-07) Test — Blood Oxygen Saturation: 86.0 %",
+			/* [ 81] */ "Clinical observation: (2022-10-07) Test — Respiratory Rate: 30.0 breaths/min",
+			/* [ 82] */ "Clinical observation: (2022-04-27) Test — Diastolic Blood Pressure: 105.0 mmHg",
+			/* [ 83] */ "Clinical observation: (2022-04-27) Test — Pulse: 70.0 beats/min",
+			/* [ 84] */ "Clinical observation: (2022-04-27) Test — Blood Oxygen Saturation: 100.0 %",
+			/* [ 85] */ "Clinical observation: (2022-04-27) Test — Respiratory Rate: 40.0 breaths/min",
+			/* [ 86] */ "Clinical observation: (2022-04-27) Test — CD4 Count: 1191.0 cells/mmL",
+			/* [ 87] */ "Clinical observation: (2022-04-27) Units of Measure — Syringe): 339.0",
+			/* [ 88] */ "Clinical observation: (2022-04-27) Misc — Milligram per meter squared: 47.0",
+			/* [ 89] */ "Clinical observation: (2022-04-27) Diagnosis — Kaposi sarcoma oral: 3.5",
+			/* [ 90] */ "Clinical observation: (2022-04-27) Diagnosis — Photoallergy: 9.93",
+			/* [ 91] */ "Clinical observation: (2022-01-16) Assessment — Primary Diagnosis: Urinary Tract Infection",
+			/* [ 92] */ "Clinical observation: (2022-01-16) Diagnosis — Fetishism: Chronic disease management visit. Medication adjusted.",
+			/* [ 93] */ "Clinical diagnosis: (2022-01-16) Diagnosis: Hypertension. Certainty: PROVISIONAL. Rank: Primary",
+			/* [ 94] */ "Clinical observation: (2022-01-16) Test — Systolic Blood Pressure: 147.0 mmHg",
+			/* [ 95] */ "Clinical observation: (2022-01-16) Test — Diastolic Blood Pressure: 58.0 mmHg",
+			/* [ 96] */ "Clinical observation: (2022-01-16) Test — Pulse: 53.0 beats/min",
+			/* [ 97] */ "Clinical observation: (2022-01-16) Test — Temperature (C): 36.4 DEG C",
+			/* [ 98] */ "Clinical observation: (2022-01-16) Test — Height (cm): 163.0 cm",
+			/* [ 99] */ "Clinical observation: (2022-01-16) Test — Respiratory Rate: 19.0 breaths/min",
+			/* [100] */ "Clinical observation: (2022-01-16) Assessment — Primary Diagnosis: Headache",
+			/* [101] */ "Clinical observation: (2022-01-16) Test — Pulse: 83.0 beats/min",
+			/* [102] */ "Clinical observation: (2022-01-16) Test — Weight (kg): 68.0 kg",
+			/* [103] */ "Clinical observation: (2022-01-16) Test — Diastolic Blood Pressure: 50.0 mmHg",
+			/* [104] */ "Clinical observation: (2022-01-16) Test — Blood Oxygen Saturation: 94.0 %",
+			/* [105] */ "Clinical observation: (2022-01-16) Test — Respiratory Rate: 40.0 breaths/min",
+			/* [106] */ "Clinical observation: (2021-11-30) Assessment — Primary Diagnosis: Malaria",
+			/* [107] */ "Clinical observation: (2021-11-30) Diagnosis — Fetishism: Well-child visit. Growth and development normal.",
+			/* [108] */ "Clinical observation: (2021-11-30) Test — Diastolic Blood Pressure: 93.0 mmHg",
+			/* [109] */ "Clinical observation: (2021-11-30) Test — Blood Oxygen Saturation: 95.0 %",
+			/* [110] */ "Clinical observation: (2021-11-30) Test — Respiratory Rate: 36.0 breaths/min",
+			/* [111] */ "Clinical diagnosis: (2021-11-30) Diagnosis: HIV Disease. Certainty: CONFIRMED. Rank: Primary",
+			/* [112] */ "Clinical observation: (2021-11-30) Test — Systolic Blood Pressure: 98.0 mmHg",
+			/* [113] */ "Clinical observation: (2021-11-30) Test — Pulse: 66.0 beats/min",
+			/* [114] */ "Clinical observation: (2021-11-30) Test — Temperature (C): 37.8 DEG C",
+			/* [115] */ "Clinical observation: (2021-11-30) Test — Weight (kg): 121.0 kg",
+			/* [116] */ "Clinical observation: (2021-11-30) Test — Height (cm): 173.0 cm",
+			/* [117] */ "Clinical observation: (2021-11-30) Test — Blood Oxygen Saturation: 94.0 %",
+			/* [118] */ "Clinical observation: (2021-11-30) Test — Respiratory Rate: 29.0 breaths/min",
+			/* [119] */ "Clinical observation: (2021-11-30) Assessment — Primary Diagnosis: Urinary Tract Infection",
+			/* [120] */ "Clinical observation: (2021-11-30) Diagnosis — Fetishism: Presenting with fever and body aches for 3 days.",
+			/* [121] */ "Clinical observation: (2021-09-16) Diagnosis — Fetishism: Patient counseled on lifestyle modifications.",
+			/* [122] */ "Clinical observation: (2021-09-16) Frequency — Every twenty-four hours: Every four hours",
+			/* [123] */ "Clinical observation: (2021-09-16) Assessment — Primary Diagnosis: Skin Infection",
+			/* [124] */ "Clinical observation: (2021-09-16) Diagnosis — Fetishism: Annual physical examination. Labs ordered.",
+			/* [125] */ "Clinical observation: (2021-09-16) Test — Height (cm): 137.0 cm",
+			/* [126] */ "Clinical observation: (2021-09-16) Test — Respiratory Rate: 28.0 breaths/min",
+			/* [127] */ "Clinical observation: (2021-09-16) Test — Systolic Blood Pressure: 134.0 mmHg",
+			/* [128] */ "Clinical diagnosis: (2021-09-16) Diagnosis: Asthma. Certainty: CONFIRMED. Rank: Primary",
+			/* [129] */ "Clinical observation: (2021-09-16) Test — Systolic Blood Pressure: 117.0 mmHg",
+			/* [130] */ "Clinical observation: (2021-09-16) Test — Diastolic Blood Pressure: 70.0 mmHg",
+			/* [131] */ "Clinical observation: (2021-09-16) Test — Pulse: 115.0 beats/min",
+			/* [132] */ "Clinical observation: (2021-09-16) Test — Temperature (C): 40.1 DEG C",
+			/* [133] */ "Clinical observation: (2021-09-16) Test — Height (cm): 186.0 cm",
+			/* [134] */ "Clinical observation: (2021-09-16) Test — Respiratory Rate: 22.0 breaths/min",
+			/* [135] */ "Clinical observation: (2021-07-20) Assessment — Primary Diagnosis: Tuberculosis",
+			/* [136] */ "Clinical observation: (2021-07-20) Assessment — Primary Diagnosis: Tuberculosis",
+			/* [137] */ "Clinical observation: (2021-07-20) Test — Respiratory Rate: 28.0 breaths/min",
+			/* [138] */ "Clinical observation: (2021-07-20) Test — Diastolic Blood Pressure: 76.0 mmHg",
+			/* [139] */ "Clinical observation: (2021-07-20) Test — Systolic Blood Pressure: 102.0 mmHg",
+			/* [140] */ "Clinical observation: (2021-07-20) Units of Measure — Syringe): 237.0",
+			/* [141] */ "Clinical observation: (2021-07-20) Misc — Milligram per meter squared: 17.0",
+			/* [142] */ "Clinical observation: (2021-07-20) Diagnosis — Photoallergy: 8.27",
+			/* [143] */ "Clinical observation: (2020-09-26) Diagnosis — Fetishism: Routine checkup. No significant findings.",
+			/* [144] */ "Clinical observation: (2020-09-26) Test — Temperature (C): 39.3 DEG C",
+			/* [145] */ "Clinical observation: (2020-09-26) Test — Diastolic Blood Pressure: 78.0 mmHg",
+			/* [146] */ "Clinical observation: (2020-09-26) Test — Blood Oxygen Saturation: 88.0 %",
+			/* [147] */ "Clinical diagnosis: (2020-09-26) Diagnosis: Diabetes Mellitus. Certainty: PROVISIONAL. Rank: Primary",
+			/* [148] */ "Clinical observation: (2020-09-26) Test — Systolic Blood Pressure: 151.0 mmHg",
+			/* [149] */ "Clinical observation: (2020-09-26) Test — Diastolic Blood Pressure: 53.0 mmHg",
+			/* [150] */ "Clinical observation: (2020-09-26) Test — Pulse: 117.0 beats/min",
+			/* [151] */ "Clinical observation: (2020-09-26) Test — Temperature (C): 39.4 DEG C",
+			/* [152] */ "Clinical observation: (2020-09-26) Test — Blood Oxygen Saturation: 88.0 %",
+			/* [153] */ "Clinical observation: (2020-09-26) Test — Respiratory Rate: 15.0 breaths/min",
 	};
 
 	// Second 67-record dataset from a 4-year-old Male patient chart.
@@ -452,6 +452,20 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void patientChart_demographicsOnlyHasNoRecords() {
+		// A chart with only demographics (no records) should have empty
+		// mappings even though getText() is non-empty. The search methods
+		// must check mappings, not text, to detect "no records found".
+		org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart chart =
+				new org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart(
+				"Patient: 4-year-old Male", Collections.<RecordMapping>emptyList());
+		assertFalse(chart.getText().isEmpty(),
+				"Demographics-only chart has non-empty text");
+		assertTrue(chart.getMappings().isEmpty(),
+				"Demographics-only chart should have no record mappings");
+	}
+
+	@Test
 	public void extractRecencyCap_shouldExtractNumberFromLastN() {
 		assertEquals(7, LlmInferenceService.extractRecencyCap(
 				"How have vitals trended across the last 7 visits?"));
@@ -491,6 +505,48 @@ public class LlmInferenceServiceTest {
 	public void extractRecencyCap_shouldReturnZeroForZero() {
 		assertEquals(0, LlmInferenceService.extractRecencyCap(
 				"last 0 visits"));
+	}
+
+	@Test
+	public void extractRecencyCap_shouldExtractFromLatestN() {
+		assertEquals(2, LlmInferenceService.extractRecencyCap(
+				"What are the latest 2 weights?"));
+	}
+
+	@Test
+	public void extractRecencyCap_shouldExtractWordNumberTwo() {
+		assertEquals(2, LlmInferenceService.extractRecencyCap(
+				"What are the latest two weights?"));
+	}
+
+	@Test
+	public void extractRecencyCap_shouldExtractWordNumberThree() {
+		assertEquals(3, LlmInferenceService.extractRecencyCap(
+				"Show the last three lab results"));
+	}
+
+	@Test
+	public void extractRecencyCap_shouldExtractWordNumberFive() {
+		assertEquals(5, LlmInferenceService.extractRecencyCap(
+				"previous five blood pressure readings"));
+	}
+
+	@Test
+	public void extractRecencyCap_shouldExtractWordNumberTen() {
+		assertEquals(10, LlmInferenceService.extractRecencyCap(
+				"most recent ten observations"));
+	}
+
+	@Test
+	public void extractRecencyCap_shouldExtractNumberBeforeKeyword() {
+		assertEquals(2, LlmInferenceService.extractRecencyCap(
+				"What are the two latest weights?"));
+	}
+
+	@Test
+	public void extractRecencyCap_shouldExtractDigitBeforeKeyword() {
+		assertEquals(3, LlmInferenceService.extractRecencyCap(
+				"Show the 3 most recent lab results"));
 	}
 
 	@Test
@@ -1018,218 +1074,63 @@ public class LlmInferenceServiceTest {
 	// --------------------------------------------------------
 
 	/**
-	 * Simulates the full retrieval pipeline: combines semantic and keyword
-	 * scores, sorts, applies gap detection, then keyword refinement.
-	 * Returns the number of records in the final result set.
+	 * Runs the production pipeline with default config and returns the count
+	 * of records in the final result set.
 	 */
-	private static int simulatePipeline(double[] semanticScores, double[] keywordScores,
+	private static int runPipeline(double[] semanticScores, double[] keywordScores,
 			double keywordWeight, int queryTermCount) {
-		return simulatePipelineIndices(semanticScores, keywordScores, keywordWeight,
+		return runPipelineIndices(semanticScores, keywordScores, keywordWeight,
 				queryTermCount, 10).size();
 	}
 
-	private static int simulatePipeline(double[] semanticScores, double[] keywordScores,
+	private static int runPipeline(double[] semanticScores, double[] keywordScores,
 			double keywordWeight, int queryTermCount, int topK) {
-		return simulatePipelineIndices(semanticScores, keywordScores, keywordWeight,
+		return runPipelineIndices(semanticScores, keywordScores, keywordWeight,
 				queryTermCount, topK).size();
 	}
 
-	private static List<Integer> simulatePipelineIndices(double[] semanticScores,
+	private static List<Integer> runPipelineIndices(double[] semanticScores,
 			double[] keywordScores, double keywordWeight, int queryTermCount, int topK) {
-		return simulatePipelineIndices(semanticScores, keywordScores,
+		return runPipelineIndices(semanticScores, keywordScores,
 				keywordWeight, queryTermCount, topK, null);
 	}
 
-	private static List<Integer> simulatePipelineIndices(double[] semanticScores,
+	/**
+	 * Calls the production {@link LlmInferenceService#filterPipeline} with
+	 * default config and returns the original array indices of the selected
+	 * records (sorted ascending). This is NOT a simulation — it exercises
+	 * the exact same code path as the production pipeline.
+	 */
+	private static List<Integer> runPipelineIndices(double[] semanticScores,
 			double[] keywordScores, double keywordWeight, int queryTermCount,
 			int topK, float[][] embeddingVectors) {
-		double gapMultiplier = ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER;
-		double minGap = ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP;
-
-		double maxSemanticScore = 0;
-		for (double s : semanticScores) {
-			if (s > maxSemanticScore) {
-				maxSemanticScore = s;
-			}
-		}
-
-		// Compute maxBaseScore for the floor gate.
-		double bonusThresholdForGate = queryTermCount >= 4
-				? 1.0 / queryTermCount
-				: queryTermCount == 0 ? 1.0
-				: (double) Math.min(2, queryTermCount) / queryTermCount;
-		double maxBaseScore = 0;
-		int keywordMatchCount = 0;
+		ChartEmbedding[] embeddings = new ChartEmbedding[semanticScores.length];
 		for (int i = 0; i < semanticScores.length; i++) {
-			double kwBonus = keywordScores[i] >= bonusThresholdForGate
-					? keywordScores[i] : 0.0;
-			double kwPenalty = 0.0;
-			if (queryTermCount <= 2 && keywordScores[i] > 0
-					&& keywordScores[i] < bonusThresholdForGate) {
-				kwPenalty = keywordScores[i];
-			}
-			double combined = semanticScores[i] + keywordWeight * kwBonus
-					- keywordWeight * kwPenalty;
-			if (combined > maxBaseScore) {
-				maxBaseScore = combined;
-			}
-			if (keywordScores[i] > 0) {
-				keywordMatchCount++;
-			}
-		}
-
-		double floorScore = Math.max(maxSemanticScore, maxBaseScore);
-		if (floorScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
-			return new ArrayList<Integer>();
-		}
-
-		// Zero-keyword gate: z-score check when too few records match keywords.
-		// Only meaningful with enough data points for statistics.
-		if (queryTermCount > 0
-				&& semanticScores.length
-				>= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
-			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
-				double sumSem = 0;
-				for (double s : semanticScores) {
-					sumSem += s;
-				}
-				double meanSem = sumSem / semanticScores.length;
-				double sumSqDiff = 0;
-				for (double s : semanticScores) {
-					double diff = s - meanSem;
-					sumSqDiff += diff * diff;
-				}
-				double stddev = Math.sqrt(sumSqDiff / semanticScores.length);
-				double zScore = stddev == 0 ? 0
-						: (maxSemanticScore - meanSem) / stddev;
-				if (zScore < ChartSearchAiConstants.ZERO_KEYWORD_MIN_Z_SCORE) {
-					return new ArrayList<Integer>();
-				}
-			}
-		}
-
-		List<LlmInferenceService.ScoredEmbedding> scored =
-				new ArrayList<LlmInferenceService.ScoredEmbedding>();
-		double bonusThreshold = queryTermCount >= 4
-				? 1.0 / queryTermCount
-				: queryTermCount == 0 ? 1.0
-				: (double) Math.min(2, queryTermCount) / queryTermCount;
-		for (int i = 0; i < semanticScores.length; i++) {
-			double keywordBonus = keywordScores[i] >= bonusThreshold ? keywordScores[i] : 0.0;
-			double keywordPenalty = 0.0;
-			if (queryTermCount <= 2 && keywordScores[i] > 0
-					&& keywordScores[i] < bonusThreshold) {
-				keywordPenalty = keywordScores[i];
-			}
-			double baseScore = semanticScores[i] + keywordWeight * keywordBonus
-					- keywordWeight * keywordPenalty;
-			LlmInferenceService.ScoredEmbedding se =
-					makeScoredEmbedding(baseScore, keywordScores[i], semanticScores[i]);
-			se.embedding.setTextContent(String.valueOf(i));
+			ChartEmbedding ce = new ChartEmbedding();
+			ce.setResourceType("obs");
+			ce.setTextContent(String.valueOf(i));
+			ce.setEmbeddingId(i);
 			if (embeddingVectors != null && embeddingVectors[i] != null) {
-				se.embedding.setEmbeddingVector(embeddingVectors[i]);
+				ce.setEmbeddingVector(embeddingVectors[i]);
 			}
-			scored.add(se);
+			embeddings[i] = ce;
 		}
 
-		Collections.sort(scored, new Comparator<LlmInferenceService.ScoredEmbedding>() {
-			@Override
-			public int compare(LlmInferenceService.ScoredEmbedding a,
-					LlmInferenceService.ScoredEmbedding b) {
-				return Double.compare(b.score, a.score);
-			}
-		});
+		LlmInferenceService.PipelineConfig config =
+				new LlmInferenceService.PipelineConfig(
+						keywordWeight,
+						ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
+						ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
+						ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
+						ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO);
 
-		double minScore = Math.min(
-				ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2,
-				maxSemanticScore / 2);
-		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, scored.size(),
-				minScore, gapMultiplier, minGap);
-
-		List<LlmInferenceService.ScoredEmbedding> candidates =
-				new ArrayList<LlmInferenceService.ScoredEmbedding>();
-		for (int i = 0; i < cutoff; i++) {
-			candidates.add(scored.get(i));
-		}
-
-		boolean refinementActivated = false;
-		if (keywordWeight > 0) {
-			List<LlmInferenceService.ScoredEmbedding> refined =
-					LlmInferenceService.refineByKeywords(candidates, queryTermCount);
-			refinementActivated = refined.size() < candidates.size();
-			candidates = refined;
-		}
-
-		if (refinementActivated) {
-			double kwMin = Double.MAX_VALUE;
-			double kwMax = 0;
-			for (LlmInferenceService.ScoredEmbedding se : candidates) {
-				if (se.keywordScore < kwMin) {
-					kwMin = se.keywordScore;
-				}
-				if (se.keywordScore > kwMax) {
-					kwMax = se.keywordScore;
-				}
-			}
-			boolean uniformKeywords = (kwMax - kwMin) < 0.01;
-			if (!uniformKeywords) {
-				double maxSemanticRefined = 0;
-				for (LlmInferenceService.ScoredEmbedding se : candidates) {
-					if (se.semanticScore > maxSemanticRefined) {
-						maxSemanticRefined = se.semanticScore;
-					}
-				}
-				double adaptiveMinGap = Math.max(
-						maxSemanticRefined
-								* ChartSearchAiConstants.REFINEMENT_ADAPTIVE_GAP_RATIO,
-						ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
-				int refinedCutoff = LlmInferenceService.findAdaptiveCutoff(
-						candidates, candidates.size(), minScore, gapMultiplier,
-						adaptiveMinGap);
-				candidates = new ArrayList<LlmInferenceService.ScoredEmbedding>(
-						candidates.subList(0, refinedCutoff));
-			}
-		} else {
-			int secondCutoff = LlmInferenceService.findAdaptiveCutoff(
-					candidates, candidates.size(), minScore,
-					gapMultiplier,
-					ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
-			double maxScore = scored.isEmpty() ? 0 : scored.get(0).score;
-			if (secondCutoff < candidates.size()) {
-				candidates = new ArrayList<LlmInferenceService.ScoredEmbedding>(
-						candidates.subList(0, secondCutoff));
-			}
-			double ratioFloor = maxScore
-					* ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO;
-			List<LlmInferenceService.ScoredEmbedding> strict =
-					new ArrayList<LlmInferenceService.ScoredEmbedding>();
-			for (LlmInferenceService.ScoredEmbedding se : candidates) {
-				if (se.score >= ratioFloor) {
-					strict.add(se);
-				}
-			}
-			candidates = strict;
-			boolean allHaveKeywords = true;
-			for (LlmInferenceService.ScoredEmbedding se : candidates) {
-				if (se.keywordScore == 0) {
-					allHaveKeywords = false;
-					break;
-				}
-			}
-			if (!allHaveKeywords && candidates.size() > topK) {
-				candidates = candidates.subList(0, topK);
-			}
-		}
-
-		// Inter-candidate coherence filter (mirrors production pipeline).
-		// filterByCoherence validates embedding vectors internally.
-		if (candidates.size() >= 3) {
-			candidates = LlmInferenceService.filterByCoherence(candidates);
-		}
+		List<ChartEmbedding> results = LlmInferenceService.filterPipeline(
+				semanticScores, keywordScores, embeddings,
+				queryTermCount, topK, config);
 
 		List<Integer> indices = new ArrayList<Integer>();
-		for (LlmInferenceService.ScoredEmbedding se : candidates) {
-			indices.add(Integer.parseInt(se.embedding.getTextContent()));
+		for (ChartEmbedding ce : results) {
+			indices.add(Integer.parseInt(ce.getTextContent()));
 		}
 		Collections.sort(indices);
 		return indices;
@@ -1244,7 +1145,7 @@ public class LlmInferenceServiceTest {
 		double[] semantic = { 0.72, 0.70, 0.68, 0.35, 0.33, 0.31, 0.29, 0.27 };
 		double[] keyword  = { 0.67, 0.67, 0.67, 0.00, 0.00, 0.00, 0.00, 0.00 };
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 3);
+		int result = runPipeline(semantic, keyword, 0.3, 3);
 
 		assertEquals(3, result,
 				"Specific lab query should return only matching records via gap detection");
@@ -1269,7 +1170,7 @@ public class LlmInferenceServiceTest {
 			keyword[10 + i] = 0.0;
 		}
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 6);
+		int result = runPipeline(semantic, keyword, 0.3, 6);
 
 		assertEquals(10, result,
 				"Broad category query should return keyword-matched records when gap detection fails");
@@ -1289,7 +1190,7 @@ public class LlmInferenceServiceTest {
 			keyword[i] = 0.0;
 		}
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 2);
+		int result = runPipeline(semantic, keyword, 0.3, 2);
 
 		assertTrue(result >= 8 && result <= 9,
 				"Generic query should return records above ratio floor (0.32), got " + result);
@@ -1320,7 +1221,7 @@ public class LlmInferenceServiceTest {
 			keyword[10 + i] = 0.0;
 		}
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 6);
+		int result = runPipeline(semantic, keyword, 0.3, 6);
 
 		assertTrue(result <= 4,
 				"Should not include records with only incidental 'normal' keyword matches; got " + result);
@@ -1345,7 +1246,7 @@ public class LlmInferenceServiceTest {
 			keyword[5 + i] = 0.0;
 		}
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 3);
+		int result = runPipeline(semantic, keyword, 0.3, 3);
 
 		assertEquals(5, result,
 				"When gap detection works, keyword refinement should not reduce the result set");
@@ -1365,7 +1266,7 @@ public class LlmInferenceServiceTest {
 			keyword[i] = 0.0;
 		}
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 2);
+		int result = runPipeline(semantic, keyword, 0.3, 2);
 
 		assertEquals(6, result,
 				"Ratio floor (topScore*0.80=0.40) should exclude records below 80% of top score");
@@ -1387,7 +1288,7 @@ public class LlmInferenceServiceTest {
 			keyword[3 + i] = 0.0;
 		}
 
-		int result = simulatePipeline(semantic, keyword, 0.0, 4);
+		int result = runPipeline(semantic, keyword, 0.0, 4);
 
 		assertTrue(result >= 5 && result <= 6,
 				"With keywordWeight=0, ratio floor should filter low scores, got " + result);
@@ -1413,7 +1314,7 @@ public class LlmInferenceServiceTest {
 			keyword[3 + i] = 0.0;
 		}
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 3);
+		int result = runPipeline(semantic, keyword, 0.3, 3);
 
 		assertEquals(3, result,
 				"Medication query should return only drug orders when they match via prefix");
@@ -1432,7 +1333,7 @@ public class LlmInferenceServiceTest {
 			keyword[i] = 0.0;
 		}
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 3);
+		int result = runPipeline(semantic, keyword, 0.3, 3);
 
 		assertTrue(result >= 8 && result <= 9,
 				"No keyword matches should still return context via ratio floor, got " + result);
@@ -1482,20 +1383,25 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void pipeline_noKeywordMatchesSmoothDistribution_shouldReturnEmpty() {
 		// Models: "HB results over time" — the patient has NO HB results.
-		// All 93 records are vital signs with smooth, similar semantic scores
-		// and ZERO keyword matches. The z-score gate detects that the top
-		// score (0.42) is not a statistical outlier — it's just part of
-		// the noise floor (z ≈ 1.73 < 2.0). Without keyword corroboration,
+		// 93 records: 40 higher-scoring (0.35–0.33, tight cluster of vitals
+		// noise) and 53 lower-scoring (0.26–0.156, other record types).
+		// ZERO keyword matches. The z-score gate detects that the top
+		// score (0.35) is not a statistical outlier — the bimodal spread
+		// yields z ≈ 1.22 < 1.5 threshold. Without keyword corroboration,
 		// these results are unreliable and the pipeline returns empty.
 		int recordCount = 93;
 		double[] semantic = new double[recordCount];
 		double[] keyword = new double[recordCount];
-		for (int i = 0; i < recordCount; i++) {
-			semantic[i] = 0.42 - i * 0.002;
+		for (int i = 0; i < 40; i++) {
+			semantic[i] = 0.35 - i * 0.0005;
 			keyword[i] = 0.0;
 		}
+		for (int i = 0; i < 53; i++) {
+			semantic[40 + i] = 0.26 - i * 0.002;
+			keyword[40 + i] = 0.0;
+		}
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 7);
+		int result = runPipeline(semantic, keyword, 0.3, 7);
 
 		assertEquals(0, result,
 				"Z-score gate should reject smooth distribution with no keyword matches");
@@ -1518,7 +1424,7 @@ public class LlmInferenceServiceTest {
 			keyword[10 + i] = 0.0;
 		}
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 6);
+		int result = runPipeline(semantic, keyword, 0.3, 6);
 
 		assertEquals(10, result,
 				"Keyword refinement should not be clipped by strict floor or topK");
@@ -1543,7 +1449,7 @@ public class LlmInferenceServiceTest {
 			keyword[2 + i] = 0.0;
 		}
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 1);
+		int result = runPipeline(semantic, keyword, 0.3, 1);
 
 		assertEquals(2, result,
 				"Focused query should return only records above strict floor when keywords can't help");
@@ -1571,7 +1477,7 @@ public class LlmInferenceServiceTest {
 		// No keyword matches for "cancer" in any record
 		Arrays.fill(keyword, 0.0);
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 1);
+		int result = runPipeline(semantic, keyword, 0.3, 1);
 
 		assertEquals(2, result,
 				"Ratio-based floor (topScore*0.80=0.304) should exclude Photoallergy at 0.28");
@@ -1593,7 +1499,7 @@ public class LlmInferenceServiceTest {
 			keyword[15 + i] = 0.0;
 		}
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 6);
+		int result = runPipeline(semantic, keyword, 0.3, 6);
 
 		assertEquals(15, result,
 				"Keyword refinement should return all 15 conditions even though topK is 10");
@@ -1619,7 +1525,7 @@ public class LlmInferenceServiceTest {
 			keyword[2 + i] = 0.0;
 		}
 
-		int result = simulatePipeline(semantic, keyword, 0.3, 1);
+		int result = runPipeline(semantic, keyword, 0.3, 1);
 
 		assertEquals(2, result,
 				"Allergy query should return only allergy records via stem-based keyword refinement");
@@ -1663,7 +1569,7 @@ public class LlmInferenceServiceTest {
 		semantic[  4] = 0.15; // [  5]
 		semantic[  0] = 0.14; // [  1]
 
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
+		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
 		// [9] CD4 Count: 988, [86] CD4 Count: 1191
 		assertEquals(Arrays.asList(8, 85),
@@ -1702,138 +1608,10 @@ public class LlmInferenceServiceTest {
 		semantic[ 11] = 0.19; // [ 12]
 		semantic[  7] = 0.17; // [  8]
 
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
+		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
 		// [9] CD4 Count: 988, [86] CD4 Count: 1191
 		assertEquals(Arrays.asList(8, 85),
-				result, "Should return exactly 2 record(s)");
-	}
-
-	@Test
-	public void pipeline_cancerQuery_realData_shouldReturnExactlyTwoRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "does the patient have cancer?" → terms: ["cancer"]. No record
-		// contains literal "cancer". Kaposi sarcoma records ([12],[89]) are
-		// semantically closest. Gap detection separates them from disease records.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("does the patient have cancer?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "cancer" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		assertEquals(0.0, keyword[11], 0.001, "[12] Kaposi sarcoma has no literal cancer match");
-		assertEquals(0.0, keyword[88], 0.001, "[89] Kaposi sarcoma has no literal cancer match");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[ 11] = 0.40; // [ 12]
-		semantic[ 88] = 0.38; // [ 89]
-
-		semantic[  7] = 0.22; // [  8]
-		semantic[ 39] = 0.21; // [ 40]
-		semantic[ 71] = 0.20; // [ 72]
-		semantic[110] = 0.20; // [111]
-		semantic[ 54] = 0.19; // [ 55]
-		semantic[ 52] = 0.19; // [ 53]
-		semantic[ 69] = 0.19; // [ 70]
-		semantic[ 40] = 0.18; // [ 41]
-		semantic[ 68] = 0.18; // [ 69]
-		semantic[ 12] = 0.17; // [ 13]
-		semantic[ 62] = 0.17; // [ 63]
-		semantic[ 66] = 0.17; // [ 67]
-		semantic[ 92] = 0.17; // [ 93]
-		semantic[ 72] = 0.16; // [ 73]
-		semantic[ 29] = 0.16; // [ 30]
-		semantic[ 55] = 0.16; // [ 56]
-
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [12] Kaposi sarcoma: 3.91, [89] Kaposi sarcoma: 3.5
-		assertEquals(Arrays.asList(11, 88),
-				result, "Should return exactly 2 record(s)");
-	}
-
-	@Test
-	public void pipeline_doesHeHaveCancerQuery_realData_shouldReturnExactlyTwoRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "does he have cancer?" → terms: ["cancer"]. Same semantic behavior
-		// as other cancer queries. Kaposi sarcoma records are the targets.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("does he have cancer?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "cancer" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		assertEquals(0.0, keyword[11], 0.001, "[12] Kaposi sarcoma has no literal cancer match");
-		assertEquals(0.0, keyword[88], 0.001, "[89] Kaposi sarcoma has no literal cancer match");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[ 11] = 0.40; // [ 12]
-		semantic[ 88] = 0.38; // [ 89]
-
-		semantic[  7] = 0.22; // [  8]
-		semantic[ 39] = 0.21; // [ 40]
-		semantic[ 71] = 0.20; // [ 72]
-		semantic[ 54] = 0.19; // [ 55]
-		semantic[ 52] = 0.19; // [ 53]
-		semantic[ 40] = 0.18; // [ 41]
-		semantic[ 68] = 0.18; // [ 69]
-		semantic[ 12] = 0.17; // [ 13]
-		semantic[ 62] = 0.17; // [ 63]
-		semantic[ 72] = 0.16; // [ 73]
-
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [12] Kaposi sarcoma: 3.91, [89] Kaposi sarcoma: 3.5
-		assertEquals(Arrays.asList(11, 88),
-				result, "Should return exactly 2 record(s)");
-	}
-
-	@Test
-	public void pipeline_anyCancerQuery_realData_shouldReturnExactlyTwoRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "any cancer?" → terms: ["cancer"]. Same targets as other cancer queries.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("any cancer?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "cancer" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		assertEquals(0.0, keyword[11], 0.001, "[12] Kaposi sarcoma has no literal cancer match");
-		assertEquals(0.0, keyword[88], 0.001, "[89] Kaposi sarcoma has no literal cancer match");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[ 11] = 0.40; // [ 12]
-		semantic[ 88] = 0.38; // [ 89]
-
-		semantic[  7] = 0.22; // [  8]
-		semantic[ 39] = 0.21; // [ 40]
-		semantic[ 54] = 0.19; // [ 55]
-		semantic[ 52] = 0.19; // [ 53]
-		semantic[ 12] = 0.17; // [ 13]
-		semantic[ 62] = 0.17; // [ 63]
-
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [12] Kaposi sarcoma: 3.91, [89] Kaposi sarcoma: 3.5
-		assertEquals(Arrays.asList(11, 88),
 				result, "Should return exactly 2 record(s)");
 	}
 
@@ -1861,49 +1639,7 @@ public class LlmInferenceServiceTest {
 		double[] semantic = new double[FULL_PATIENT_DATASET.length];
 		Arrays.fill(semantic, 0.15);
 
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		assertEquals(Collections.emptyList(), result,
-				"Should return no record(s)");
-	}
-
-	@Test
-	public void pipeline_familyHistoryOfCancerQuery_realData_shouldReturnNoRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "Any family history of cancer?" → expected: 0 records.
-		// Although some records match individual terms ("family", "history"),
-		// no record is semantically related to family cancer history.
-		// All semantic scores are below gate threshold → empty result.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("Any family history of cancer?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "family", "history", "cancer" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		// Some records match individual terms but none match "cancer"
-		assertEquals(0.3333, keyword[3], 0.01, "[4] matches history");
-		assertEquals(0.3333, keyword[5], 0.01, "[6] matches family");
-		assertEquals(0.3333, keyword[6], 0.01, "[7] matches family");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.10);
-
-		// Real model gives all records below the absolute similarity floor
-		// (0.25) for this query. "Family history of cancer" is a specific
-		// concept that no record in the dataset represents. The model gives
-		// Kaposi sarcoma only ~0.25 (cancer concept) and Family planning
-		// ~0.22 (word overlap). All below gate threshold.
-		semantic[3]  = 0.19; // [4] Immunization history — "history" word overlap
-		semantic[5]  = 0.23; // [6] Family planning: Condoms — "family" word overlap
-		semantic[6]  = 0.22; // [7] Family planning: Diaphragm — "family" word overlap
-		semantic[11] = 0.24; // [12] Kaposi sarcoma — cancer concept (below gate)
-		semantic[88] = 0.23; // [89] Kaposi sarcoma — cancer concept (below gate)
-
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
+		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
 		assertEquals(Collections.emptyList(), result,
 				"Should return no record(s)");
@@ -1948,7 +1684,7 @@ public class LlmInferenceServiceTest {
 		semantic[ 11] = 0.15; // [ 12]
 		semantic[ 88] = 0.14; // [ 89]
 
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
+		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
 		// [1] Drug order: Azithromycin (REVISE), [2] Drug order: Azithromycin (NEW), [57] Visit note: Medication adjusted, [92] Visit note: Medication adjusted
 		assertEquals(Arrays.asList(0, 1, 56, 91),
@@ -1989,7 +1725,7 @@ public class LlmInferenceServiceTest {
 		semantic[ 12] = 0.17; // [ 13]
 		semantic[ 62] = 0.17; // [ 63]
 
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
+		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
 		// [8] Condition: TB, [55] Condition: Hypertension
 		assertEquals(Arrays.asList(7, 54),
@@ -2037,7 +1773,7 @@ public class LlmInferenceServiceTest {
 		semantic[  8] = 0.14; // [  9]
 		semantic[ 85] = 0.14; // [ 86]
 
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
+		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
 		// [30] Assessment: Anemia, [56] Assessment: Anemia, [73] Dx: Anemia (PROVISIONAL)
 		assertEquals(Arrays.asList(29, 55, 72),
@@ -2075,7 +1811,7 @@ public class LlmInferenceServiceTest {
 		semantic[ 12] = 0.17; // [ 13]
 		semantic[ 62] = 0.17; // [ 63]
 
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
+		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
 		// [8] Condition: TB, [55] Condition: Hypertension
 		assertEquals(Arrays.asList(7, 54),
@@ -2134,7 +1870,7 @@ public class LlmInferenceServiceTest {
 		semantic[ 11] = 0.14; // [ 12]
 		semantic[ 88] = 0.14; // [ 89]
 
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
+		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
 		// [40] Dx: HIV Disease (CONFIRMED), [41] Assessment: HIV Disease, [69] Assessment: HIV Disease, [70] Dx: HIV Disease (PROVISIONAL), [72] Dx: HIV Disease (CONFIRMED), [111] Dx: HIV Disease (CONFIRMED)
 		assertEquals(Arrays.asList(39, 40, 68, 69, 71, 110),
@@ -2173,7 +1909,7 @@ public class LlmInferenceServiceTest {
 		semantic[ 11] = 0.15; // [ 12]
 		semantic[ 88] = 0.14; // [ 89]
 
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
+		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
 		// [5] Allergy: Beef, [54] Allergy: Fomepizole
 		assertEquals(Arrays.asList(4, 53),
@@ -2212,7 +1948,7 @@ public class LlmInferenceServiceTest {
 		semantic[ 52] = 0.16; // [ 53]
 		semantic[ 12] = 0.15; // [ 13]
 
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
+		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
 		// [51] Cough visit note
 		assertEquals(Arrays.asList(50),
@@ -2249,7 +1985,7 @@ public class LlmInferenceServiceTest {
 		semantic[ 39] = 0.18; // [ 40]
 		semantic[ 11] = 0.15; // [ 12]
 
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
+		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
 		// [5] Allergy: Beef, [54] Allergy: Fomepizole
 		assertEquals(Arrays.asList(4, 53),
@@ -2284,7 +2020,7 @@ public class LlmInferenceServiceTest {
 		semantic[ 54] = 0.19; // [ 55]
 		semantic[ 39] = 0.18; // [ 40]
 
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
+		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
 		// [5] Allergy: Beef, [54] Allergy: Fomepizole
 		assertEquals(Arrays.asList(4, 53),
@@ -2391,7 +2127,7 @@ public class LlmInferenceServiceTest {
 		semantic[145] = 0.40; // [146] Blood O2: 88.0
 		semantic[151] = 0.40; // [152] Blood O2: 88.0
 
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
+		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
 
 		// All 40 BP + weight + temperature records (24 BP + 7 weight + 9 temp)
 		assertEquals(Arrays.asList(17, 18, 22, 23, 25, 26, 31, 33, 36, 38,
@@ -2400,93 +2136,6 @@ public class LlmInferenceServiceTest {
 				128, 129, 131, 137, 138, 143, 144, 147, 148, 150),
 				result, "Should return all 40 BP + weight + temperature records");
 	}
-
-	@Test
-	public void pipeline_historyOfCancerQuery_realData_shouldReturnExactlyTwoRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "any history of cancer?" → terms: ["history", "cancer"] (N=2).
-		// Only record [4] ("Immunization history") matches "history" (1/2 = 0.5).
-		// No record contains literal "cancer". Kaposi sarcoma ([12],[89]) is
-		// semantically closest to "cancer" but has zero keyword match.
-		// With keyword bonus threshold (≥2 terms for N=2), NO record gets bonus.
-		// Gap detection separates the 2 Kaposi sarcoma records from the rest.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("any history of cancer?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "history", "cancer" }, queryTerms,
-				"'history' and 'cancer' should remain after stopword removal");
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		// Only "Immunization history" matches "history" (1/2 terms = 0.5)
-		assertEquals(0.5, keyword[3], 0.001,
-				"[4] 'history' should match 'Immunization history'");
-		// Kaposi sarcoma records have zero keyword match
-		assertEquals(0.0, keyword[11], 0.001,
-				"[12] Kaposi sarcoma should not match 'history' or 'cancer'");
-		assertEquals(0.0, keyword[88], 0.001,
-				"[89] Kaposi sarcoma should not match 'history' or 'cancer'");
-		// All other records should also have zero keyword match
-		for (int i = 0; i < keyword.length; i++) {
-			if (i == 3) continue; // skip immunization history
-			assertEquals(0.0, keyword[i], 0.001,
-					"Record [" + (i + 1) + "] should not match 'history' or 'cancer'");
-		}
-
-		// Semantic scores: Kaposi sarcoma is semantically closest to "cancer".
-		// Disease/condition records have moderate similarity. Vitals, meds,
-		// frequencies, etc. have low similarity. The key gap is between the
-		// 2 Kaposi sarcoma records (0.38-0.40) and all others (≤0.22).
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.10);
-
-		// Cancer-related — clearly the highest semantic similarity
-		semantic[11] = 0.40; // [12] Kaposi sarcoma oral: 3.91
-		semantic[88] = 0.38; // [89] Kaposi sarcoma oral: 3.5
-
-		// Disease/condition records — moderate semantic similarity to "cancer"
-		semantic[3]   = 0.39; // [4] Immunization history — model inflates due to "history" word overlap
-		semantic[39]  = 0.21; // [40] HIV Disease
-		semantic[71]  = 0.20; // [72] HIV Disease
-		semantic[110] = 0.20; // [111] HIV Disease
-		semantic[7]   = 0.19; // [8] Condition: TB
-		semantic[52]  = 0.19; // [53] TB
-		semantic[69]  = 0.19; // [70] HIV Disease
-		semantic[54]  = 0.18; // [55] Condition: Hypertension
-		semantic[40]  = 0.18; // [41] Assessment: HIV Disease
-		semantic[68]  = 0.18; // [69] Assessment: HIV Disease
-		semantic[12]  = 0.17; // [13] Assessment: TB
-		semantic[62]  = 0.17; // [63] Assessment: Pneumonia
-		semantic[66]  = 0.17; // [67] Malaria
-		semantic[92]  = 0.17; // [93] Hypertension
-		semantic[134] = 0.17; // [135] Assessment: TB
-		semantic[135] = 0.17; // [136] Assessment: TB
-		semantic[21]  = 0.16; // [22] Gastroenteritis
-		semantic[61]  = 0.16; // [62] Skin Infection
-		semantic[72]  = 0.16; // [73] Anemia
-		semantic[127] = 0.16; // [128] Asthma
-		semantic[146] = 0.16; // [147] Diabetes
-		semantic[29]  = 0.16; // [30] Assessment: Anemia
-		semantic[55]  = 0.16; // [56] Assessment: Anemia
-		semantic[105] = 0.16; // [106] Assessment: Malaria
-		semantic[49]  = 0.15; // [50] Assessment: Diabetes
-		semantic[90]  = 0.15; // [91] Assessment: UTI
-		semantic[118] = 0.15; // [119] Assessment: UTI
-		semantic[89]  = 0.14; // [90] Photoallergy
-		semantic[141] = 0.14; // [142] Photoallergy
-		semantic[8]   = 0.14; // [9] CD4 Count
-		semantic[85]  = 0.14; // [86] CD4 Count
-
-		List<Integer> result = simulatePipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [12] Kaposi sarcoma: 3.91, [89] Kaposi sarcoma: 3.5
-		assertEquals(Arrays.asList(11, 88),
-				result, "Query 'any history of cancer?' should return exactly 2 Kaposi sarcoma records");
-	}
-
 
 	private static Date makeDate(int year, int month, int day) {
 		Calendar cal = Calendar.getInstance();
@@ -2532,36 +2181,39 @@ public class LlmInferenceServiceTest {
 
 	/**
 	 * Computes real semantic scores and optionally captures embedding vectors
-	 * for inter-candidate coherence filtering.
+	 * for inter-candidate coherence filtering. Mirrors production: strips
+	 * dataset prefix/date, then embeds with getEmbeddingPrefix + textContent.
 	 */
 	private static double[] computeRealSemanticScoresWithVectors(
 			org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider provider,
 			String query, String[] dataset, float[][] embeddingVectors) {
 		String normalizedQuery = LlmInferenceService.stripQueryStopwords(query);
-		float[] queryVector = provider.embed(normalizedQuery);
+		String embeddingQuery = LlmInferenceService.buildEmbeddingQuery(normalizedQuery);
+		float[] queryVector = provider.embed(
+				ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX + embeddingQuery);
 
 		double[] scores = new double[dataset.length];
 		for (int i = 0; i < dataset.length; i++) {
-			String text = dataset[i];
-			float[] docVector = provider.embed(text);
+			String resourceType = inferResourceType(dataset[i]);
+			String textContent = stripDatasetPrefixAndDate(dataset[i]);
+			String embeddingText = ChartSearchAiConstants.getEmbeddingPrefix(
+					resourceType, textContent) + textContent;
+			float[] docVector = provider.embed(embeddingText);
 			if (embeddingVectors != null) {
 				embeddingVectors[i] = docVector;
 			}
-			double dot = 0, normA = 0, normB = 0;
-			for (int j = 0; j < queryVector.length; j++) {
-				dot += queryVector[j] * docVector[j];
-				normA += queryVector[j] * queryVector[j];
-				normB += docVector[j] * docVector[j];
-			}
-			double denom = Math.sqrt(normA) * Math.sqrt(normB);
-			scores[i] = denom == 0 ? 0 : dot / denom;
+			scores[i] = LlmInferenceService.cosineSimilarity(queryVector, docVector);
 		}
 		return scores;
 	}
 
 	/**
-	 * Runs the full pipeline simulation using real semantic scores from the
+	 * Runs the production pipeline using real semantic scores from the
 	 * ONNX model combined with keyword scores from the dataset.
+	 * Calls the exact same static production methods as the live system:
+	 * {@link EmbeddingIndexer#buildEmbeddings} for indexing and
+	 * {@link LlmInferenceService#findSimilar(List, EmbeddingProvider, String, int, String, LlmInferenceService.PipelineConfig)}
+	 * for querying — zero simulation.
 	 */
 	private static List<Integer> runRealModelPipeline(String query, int topK) {
 		return runRealModelPipeline(query, topK, FULL_PATIENT_DATASET);
@@ -2573,21 +2225,31 @@ public class LlmInferenceServiceTest {
 				new org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider(
 						MODEL_PATH, VOCAB_PATH);
 		try {
-			float[][] embeddingVectors = new float[dataset.length][];
-			double[] semantic = computeRealSemanticScoresWithVectors(
-					provider, query, dataset, embeddingVectors);
-
-			String normalized = LlmInferenceService.stripQueryStopwords(query);
-			String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-
-			double[] keyword = new double[dataset.length];
+			// Build embeddings using the exact production indexing code
+			List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> records =
+					new ArrayList<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord>();
 			for (int i = 0; i < dataset.length; i++) {
-				keyword[i] = LlmInferenceService.computeKeywordScore(
-						queryTerms, dataset[i]);
+				String resourceType = inferResourceType(dataset[i]);
+				String textContent = stripDatasetPrefixAndDate(dataset[i]);
+				records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+						resourceType, i, textContent, null));
 			}
+			List<ChartEmbedding> allEmbeddings =
+					org.openmrs.module.chartsearchai.api.EmbeddingIndexer.buildEmbeddings(
+							records, provider);
 
-			return simulatePipelineIndices(semantic, keyword, 0.3,
-					queryTerms.length, topK, embeddingVectors);
+			// Query using the exact production query code
+			List<ChartEmbedding> results = LlmInferenceService.findSimilar(
+					allEmbeddings, provider, query, topK,
+					ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
+					LlmInferenceService.PipelineConfig.defaults());
+
+			List<Integer> indices = new ArrayList<Integer>();
+			for (ChartEmbedding ce : results) {
+				indices.add(ce.getResourceId());
+			}
+			Collections.sort(indices);
+			return indices;
 		} finally {
 			provider.close();
 		}
@@ -2702,6 +2364,128 @@ public class LlmInferenceServiceTest {
 				result, "Should return exactly 2 Kaposi sarcoma records");
 	}
 
+	/**
+	 * Integration test that exercises the full production code path for
+	 * "any history of cancer?" — from record embedding (with
+	 * {@link ChartSearchAiConstants#getEmbeddingPrefix}, matching
+	 * {@link org.openmrs.module.chartsearchai.api.EmbeddingIndexer})
+	 * through query preprocessing ({@link LlmInferenceService#buildEmbeddingQuery},
+	 * matching {@link LlmInferenceService#findSimilar}) to the complete
+	 * {@link LlmInferenceService#filterPipeline} with production defaults.
+	 * Uses the real ONNX embedding model and the first patient dataset.
+	 *
+	 * <p>The dataset text format is {@code "prefix: (date) serializer_output"}
+	 * but production stores just {@code serializer_output} as textContent and
+	 * embeds {@code embedding_prefix + serializer_output} (no date). This test
+	 * strips the dataset prefix and date to reconstruct the production format,
+	 * Calls the actual production static methods
+	 * {@link org.openmrs.module.chartsearchai.api.EmbeddingIndexer#buildEmbeddings}
+	 * and {@link LlmInferenceService#findSimilar(List, EmbeddingProvider, String, int, String, LlmInferenceService.PipelineConfig)}
+	 * directly — zero simulation, zero reimplementation.
+	 */
+	@Test
+	public void integration_historyOfCancerQuery_shouldReturnOnly2Records() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline("any history of cancer?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		assertEquals(2, result.size(),
+				"'any history of cancer?' should return exactly 2 records");
+	}
+
+	@Test
+	public void integration_anemicQuery_shouldReturnExactly3Records() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline("is the patient anemic?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		assertEquals(Arrays.asList(29, 55, 72), result,
+				"'is the patient anemic?' should return the 3 anemia records");
+	}
+
+	@Test
+	public void integration_stdAbbreviationQuery_shouldReturnAll6HivRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline("any STD?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		assertEquals(Arrays.asList(39, 40, 68, 69, 71, 110), result,
+				"'any STD?' should return the same 6 HIV records as the full phrase");
+	}
+
+	/** Known prefixes in the dataset text format. Order matters — longer
+	 * prefixes must be checked before shorter ones that share a prefix. */
+	private static final String[] DATASET_PREFIXES = {
+			"Medication prescription: ",
+			"Lab test order: ",
+			"Clinical observation: ",
+			"Clinical diagnosis: ",
+			"Medical condition: ",
+			"Patient allergy: ",
+			"Program enrollment: ",
+			"Medication dispensed: "
+	};
+
+	private static final java.util.regex.Pattern DATE_PREFIX_PATTERN =
+			java.util.regex.Pattern.compile("^\\(\\d{4}-\\d{2}-\\d{2}\\)\\s*");
+
+	/**
+	 * Strips the dataset-format prefix and optional date to recover the raw
+	 * serializer output that production stores as
+	 * {@link ChartEmbedding#getTextContent()}.
+	 *
+	 * <p>Dataset format: {@code "Clinical observation: (2025-10-30) Test — Weight (kg): 94.0 kg"}
+	 * <br>Production textContent: {@code "Test — Weight (kg): 94.0 kg"}
+	 */
+	private static String stripDatasetPrefixAndDate(String datasetText) {
+		String text = datasetText;
+		for (String prefix : DATASET_PREFIXES) {
+			if (text.startsWith(prefix)) {
+				text = text.substring(prefix.length());
+				break;
+			}
+		}
+		java.util.regex.Matcher m = DATE_PREFIX_PATTERN.matcher(text);
+		if (m.find()) {
+			text = text.substring(m.end());
+		}
+		return text;
+	}
+
+	/**
+	 * Infers resource type from the serialized text prefix, matching the
+	 * resource types assigned by
+	 * {@link org.openmrs.module.chartsearchai.serializer.PatientRecordLoader}.
+	 */
+	private static String inferResourceType(String text) {
+		if (text.startsWith("Medication prescription:")
+				|| text.startsWith("Lab test order:")) {
+			return ChartSearchAiConstants.RESOURCE_TYPE_ORDER;
+		}
+		if (text.startsWith("Medical condition:")) {
+			return ChartSearchAiConstants.RESOURCE_TYPE_CONDITION;
+		}
+		if (text.startsWith("Clinical diagnosis:")) {
+			return ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS;
+		}
+		if (text.startsWith("Patient allergy:")) {
+			return ChartSearchAiConstants.RESOURCE_TYPE_ALLERGY;
+		}
+		if (text.startsWith("Program enrollment:")) {
+			return ChartSearchAiConstants.RESOURCE_TYPE_PROGRAM;
+		}
+		if (text.startsWith("Medication dispensed:")) {
+			return ChartSearchAiConstants.RESOURCE_TYPE_MEDICATION_DISPENSE;
+		}
+		return ChartSearchAiConstants.RESOURCE_TYPE_OBS;
+	}
+
 	@Test
 	public void realModel_familyHistoryOfCancerQuery_shouldReturnNoRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
@@ -2712,6 +2496,30 @@ public class LlmInferenceServiceTest {
 
 		assertEquals(Collections.emptyList(),
 				result, "Should return no records");
+	}
+
+	@Test
+	public void realModel_doesHeHaveCancerQuery_shouldReturnKaposiSarcomaOnly() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"does he have cancer?", 10);
+
+		assertEquals(Arrays.asList(11, 88),
+				result, "Should return exactly 2 Kaposi sarcoma records");
+	}
+
+	@Test
+	public void realModel_anyCancerQuery_shouldReturnKaposiSarcomaOnly() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"any cancer?", 10);
+
+		assertEquals(Arrays.asList(11, 88),
+				result, "Should return exactly 2 Kaposi sarcoma records");
 	}
 
 	@Test
@@ -2861,8 +2669,11 @@ public class LlmInferenceServiceTest {
 				// Collect and sort by semantic score descending
 				double[][] indexed = new double[FULL_PATIENT_DATASET.length][3];
 				for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
+					String rt = inferResourceType(FULL_PATIENT_DATASET[i]);
+					String tc = stripDatasetPrefixAndDate(FULL_PATIENT_DATASET[i]);
+					String kwText = ChartSearchAiConstants.getEmbeddingPrefix(rt, tc) + tc;
 					double kw = LlmInferenceService.computeKeywordScore(
-							queryTerms, FULL_PATIENT_DATASET[i]);
+							queryTerms, kwText);
 					indexed[i][0] = i;
 					indexed[i][1] = semantic[i];
 					indexed[i][2] = kw;
@@ -2891,6 +2702,232 @@ public class LlmInferenceServiceTest {
 		}
 		// This test always passes — it's just for diagnostics
 		assertTrue(true);
+	}
+
+
+	// --------------------------------------------------------
+	// Direct unit tests for isGapCoherent, growCluster, and
+	// rescueBelowFloor.
+	// --------------------------------------------------------
+
+	private static LlmInferenceService.ScoredEmbedding makeScoredEmbeddingWithVector(
+			double score, double keywordScore, double semanticScore,
+			float[] vector, int id) {
+		ChartEmbedding ce = new ChartEmbedding();
+		ce.setResourceType("obs");
+		ce.setTextContent(String.valueOf(id));
+		ce.setEmbeddingId(id);
+		ce.setEmbeddingVector(vector);
+		return new LlmInferenceService.ScoredEmbedding(ce, score, keywordScore, semanticScore);
+	}
+
+	@Test
+	public void isGapCoherent_shouldReturnTrueWhenCrossBoundaryCosineHighEnough() {
+		// 6 records: 3 above cutoff, 3 below. All share a similar vector →
+		// high cross-boundary cosine → gap is intra-topic.
+		float[] v1 = { 1.0f, 0.0f, 0.0f };
+		float[] v2 = { 0.95f, 0.1f, 0.0f };
+		float[] v3 = { 0.9f, 0.2f, 0.0f };
+		float[] v4 = { 0.85f, 0.25f, 0.0f };
+		float[] v5 = { 0.8f, 0.3f, 0.0f };
+		float[] v6 = { 0.75f, 0.35f, 0.0f };
+
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbeddingWithVector(0.50, 0, 0.50, v1, 1),
+				makeScoredEmbeddingWithVector(0.48, 0, 0.48, v2, 2),
+				makeScoredEmbeddingWithVector(0.46, 0, 0.46, v3, 3),
+				makeScoredEmbeddingWithVector(0.30, 0, 0.30, v4, 4),
+				makeScoredEmbeddingWithVector(0.28, 0, 0.28, v5, 5),
+				makeScoredEmbeddingWithVector(0.26, 0, 0.26, v6, 6));
+
+		assertTrue(LlmInferenceService.isGapCoherent(scored, 3, 0.47),
+				"Cross-boundary cosine is high — gap is intra-topic");
+	}
+
+	@Test
+	public void isGapCoherent_shouldReturnFalseWhenCrossBoundaryCosineIsLow() {
+		// 3 above cutoff point one way, 3 below point another → low cross-boundary cosine.
+		float[] vA = { 1.0f, 0.0f, 0.0f };
+		float[] vB = { 0.0f, 1.0f, 0.0f };
+
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbeddingWithVector(0.50, 0, 0.50, vA, 1),
+				makeScoredEmbeddingWithVector(0.48, 0, 0.48, vA, 2),
+				makeScoredEmbeddingWithVector(0.46, 0, 0.46, vA, 3),
+				makeScoredEmbeddingWithVector(0.30, 0, 0.30, vB, 4),
+				makeScoredEmbeddingWithVector(0.28, 0, 0.28, vB, 5),
+				makeScoredEmbeddingWithVector(0.26, 0, 0.26, vB, 6));
+
+		assertFalse(LlmInferenceService.isGapCoherent(scored, 3, 0.47),
+				"Cross-boundary cosine is low — gap is inter-topic");
+	}
+
+	@Test
+	public void isGapCoherent_shouldReturnFalseWhenCutoffIsZeroOrBeyondSize() {
+		float[] v = { 1.0f, 0.0f };
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbeddingWithVector(0.50, 0, 0.50, v, 1),
+				makeScoredEmbeddingWithVector(0.40, 0, 0.40, v, 2));
+
+		assertFalse(LlmInferenceService.isGapCoherent(scored, 0, 0.47));
+		assertFalse(LlmInferenceService.isGapCoherent(scored, 2, 0.47));
+	}
+
+	@Test
+	public void isGapCoherent_shouldReturnFalseWhenVectorsAreNull() {
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbeddingWithVector(0.50, 0, 0.50, null, 1),
+				makeScoredEmbeddingWithVector(0.48, 0, 0.48, null, 2),
+				makeScoredEmbeddingWithVector(0.30, 0, 0.30, null, 3),
+				makeScoredEmbeddingWithVector(0.28, 0, 0.28, null, 4));
+
+		assertFalse(LlmInferenceService.isGapCoherent(scored, 2, 0.47),
+				"Null vectors → no pairs → should return false");
+	}
+
+	@Test
+	public void growCluster_shouldAddCoherentCandidatesBeyondSeed() {
+		// Seed: first 2 records. Records 3-4 are coherent with seed (similar
+		// vectors). Record 5 is orthogonal → should not be included.
+		float[] vA = { 1.0f, 0.0f, 0.0f };
+		float[] vSimilar = { 0.95f, 0.1f, 0.0f };
+		float[] vOrthogonal = { 0.0f, 1.0f, 0.0f };
+
+		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+				makeScoredEmbeddingWithVector(0.50, 0, 0.50, vA, 1),
+				makeScoredEmbeddingWithVector(0.48, 0, 0.48, vA, 2),
+				makeScoredEmbeddingWithVector(0.30, 0, 0.30, vSimilar, 3),
+				makeScoredEmbeddingWithVector(0.28, 0, 0.28, vSimilar, 4),
+				makeScoredEmbeddingWithVector(0.20, 0, 0.20, vOrthogonal, 5));
+
+		List<LlmInferenceService.ScoredEmbedding> result =
+				LlmInferenceService.growCluster(candidates, 2, 0.47);
+
+		assertEquals(4, result.size(),
+				"Seed (2) + 2 coherent candidates = 4; orthogonal excluded");
+	}
+
+	@Test
+	public void growCluster_shouldReturnAllWhenSeedIsEntireList() {
+		float[] v = { 1.0f, 0.0f };
+		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+				makeScoredEmbeddingWithVector(0.50, 0, 0.50, v, 1),
+				makeScoredEmbeddingWithVector(0.48, 0, 0.48, v, 2));
+
+		List<LlmInferenceService.ScoredEmbedding> result =
+				LlmInferenceService.growCluster(candidates, 2, 0.47);
+
+		assertEquals(2, result.size());
+	}
+
+	@Test
+	public void growCluster_shouldSkipCandidatesWithNullVectors() {
+		float[] v = { 1.0f, 0.0f };
+		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+				makeScoredEmbeddingWithVector(0.50, 0, 0.50, v, 1),
+				makeScoredEmbeddingWithVector(0.48, 0, 0.48, v, 2),
+				makeScoredEmbeddingWithVector(0.30, 0, 0.30, null, 3));
+
+		List<LlmInferenceService.ScoredEmbedding> result =
+				LlmInferenceService.growCluster(candidates, 2, 0.47);
+
+		assertEquals(2, result.size(),
+				"Null-vector candidate should not be added");
+	}
+
+	@Test
+	public void growCluster_shouldGrowTransitively() {
+		// Record 3 is coherent with seed. Record 4 is coherent with
+		// record 3 but not with the seed. After first iteration adds 3,
+		// second iteration should add 4 through transitivity.
+		float[] vSeed = { 1.0f, 0.0f, 0.0f };
+		float[] vBridge = { 0.7f, 0.7f, 0.0f }; // cos with seed ≈ 0.71, cos with far ≈ 0.71
+		float[] vFar = { 0.0f, 1.0f, 0.0f }; // cos with seed ≈ 0, cos with bridge ≈ 0.71
+
+		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+				makeScoredEmbeddingWithVector(0.50, 0, 0.50, vSeed, 1),
+				makeScoredEmbeddingWithVector(0.40, 0, 0.40, vBridge, 2),
+				makeScoredEmbeddingWithVector(0.30, 0, 0.30, vFar, 3));
+
+		List<LlmInferenceService.ScoredEmbedding> result =
+				LlmInferenceService.growCluster(candidates, 1, 0.47);
+
+		assertEquals(3, result.size(),
+				"Transitive growth: seed→bridge→far");
+	}
+
+	@Test
+	public void rescueBelowFloor_shouldRecoverCoherentBelowFloorRecords() {
+		// Cluster: 3 records with slightly different but similar vectors.
+		// This creates a minClusterCoherence < 1.0, allowing rescue of
+		// below-floor records that meet the threshold.
+		float[] v1 = { 1.0f, 0.0f, 0.0f };
+		float[] v2 = { 0.95f, 0.1f, 0.0f };
+		float[] v3 = { 0.9f, 0.15f, 0.0f };
+		// Similar to cluster — should be rescued
+		float[] vSimilar = { 0.92f, 0.12f, 0.0f };
+		// Orthogonal — should NOT be rescued
+		float[] vOrthogonal = { 0.0f, 1.0f, 0.0f };
+
+		List<LlmInferenceService.ScoredEmbedding> cluster = new ArrayList<LlmInferenceService.ScoredEmbedding>(
+				Arrays.asList(
+						makeScoredEmbeddingWithVector(0.50, 0, 0.50, v1, 1),
+						makeScoredEmbeddingWithVector(0.48, 0, 0.48, v2, 2),
+						makeScoredEmbeddingWithVector(0.46, 0, 0.46, v3, 3)));
+
+		// Full scored list includes cluster + below-floor records
+		List<LlmInferenceService.ScoredEmbedding> scored = new ArrayList<LlmInferenceService.ScoredEmbedding>(
+				Arrays.asList(
+						makeScoredEmbeddingWithVector(0.50, 0, 0.50, v1, 1),
+						makeScoredEmbeddingWithVector(0.48, 0, 0.48, v2, 2),
+						makeScoredEmbeddingWithVector(0.46, 0, 0.46, v3, 3),
+						makeScoredEmbeddingWithVector(0.10, 0, 0.10, vSimilar, 4),
+						makeScoredEmbeddingWithVector(0.08, 0, 0.08, vOrthogonal, 5)));
+
+		List<LlmInferenceService.ScoredEmbedding> result =
+				LlmInferenceService.rescueBelowFloor(cluster, scored, 3);
+
+		assertEquals(4, result.size(),
+				"Should rescue the coherent below-floor record (id=4) but not the orthogonal one");
+	}
+
+	@Test
+	public void rescueBelowFloor_shouldReturnUnchangedWhenAdaptiveCutoffBeyondScored() {
+		float[] v = { 1.0f, 0.0f };
+		List<LlmInferenceService.ScoredEmbedding> cluster = Arrays.asList(
+				makeScoredEmbeddingWithVector(0.50, 0, 0.50, v, 1),
+				makeScoredEmbeddingWithVector(0.48, 0, 0.48, v, 2),
+				makeScoredEmbeddingWithVector(0.46, 0, 0.46, v, 3));
+
+		List<LlmInferenceService.ScoredEmbedding> result =
+				LlmInferenceService.rescueBelowFloor(cluster, cluster, 3);
+
+		assertEquals(3, result.size(),
+				"No below-floor records to check");
+	}
+
+	@Test
+	public void rescueBelowFloor_shouldNotRescueRecordsAlreadyInCluster() {
+		float[] v = { 1.0f, 0.0f };
+		List<LlmInferenceService.ScoredEmbedding> cluster = new ArrayList<LlmInferenceService.ScoredEmbedding>(
+				Arrays.asList(
+						makeScoredEmbeddingWithVector(0.50, 0, 0.50, v, 1),
+						makeScoredEmbeddingWithVector(0.48, 0, 0.48, v, 2),
+						makeScoredEmbeddingWithVector(0.46, 0, 0.46, v, 3)));
+
+		// scored contains the same records (same IDs) in the below-floor range
+		List<LlmInferenceService.ScoredEmbedding> scored = new ArrayList<LlmInferenceService.ScoredEmbedding>(
+				Arrays.asList(
+						makeScoredEmbeddingWithVector(0.50, 0, 0.50, v, 1),
+						makeScoredEmbeddingWithVector(0.48, 0, 0.48, v, 2),
+						makeScoredEmbeddingWithVector(0.46, 0, 0.46, v, 3),
+						makeScoredEmbeddingWithVector(0.10, 0, 0.10, v, 1)));
+
+		List<LlmInferenceService.ScoredEmbedding> result =
+				LlmInferenceService.rescueBelowFloor(cluster, scored, 3);
+
+		assertEquals(3, result.size(),
+				"Should not duplicate records already in cluster");
 	}
 
 }

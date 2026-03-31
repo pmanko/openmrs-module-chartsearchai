@@ -64,13 +64,13 @@ public class ChartSearchAiConstants {
 	 * top semantic score when fewer than {@link #ADAPTIVE_MIN_RECORDS}
 	 * records match any query keyword. Without keyword corroboration, the
 	 * top semantic score must be a statistical outlier — not just part of
-	 * the noise floor. A z-score of 2.0 means the best match is in the
-	 * top 2.3% of the score distribution, indicating genuine semantic
+	 * the noise floor. A z-score of 1.5 means the best match is in the
+	 * top ~6.7% of the score distribution, indicating genuine semantic
 	 * affinity rather than the embedding model grouping similar record
 	 * types together (e.g. all lab tests scoring ~0.27 for "HB results").
 	 * This threshold automatically adapts to any embedding model and
 	 * dataset size since it is relative to the score distribution. */
-	public static final double ZERO_KEYWORD_MIN_Z_SCORE = 2.0;
+	public static final double ZERO_KEYWORD_MIN_Z_SCORE = 1.5;
 
 	/** Minimum number of records required for the z-score gate to
 	 * activate. Below this threshold, the score distribution has too
@@ -88,6 +88,18 @@ public class ChartSearchAiConstants {
 	 */
 	public static final double DEFAULT_MIN_SCORE_GAP = 0.10;
 
+	/** Absolute coherence floor below which a candidate is a true outlier.
+	 * If a candidate flagged for removal by the coherence gap detector has
+	 * average pairwise coherence at or above this value, the cut is
+	 * suppressed — the candidate genuinely belongs to the same topic.
+	 * Prevents duplicate/near-duplicate embeddings (identical text → cosine
+	 * 1.0 between them) from inflating the coherence range and making a
+	 * same-topic record look like an outlier. Empirically: same-topic
+	 * candidates removed incorrectly have coherence ~0.91+, while true
+	 * cross-topic outliers have coherence ~0.49-. Value of 0.70 sits
+	 * well between these ranges. */
+	public static final double COHERENCE_SAME_TOPIC_FLOOR = 0.70;
+
 	/** Minimum gap for the second-pass gap detection. The second pass
 	 * reuses the primary gap multiplier ({@link #DEFAULT_SCORE_GAP_MULTIPLIER})
 	 * but with a much lower absolute floor than the first pass
@@ -102,6 +114,15 @@ public class ChartSearchAiConstants {
 	 * with the score range of the current query. */
 	public static final double REFINEMENT_ADAPTIVE_GAP_RATIO = 0.10;
 
+	/** Minimum fraction of the top semantic score that a keyword-matched
+	 * record must have to be considered genuinely relevant when the
+	 * refinement path's gap detection finds an intra-topic gap (validated
+	 * by cross-boundary cosine). This separates records that are
+	 * semantically close to the query intent (e.g. Weight for a "blood
+	 * pressure, weight, and temperature" query) from coincidental keyword
+	 * matches (e.g. Blood Oxygen matching "blood"). */
+	public static final double REFINEMENT_SEMANTIC_RATIO = 0.70;
+
 	/** Gap multiplier for inter-candidate coherence outlier detection.
 	 * Moderate sensitivity — only removes clear topic outliers. */
 	public static final double COHERENCE_GAP_MULTIPLIER = 2.0;
@@ -114,8 +135,27 @@ public class ChartSearchAiConstants {
 	 * {@link #COHERENCE_ADAPTIVE_GAP_RATIO} was calibrated for candidate
 	 * sets of this size. For smaller sets, the gap ratio is scaled up by
 	 * √((REFERENCE−1) / (n−1)) to account for the higher variance in
-	 * coherence estimates (fewer pairwise comparisons per candidate). */
-	public static final int COHERENCE_REFERENCE_N = 10;
+	 * coherence estimates (fewer pairwise comparisons per candidate).
+	 * Value of 5 means: for n=4 the scale is modest (√(4/3)≈1.15);
+	 * for n≥5 the scale is 1.0 (no inflation). The coherence filter
+	 * is not called for n&lt;4 (too few pairwise comparisons). */
+	public static final int COHERENCE_REFERENCE_N = 5;
+
+
+	public static final String GP_EMBEDDING_GAP_VALIDATION_COSINE_THRESHOLD =
+			"chartsearchai.embedding.gapValidationCosineThreshold";
+
+	/** Cosine similarity threshold for validating whether a gap in the
+	 * score distribution is intra-topic (records on both sides belong to
+	 * the same broad topic, e.g. different vital sign types) or
+	 * inter-topic (a real relevance boundary). When the average cosine
+	 * between the records just above and below the gap meets or exceeds
+	 * this threshold, the gap is considered intra-topic and the second-pass
+	 * cut is skipped. Value of 0.47 was determined empirically: medical
+	 * records within the same broad category (all vitals) typically have
+	 * inter-record cosine >= 0.47, while cross-category pairs (vital vs
+	 * encounter note or condition) are typically below. */
+	public static final double DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD = 0.47;
 
 	public static final String GP_RETRIEVAL_PIPELINE = "chartsearchai.retrieval.pipeline";
 

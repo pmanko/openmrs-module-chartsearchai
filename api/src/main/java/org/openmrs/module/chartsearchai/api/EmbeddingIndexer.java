@@ -71,28 +71,16 @@ public class EmbeddingIndexer {
 
 		// Build all embeddings first so the patient is never without data
 		List<SerializedRecord> records = recordLoader.loadAll(patient);
-		List<ChartEmbedding> newEmbeddings = new java.util.ArrayList<ChartEmbedding>(records.size());
-		int failed = 0;
-		for (SerializedRecord record : records) {
-			try {
-				ChartEmbedding ce = new ChartEmbedding();
-				ce.setPatient(patient);
-				ce.setResourceType(record.getResourceType());
-				ce.setResourceId(record.getResourceId());
-				ce.setTextContent(record.getText());
-				String embeddingText = ChartSearchAiConstants.getEmbeddingPrefix(
-						record.getResourceType(), record.getText()) + record.getText();
-				ce.setEmbeddingVector(embeddingProvider.embed(embeddingText));
-				ce.setDateCreated(now);
-				newEmbeddings.add(ce);
-			}
-			catch (Exception e) {
-				failed++;
-				log.warn("Failed to embed {} [id={}] for patient [id={}]: {}",
-						record.getResourceType(), record.getResourceId(),
-						patient.getPatientId(), e.getMessage());
-			}
+		List<ChartEmbedding> newEmbeddings = buildEmbeddings(records, embeddingProvider);
+
+		// Set patient and timestamp on each embedding (buildEmbeddings
+		// intentionally omits these so it stays DAO/context-free).
+		for (ChartEmbedding ce : newEmbeddings) {
+			ce.setPatient(patient);
+			ce.setDateCreated(now);
 		}
+
+		int failed = records.size() - newEmbeddings.size();
 		if (failed > 0) {
 			log.warn("Skipped {} of {} records during indexing of patient [id={}]",
 					failed, records.size(), patient.getPatientId());
@@ -198,6 +186,39 @@ public class EmbeddingIndexer {
 		} else {
 			saveEmbedding(patient, resourceType, resourceId, text, now);
 		}
+	}
+
+	/**
+	 * Builds {@link ChartEmbedding} objects from serialized records using the
+	 * exact same logic as {@link #indexPatient(Patient)}. This static method
+	 * exists so integration tests can call the real production embedding code
+	 * without needing a DAO, Spring context, or any simulation.
+	 *
+	 * @param records the serialized patient records
+	 * @param provider the embedding provider to compute vectors
+	 * @return list of chart embeddings with vectors, resource types, and text content set
+	 */
+	public static List<ChartEmbedding> buildEmbeddings(
+			List<SerializedRecord> records, EmbeddingProvider provider) {
+		List<ChartEmbedding> result = new java.util.ArrayList<ChartEmbedding>(records.size());
+		for (SerializedRecord record : records) {
+			try {
+				ChartEmbedding ce = new ChartEmbedding();
+				ce.setResourceType(record.getResourceType());
+				ce.setResourceId(record.getResourceId());
+				ce.setTextContent(record.getText());
+				String embeddingText = ChartSearchAiConstants.getEmbeddingPrefix(
+						record.getResourceType(), record.getText()) + record.getText();
+				ce.setEmbeddingVector(provider.embed(embeddingText));
+				result.add(ce);
+			}
+			catch (Exception e) {
+				log.warn("Failed to embed {} [id={}]: {}",
+						record.getResourceType(), record.getResourceId(),
+						e.getMessage());
+			}
+		}
+		return result;
 	}
 
 	/**

@@ -172,6 +172,12 @@ Question: What lab orders were placed?
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.embedding.gapValidationCosineThreshold</property>
+		<defaultValue>0.47</defaultValue>
+		<description>Cosine similarity threshold for validating whether a gap in the score distribution is intra-topic (e.g. different vital sign types in the same broad category) or inter-topic (a real relevance boundary). When the average cosine between records just above and below the gap meets or exceeds this threshold, the gap is considered intra-topic and the second-pass cut is skipped. Lower values are more permissive (more gaps treated as intra-topic); higher values are more aggressive at cutting. Must be between 0 and 1. Default: 0.47.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.embedding.modelFilePath</property>
 		<defaultValue>chartsearchai/model.onnx</defaultValue>
 		<description>Relative path, including the filename, within the OpenMRS application data directory to the ONNX embedding model file. Required when embedding pre-filtering is enabled (chartsearchai.embedding.preFilter is true, the default). Example: chartsearchai/all-MiniLM-L6-v2.onnx (resolves to &lt;application-data-directory&gt;/chartsearchai/all-MiniLM-L6-v2.onnx). Download the model.onnx file from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 and rename it. Path traversal (e.g. "..") is not allowed.</description>
