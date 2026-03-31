@@ -1,0 +1,583 @@
+<dataset>
+	<!-- ==================== DEDICATED TEST PATIENT ==================== -->
+	<!-- Use a patient with no pre-existing records from the standard test data -->
+	<person person_id="999" gender="F" dead="false" creator="1"
+		date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e00999-0000-0000-0000-000000000001" />
+	<person_name person_name_id="999" preferred="true" person_id="999"
+		given_name="E2E" family_name="TestPatient" creator="1"
+		date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e00999-0000-0000-0000-00000000000a" />
+	<patient patient_id="999" creator="1" date_created="2024-01-01 00:00:00" />
+	<patient_identifier patient_identifier_id="999" patient_id="999"
+		identifier="E2E-999" identifier_type="2" preferred="true" location_id="1"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e00999-0000-0000-0000-00000000000b" />
+
+	<!-- ==================== CONCEPTS ==================== -->
+
+	<!-- Vitals concepts: class=5 (Finding), datatype=1 (Numeric) -->
+	<concept concept_id="90001" retired="false" datatype_id="1" class_id="5" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01001-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90001" concept_id="90001" name="Temperature (c)"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01001-0000-0000-0000-00000000000a" />
+	<concept_name concept_name_id="99001" concept_id="90001" name="Temp (c)"
+		locale="en" locale_preferred="false" concept_name_type="SHORT"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01001-0000-0000-0000-00000000000b" />
+	<concept_numeric concept_id="90001" units="DEG C" allow_decimal="true" />
+
+	<concept concept_id="90002" retired="false" datatype_id="1" class_id="5" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01002-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90002" concept_id="90002" name="Systolic blood pressure"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01002-0000-0000-0000-00000000000a" />
+	<concept_name concept_name_id="99002" concept_id="90002" name="SBP"
+		locale="en" locale_preferred="false" concept_name_type="SHORT"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01002-0000-0000-0000-00000000000b" />
+	<concept_numeric concept_id="90002" units="mmHg" allow_decimal="true" />
+
+	<concept concept_id="90003" retired="false" datatype_id="1" class_id="5" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01003-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90003" concept_id="90003" name="Diastolic blood pressure"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01003-0000-0000-0000-00000000000a" />
+	<concept_name concept_name_id="99003" concept_id="90003" name="DBP"
+		locale="en" locale_preferred="false" concept_name_type="SHORT"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01003-0000-0000-0000-00000000000b" />
+	<concept_numeric concept_id="90003" units="mmHg" allow_decimal="true" />
+
+	<concept concept_id="90004" retired="false" datatype_id="1" class_id="5" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01004-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90004" concept_id="90004" name="Pulse"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01004-0000-0000-0000-00000000000a" />
+	<concept_name concept_name_id="99004" concept_id="90004" name="HR"
+		locale="en" locale_preferred="false" concept_name_type="SHORT"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01004-0000-0000-0000-00000000000b" />
+	<concept_numeric concept_id="90004" units="beats/min" allow_decimal="true" />
+
+	<concept concept_id="90005" retired="false" datatype_id="1" class_id="5" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01005-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90005" concept_id="90005" name="Arterial blood oxygen saturation (pulse oximeter)"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01005-0000-0000-0000-00000000000a" />
+	<concept_name concept_name_id="99005" concept_id="90005" name="SpO2"
+		locale="en" locale_preferred="false" concept_name_type="SHORT"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01005-0000-0000-0000-00000000000b" />
+	<concept_numeric concept_id="90005" units="%" allow_decimal="true" />
+
+	<concept concept_id="90006" retired="false" datatype_id="1" class_id="5" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01006-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90006" concept_id="90006" name="Weight (kg)"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01006-0000-0000-0000-00000000000a" />
+	<concept_name concept_name_id="99006" concept_id="90006" name="WT"
+		locale="en" locale_preferred="false" concept_name_type="SHORT"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01006-0000-0000-0000-00000000000b" />
+	<concept_numeric concept_id="90006" units="kg" allow_decimal="true" />
+
+	<concept concept_id="90007" retired="false" datatype_id="1" class_id="5" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01007-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90007" concept_id="90007" name="Respiratory rate"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01007-0000-0000-0000-00000000000a" />
+	<concept_name concept_name_id="99007" concept_id="90007" name="RR"
+		locale="en" locale_preferred="false" concept_name_type="SHORT"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01007-0000-0000-0000-00000000000b" />
+	<concept_numeric concept_id="90007" units="breaths/min" allow_decimal="true" />
+
+	<concept concept_id="90008" retired="false" datatype_id="1" class_id="5" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01008-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90008" concept_id="90008" name="Height (cm)"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01008-0000-0000-0000-00000000000a" />
+	<concept_name concept_name_id="99008" concept_id="90008" name="HT"
+		locale="en" locale_preferred="false" concept_name_type="SHORT"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01008-0000-0000-0000-00000000000b" />
+	<concept_numeric concept_id="90008" units="cm" allow_decimal="true" />
+
+	<!-- Text of encounter note concept: class=7 (Question), datatype=3 (Text) -->
+	<concept concept_id="90009" retired="false" datatype_id="3" class_id="7" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01009-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90009" concept_id="90009" name="Text of encounter note"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01009-0000-0000-0000-00000000000a" />
+
+	<!-- HDL cholesterol concept: class=1 (Test), datatype=1 (Numeric) -->
+	<concept concept_id="90010" retired="false" datatype_id="1" class_id="1" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01010-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90010" concept_id="90010" name="High-density lipoprotein cholesterol measurement (mmol/L)"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01010-0000-0000-0000-00000000000a" />
+	<concept_name concept_name_id="90011" concept_id="90010" name="HDL"
+		locale="en" locale_preferred="false" concept_name_type="SHORT"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01010-0000-0000-0000-00000000000b" />
+	<concept_name concept_name_id="99010" concept_id="90010" name="HDL (mmol/L)"
+		locale="en" locale_preferred="false" concept_name_type="SHORT"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01010-0000-0000-0000-00000000000c" />
+	<concept_name concept_name_id="99011" concept_id="90010" name="High-density lipoprotein cholesterol"
+		locale="en" locale_preferred="false" concept_name_type="SHORT"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01010-0000-0000-0000-00000000000d" />
+	<concept_numeric concept_id="90010" units="mmol/L" allow_decimal="true" />
+
+	<!-- Condition/Diagnosis concepts: class=4 (Diagnosis), datatype=4 (N/A) -->
+	<concept concept_id="90101" retired="false" datatype_id="4" class_id="4" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01101-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90101" concept_id="90101" name="Nonparalytic stroke"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01101-0000-0000-0000-00000000000a" />
+
+	<concept concept_id="90102" retired="false" datatype_id="4" class_id="4" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01102-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90102" concept_id="90102" name="Scarring Alopecia"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01102-0000-0000-0000-00000000000a" />
+
+	<concept concept_id="90103" retired="false" datatype_id="4" class_id="4" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01103-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90103" concept_id="90103" name="Granuloma annulare"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01103-0000-0000-0000-00000000000a" />
+
+	<concept concept_id="90104" retired="false" datatype_id="4" class_id="4" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01104-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90104" concept_id="90104" name="Syphilitic Cirrhosis"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01104-0000-0000-0000-00000000000a" />
+
+	<concept concept_id="90105" retired="false" datatype_id="4" class_id="4" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01105-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90105" concept_id="90105" name="Atherosclerosis"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01105-0000-0000-0000-00000000000a" />
+
+	<concept concept_id="90106" retired="false" datatype_id="4" class_id="4" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01106-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90106" concept_id="90106" name="Complete tear of ligament of ankle or foot"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01106-0000-0000-0000-00000000000a" />
+
+	<concept concept_id="90107" retired="false" datatype_id="4" class_id="4" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01107-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90107" concept_id="90107" name="Mild depressive episode"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01107-0000-0000-0000-00000000000a" />
+
+	<concept concept_id="90108" retired="false" datatype_id="4" class_id="4" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01108-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90108" concept_id="90108" name="Female infertility"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01108-0000-0000-0000-00000000000a" />
+
+	<concept concept_id="90109" retired="false" datatype_id="4" class_id="4" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01109-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90109" concept_id="90109" name="Personal history of blood transfusion"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01109-0000-0000-0000-00000000000a" />
+
+	<concept concept_id="90110" retired="false" datatype_id="4" class_id="4" is_set="false"
+		creator="1" date_created="2024-01-01 00:00:00" uuid="e2e01110-0000-0000-0000-000000000001" />
+	<concept_name concept_name_id="90110" concept_id="90110" name="Chronic fatigue"
+		locale="en" locale_preferred="true" concept_name_type="FULLY_SPECIFIED"
+		creator="1" date_created="2024-01-01 00:00:00" voided="false"
+		uuid="e2e01110-0000-0000-0000-00000000000a" />
+
+	<!-- ==================== ENCOUNTERS ==================== -->
+	<!-- 5 encounters for patient 2 -->
+	<encounter encounter_id="10001" encounter_type="100" patient_id="999"
+		encounter_datetime="2026-03-10 09:00:00" creator="1"
+		date_created="2026-03-10 09:00:00" voided="false"
+		uuid="e2e10001-0000-0000-0000-000000000001" />
+	<encounter encounter_id="10002" encounter_type="100" patient_id="999"
+		encounter_datetime="2026-03-14 09:00:00" creator="1"
+		date_created="2026-03-14 09:00:00" voided="false"
+		uuid="e2e10002-0000-0000-0000-000000000001" />
+	<encounter encounter_id="10003" encounter_type="100" patient_id="999"
+		encounter_datetime="2026-03-18 09:00:00" creator="1"
+		date_created="2026-03-18 09:00:00" voided="false"
+		uuid="e2e10003-0000-0000-0000-000000000001" />
+	<encounter encounter_id="10004" encounter_type="100" patient_id="999"
+		encounter_datetime="2026-03-22 09:00:00" creator="1"
+		date_created="2026-03-22 09:00:00" voided="false"
+		uuid="e2e10004-0000-0000-0000-000000000001" />
+	<encounter encounter_id="10005" encounter_type="100" patient_id="999"
+		encounter_datetime="2026-03-26 09:00:00" creator="1"
+		date_created="2026-03-26 09:00:00" voided="false"
+		uuid="e2e10005-0000-0000-0000-000000000001" />
+
+	<!-- ==================== ENCOUNTER NOTES (text obs) ==================== -->
+	<!-- SECOND_PATIENT_DATASET indices: 0, 15, 28, 43, 54 -->
+	<obs obs_id="20001" person_id="999" concept_id="90009" encounter_id="10001"
+		obs_datetime="2026-03-10 09:00:00"
+		value_text="Est sit amet facilisis magna etiam tempor. Sed vulputate odio ut enim blandit volutpat. Eget est lorem ipsum dolor sit amet. Arcu vitae elementum curabitur vitae nunc sed velit. Venenatis cras sed felis eget velit."
+		status="FINAL" creator="1" date_created="2026-03-10 09:00:00" voided="false"
+		uuid="e2e30001-0000-0000-0000-000000000001" />
+	<obs obs_id="20002" person_id="999" concept_id="90009" encounter_id="10002"
+		obs_datetime="2026-03-14 09:00:00"
+		value_text="Neque convallis a cras semper auctor neque vitae. Proin nibh nisl condimentum id venenatis a condimentum vitae. Viverra accumsan in nisl nisi scelerisque eu ultrices vitae. Ac tincidunt vitae semper quis lectus nulla."
+		status="FINAL" creator="1" date_created="2026-03-14 09:00:00" voided="false"
+		uuid="e2e30002-0000-0000-0000-000000000001" />
+	<obs obs_id="20003" person_id="999" concept_id="90009" encounter_id="10003"
+		obs_datetime="2026-03-18 09:00:00"
+		value_text="Faucibus et molestie ac feugiat sed lectus. Condimentum lacinia quis vel eros donec ac. Urna porttitor rhoncus dolor purus."
+		status="FINAL" creator="1" date_created="2026-03-18 09:00:00" voided="false"
+		uuid="e2e30003-0000-0000-0000-000000000001" />
+	<obs obs_id="20004" person_id="999" concept_id="90009" encounter_id="10004"
+		obs_datetime="2026-03-22 09:00:00"
+		value_text="Est sit amet facilisis magna etiam tempor. Sed vulputate odio ut enim blandit volutpat. Eget est lorem ipsum dolor sit amet. Arcu vitae elementum curabitur vitae nunc sed velit. Venenatis cras sed felis eget velit."
+		status="FINAL" creator="1" date_created="2026-03-22 09:00:00" voided="false"
+		uuid="e2e30004-0000-0000-0000-000000000001" />
+	<obs obs_id="20005" person_id="999" concept_id="90009" encounter_id="10005"
+		obs_datetime="2026-03-26 09:00:00"
+		value_text="Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Vulputate enim nulla aliquet porttitor. Fermentum iaculis eu non diam phasellus vestibulum lorem sed. Orci ac auctor augue mauris augue neque. Fames ac turpis egestas sed tempus urna. Sit amet justo donec enim diam vulputate. Tortor aliquam nulla facilisi cras fermentum. Aliquet eget sit amet tellus. Elit ullamcorper dignissim cras tincidunt lobortis feugiat. Nisl tincidunt eget nullam non nisi est. Volutpat maecenas volutpat blandit aliquam etiam erat."
+		status="FINAL" creator="1" date_created="2026-03-26 09:00:00" voided="false"
+		uuid="e2e30005-0000-0000-0000-000000000001" />
+
+	<!-- ==================== LAB RESULT (obs) ==================== -->
+	<!-- SECOND_PATIENT_DATASET index 13: HDL cholesterol -->
+	<obs obs_id="20006" person_id="999" concept_id="90010" encounter_id="10001"
+		obs_datetime="2026-03-10 09:00:00" value_numeric="96.0"
+		status="FINAL" creator="1" date_created="2026-03-10 09:00:00" voided="false"
+		uuid="e2e30006-0000-0000-0000-000000000001" />
+
+	<!-- ==================== LAB TEST ORDER ==================== -->
+	<!-- SECOND_PATIENT_DATASET index 14: HDL cholesterol test order -->
+	<orders order_id="20007" uuid="e2e40007-0000-0000-0000-000000000001"
+		order_type_id="3" concept_id="90010" encounter_id="10001" patient_id="999"
+		orderer="1" care_setting="1" date_activated="2026-03-10 09:00:00"
+		urgency="ROUTINE" order_action="NEW" order_number="ORD-20007"
+		creator="1" date_created="2026-03-10 09:00:00" voided="false" />
+	<test_order order_id="20007" />
+
+	<!-- ==================== CONDITIONS ==================== -->
+	<!-- Enc 1: Nonparalytic stroke, Scarring Alopecia -->
+	<conditions condition_id="20101" patient_id="999" condition_coded="90101"
+		clinical_status="ACTIVE" creator="1" date_created="2026-03-10 09:00:00"
+		voided="false" onset_date="2026-03-10 09:00:00"
+		uuid="e2e50101-0000-0000-0000-000000000001" />
+	<conditions condition_id="20102" patient_id="999" condition_coded="90102"
+		clinical_status="ACTIVE" creator="1" date_created="2026-03-10 09:00:00"
+		voided="false" onset_date="2026-03-10 09:00:00"
+		uuid="e2e50102-0000-0000-0000-000000000001" />
+
+	<!-- Enc 2: Granuloma annulare, Syphilitic Cirrhosis -->
+	<conditions condition_id="20103" patient_id="999" condition_coded="90103"
+		clinical_status="ACTIVE" creator="1" date_created="2026-03-14 09:00:00"
+		voided="false" onset_date="2026-03-14 09:00:00"
+		uuid="e2e50103-0000-0000-0000-000000000001" />
+	<conditions condition_id="20104" patient_id="999" condition_coded="90104"
+		clinical_status="ACTIVE" creator="1" date_created="2026-03-14 09:00:00"
+		voided="false" onset_date="2026-03-14 09:00:00"
+		uuid="e2e50104-0000-0000-0000-000000000001" />
+
+	<!-- Enc 3: Atherosclerosis, Complete tear, Mild depressive episode -->
+	<conditions condition_id="20105" patient_id="999" condition_coded="90105"
+		clinical_status="ACTIVE" creator="1" date_created="2026-03-18 09:00:00"
+		voided="false" onset_date="2026-03-18 09:00:00"
+		uuid="e2e50105-0000-0000-0000-000000000001" />
+	<conditions condition_id="20106" patient_id="999" condition_coded="90106"
+		clinical_status="ACTIVE" creator="1" date_created="2026-03-18 09:00:00"
+		voided="false" onset_date="2026-03-18 09:00:00"
+		uuid="e2e50106-0000-0000-0000-000000000001" />
+	<conditions condition_id="20107" patient_id="999" condition_coded="90107"
+		clinical_status="ACTIVE" creator="1" date_created="2026-03-18 09:00:00"
+		voided="false" onset_date="2026-03-18 09:00:00"
+		uuid="e2e50107-0000-0000-0000-000000000001" />
+
+	<!-- Enc 4: Female infertility -->
+	<conditions condition_id="20108" patient_id="999" condition_coded="90108"
+		clinical_status="ACTIVE" creator="1" date_created="2026-03-22 09:00:00"
+		voided="false" onset_date="2026-03-22 09:00:00"
+		uuid="e2e50108-0000-0000-0000-000000000001" />
+
+	<!-- Enc 5: Personal history of blood transfusion, Chronic fatigue -->
+	<conditions condition_id="20109" patient_id="999" condition_coded="90109"
+		clinical_status="ACTIVE" creator="1" date_created="2026-03-26 09:00:00"
+		voided="false" onset_date="2026-03-26 09:00:00"
+		uuid="e2e50109-0000-0000-0000-000000000001" />
+	<conditions condition_id="20110" patient_id="999" condition_coded="90110"
+		clinical_status="ACTIVE" creator="1" date_created="2026-03-26 09:00:00"
+		voided="false" onset_date="2026-03-26 09:00:00"
+		uuid="e2e50110-0000-0000-0000-000000000001" />
+
+	<!-- ==================== DIAGNOSES ==================== -->
+	<!-- Enc 1: Nonparalytic stroke (PROVISIONAL), Scarring Alopecia (CONFIRMED) -->
+	<encounter_diagnosis diagnosis_id="20201" encounter_id="10001" patient_id="999"
+		diagnosis_coded="90101" certainty="PROVISIONAL" dx_rank="1"
+		creator="1" date_created="2026-03-10 09:00:00" voided="false"
+		uuid="e2e60201-0000-0000-0000-000000000001" />
+	<encounter_diagnosis diagnosis_id="20202" encounter_id="10001" patient_id="999"
+		diagnosis_coded="90102" certainty="CONFIRMED" dx_rank="1"
+		creator="1" date_created="2026-03-10 09:00:00" voided="false"
+		uuid="e2e60202-0000-0000-0000-000000000001" />
+
+	<!-- Enc 2: Granuloma annulare (PROVISIONAL), Syphilitic Cirrhosis (CONFIRMED) -->
+	<encounter_diagnosis diagnosis_id="20203" encounter_id="10002" patient_id="999"
+		diagnosis_coded="90103" certainty="PROVISIONAL" dx_rank="1"
+		creator="1" date_created="2026-03-14 09:00:00" voided="false"
+		uuid="e2e60203-0000-0000-0000-000000000001" />
+	<encounter_diagnosis diagnosis_id="20204" encounter_id="10002" patient_id="999"
+		diagnosis_coded="90104" certainty="CONFIRMED" dx_rank="1"
+		creator="1" date_created="2026-03-14 09:00:00" voided="false"
+		uuid="e2e60204-0000-0000-0000-000000000001" />
+
+	<!-- Enc 3: Atherosclerosis (PROVISIONAL), Complete tear (CONFIRMED), Mild depressive (CONFIRMED) -->
+	<encounter_diagnosis diagnosis_id="20205" encounter_id="10003" patient_id="999"
+		diagnosis_coded="90105" certainty="PROVISIONAL" dx_rank="1"
+		creator="1" date_created="2026-03-18 09:00:00" voided="false"
+		uuid="e2e60205-0000-0000-0000-000000000001" />
+	<encounter_diagnosis diagnosis_id="20206" encounter_id="10003" patient_id="999"
+		diagnosis_coded="90106" certainty="CONFIRMED" dx_rank="1"
+		creator="1" date_created="2026-03-18 09:00:00" voided="false"
+		uuid="e2e60206-0000-0000-0000-000000000001" />
+	<encounter_diagnosis diagnosis_id="20207" encounter_id="10003" patient_id="999"
+		diagnosis_coded="90107" certainty="CONFIRMED" dx_rank="1"
+		creator="1" date_created="2026-03-18 09:00:00" voided="false"
+		uuid="e2e60207-0000-0000-0000-000000000001" />
+
+	<!-- Enc 4: Female infertility (PROVISIONAL) -->
+	<encounter_diagnosis diagnosis_id="20208" encounter_id="10004" patient_id="999"
+		diagnosis_coded="90108" certainty="PROVISIONAL" dx_rank="1"
+		creator="1" date_created="2026-03-22 09:00:00" voided="false"
+		uuid="e2e60208-0000-0000-0000-000000000001" />
+
+	<!-- Enc 5: Personal history of blood transfusion (PROVISIONAL), Chronic fatigue (CONFIRMED) -->
+	<encounter_diagnosis diagnosis_id="20209" encounter_id="10005" patient_id="999"
+		diagnosis_coded="90109" certainty="PROVISIONAL" dx_rank="1"
+		creator="1" date_created="2026-03-26 09:00:00" voided="false"
+		uuid="e2e60209-0000-0000-0000-000000000001" />
+	<encounter_diagnosis diagnosis_id="20210" encounter_id="10005" patient_id="999"
+		diagnosis_coded="90110" certainty="CONFIRMED" dx_rank="1"
+		creator="1" date_created="2026-03-26 09:00:00" voided="false"
+		uuid="e2e60210-0000-0000-0000-000000000001" />
+
+	<!-- ==================== VITALS OBS ==================== -->
+	<!-- Encounter 1 vitals -->
+	<obs obs_id="10005" person_id="999" concept_id="90001" encounter_id="10001"
+		obs_datetime="2026-03-10 09:00:00" value_numeric="38.9"
+		interpretation="CRITICALLY_HIGH" status="FINAL" creator="1"
+		date_created="2026-03-10 09:00:00" voided="false"
+		uuid="e2e20005-0000-0000-0000-000000000001" />
+	<obs obs_id="10006" person_id="999" concept_id="90002" encounter_id="10001"
+		obs_datetime="2026-03-10 09:00:00" value_numeric="133.0"
+		interpretation="HIGH" status="FINAL" creator="1"
+		date_created="2026-03-10 09:00:00" voided="false"
+		uuid="e2e20006-0000-0000-0000-000000000001" />
+	<obs obs_id="10007" person_id="999" concept_id="90003" encounter_id="10001"
+		obs_datetime="2026-03-10 09:00:00" value_numeric="57.0"
+		interpretation="NORMAL" status="FINAL" creator="1"
+		date_created="2026-03-10 09:00:00" voided="false"
+		uuid="e2e20007-0000-0000-0000-000000000001" />
+	<obs obs_id="10008" person_id="999" concept_id="90004" encounter_id="10001"
+		obs_datetime="2026-03-10 09:00:00" value_numeric="100.0"
+		interpretation="NORMAL" status="FINAL" creator="1"
+		date_created="2026-03-10 09:00:00" voided="false"
+		uuid="e2e20008-0000-0000-0000-000000000001" />
+	<obs obs_id="10009" person_id="999" concept_id="90005" encounter_id="10001"
+		obs_datetime="2026-03-10 09:00:00" value_numeric="96.6"
+		status="FINAL" creator="1" date_created="2026-03-10 09:00:00" voided="false"
+		uuid="e2e20009-0000-0000-0000-000000000001" />
+	<obs obs_id="10010" person_id="999" concept_id="90006" encounter_id="10001"
+		obs_datetime="2026-03-10 09:00:00" value_numeric="68.0"
+		status="FINAL" creator="1" date_created="2026-03-10 09:00:00" voided="false"
+		uuid="e2e20010-0000-0000-0000-000000000001" />
+	<obs obs_id="10011" person_id="999" concept_id="90007" encounter_id="10001"
+		obs_datetime="2026-03-10 09:00:00" value_numeric="17.0"
+		interpretation="CRITICALLY_LOW" status="FINAL" creator="1"
+		date_created="2026-03-10 09:00:00" voided="false"
+		uuid="e2e20011-0000-0000-0000-000000000001" />
+	<obs obs_id="10012" person_id="999" concept_id="90008" encounter_id="10001"
+		obs_datetime="2026-03-10 09:00:00" value_numeric="168.0"
+		status="FINAL" creator="1" date_created="2026-03-10 09:00:00" voided="false"
+		uuid="e2e20012-0000-0000-0000-000000000001" />
+
+	<!-- Encounter 2 vitals -->
+	<obs obs_id="10020" person_id="999" concept_id="90001" encounter_id="10002"
+		obs_datetime="2026-03-14 09:00:00" value_numeric="37.2"
+		interpretation="NORMAL" status="FINAL" creator="1"
+		date_created="2026-03-14 09:00:00" voided="false"
+		uuid="e2e20020-0000-0000-0000-000000000001" />
+	<obs obs_id="10021" person_id="999" concept_id="90002" encounter_id="10002"
+		obs_datetime="2026-03-14 09:00:00" value_numeric="104.0"
+		interpretation="NORMAL" status="FINAL" creator="1"
+		date_created="2026-03-14 09:00:00" voided="false"
+		uuid="e2e20021-0000-0000-0000-000000000001" />
+	<obs obs_id="10022" person_id="999" concept_id="90003" encounter_id="10002"
+		obs_datetime="2026-03-14 09:00:00" value_numeric="52.0"
+		interpretation="NORMAL" status="FINAL" creator="1"
+		date_created="2026-03-14 09:00:00" voided="false"
+		uuid="e2e20022-0000-0000-0000-000000000001" />
+	<obs obs_id="10023" person_id="999" concept_id="90004" encounter_id="10002"
+		obs_datetime="2026-03-14 09:00:00" value_numeric="108.0"
+		interpretation="NORMAL" status="FINAL" creator="1"
+		date_created="2026-03-14 09:00:00" voided="false"
+		uuid="e2e20023-0000-0000-0000-000000000001" />
+	<obs obs_id="10024" person_id="999" concept_id="90005" encounter_id="10002"
+		obs_datetime="2026-03-14 09:00:00" value_numeric="93.0"
+		interpretation="LOW" status="FINAL" creator="1"
+		date_created="2026-03-14 09:00:00" voided="false"
+		uuid="e2e20024-0000-0000-0000-000000000001" />
+	<obs obs_id="10025" person_id="999" concept_id="90006" encounter_id="10002"
+		obs_datetime="2026-03-14 09:00:00" value_numeric="49.0"
+		status="FINAL" creator="1" date_created="2026-03-14 09:00:00" voided="false"
+		uuid="e2e20025-0000-0000-0000-000000000001" />
+	<obs obs_id="10026" person_id="999" concept_id="90007" encounter_id="10002"
+		obs_datetime="2026-03-14 09:00:00" value_numeric="22.0"
+		interpretation="NORMAL" status="FINAL" creator="1"
+		date_created="2026-03-14 09:00:00" voided="false"
+		uuid="e2e20026-0000-0000-0000-000000000001" />
+	<obs obs_id="10027" person_id="999" concept_id="90008" encounter_id="10002"
+		obs_datetime="2026-03-14 09:00:00" value_numeric="186.0"
+		status="FINAL" creator="1" date_created="2026-03-14 09:00:00" voided="false"
+		uuid="e2e20027-0000-0000-0000-000000000001" />
+
+	<!-- Encounter 3 vitals -->
+	<obs obs_id="10035" person_id="999" concept_id="90001" encounter_id="10003"
+		obs_datetime="2026-03-18 09:00:00" value_numeric="38.7"
+		interpretation="CRITICALLY_HIGH" status="FINAL" creator="1"
+		date_created="2026-03-18 09:00:00" voided="false"
+		uuid="e2e20035-0000-0000-0000-000000000001" />
+	<obs obs_id="10036" person_id="999" concept_id="90002" encounter_id="10003"
+		obs_datetime="2026-03-18 09:00:00" value_numeric="105.0"
+		interpretation="NORMAL" status="FINAL" creator="1"
+		date_created="2026-03-18 09:00:00" voided="false"
+		uuid="e2e20036-0000-0000-0000-000000000001" />
+	<obs obs_id="10037" person_id="999" concept_id="90003" encounter_id="10003"
+		obs_datetime="2026-03-18 09:00:00" value_numeric="60.0"
+		interpretation="NORMAL" status="FINAL" creator="1"
+		date_created="2026-03-18 09:00:00" voided="false"
+		uuid="e2e20037-0000-0000-0000-000000000001" />
+	<obs obs_id="10038" person_id="999" concept_id="90004" encounter_id="10003"
+		obs_datetime="2026-03-18 09:00:00" value_numeric="65.0"
+		interpretation="CRITICALLY_LOW" status="FINAL" creator="1"
+		date_created="2026-03-18 09:00:00" voided="false"
+		uuid="e2e20038-0000-0000-0000-000000000001" />
+	<obs obs_id="10039" person_id="999" concept_id="90005" encounter_id="10003"
+		obs_datetime="2026-03-18 09:00:00" value_numeric="99.6"
+		status="FINAL" creator="1" date_created="2026-03-18 09:00:00" voided="false"
+		uuid="e2e20039-0000-0000-0000-000000000001" />
+	<obs obs_id="10040" person_id="999" concept_id="90006" encounter_id="10003"
+		obs_datetime="2026-03-18 09:00:00" value_numeric="72.0"
+		status="FINAL" creator="1" date_created="2026-03-18 09:00:00" voided="false"
+		uuid="e2e20040-0000-0000-0000-000000000001" />
+	<obs obs_id="10041" person_id="999" concept_id="90007" encounter_id="10003"
+		obs_datetime="2026-03-18 09:00:00" value_numeric="9.0"
+		interpretation="CRITICALLY_LOW" status="FINAL" creator="1"
+		date_created="2026-03-18 09:00:00" voided="false"
+		uuid="e2e20041-0000-0000-0000-000000000001" />
+	<obs obs_id="10042" person_id="999" concept_id="90008" encounter_id="10003"
+		obs_datetime="2026-03-18 09:00:00" value_numeric="186.0"
+		status="FINAL" creator="1" date_created="2026-03-18 09:00:00" voided="false"
+		uuid="e2e20042-0000-0000-0000-000000000001" />
+
+	<!-- Encounter 4 vitals -->
+	<obs obs_id="10046" person_id="999" concept_id="90001" encounter_id="10004"
+		obs_datetime="2026-03-22 09:00:00" value_numeric="36.0"
+		interpretation="NORMAL" status="FINAL" creator="1"
+		date_created="2026-03-22 09:00:00" voided="false"
+		uuid="e2e20046-0000-0000-0000-000000000001" />
+	<obs obs_id="10047" person_id="999" concept_id="90002" encounter_id="10004"
+		obs_datetime="2026-03-22 09:00:00" value_numeric="128.0"
+		interpretation="HIGH" status="FINAL" creator="1"
+		date_created="2026-03-22 09:00:00" voided="false"
+		uuid="e2e20047-0000-0000-0000-000000000001" />
+	<obs obs_id="10048" person_id="999" concept_id="90003" encounter_id="10004"
+		obs_datetime="2026-03-22 09:00:00" value_numeric="86.0"
+		interpretation="HIGH" status="FINAL" creator="1"
+		date_created="2026-03-22 09:00:00" voided="false"
+		uuid="e2e20048-0000-0000-0000-000000000001" />
+	<obs obs_id="10049" person_id="999" concept_id="90004" encounter_id="10004"
+		obs_datetime="2026-03-22 09:00:00" value_numeric="70.0"
+		interpretation="LOW" status="FINAL" creator="1"
+		date_created="2026-03-22 09:00:00" voided="false"
+		uuid="e2e20049-0000-0000-0000-000000000001" />
+	<obs obs_id="10050" person_id="999" concept_id="90005" encounter_id="10004"
+		obs_datetime="2026-03-22 09:00:00" value_numeric="89.3"
+		interpretation="CRITICALLY_LOW" status="FINAL" creator="1"
+		date_created="2026-03-22 09:00:00" voided="false"
+		uuid="e2e20050-0000-0000-0000-000000000001" />
+	<obs obs_id="10051" person_id="999" concept_id="90006" encounter_id="10004"
+		obs_datetime="2026-03-22 09:00:00" value_numeric="50.0"
+		status="FINAL" creator="1" date_created="2026-03-22 09:00:00" voided="false"
+		uuid="e2e20051-0000-0000-0000-000000000001" />
+	<obs obs_id="10052" person_id="999" concept_id="90007" encounter_id="10004"
+		obs_datetime="2026-03-22 09:00:00" value_numeric="16.0"
+		interpretation="CRITICALLY_LOW" status="FINAL" creator="1"
+		date_created="2026-03-22 09:00:00" voided="false"
+		uuid="e2e20052-0000-0000-0000-000000000001" />
+	<obs obs_id="10053" person_id="999" concept_id="90008" encounter_id="10004"
+		obs_datetime="2026-03-22 09:00:00" value_numeric="185.0"
+		status="FINAL" creator="1" date_created="2026-03-22 09:00:00" voided="false"
+		uuid="e2e20053-0000-0000-0000-000000000001" />
+
+	<!-- Encounter 5 vitals -->
+	<obs obs_id="10059" person_id="999" concept_id="90001" encounter_id="10005"
+		obs_datetime="2026-03-26 09:00:00" value_numeric="36.5"
+		interpretation="NORMAL" status="FINAL" creator="1"
+		date_created="2026-03-26 09:00:00" voided="false"
+		uuid="e2e20059-0000-0000-0000-000000000001" />
+	<obs obs_id="10060" person_id="999" concept_id="90002" encounter_id="10005"
+		obs_datetime="2026-03-26 09:00:00" value_numeric="131.0"
+		interpretation="HIGH" status="FINAL" creator="1"
+		date_created="2026-03-26 09:00:00" voided="false"
+		uuid="e2e20060-0000-0000-0000-000000000001" />
+	<obs obs_id="10061" person_id="999" concept_id="90003" encounter_id="10005"
+		obs_datetime="2026-03-26 09:00:00" value_numeric="60.0"
+		interpretation="NORMAL" status="FINAL" creator="1"
+		date_created="2026-03-26 09:00:00" voided="false"
+		uuid="e2e20061-0000-0000-0000-000000000001" />
+	<obs obs_id="10062" person_id="999" concept_id="90004" encounter_id="10005"
+		obs_datetime="2026-03-26 09:00:00" value_numeric="63.0"
+		interpretation="CRITICALLY_LOW" status="FINAL" creator="1"
+		date_created="2026-03-26 09:00:00" voided="false"
+		uuid="e2e20062-0000-0000-0000-000000000001" />
+	<obs obs_id="10063" person_id="999" concept_id="90005" encounter_id="10005"
+		obs_datetime="2026-03-26 09:00:00" value_numeric="89.7"
+		interpretation="CRITICALLY_LOW" status="FINAL" creator="1"
+		date_created="2026-03-26 09:00:00" voided="false"
+		uuid="e2e20063-0000-0000-0000-000000000001" />
+	<obs obs_id="10064" person_id="999" concept_id="90006" encounter_id="10005"
+		obs_datetime="2026-03-26 09:00:00" value_numeric="50.0"
+		status="FINAL" creator="1" date_created="2026-03-26 09:00:00" voided="false"
+		uuid="e2e20064-0000-0000-0000-000000000001" />
+	<obs obs_id="10065" person_id="999" concept_id="90007" encounter_id="10005"
+		obs_datetime="2026-03-26 09:00:00" value_numeric="8.0"
+		interpretation="CRITICALLY_LOW" status="FINAL" creator="1"
+		date_created="2026-03-26 09:00:00" voided="false"
+		uuid="e2e20065-0000-0000-0000-000000000001" />
+	<obs obs_id="10066" person_id="999" concept_id="90008" encounter_id="10005"
+		obs_datetime="2026-03-26 09:00:00" value_numeric="196.0"
+		status="FINAL" creator="1" date_created="2026-03-26 09:00:00" voided="false"
+		uuid="e2e20066-0000-0000-0000-000000000001" />
+</dataset>
