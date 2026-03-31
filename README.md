@@ -4,6 +4,29 @@ An OpenMRS module that lets clinicians ask natural language questions about a pa
 
 For project background, community discussion, and roadmap, see the [wiki project page](https://openmrs.atlassian.net/wiki/spaces/projects/pages/373325839/Chart+Search+aka+ChartSearchAI).
 
+## Table of Contents
+
+- [Requirements](#requirements)
+- [Setup](#setup)
+  - [1. Build](#1-build)
+  - [2. Download the LLM model](#2-download-the-llm-model)
+  - [3. Download the embedding model](#3-download-the-embedding-model)
+  - [4. Install](#4-install)
+  - [5. Configure](#5-configure)
+  - [6. Grant privileges](#6-grant-privileges)
+  - [7. Indexing](#7-indexing)
+  - [Testing the Elasticsearch pipeline locally](#testing-the-elasticsearch-pipeline-locally)
+- [Query behavior](#query-behavior)
+- [API](#api)
+  - [Search](#search)
+  - [Streaming search (SSE)](#streaming-search-sse)
+  - [Feedback](#feedback)
+  - [Audit log](#audit-log)
+- [Patient access control](#patient-access-control)
+- [Evals](#evals)
+- [Architecture](#architecture)
+- [License](#license)
+
 ## Requirements
 
 - Java 11+
