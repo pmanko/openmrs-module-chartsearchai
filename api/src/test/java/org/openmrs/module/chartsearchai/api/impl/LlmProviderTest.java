@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.Arrays;
 
 import org.junit.jupiter.api.Test;
+import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 
 /**
  * Pure unit tests for {@link LlmProvider} configuration logic.
@@ -260,6 +261,45 @@ public class LlmProviderTest {
 	public void resolveStopStrings_shouldReturnEmptyForCustomTemplate() {
 		assertArrayEquals(new String[0],
 				LlmProvider.resolveStopStrings("<<SYS>>{system}<</SYS>>"));
+	}
+
+	@Test
+	public void getIdleTimeoutMinutes_shouldReturnDefault() {
+		LlmProvider provider = createProviderWithIdleTimeout(-1);
+		assertEquals(ChartSearchAiConstants.DEFAULT_LLM_IDLE_TIMEOUT_MINUTES,
+				provider.getIdleTimeoutMinutes());
+	}
+
+	@Test
+	public void getIdleTimeoutMinutes_shouldReturnConfiguredValue() {
+		LlmProvider provider = createProviderWithIdleTimeout(15);
+		assertEquals(15, provider.getIdleTimeoutMinutes());
+	}
+
+	@Test
+	public void getIdleTimeoutMinutes_shouldReturnZeroToDisable() {
+		LlmProvider provider = createProviderWithIdleTimeout(0);
+		assertEquals(0, provider.getIdleTimeoutMinutes());
+	}
+
+	@Test
+	public void close_shouldBeIdempotent() {
+		LlmProvider provider = new LlmProvider();
+		provider.close();
+		provider.close(); // Should not throw
+	}
+
+	private LlmProvider createProviderWithIdleTimeout(final int timeout) {
+		return new LlmProvider() {
+
+			@Override
+			protected int getIdleTimeoutMinutes() {
+				if (timeout >= 0) {
+					return timeout;
+				}
+				return ChartSearchAiConstants.DEFAULT_LLM_IDLE_TIMEOUT_MINUTES;
+			}
+		};
 	}
 
 	private LlmProvider createProvider(final String customSystemPrompt) {

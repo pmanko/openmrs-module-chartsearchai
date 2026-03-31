@@ -17,6 +17,10 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import java.util.regex.Matcher;
@@ -136,6 +140,18 @@ public class LlmProvider {
 
 	private String loadedModelPath;
 
+	private final ScheduledExecutorService idleTimer = Executors.newSingleThreadScheduledExecutor(
+			new java.util.concurrent.ThreadFactory() {
+				@Override
+				public Thread newThread(Runnable r) {
+					Thread t = new Thread(r, "chartsearchai-llm-idle-timer");
+					t.setDaemon(true);
+					return t;
+				}
+			});
+
+	private ScheduledFuture<?> idleUnloadFuture;
+
 	/**
 	 * Send numbered patient records and a question to the LLM for synthesis.
 	 * Uses streaming generation with a wall-clock timeout to prevent indefinite blocking.
@@ -164,7 +180,9 @@ public class LlmProvider {
 			result.append(output);
 		}
 
-		return extractResponse(result.toString());
+		LlmResponse llmResponse = extractResponse(result.toString());
+		resetIdleTimer();
+		return llmResponse;
 	}
 
 	/**
@@ -199,7 +217,9 @@ public class LlmProvider {
 			tokenConsumer.accept(token);
 		}
 
-		return extractResponse(result.toString());
+		LlmResponse llmResponse = extractResponse(result.toString());
+		resetIdleTimer();
+		return llmResponse;
 	}
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -290,12 +310,66 @@ public class LlmProvider {
 	}
 
 	public synchronized void close() {
+		if (idleUnloadFuture != null) {
+			idleUnloadFuture.cancel(false);
+			idleUnloadFuture = null;
+		}
 		if (model != null) {
 			log.info("Closing LLM model");
 			model.close();
 			model = null;
 		}
 		loadedModelPath = null;
+	}
+
+	/**
+	 * Shuts down the idle timer executor. Called on module shutdown to
+	 * release the daemon thread. After this call, idle unloading is
+	 * permanently disabled for this instance.
+	 */
+	public void shutdown() {
+		idleTimer.shutdownNow();
+		close();
+	}
+
+	private synchronized void resetIdleTimer() {
+		if (idleUnloadFuture != null) {
+			idleUnloadFuture.cancel(false);
+			idleUnloadFuture = null;
+		}
+		int idleMinutes = getIdleTimeoutMinutes();
+		if (idleMinutes > 0) {
+			try {
+				idleUnloadFuture = idleTimer.schedule(new Runnable() {
+					@Override
+					public void run() {
+						log.info("LLM idle for {} minutes, unloading model to free memory", idleMinutes);
+						close();
+					}
+				}, idleMinutes, TimeUnit.MINUTES);
+			}
+			catch (java.util.concurrent.RejectedExecutionException e) {
+				log.debug("Idle timer already shut down, skipping schedule");
+			}
+		}
+	}
+
+	protected int getIdleTimeoutMinutes() {
+		String value = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_IDLE_TIMEOUT_MINUTES);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				int parsed = Integer.parseInt(value.trim());
+				if (parsed >= 0) {
+					return parsed;
+				}
+				log.warn("Idle timeout must be non-negative, got '{}', using default", parsed);
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid idle timeout value '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_LLM_IDLE_TIMEOUT_MINUTES;
 	}
 
 	private InferenceParameters createInferenceParameters(LlamaModel llm, String numberedRecords,

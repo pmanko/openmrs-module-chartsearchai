@@ -444,7 +444,7 @@ The model runs **in-process** inside the OpenMRS JVM via [java-llama.cpp](https:
 1. The `.omod` module file (includes the java-llama.cpp dependency)
 2. The `.gguf` model file (placed in the OpenMRS application data directory)
 
-The model path is configured via the `chartsearchai.llm.modelFilePath` global property. The model loads into memory on first query and stays resident for subsequent requests. If the model path global property is changed, the model is automatically unloaded and the new model is loaded on the next query — no restart required.
+The model path is configured via the `chartsearchai.llm.modelFilePath` global property. The model loads into memory on first query (lazy loading) and is automatically unloaded after a configurable idle period (`chartsearchai.llm.idleTimeoutMinutes`, default 30 minutes) to free RAM. The model is transparently reloaded on the next query. This debounced idle timer uses a single daemon thread with a `ScheduledExecutorService` — after each inference completes, any pending unload is cancelled and a new one is scheduled. Setting the idle timeout to 0 keeps the model loaded indefinitely. If the model path global property is changed, the model is automatically unloaded and the new model is loaded on the next query — no restart required.
 
 Inference uses temperature 0.0, a fixed seed, and prompt caching disabled (`setCachePrompt(false)`) for deterministic output. Prompt caching had to be disabled because llama.cpp's KV cache reuse caused non-deterministic responses — the first query for a given prompt produced a different answer than subsequent identical queries. With caching off, identical inputs always produce identical answers, which is important for clinical trust and for the answer cache to be meaningful.
 
@@ -695,7 +695,7 @@ Direct image interpretation is deferred to future work, pending either capable m
 
 ### REST endpoints
 
-The module exposes two REST endpoints for chart search queries. Both require the `AI Query Patient Data` privilege and are registered under the OpenMRS `webservices.rest` module namespace.
+The module exposes REST endpoints for chart search queries and user feedback. Query endpoints require the `AI Query Patient Data` privilege and are registered under the OpenMRS `webservices.rest` module namespace.
 
 #### Synchronous endpoint
 
@@ -710,6 +710,7 @@ POST /ws/rest/v1/chartsearchai/search
 Response:
 ```json
 {
+  "questionId": "42",
   "answer": "The patient is currently on...[1]...[3]",
   "disclaimer": "This response is AI-generated and may not be accurate...",
   "references": [
@@ -734,6 +735,21 @@ Returns a `text/event-stream` with three event types:
 - `done` — final JSON with the complete answer, references (with `index`, `resourceType`, `resourceId`, `date`), and disclaimer
 - `error` — an error message if something goes wrong
 
+Both search endpoints return a `questionId` (the audit log row ID as a string) that the frontend uses to submit user feedback.
+
+#### Feedback endpoint
+
+```
+POST /ws/rest/v1/chartsearchai/feedback
+{
+  "questionId": "42",
+  "rating": "positive",
+  "comment": "Accurate and helpful"
+}
+```
+
+Requires the `AI Query Patient Data` privilege. `rating` must be `positive` or `negative`. `comment` is optional (max 500 characters, control characters stripped). Users can only submit feedback on their own queries — requests for other users' queries return 404 to prevent information disclosure.
+
 #### Audit log endpoint
 
 ```
@@ -756,8 +772,11 @@ Requires the `View AI Audit Logs` privilege. All query parameters are optional. 
   - The search mode used (`pre-filter` or `full-chart`)
   - Response time in milliseconds
   - Timestamp
+  - Optional user feedback: `rating` (`positive` or `negative`) and `feedback_comment` (free-text, max 500 characters)
 
-  This audit trail supports compliance review (who queried which patient's data and what the AI responded) and performance analysis. A scheduled task purges entries older than `chartsearchai.auditLogRetentionDays` (default 90 days, set to 0 to retain all).
+  The audit log `id` is returned as `questionId` in search responses, allowing the frontend to link feedback to the original query via `POST /ws/rest/v1/chartsearchai/feedback` with `questionId`, `rating`, and optional `comment`. Feedback is stored on the same audit log row rather than in a separate table — this avoids schema bloat and keeps the query-feedback relationship as a simple column update. An ownership check ensures users can only submit feedback on their own queries.
+
+  This audit trail supports compliance review (who queried which patient's data and what the AI responded), user feedback collection, and performance analysis. A scheduled task purges entries older than `chartsearchai.auditLogRetentionDays` (default 90 days, set to 0 to retain all).
 - **Patient access control**: A `PatientAccessCheck` interface controls whether a user can query a specific patient's chart. The default implementation (`DefaultPatientAccessCheck`) permits all access — any user with the `AI Query Patient Data` privilege can query any patient. Deployments requiring patient-level restrictions (e.g., location-based or care-team-based) can override this by registering a custom Spring bean with id `chartSearchAi.patientAccessCheck`. This separates privilege-based access (handled by OpenMRS) from patient-level access (handled by the module).
 
 ## Decision 12: Concurrency model

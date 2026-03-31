@@ -48,7 +48,7 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 		try {
 			LlmProvider llmProvider = Context.getRegisteredComponent("llmProvider", LlmProvider.class);
 			if (llmProvider != null) {
-				llmProvider.close();
+				llmProvider.shutdown();
 			}
 		}
 		catch (Exception e) {

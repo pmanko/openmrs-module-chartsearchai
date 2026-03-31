@@ -90,6 +90,7 @@ These settings only apply when `chartsearchai.retrieval.pipeline` is `embedding`
 | `chartsearchai.llm.chatTemplate` | `llama3` | Chat template for formatting prompts. Presets: `llama3`, `mistral`, `phi3`, `chatml`, `gemma`. Set to `auto` to use the model's built-in GGUF chat template. Or a custom template string with `{system}` and `{user}` placeholders |
 | `chartsearchai.llm.systemPrompt` | *(built-in clinical prompt)* | System prompt that guides how the LLM responds — e.g. answering only the question asked, using only the provided patient records, citing records by number, naming what is missing when records lack relevant information (e.g. "There are no records about diabetes in this patient's chart"), keeping answers concise, and returning structured JSON |
 | `chartsearchai.llm.timeoutSeconds` | `120` | Maximum seconds to wait for LLM inference before timing out |
+| `chartsearchai.llm.idleTimeoutMinutes` | `30` | Minutes of inactivity after which the LLM model is unloaded from memory to free RAM. The model is automatically reloaded on the next query. Set to `0` to keep the model loaded indefinitely |
 
 #### Rate limiting and caching
 

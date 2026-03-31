@@ -177,6 +177,10 @@ public class ChartSearchAiConstants {
 
 	public static final int DEFAULT_LLM_TIMEOUT_SECONDS = 120;
 
+	public static final String GP_LLM_IDLE_TIMEOUT_MINUTES = "chartsearchai.llm.idleTimeoutMinutes";
+
+	public static final int DEFAULT_LLM_IDLE_TIMEOUT_MINUTES = 30;
+
 	public static final int DEFAULT_MAX_TOKENS = 2048;
 
 	public static final String GP_RATE_LIMIT_PER_MINUTE = "chartsearchai.rateLimitPerMinute";
