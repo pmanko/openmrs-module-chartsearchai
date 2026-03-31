@@ -35,6 +35,12 @@ public class AuditLogServiceImpl implements AuditLogService {
 
 	@Override
 	@Transactional(readOnly = true)
+	public ChartSearchAuditLog getAuditLog(Integer auditLogId) {
+		return dao.getAuditLog(auditLogId);
+	}
+
+	@Override
+	@Transactional(readOnly = true)
 	public List<ChartSearchAuditLog> getAuditLogs(Patient patient, User user, Date fromDate, Date toDate,
 			Integer startIndex, Integer limit) {
 		return dao.getAuditLogs(patient, user, fromDate, toDate, startIndex, limit);

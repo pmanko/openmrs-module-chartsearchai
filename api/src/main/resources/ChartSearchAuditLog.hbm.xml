@@ -27,6 +27,10 @@
 
 		<property name="dateCreated" column="date_created" type="timestamp" not-null="true"/>
 
+		<property name="rating" column="rating" type="string" length="10"/>
+
+		<property name="feedbackComment" column="feedback_comment" type="text"/>
+
 	</class>
 
 </hibernate-mapping>

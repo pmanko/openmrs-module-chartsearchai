@@ -79,8 +79,14 @@ public class HibernateChartSearchAiDAO implements ChartSearchAiDAO {
 
 	@Override
 	public ChartSearchAuditLog saveAuditLog(ChartSearchAuditLog auditLog) {
-		sessionFactory.getCurrentSession().save(auditLog);
+		sessionFactory.getCurrentSession().saveOrUpdate(auditLog);
 		return auditLog;
+	}
+
+	@Override
+	public ChartSearchAuditLog getAuditLog(Integer auditLogId) {
+		return (ChartSearchAuditLog) sessionFactory.getCurrentSession()
+				.get(ChartSearchAuditLog.class, auditLogId);
 	}
 
 	@Override

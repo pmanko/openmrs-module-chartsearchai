@@ -35,6 +35,8 @@ public interface ChartSearchAiDAO {
 
 	ChartSearchAuditLog saveAuditLog(ChartSearchAuditLog auditLog);
 
+	ChartSearchAuditLog getAuditLog(Integer auditLogId);
+
 	List<Integer> getIndexedPatientIds();
 
 	List<ChartSearchAuditLog> getAuditLogs(Patient patient, User user, Date fromDate, Date toDate,

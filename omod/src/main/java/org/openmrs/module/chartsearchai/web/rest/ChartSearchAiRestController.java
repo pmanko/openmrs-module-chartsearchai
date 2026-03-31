@@ -213,6 +213,9 @@ public class ChartSearchAiRestController {
 			refs.add(refMap);
 		}
 		response.put("references", refs);
+		if (auditLog.getAuditLogId() != null) {
+			response.put("questionId", String.valueOf(auditLog.getAuditLogId()));
+		}
 
 		return new ResponseEntity<Object>(response, HttpStatus.OK);
 	}
@@ -349,6 +352,9 @@ public class ChartSearchAiRestController {
 				refs.add(refMap);
 			}
 			doneData.put("references", refs);
+			if (auditLog.getAuditLogId() != null) {
+				doneData.put("questionId", String.valueOf(auditLog.getAuditLogId()));
+			}
 
 			writeSseEvent(out, "done", new ObjectMapper().writeValueAsString(doneData));
 		}
@@ -437,6 +443,8 @@ public class ChartSearchAiRestController {
 			entry.put("responseTimeMs", auditLog.getResponseTimeMs());
 			entry.put("dateCreated", auditLog.getDateCreated() != null
 					? auditLog.getDateCreated().getTime() : null);
+			entry.put("rating", auditLog.getRating());
+			entry.put("feedbackComment", auditLog.getFeedbackComment());
 			results.add(entry);
 		}
 
@@ -444,6 +452,39 @@ public class ChartSearchAiRestController {
 		response.put("results", results);
 		response.put("totalCount", totalCount);
 
+		return new ResponseEntity<Object>(response, HttpStatus.OK);
+	}
+
+	@Transactional
+	@RequestMapping(value = "/feedback", method = RequestMethod.POST)
+	@ResponseBody
+	public ResponseEntity<Object> submitFeedback(@RequestBody Map<String, Object> body) {
+		Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA);
+
+		String validationError = validateFeedbackInput(body);
+		if (validationError != null) {
+			return new ResponseEntity<Object>(
+					errorResponse(validationError), HttpStatus.BAD_REQUEST);
+		}
+
+		Integer auditLogId = Integer.valueOf(body.get("questionId").toString());
+		String rating = body.get("rating").toString();
+		String comment = sanitizeFeedbackComment(
+				body.get("comment") != null ? body.get("comment").toString() : null);
+
+		ChartSearchAuditLog auditLog = auditLogService.getAuditLog(auditLogId);
+		User user = Context.getAuthenticatedUser();
+		if (auditLog == null || auditLog.getUser() == null || !auditLog.getUser().equals(user)) {
+			return new ResponseEntity<Object>(
+					errorResponse("Question not found"), HttpStatus.NOT_FOUND);
+		}
+
+		auditLog.setRating(rating);
+		auditLog.setFeedbackComment(comment);
+		auditLogService.saveAuditLog(auditLog);
+
+		Map<String, Object> response = new HashMap<String, Object>();
+		response.put("success", true);
 		return new ResponseEntity<Object>(response, HttpStatus.OK);
 	}
 
@@ -484,6 +525,43 @@ public class ChartSearchAiRestController {
 					HttpStatus.TOO_MANY_REQUESTS);
 		}
 		return null;
+	}
+
+	/**
+	 * Validates feedback input fields (questionId and rating). Returns an error
+	 * message if validation fails, or null if the input is valid.
+	 */
+	static String validateFeedbackInput(Map<String, Object> body) {
+		Object questionIdObj = body.get("questionId");
+		if (questionIdObj == null) {
+			return "questionId is required";
+		}
+		try {
+			Integer.valueOf(questionIdObj.toString());
+		}
+		catch (NumberFormatException e) {
+			return "Invalid questionId";
+		}
+		String rating = body.get("rating") != null ? body.get("rating").toString() : null;
+		if (rating == null || (!"positive".equals(rating) && !"negative".equals(rating))) {
+			return "rating must be 'positive' or 'negative'";
+		}
+		return null;
+	}
+
+	/**
+	 * Sanitizes a feedback comment: strips control characters and truncates
+	 * to 500 characters. Returns null if the input is null.
+	 */
+	static String sanitizeFeedbackComment(String comment) {
+		if (comment == null) {
+			return null;
+		}
+		comment = CONTROL_CHARS.matcher(comment).replaceAll("");
+		if (comment.length() > 500) {
+			comment = comment.substring(0, 500);
+		}
+		return comment;
 	}
 
 	/**

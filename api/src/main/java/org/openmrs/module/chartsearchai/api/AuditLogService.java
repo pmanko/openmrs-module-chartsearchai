@@ -23,6 +23,8 @@ public interface AuditLogService {
 
 	ChartSearchAuditLog saveAuditLog(ChartSearchAuditLog auditLog);
 
+	ChartSearchAuditLog getAuditLog(Integer auditLogId);
+
 	List<ChartSearchAuditLog> getAuditLogs(Patient patient, User user, Date fromDate, Date toDate,
 			Integer startIndex, Integer limit);
 

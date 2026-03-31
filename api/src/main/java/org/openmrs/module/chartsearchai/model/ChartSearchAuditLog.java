@@ -38,6 +38,10 @@ public class ChartSearchAuditLog implements Serializable {
 
 	private Long responseTimeMs;
 
+	private String rating;
+
+	private String feedbackComment;
+
 	private Date dateCreated;
 
 	public Integer getAuditLogId() {
@@ -110,5 +114,21 @@ public class ChartSearchAuditLog implements Serializable {
 
 	public void setDateCreated(Date dateCreated) {
 		this.dateCreated = dateCreated;
+	}
+
+	public String getRating() {
+		return rating;
+	}
+
+	public void setRating(String rating) {
+		this.rating = rating;
+	}
+
+	public String getFeedbackComment() {
+		return feedbackComment;
+	}
+
+	public void setFeedbackComment(String feedbackComment) {
+		this.feedbackComment = feedbackComment;
 	}
 }
