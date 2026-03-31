@@ -2,6 +2,27 @@
 
 This document captures the architectural decisions made for the Chart Search AI module, including alternatives evaluated and the reasoning behind the chosen approaches.
 
+## Table of Contents
+
+- [Problem Statement](#problem-statement)
+- [Decision 1: What value does an LLM add?](#decision-1-what-value-does-an-llm-add)
+- [Decision 2: Overall architecture — RAG vs. alternatives](#decision-2-overall-architecture--rag-vs-alternatives)
+- [Decision 3: Embedding approach — semantic search index](#decision-3-embedding-approach--semantic-search-index)
+- [Decision 4: Concise text as LLM input format](#decision-4-concise-text-as-llm-input-format)
+- [Decision 5: Embedding granularity](#decision-5-embedding-granularity)
+- [Decision 6: Embedding model](#decision-6-embedding-model)
+- [Decision 7: Vector storage — MySQL, not a vector database](#decision-7-vector-storage--mysql-not-a-vector-database)
+- [Decision 8: Index population strategy](#decision-8-index-population-strategy)
+- [Decision 9: Text serialization — ClinicalTextSerializer pattern](#decision-9-text-serialization--clinicaltextserializer-pattern)
+- [Decision 10: Single LLM architecture with optional embedding pre-filter](#decision-10-single-llm-architecture-with-optional-embedding-pre-filter)
+- [Decision 11: REST API and guardrails](#decision-11-rest-api-and-guardrails)
+- [Decision 12: Concurrency model](#decision-12-concurrency-model)
+- [Known limitations](#known-limitations)
+- [Decision 13: Lucene BM25 as an alternative retrieval pipeline](#decision-13-lucene-bm25-as-an-alternative-retrieval-pipeline)
+- [Decision 14: Elasticsearch hybrid search pipeline with RRF](#decision-14-elasticsearch-hybrid-search-pipeline-with-rrf)
+- [Decision 15: LangChain / LangChain4j not adopted](#decision-15-langchain--langchain4j-not-adopted)
+- [Planned future work](#planned-future-work)
+
 ## Problem Statement
 
 Clinicians using OpenMRS often see hundreds of patients daily with limited time per encounter. Finding specific information in a patient's chart — especially across years of records, unstructured notes, and multiple widget pages — is slow and error-prone. A Chart Search feature should help clinicians quickly find what they need by asking natural language questions about a patient's chart.
