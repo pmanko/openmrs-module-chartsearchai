@@ -196,7 +196,7 @@ Records will be re-indexed on the next patient access.
 
 ### Absent-data detection
 
-When the embedding pipeline is active and a query has no keyword matches in the patient's records (e.g., asking "any cancer?" for a patient with no cancer-related records), the system uses a z-score gate to detect whether the top semantic match is a genuine result or just noise. If the patient has 30+ records and the best semantic score is not a statistical outlier (z-score < 2.0), the query returns "There are no records about [topic] in this patient's chart" instead of false positives. This prevents the system from returning unrelated records that happen to have slightly elevated similarity scores.
+When the embedding pipeline is active and a query has no keyword matches in the patient's records (e.g., asking "any cancer?" for a patient with no cancer-related records), the system uses a z-score gate to detect whether the top semantic match is a genuine result or just noise. If the patient has 30+ records and the best semantic score is not a statistical outlier (z-score < 1.5), the query returns "There are no records about [topic] in this patient's chart" instead of false positives. This prevents the system from returning unrelated records that happen to have slightly elevated similarity scores.
 
 ### Recency cap
 
@@ -226,12 +226,15 @@ Response:
 {
   "answer": "The patient is currently on Metformin [1] and Lisinopril [3]...",
   "disclaimer": "This response is AI-generated and may not be accurate...",
+  "questionId": "42",
   "references": [
     { "index": 3, "resourceType": "order", "resourceId": 789, "date": "2025-03-15" },
     { "index": 1, "resourceType": "order", "resourceId": 456, "date": "2025-01-10" }
   ]
 }
 ```
+
+`questionId` is a string identifier for this query, used to submit feedback (see below). It is omitted if audit logging fails.
 
 ### Streaming search (SSE)
 
@@ -253,8 +256,31 @@ SSE events:
 | Event | Description |
 |-------|-------------|
 | `token` | A chunk of the answer text as it is generated |
-| `done` | Final JSON with the complete answer, references (sorted most recent first, with `index`, `resourceType`, `resourceId`, `date`), and disclaimer |
+| `done` | Final JSON with the complete answer, references (sorted most recent first, with `index`, `resourceType`, `resourceId`, `date`), `questionId`, and disclaimer |
 | `error` | Error message if something goes wrong |
+
+### Feedback
+
+Submit user feedback (thumbs up/down) for an AI response. Requires the **"AI Query Patient Data"** privilege.
+
+```
+POST /ws/rest/v1/chartsearchai/feedback
+Content-Type: application/json
+
+{
+  "questionId": "42",
+  "rating": "positive",
+  "comment": "Accurate and helpful"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `questionId` | Yes | The `questionId` from the search response |
+| `rating` | Yes | `"positive"` or `"negative"` |
+| `comment` | No | Optional text (max 500 characters, truncated if longer) |
+
+Users can only submit feedback on their own queries. Submitting again overwrites the previous feedback.
 
 ### Audit log
 
@@ -264,7 +290,7 @@ Requires the **"View AI Audit Logs"** privilege.
 GET /ws/rest/v1/chartsearchai/auditlog?patient=...&user=...&fromDate=...&toDate=...&startIndex=0&limit=50
 ```
 
-All query parameters are optional. `fromDate` and `toDate` are epoch milliseconds. Returns paginated results ordered by most recent first, with a `totalCount` for pagination.
+All query parameters are optional. `fromDate` and `toDate` are epoch milliseconds. Returns paginated results ordered by most recent first, with a `totalCount` for pagination. Each entry includes `rating` and `feedbackComment` fields (null if no feedback was submitted).
 
 ## Patient access control
 
