@@ -12,6 +12,7 @@ This document captures the architectural decisions made for the Chart Search AI 
 - [Decision 5: Embedding granularity](#decision-5-embedding-granularity)
 - [Decision 6: Embedding model](#decision-6-embedding-model)
 - [Decision 7: Vector storage — MySQL, not a vector database](#decision-7-vector-storage--mysql-not-a-vector-database)
+- [CQRS separation](#cqrs-separation)
 - [Decision 8: Index population strategy](#decision-8-index-population-strategy)
 - [Decision 9: Text serialization — ClinicalTextSerializer pattern](#decision-9-text-serialization--clinicaltextserializer-pattern)
 - [Decision 10: Single LLM architecture with optional embedding pre-filter](#decision-10-single-llm-architecture-with-optional-embedding-pre-filter)
@@ -195,7 +196,7 @@ Store embeddings as `MEDIUMBLOB` in a regular MySQL table (`chartsearchai_embedd
 
 The `UNIQUE KEY (resource_type, resource_id)` constraint prevents duplicate embeddings and enables upsert on re-index.
 
-### CQRS separation
+## CQRS separation
 
 The module applies the CQRS (Command Query Responsibility Segregation) principle in relation to OpenMRS patient data. The transactional store (OpenMRS's normalized relational tables — `obs`, `orders`, `conditions`, etc.) serves clinical workflows and CRUD operations. The query stores are separate, denormalized projections optimized for search:
 
