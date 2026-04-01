@@ -71,7 +71,6 @@ public class LlmProviderTest {
 		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
 		assertEquals("The patient has Hypertension [48] and Diabetes [49].", result.getAnswer());
 		assertEquals(Arrays.asList(48, 49), result.getCitations());
-		assertEquals(0, result.getTokenCount());
 	}
 
 	@Test
@@ -281,29 +280,6 @@ public class LlmProviderTest {
 	public void getIdleTimeoutMinutes_shouldReturnZeroToDisable() {
 		LlmProvider provider = createProviderWithIdleTimeout(0);
 		assertEquals(0, provider.getIdleTimeoutMinutes());
-	}
-
-	@Test
-	public void extractResponse_withTokenCount_shouldPreserveCount() {
-		String response = "{\"answer\": \"On Metformin [1].\", \"citations\": [1]}";
-		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response, 1500);
-		assertEquals("On Metformin [1].", result.getAnswer());
-		assertEquals(Arrays.asList(1), result.getCitations());
-		assertEquals(1500, result.getTokenCount());
-	}
-
-	@Test
-	public void extractResponse_withTokenCount_shouldPreserveCountOnFallback() {
-		LlmProvider.LlmResponse result = LlmProvider.extractResponse("not json", 42);
-		assertEquals("not json", result.getAnswer());
-		assertTrue(result.getCitations().isEmpty());
-		assertEquals(42, result.getTokenCount());
-	}
-
-	@Test
-	public void llmResponse_shouldDefaultTokenCountToZero() {
-		LlmProvider.LlmResponse result = new LlmProvider.LlmResponse("answer", Arrays.asList(1));
-		assertEquals(0, result.getTokenCount());
 	}
 
 	@Test
