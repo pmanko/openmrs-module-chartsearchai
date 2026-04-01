@@ -283,6 +283,14 @@ public class LlmProviderTest {
 	}
 
 	@Test
+	public void defaultRepeatPenalty_shouldBePositiveAndGreaterThanOne() {
+		assertTrue(ChartSearchAiConstants.DEFAULT_REPEAT_PENALTY > 1.0f,
+				"Repeat penalty must be > 1.0 to discourage repetition loops");
+		assertTrue(ChartSearchAiConstants.DEFAULT_REPEAT_PENALTY <= 1.5f,
+				"Repeat penalty should not be too aggressive (max 1.5)");
+	}
+
+	@Test
 	public void close_shouldBeIdempotent() {
 		LlmProvider provider = new LlmProvider();
 		provider.close();

@@ -433,6 +433,7 @@ public class LlmProvider {
 				.setSeed(42)
 				.setCachePrompt(false)
 				.setNPredict(ChartSearchAiConstants.DEFAULT_MAX_TOKENS)
+				.setRepeatPenalty(ChartSearchAiConstants.DEFAULT_REPEAT_PENALTY)
 				.setGrammar(JSON_ANSWER_GRAMMAR);
 
 		return new PreparedInference(finalParams, promptTokens);
