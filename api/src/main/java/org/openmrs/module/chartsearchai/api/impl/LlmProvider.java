@@ -553,7 +553,8 @@ public class LlmProvider {
 			log.info("Loading LLM from {}", modelPath);
 			ModelParameters modelParams = new ModelParameters()
 					.setModel(modelPath)
-					.setGpuLayers(-1);
+					.setGpuLayers(-1)
+					.setCtxSize(4096);
 			model = new LlamaModel(modelParams);
 			loadedModelPath = modelPath;
 			log.info("LLM loaded successfully");
