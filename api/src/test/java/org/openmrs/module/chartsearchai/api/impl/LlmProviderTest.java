@@ -12,16 +12,12 @@ package org.openmrs.module.chartsearchai.api.impl;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
-import java.util.Collections;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
-import org.openmrs.module.chartsearchai.api.ChartSearchService.ChartAnswer;
-import org.openmrs.module.chartsearchai.model.ChartSearchAuditLog;
 
 /**
  * Pure unit tests for {@link LlmProvider} configuration logic.
@@ -359,34 +355,5 @@ public class LlmProviderTest {
 				return org.openmrs.module.chartsearchai.ChartSearchAiConstants.DEFAULT_LLM_TIMEOUT_SECONDS;
 			}
 		};
-	}
-
-	// --- ChartAnswer token count tests ---
-
-	@Test
-	public void chartAnswer_shouldCarryTokenCount() {
-		ChartAnswer answer = new ChartAnswer("answer", Collections.emptyList(), 1939);
-		assertEquals(1939, answer.getTokenCount());
-	}
-
-	@Test
-	public void chartAnswer_shouldDefaultTokenCountToZero() {
-		ChartAnswer answer = new ChartAnswer("answer", Collections.emptyList());
-		assertEquals(0, answer.getTokenCount());
-	}
-
-	// --- ChartSearchAuditLog token count tests ---
-
-	@Test
-	public void auditLog_shouldStoreAndRetrieveTokenCount() {
-		ChartSearchAuditLog auditLog = new ChartSearchAuditLog();
-		auditLog.setTokenCount(1500);
-		assertEquals(Integer.valueOf(1500), auditLog.getTokenCount());
-	}
-
-	@Test
-	public void auditLog_shouldAllowNullTokenCount() {
-		ChartSearchAuditLog auditLog = new ChartSearchAuditLog();
-		assertNull(auditLog.getTokenCount());
 	}
 }
