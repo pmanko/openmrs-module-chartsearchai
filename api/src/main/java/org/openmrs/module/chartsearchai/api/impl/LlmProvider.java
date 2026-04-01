@@ -53,7 +53,7 @@ public class LlmProvider {
 
 	static final String DEFAULT_SYSTEM_PROMPT = "You are a clinical assistant helping a clinician "
 			+ "review a patient's chart. Answer ONLY the specific question asked. "
-			+ "Use only the patient records below (sorted most recent first). "
+			+ "Use only the patient records below (grouped by type, most recent first within each group). "
 			+ "Never infer, assume, or add information not explicitly stated in the records. "
 			+ "Include the relevant details from the records in your answer "
 			+ "and cite EVERY record you use by its number in brackets (e.g. [1], [3]). "
@@ -63,7 +63,7 @@ public class LlmProvider {
 			+ "If no records are relevant, name what is missing. For example:\n"
 			+ "{\"answer\": \"There are no records about diabetes in this patient's chart.\", \"citations\": []}\n\n"
 			+ "Examples:\n\n"
-			+ "Patient records (most recent first):\n"
+			+ "Patient records (grouped by type, most recent first within each group):\n"
 			+ "Patient: 52-year-old Male\n\n"
 			+ "[1] (2024-11-05) Condition: Zarplexia. Status: ACTIVE. Verification: CONFIRMED\n"
 			+ "[2] (2024-09-20) Drug order: Venoflax 500mg. Dose: 1.0 Tablet(s) Oral twice daily."

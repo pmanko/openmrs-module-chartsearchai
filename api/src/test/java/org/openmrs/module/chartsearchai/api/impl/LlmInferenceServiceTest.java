@@ -625,6 +625,85 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void groupByConcept_shouldGroupRecordsByConceptKeyPreservingOrderWithinGroup() {
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> records
+				= new ArrayList<>();
+		// Interleaved: BP, Weight, BP, Temp, Weight, BP
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 1, "Clinical observation: Test — Systolic Blood Pressure: 151.0", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 2, "Clinical observation: Test — Weight (kg): 94.0", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 3, "Clinical observation: Test — Systolic Blood Pressure: 134.0", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 4, "Clinical observation: Test — Temperature (C): 36.7", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 5, "Clinical observation: Test — Weight (kg): 68.0", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 6, "Clinical observation: Test — Systolic Blood Pressure: 102.0", null));
+
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> result
+				= LlmInferenceService.groupByConcept(records);
+
+		assertEquals(6, result.size(), "All records should be preserved");
+		// BP group first (first concept encountered), in original order
+		assertEquals(Integer.valueOf(1), result.get(0).getResourceId());
+		assertEquals(Integer.valueOf(3), result.get(1).getResourceId());
+		assertEquals(Integer.valueOf(6), result.get(2).getResourceId());
+		// Weight group next
+		assertEquals(Integer.valueOf(2), result.get(3).getResourceId());
+		assertEquals(Integer.valueOf(5), result.get(4).getResourceId());
+		// Temperature group last
+		assertEquals(Integer.valueOf(4), result.get(5).getResourceId());
+	}
+
+	@Test
+	public void groupByConcept_shouldBeNoOpForSingleConcept() {
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> records
+				= new ArrayList<>();
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 1, "Clinical observation: Test — Weight (kg): 94.0", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 2, "Clinical observation: Test — Weight (kg): 68.0", null));
+
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> result
+				= LlmInferenceService.groupByConcept(records);
+
+		assertEquals(2, result.size());
+		assertEquals(Integer.valueOf(1), result.get(0).getResourceId());
+		assertEquals(Integer.valueOf(2), result.get(1).getResourceId());
+	}
+
+	@Test
+	public void groupByConcept_shouldHandleEmptyList() {
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> result
+				= LlmInferenceService.groupByConcept(new ArrayList<>());
+		assertTrue(result.isEmpty());
+	}
+
+	@Test
+	public void groupByConcept_shouldHandleMixedRecordTypes() {
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> records
+				= new ArrayList<>();
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 1, "Clinical observation: Test — Systolic Blood Pressure: 97.0", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"condition", 2, "Medical condition: Condition: Hypertension. Status: ACTIVE", null));
+		records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+				"obs", 3, "Clinical observation: Test — Systolic Blood Pressure: 134.0", null));
+
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> result
+				= LlmInferenceService.groupByConcept(records);
+
+		assertEquals(3, result.size());
+		// BP records grouped together
+		assertEquals(Integer.valueOf(1), result.get(0).getResourceId());
+		assertEquals(Integer.valueOf(3), result.get(1).getResourceId());
+		// Condition separate
+		assertEquals(Integer.valueOf(2), result.get(2).getResourceId());
+	}
+
+	@Test
 	public void defaultSimilarityRatio_shouldBeBetweenZeroAndOne() {
 		assertTrue(ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO > 0);
 		assertTrue(ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO < 1);

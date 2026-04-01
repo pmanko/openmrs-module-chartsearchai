@@ -228,6 +228,26 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
+	 * Groups records by concept key, preserving the original order within each group.
+	 * Groups appear in the order their first record is encountered. For example,
+	 * interleaved [BP, Weight, BP, Temp, Weight] becomes [BP, BP, Weight, Weight, Temp].
+	 * This helps small LLMs process multi-concept queries by reducing the need to
+	 * mentally sort interleaved records.
+	 */
+	static List<SerializedRecord> groupByConcept(List<SerializedRecord> records) {
+		Map<String, List<SerializedRecord>> groups = new java.util.LinkedHashMap<String, List<SerializedRecord>>();
+		for (SerializedRecord record : records) {
+			String key = conceptKey(record.getText());
+			groups.computeIfAbsent(key, k -> new ArrayList<SerializedRecord>()).add(record);
+		}
+		List<SerializedRecord> result = new ArrayList<SerializedRecord>();
+		for (List<SerializedRecord> group : groups.values()) {
+			result.addAll(group);
+		}
+		return result;
+	}
+
+	/**
 	 * Extracts a concept grouping key from record text by stripping the
 	 * date prefix and trailing numeric value with optional unit. For example:
 	 * <ul>
@@ -410,6 +430,8 @@ public class LlmInferenceService implements ChartSearchService {
 			filtered = capPerConcept(filtered, recencyCap);
 			log.debug("Recency cap {} applied, {} records remain", recencyCap, filtered.size());
 		}
+
+		filtered = groupByConcept(filtered);
 
 		return chartSerializer.serialize(patient, filtered);
 	}
