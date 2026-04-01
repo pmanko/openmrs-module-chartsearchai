@@ -270,6 +270,138 @@ Key design choices:
 - `PatientProgramTextSerializer` includes program name, enrollment/completion dates, active status, outcome, and current workflow state (via `getCurrentState(null)`). Only the current state is serialized; historical state transitions (e.g., "First Line → Second Line") are omitted. Including them would add ~15-20 tokens per transition (e.g., `States: First Line (2023-01-15 to 2024-06-01), Second Line (2024-06-01 to present)`), and most programs have 1-3 transitions. This is a potential future enhancement for questions about treatment changes (e.g., "Why was the patient's ARV regimen changed?"), but the token cost compounds across multiple program enrollments. Location is omitted — it is administrative metadata rarely part of a clinical question about a program enrollment.
 - `MedicationDispenseTextSerializer` includes drug name, status (completed/declined/cancelled), quantity/units, dose/units/route/frequency, dosing instructions, status reason, substitution flag/type/reason, and date handed over. Status is clinically critical — a declined or cancelled dispense means the patient did NOT receive the medication, which changes the clinical picture entirely. Substitution details (type and reason) are included because a generic substitution for cost reasons is clinically different from a therapeutic substitution for a drug interaction. Omitted: date prepared (pharmacy workflow detail, not clinical content).
 
+### Serialization format
+
+Records are serialized as labeled plain text (e.g., `Condition: Diabetes. Status: ACTIVE`). This was chosen over structured formats for token efficiency:
+
+| Format | Example | Tokens (approx.) |
+|--------|---------|-------------------|
+| **Plain text (chosen)** | `Condition: Diabetes. Status: ACTIVE` | ~8 |
+| JSON | `{"type":"condition","name":"Diabetes","status":"ACTIVE"}` | ~18 |
+| FHIR JSON | `{"resourceType":"Condition","code":{"text":"Diabetes"},"clinicalStatus":{"coding":[{"code":"active"}]}}` | ~30+ |
+| XML | `<condition><name>Diabetes</name><status>ACTIVE</status></condition>` | ~16 |
+
+With 10 records per query and potentially hundreds of patients per day, the token savings compound. Plain text also reads naturally, which helps smaller LLMs that perform better with human-readable input than structured formats. Field labels (e.g., "Status:", "Severity:") provide enough structure for the LLM to extract information without the overhead of delimiters, braces, or tags.
+
+### Serialized fields per record type
+
+Each record type is serialized into a concise text string. The fields below are chosen for clinical value while minimizing token count.
+
+#### Obs (observations, vitals, lab results)
+
+**Included fields:** concept class prefix (e.g., "Test — ", "Assessment — " when available), concept name, value (coded/numeric/text/datetime/drug), units, value modifier (e.g., "<", ">"), interpretation (NORMAL, ABNORMAL), comment, group members (flattened). The concept class "Question" is mapped to "Assessment" to avoid collision with the "Question:" separator in the LLM prompt.
+
+**Excluded fields:** reference range (not exposed in OpenMRS 2.8.x API), linked order (serialized separately as its own record), obs datetime (already in the citation date label)
+
+Examples:
+```
+[1] (2025-10-30) Systolic Blood Pressure: 120 mmHg (ABNORMAL). Note: Taken after exercise
+[2] (2025-10-30) Blood Panel: Hemoglobin: 12.5 g/dL; White Blood Cells: 8000 cells/uL (NORMAL)
+```
+
+#### Condition
+
+**Included fields:** condition name, clinical status (ACTIVE/INACTIVE), verification status (CONFIRMED, etc.), additional detail, end date, end reason
+
+**Excluded fields:** onset date (already in the citation date label)
+
+Examples:
+```
+[3] (2018-03-10) Condition: Type 2 Diabetes Mellitus. Status: ACTIVE. Verification: CONFIRMED.
+    Detail: Stage 3, GFR 45 mL/min
+[4] (2023-01-15) Condition: Malaria. Status: INACTIVE. Resolved: 2023-02-01 (Treatment completed)
+```
+
+#### Diagnosis
+
+**Included fields:** diagnosis name, certainty (CONFIRMED/PROVISIONAL), rank (Primary/Secondary)
+
+**Excluded fields:** linked condition (serialized separately)
+
+Example:
+```
+[5] (2025-06-29) Diagnosis: Tuberculosis. Certainty: CONFIRMED. Rank: Secondary
+```
+
+#### Allergy
+
+**Included fields:** allergen name, allergen type (drug allergen/food allergen/environmental allergen), severity, reactions, comments
+
+Example:
+```
+[6] (2024-12-29) Allergy: Penicillin (drug allergen). Severity: Severe. Reactions: Anaphylaxis, Rash.
+    Comments: Confirmed by allergist
+```
+
+#### Order (drug orders, test orders, referral orders)
+
+**Included fields:** concept name, action (NEW/REVISE/DISCONTINUE/RENEW), urgency (ROUTINE/STAT), instructions, order reason, date stopped. Drug orders additionally: drug name, dose/units/route/frequency, duration/units, quantity/units, as-needed flag and condition, dosing instructions. Service/test/referral orders additionally: laterality, specimen source, clinical history.
+
+**Excluded fields:** number of refills (pharmacy detail), brand name (drug name already captured), dispense-as-written flag (pharmacy detail), care setting — inpatient/outpatient (adds tokens to every order for marginal value), scheduled date (only relevant for rare ON_SCHEDULED_DATE urgency), number of repeats (rarely relevant)
+
+Examples:
+```
+[7]  (2025-01-10) Drug order: Metformin 500mg. Dose: 1.0 Tablet(s) Oral twice daily.
+     Duration: 30 Day(s). Quantity: 60.0 Tablet(s). Action: NEW. Urgency: ROUTINE
+[8]  (2025-03-15) Drug order: Ibuprofen 400mg. Dose: 1.0 Tablet(s) Oral.
+     As needed (for pain). Action: NEW. Urgency: ROUTINE
+[9]  (2025-06-29) Test order: X-Ray Chest. Laterality: LEFT.
+     Clinical history: Persistent cough for 3 weeks. Action: NEW. Urgency: STAT
+[10] (2025-04-01) Drug order: Lisinopril 10mg. Action: DISCONTINUE. Urgency: ROUTINE.
+     Reason: Persistent dry cough. Stopped: 2025-04-01
+```
+
+#### Medication dispense
+
+**Included fields:** drug name, status (completed/declined/cancelled), quantity/units, dose/units/route/frequency, dosing instructions, status reason, substitution flag/type/reason, date handed over
+
+**Excluded fields:** date prepared (pharmacy workflow detail)
+
+Examples:
+```
+[11] (2025-01-10) Dispensed: Metformin 500mg. Status: Completed.
+     Quantity: 60.0 Tablet(s). Dose: 1.0 Tablet(s) Oral twice daily.
+     Handed over: 2025-01-10
+[12] (2025-01-10) Dispensed: Metformin 500mg. Status: Completed.
+     Status reason: Out of stock. Substituted: Generic equivalent.
+     Substitution reason: Cost. Handed over: 2025-01-10
+[13] (2025-02-15) Dispensed: Amoxicillin 250mg. Status: Declined.
+     Status reason: Patient refused
+```
+
+#### Patient program
+
+**Included fields:** program name, enrollment date, completion date, active status, outcome, current state
+
+**Excluded fields:** location (where enrolled — marginal for clinical queries), program attributes (implementation-specific, unknown content)
+
+Examples:
+```
+[14] (2024-01-15) Program: HIV Treatment. Enrolled: 2024-01-15. Status: Active.
+     Current state: On ART
+[15] (2022-06-01) Program: TB Treatment. Enrolled: 2022-06-01.
+     Completed: 2023-01-15. Outcome: Treatment completed
+```
+
+### Medical imaging data (X-rays, scans, etc.)
+
+The recommended Llama 3.3 8B model is text-only. Multimodal variants that can interpret images directly (Llama 3.2 11B and 90B) are too large for CPU inference in low-resource settings.
+
+#### Current approach: rely on text reports
+
+For v1, the module relies on the text reports that accompany imaging studies. In OpenMRS, imaging results typically have an associated obs with the radiologist's interpretation (e.g., `"Obs: Chest X-ray findings: bilateral infiltrates consistent with pneumonia"`). This text is already captured by `ObsTextSerializer` and flows through the existing pipeline — the embedding pre-filter can match it by similarity, and the LLM can reason over it.
+
+#### Future options for direct image interpretation
+
+These require either hardware beyond current low-resource constraints or an external service:
+
+- **Multimodal LLM (Llama 3.2 11B/90B)**: Can interpret images alongside text but requires GPU or significantly more RAM than available in target deployments.
+- **Specialized medical imaging models**: Small models trained for specific tasks (e.g., CheXNet for chest X-ray classification). Each covers only one type of image, so multiple models would be needed, adding significant complexity and storage requirements.
+- **Cloud API**: Offload image interpretation to a cloud-hosted multimodal model. Introduces external dependency, latency, cost, and data privacy concerns that conflict with the self-contained, offline-capable design goals.
+- **OCR for paper forms**: Convert photos of handwritten or printed paper forms to text at write time. The extracted text then flows through the existing serializer pipeline. This is more feasible than general medical image interpretation and addresses a common need in low-resource settings where paper forms are digitized by photographing them.
+
+Direct image interpretation is deferred to future work, pending either capable multimodal models that run on CPU within low-resource constraints, or a decision to support optional cloud API integration for sites that have connectivity and consent to external processing.
+
 ### Resource type coverage analysis
 
 The seven resource types above (Obs, Condition, Allergy, Diagnosis, Order, PatientProgram, MedicationDispense) were chosen after a systematic review of every patient-facing domain class in OpenMRS core 2.8.0. The following data types were considered and intentionally excluded:
@@ -590,138 +722,6 @@ The general-purpose embedding model (all-MiniLM-L6-v2) ranks records by lexical 
 ### Chunking strategy
 
 No chunking is used. Each patient record (obs, condition, diagnosis, allergy, order, program enrollment, medication dispense) is serialized as a single text string and embedded as one unit. This is possible because individual clinical records are naturally short — typically a sentence or two — so they fit well within the embedding model's 256-token window without splitting. This avoids the complexity of chunk boundary management, overlap strategies, and reassembly that document-oriented RAG systems require.
-
-### Serialization format
-
-Records are serialized as labeled plain text (e.g., `Condition: Diabetes. Status: ACTIVE`). This was chosen over structured formats for token efficiency:
-
-| Format | Example | Tokens (approx.) |
-|--------|---------|-------------------|
-| **Plain text (chosen)** | `Condition: Diabetes. Status: ACTIVE` | ~8 |
-| JSON | `{"type":"condition","name":"Diabetes","status":"ACTIVE"}` | ~18 |
-| FHIR JSON | `{"resourceType":"Condition","code":{"text":"Diabetes"},"clinicalStatus":{"coding":[{"code":"active"}]}}` | ~30+ |
-| XML | `<condition><name>Diabetes</name><status>ACTIVE</status></condition>` | ~16 |
-
-With 10 records per query and potentially hundreds of patients per day, the token savings compound. Plain text also reads naturally, which helps smaller LLMs that perform better with human-readable input than structured formats. Field labels (e.g., "Status:", "Severity:") provide enough structure for the LLM to extract information without the overhead of delimiters, braces, or tags.
-
-### Serialized fields per record type
-
-Each record type is serialized into a concise text string. The fields below are chosen for clinical value while minimizing token count.
-
-#### Obs (observations, vitals, lab results)
-
-**Included fields:** concept class prefix (e.g., "Test — ", "Assessment — " when available), concept name, value (coded/numeric/text/datetime/drug), units, value modifier (e.g., "<", ">"), interpretation (NORMAL, ABNORMAL), comment, group members (flattened). The concept class "Question" is mapped to "Assessment" to avoid collision with the "Question:" separator in the LLM prompt.
-
-**Excluded fields:** reference range (not exposed in OpenMRS 2.8.x API), linked order (serialized separately as its own record), obs datetime (already in the citation date label)
-
-Examples:
-```
-[1] (2025-10-30) Systolic Blood Pressure: 120 mmHg (ABNORMAL). Note: Taken after exercise
-[2] (2025-10-30) Blood Panel: Hemoglobin: 12.5 g/dL; White Blood Cells: 8000 cells/uL (NORMAL)
-```
-
-#### Condition
-
-**Included fields:** condition name, clinical status (ACTIVE/INACTIVE), verification status (CONFIRMED, etc.), additional detail, end date, end reason
-
-**Excluded fields:** onset date (already in the citation date label)
-
-Examples:
-```
-[3] (2018-03-10) Condition: Type 2 Diabetes Mellitus. Status: ACTIVE. Verification: CONFIRMED.
-    Detail: Stage 3, GFR 45 mL/min
-[4] (2023-01-15) Condition: Malaria. Status: INACTIVE. Resolved: 2023-02-01 (Treatment completed)
-```
-
-#### Diagnosis
-
-**Included fields:** diagnosis name, certainty (CONFIRMED/PROVISIONAL), rank (Primary/Secondary)
-
-**Excluded fields:** linked condition (serialized separately)
-
-Example:
-```
-[5] (2025-06-29) Diagnosis: Tuberculosis. Certainty: CONFIRMED. Rank: Secondary
-```
-
-#### Allergy
-
-**Included fields:** allergen name, allergen type (drug allergen/food allergen/environmental allergen), severity, reactions, comments
-
-Example:
-```
-[6] (2024-12-29) Allergy: Penicillin (drug allergen). Severity: Severe. Reactions: Anaphylaxis, Rash.
-    Comments: Confirmed by allergist
-```
-
-#### Order (drug orders, test orders, referral orders)
-
-**Included fields:** concept name, action (NEW/REVISE/DISCONTINUE/RENEW), urgency (ROUTINE/STAT), instructions, order reason, date stopped. Drug orders additionally: drug name, dose/units/route/frequency, duration/units, quantity/units, as-needed flag and condition, dosing instructions. Service/test/referral orders additionally: laterality, specimen source, clinical history.
-
-**Excluded fields:** number of refills (pharmacy detail), brand name (drug name already captured), dispense-as-written flag (pharmacy detail), care setting — inpatient/outpatient (adds tokens to every order for marginal value), scheduled date (only relevant for rare ON_SCHEDULED_DATE urgency), number of repeats (rarely relevant)
-
-Examples:
-```
-[7]  (2025-01-10) Drug order: Metformin 500mg. Dose: 1.0 Tablet(s) Oral twice daily.
-     Duration: 30 Day(s). Quantity: 60.0 Tablet(s). Action: NEW. Urgency: ROUTINE
-[8]  (2025-03-15) Drug order: Ibuprofen 400mg. Dose: 1.0 Tablet(s) Oral.
-     As needed (for pain). Action: NEW. Urgency: ROUTINE
-[9]  (2025-06-29) Test order: X-Ray Chest. Laterality: LEFT.
-     Clinical history: Persistent cough for 3 weeks. Action: NEW. Urgency: STAT
-[10] (2025-04-01) Drug order: Lisinopril 10mg. Action: DISCONTINUE. Urgency: ROUTINE.
-     Reason: Persistent dry cough. Stopped: 2025-04-01
-```
-
-#### Medication dispense
-
-**Included fields:** drug name, status (completed/declined/cancelled), quantity/units, dose/units/route/frequency, dosing instructions, status reason, substitution flag/type/reason, date handed over
-
-**Excluded fields:** date prepared (pharmacy workflow detail)
-
-Examples:
-```
-[11] (2025-01-10) Dispensed: Metformin 500mg. Status: Completed.
-     Quantity: 60.0 Tablet(s). Dose: 1.0 Tablet(s) Oral twice daily.
-     Handed over: 2025-01-10
-[12] (2025-01-10) Dispensed: Metformin 500mg. Status: Completed.
-     Status reason: Out of stock. Substituted: Generic equivalent.
-     Substitution reason: Cost. Handed over: 2025-01-10
-[13] (2025-02-15) Dispensed: Amoxicillin 250mg. Status: Declined.
-     Status reason: Patient refused
-```
-
-#### Patient program
-
-**Included fields:** program name, enrollment date, completion date, active status, outcome, current state
-
-**Excluded fields:** location (where enrolled — marginal for clinical queries), program attributes (implementation-specific, unknown content)
-
-Examples:
-```
-[14] (2024-01-15) Program: HIV Treatment. Enrolled: 2024-01-15. Status: Active.
-     Current state: On ART
-[15] (2022-06-01) Program: TB Treatment. Enrolled: 2022-06-01.
-     Completed: 2023-01-15. Outcome: Treatment completed
-```
-
-### Medical imaging data (X-rays, scans, etc.)
-
-The recommended Llama 3.3 8B model is text-only. Multimodal variants that can interpret images directly (Llama 3.2 11B and 90B) are too large for CPU inference in low-resource settings.
-
-#### Current approach: rely on text reports
-
-For v1, the module relies on the text reports that accompany imaging studies. In OpenMRS, imaging results typically have an associated obs with the radiologist's interpretation (e.g., `"Obs: Chest X-ray findings: bilateral infiltrates consistent with pneumonia"`). This text is already captured by `ObsTextSerializer` and flows through the existing pipeline — the embedding pre-filter can match it by similarity, and the LLM can reason over it.
-
-#### Future options for direct image interpretation
-
-These require either hardware beyond current low-resource constraints or an external service:
-
-- **Multimodal LLM (Llama 3.2 11B/90B)**: Can interpret images alongside text but requires GPU or significantly more RAM than available in target deployments.
-- **Specialized medical imaging models**: Small models trained for specific tasks (e.g., CheXNet for chest X-ray classification). Each covers only one type of image, so multiple models would be needed, adding significant complexity and storage requirements.
-- **Cloud API**: Offload image interpretation to a cloud-hosted multimodal model. Introduces external dependency, latency, cost, and data privacy concerns that conflict with the self-contained, offline-capable design goals.
-- **OCR for paper forms**: Convert photos of handwritten or printed paper forms to text at write time. The extracted text then flows through the existing serializer pipeline. This is more feasible than general medical image interpretation and addresses a common need in low-resource settings where paper forms are digitized by photographing them.
-
-Direct image interpretation is deferred to future work, pending either capable multimodal models that run on CPU within low-resource constraints, or a decision to support optional cloud API integration for sites that have connectivity and consent to external processing.
 
 ## Decision 11: REST API and guardrails
 
