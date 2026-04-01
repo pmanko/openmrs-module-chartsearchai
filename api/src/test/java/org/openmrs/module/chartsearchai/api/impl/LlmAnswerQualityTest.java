@@ -279,15 +279,14 @@ public class LlmAnswerQualityTest {
 
 		// Variation 1: anti-summarization
 		prompts.add(LlmProvider.DEFAULT_SYSTEM_PROMPT.replace(
-				"Keep your answer concise while including all relevant details.",
+				"Include ALL relevant records in your answer — never omit any for brevity.",
 				"NEVER summarize multiple values into a range. List each measurement individually "
 				+ "with its date, value, and citation. Every record MUST appear in the answer."));
 
 		// Variation 2: strongest directive with arrow format
 		prompts.add(LlmProvider.DEFAULT_SYSTEM_PROMPT.replace(
-				"Include the relevant details from the records in your answer "
-				+ "and cite EVERY record you use by its number in brackets (e.g. [1], [3]). "
-				+ "Keep your answer concise while including all relevant details.",
+				"Include ALL relevant records in your answer — never omit any for brevity. "
+				+ "Cite EVERY record you reference by its number in brackets (e.g. [1], [3]).",
 				"CRITICAL REQUIREMENT: You must cite EVERY record provided. "
 				+ "For each record [N], include: the exact value, date, and [N] citation. "
 				+ "Do NOT summarize ranges. Do NOT skip records. "
@@ -298,9 +297,8 @@ public class LlmAnswerQualityTest {
 				.replace("Answer ONLY the specific question asked.",
 						"Answer ONLY the specific question asked. When the question asks about trends, "
 						+ "you MUST list every single value from oldest to newest.")
-				.replace("Include the relevant details from the records in your answer "
-						+ "and cite EVERY record you use by its number in brackets (e.g. [1], [3]). "
-						+ "Keep your answer concise while including all relevant details.",
+				.replace("Include ALL relevant records in your answer — never omit any for brevity. "
+						+ "Cite EVERY record you reference by its number in brackets (e.g. [1], [3]).",
 						"Cite EVERY record by its [N] number. Your answer must contain ALL record numbers. "
 						+ "Format: val (date) [N] \\u2192 val (date) [N] \\u2192 ..."));
 

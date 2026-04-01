@@ -41,6 +41,15 @@ public class LlmProviderTest {
 	}
 
 	@Test
+	public void defaultSystemPrompt_shouldRequireAllRelevantRecords() {
+		assertTrue(LlmProvider.DEFAULT_SYSTEM_PROMPT.contains("ALL relevant records"),
+				"System prompt must instruct LLM to include ALL relevant records");
+		assertTrue(LlmProvider.DEFAULT_SYSTEM_PROMPT.contains("never omit"),
+				"System prompt must explicitly tell LLM not to omit records for brevity");
+	}
+
+
+	@Test
 	public void close_shouldNotFailWhenModelIsNull() {
 		LlmProvider provider = new LlmProvider();
 		// Should not throw
@@ -283,11 +292,14 @@ public class LlmProviderTest {
 	}
 
 	@Test
-	public void defaultRepeatPenalty_shouldBePositiveAndGreaterThanOne() {
-		assertTrue(ChartSearchAiConstants.DEFAULT_REPEAT_PENALTY > 1.0f,
-				"Repeat penalty must be > 1.0 to discourage repetition loops");
-		assertTrue(ChartSearchAiConstants.DEFAULT_REPEAT_PENALTY <= 1.5f,
-				"Repeat penalty should not be too aggressive (max 1.5)");
+	public void defaultRepeatPenalty_shouldBeDisabledToAllowFullEnumeration() {
+		// Repeat penalty must be 1.0 (disabled). Any value > 1.0 causes
+		// greedy decoding (temperature=0) to stop enumerating after ~7
+		// items because structural tokens (commas, brackets) accumulate
+		// penalties. The JSON grammar, nPredict cap, and inference timeout
+		// provide sufficient safeguards against repetition loops.
+		assertEquals(1.0f, ChartSearchAiConstants.DEFAULT_REPEAT_PENALTY,
+				"Repeat penalty must be 1.0 (disabled) to allow complete enumeration");
 	}
 
 	@Test
