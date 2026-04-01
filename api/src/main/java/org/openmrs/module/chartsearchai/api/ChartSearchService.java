@@ -52,10 +52,17 @@ public interface ChartSearchService {
 
 		private final List<RecordReference> references;
 
+		private final int tokenCount;
+
 		public ChartAnswer(String answer, List<RecordReference> references) {
+			this(answer, references, 0);
+		}
+
+		public ChartAnswer(String answer, List<RecordReference> references, int tokenCount) {
 			this.answer = answer;
 			this.references = java.util.Collections.unmodifiableList(
 					new java.util.ArrayList<>(references));
+			this.tokenCount = tokenCount;
 		}
 
 		/**
@@ -71,6 +78,13 @@ public interface ChartSearchService {
 		 */
 		public List<RecordReference> getReferences() {
 			return references;
+		}
+
+		/**
+		 * The total number of tokens used (prompt + completion).
+		 */
+		public int getTokenCount() {
+			return tokenCount;
 		}
 	}
 

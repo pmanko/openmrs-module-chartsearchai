@@ -92,4 +92,11 @@
 		</addColumn>
 	</changeSet>
 
+	<changeSet id="chartsearchai-004" author="openmrs">
+		<comment>Add token_count column to chartsearchai_audit_log for tracking LLM token usage per request</comment>
+		<addColumn tableName="chartsearchai_audit_log">
+			<column name="token_count" type="int"/>
+		</addColumn>
+	</changeSet>
+
 </databaseChangeLog>

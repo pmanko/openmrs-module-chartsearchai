@@ -191,6 +191,7 @@ public class ChartSearchAiRestController {
 		auditLog.setReferenceCount(chartAnswer.getReferences().size());
 		auditLog.setSearchMode(preFilterEnabled ? "pre-filter" : "full-chart");
 		auditLog.setResponseTimeMs(responseTimeMs);
+		auditLog.setTokenCount(chartAnswer.getTokenCount() > 0 ? chartAnswer.getTokenCount() : null);
 		auditLog.setDateCreated(new Date());
 		try {
 			auditLogService.saveAuditLog(auditLog);
@@ -330,6 +331,7 @@ public class ChartSearchAiRestController {
 			auditLog.setReferenceCount(chartAnswer.getReferences().size());
 			auditLog.setSearchMode(searchMode);
 			auditLog.setResponseTimeMs(responseTimeMs);
+			auditLog.setTokenCount(chartAnswer.getTokenCount() > 0 ? chartAnswer.getTokenCount() : null);
 			auditLog.setDateCreated(new Date());
 			try {
 				auditLogService.saveAuditLog(auditLog);
@@ -441,6 +443,7 @@ public class ChartSearchAiRestController {
 			entry.put("referenceCount", auditLog.getReferenceCount());
 			entry.put("searchMode", auditLog.getSearchMode());
 			entry.put("responseTimeMs", auditLog.getResponseTimeMs());
+			entry.put("tokenCount", auditLog.getTokenCount());
 			entry.put("dateCreated", auditLog.getDateCreated() != null
 					? auditLog.getDateCreated().getTime() : null);
 			entry.put("rating", auditLog.getRating());

@@ -38,6 +38,8 @@ public class ChartSearchAuditLog implements Serializable {
 
 	private Long responseTimeMs;
 
+	private Integer tokenCount;
+
 	private String rating;
 
 	private String feedbackComment;
@@ -106,6 +108,14 @@ public class ChartSearchAuditLog implements Serializable {
 
 	public void setResponseTimeMs(Long responseTimeMs) {
 		this.responseTimeMs = responseTimeMs;
+	}
+
+	public Integer getTokenCount() {
+		return tokenCount;
+	}
+
+	public void setTokenCount(Integer tokenCount) {
+		this.tokenCount = tokenCount;
 	}
 
 	public Date getDateCreated() {

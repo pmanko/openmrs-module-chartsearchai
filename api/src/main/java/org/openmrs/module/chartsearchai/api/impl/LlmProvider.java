@@ -165,12 +165,13 @@ public class LlmProvider {
 		LlamaModel llm = getModel();
 
 		int timeoutSeconds = getTimeoutSeconds();
-		InferenceParameters params = createInferenceParameters(llm, numberedRecords, question);
+		PreparedInference prepared = createInferenceParameters(llm, numberedRecords, question);
 
 		long deadline = System.currentTimeMillis() + (timeoutSeconds * 1000L);
 		StringBuilder result = new StringBuilder();
+		int completionTokens = 0;
 
-		for (LlamaOutput output : llm.generate(params)) {
+		for (LlamaOutput output : llm.generate(prepared.params)) {
 			if (System.currentTimeMillis() > deadline) {
 				log.warn("LLM inference timed out after {} seconds", timeoutSeconds);
 				throw new APIException("LLM inference timed out after " + timeoutSeconds
@@ -178,9 +179,14 @@ public class LlmProvider {
 						+ ChartSearchAiConstants.GP_LLM_TIMEOUT_SECONDS);
 			}
 			result.append(output);
+			completionTokens++;
 		}
 
-		LlmResponse llmResponse = extractResponse(result.toString());
+		int tokenCount = prepared.promptTokens + completionTokens;
+		log.info("LLM token usage: {} total ({} prompt + {} completion)", tokenCount,
+				prepared.promptTokens, completionTokens);
+
+		LlmResponse llmResponse = extractResponse(result.toString(), tokenCount);
 		resetIdleTimer();
 		return llmResponse;
 	}
@@ -200,12 +206,13 @@ public class LlmProvider {
 		LlamaModel llm = getModel();
 
 		int timeoutSeconds = getTimeoutSeconds();
-		InferenceParameters params = createInferenceParameters(llm, numberedRecords, question);
+		PreparedInference prepared = createInferenceParameters(llm, numberedRecords, question);
 
 		long deadline = System.currentTimeMillis() + (timeoutSeconds * 1000L);
 		StringBuilder result = new StringBuilder();
+		int completionTokens = 0;
 
-		for (LlamaOutput output : llm.generate(params)) {
+		for (LlamaOutput output : llm.generate(prepared.params)) {
 			if (System.currentTimeMillis() > deadline) {
 				log.warn("LLM inference timed out after {} seconds", timeoutSeconds);
 				throw new APIException("LLM inference timed out after " + timeoutSeconds
@@ -215,11 +222,21 @@ public class LlmProvider {
 			String token = output.toString();
 			result.append(token);
 			tokenConsumer.accept(token);
+			completionTokens++;
 		}
 
-		LlmResponse llmResponse = extractResponse(result.toString());
+		int tokenCount = prepared.promptTokens + completionTokens;
+		log.info("LLM token usage: {} total ({} prompt + {} completion)", tokenCount,
+				prepared.promptTokens, completionTokens);
+
+		LlmResponse llmResponse = extractResponse(result.toString(), tokenCount);
 		resetIdleTimer();
 		return llmResponse;
+	}
+
+	static LlmResponse extractResponse(String response, int tokenCount) {
+		LlmResponse parsed = extractResponse(response);
+		return new LlmResponse(parsed.getAnswer(), parsed.getCitations(), tokenCount);
 	}
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -295,9 +312,16 @@ public class LlmProvider {
 
 		private final List<Integer> citations;
 
+		private final int tokenCount;
+
 		LlmResponse(String answer, List<Integer> citations) {
+			this(answer, citations, 0);
+		}
+
+		LlmResponse(String answer, List<Integer> citations, int tokenCount) {
 			this.answer = answer;
 			this.citations = Collections.unmodifiableList(new ArrayList<>(citations));
+			this.tokenCount = tokenCount;
 		}
 
 		String getAnswer() {
@@ -306,6 +330,10 @@ public class LlmProvider {
 
 		List<Integer> getCitations() {
 			return citations;
+		}
+
+		int getTokenCount() {
+			return tokenCount;
 		}
 	}
 
@@ -372,7 +400,7 @@ public class LlmProvider {
 		return ChartSearchAiConstants.DEFAULT_LLM_IDLE_TIMEOUT_MINUTES;
 	}
 
-	private InferenceParameters createInferenceParameters(LlamaModel llm, String numberedRecords,
+	private PreparedInference createInferenceParameters(LlamaModel llm, String numberedRecords,
 			String question) {
 		String systemPrompt = getSystemPrompt();
 		String userMessage = "Patient records (most recent first):\n" + numberedRecords.stripTrailing()
@@ -380,6 +408,7 @@ public class LlmProvider {
 		String templateValue = getChatTemplate();
 
 		InferenceParameters params;
+		int promptTokens;
 		if ("auto".equalsIgnoreCase(templateValue)) {
 			// Use the model's built-in GGUF chat template for correct formatting
 			List<Pair<String, String>> messages = new ArrayList<Pair<String, String>>();
@@ -387,20 +416,38 @@ public class LlmProvider {
 			params = new InferenceParameters("")
 					.setUseChatTemplate(true)
 					.setMessages(systemPrompt, messages);
+			// Approximate: tokenize the raw content since the formatted prompt
+			// is not accessible when using the model's built-in template
+			promptTokens = llm.encode(systemPrompt + "\n\n" + userMessage).length;
 			log.debug("Using model's built-in chat template");
 		} else {
 			String prompt = formatPrompt(templateValue, systemPrompt, userMessage);
-			log.debug("LLM prompt size: {} tokens", llm.encode(prompt).length);
+			promptTokens = llm.encode(prompt).length;
+			log.debug("LLM prompt size: {} tokens", promptTokens);
 			params = new InferenceParameters(prompt)
 					.setStopStrings(resolveStopStrings(templateValue));
 		}
 
-		return params
+		InferenceParameters finalParams = params
 				.setTemperature(0.0f)
 				.setSeed(42)
 				.setCachePrompt(false)
 				.setNPredict(ChartSearchAiConstants.DEFAULT_MAX_TOKENS)
 				.setGrammar(JSON_ANSWER_GRAMMAR);
+
+		return new PreparedInference(finalParams, promptTokens);
+	}
+
+	static class PreparedInference {
+
+		final InferenceParameters params;
+
+		final int promptTokens;
+
+		PreparedInference(InferenceParameters params, int promptTokens) {
+			this.params = params;
+			this.promptTokens = promptTokens;
+		}
 	}
 
 	static String formatPrompt(String templateValue, String systemPrompt, String userMessage) {

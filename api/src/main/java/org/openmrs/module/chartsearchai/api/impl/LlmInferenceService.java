@@ -100,7 +100,8 @@ public class LlmInferenceService implements ChartSearchService {
 		LlmResponse response = llmProvider.search(chart.getText(), question);
 
 		return new ChartAnswer(response.getAnswer(),
-				extractCitedReferences(response.getCitations(), chart.getMappings()));
+				extractCitedReferences(response.getCitations(), chart.getMappings()),
+				response.getTokenCount());
 	}
 
 	@Override
@@ -117,7 +118,8 @@ public class LlmInferenceService implements ChartSearchService {
 		LlmResponse response = llmProvider.searchStreaming(chart.getText(), question, tokenConsumer);
 
 		return new ChartAnswer(response.getAnswer(),
-				extractCitedReferences(response.getCitations(), chart.getMappings()));
+				extractCitedReferences(response.getCitations(), chart.getMappings()),
+				response.getTokenCount());
 	}
 
 	/**
