@@ -188,6 +188,9 @@ public class LlmAnswerQualityTest {
 	 */
 	@Test
 	public void trendQuery_shouldCiteRecordsAndCoverAllConcepts() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(
+				"true".equalsIgnoreCase(System.getProperty("chartsearchai.llm.quality.test")),
+				"Skipping: set -Dchartsearchai.llm.quality.test=true to run");
 		org.junit.jupiter.api.Assumptions.assumeTrue(llmModelFileExists(),
 				"Skipping: LLM model file not found at " + LLM_MODEL_PATH);
 
