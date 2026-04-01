@@ -18,10 +18,10 @@ This document captures the architectural decisions made for the Chart Search AI 
 - [Decision 10: Single LLM architecture with optional embedding pre-filter](#decision-10-single-llm-architecture-with-optional-embedding-pre-filter)
 - [Decision 11: REST API and guardrails](#decision-11-rest-api-and-guardrails)
 - [Decision 12: Concurrency model](#decision-12-concurrency-model)
-- [Known limitations](#known-limitations)
 - [Decision 13: Lucene BM25 as an alternative retrieval pipeline](#decision-13-lucene-bm25-as-an-alternative-retrieval-pipeline)
 - [Decision 14: Elasticsearch hybrid search pipeline with RRF](#decision-14-elasticsearch-hybrid-search-pipeline-with-rrf)
 - [Decision 15: LangChain / LangChain4j not adopted](#decision-15-langchain--langchain4j-not-adopted)
+- [Known limitations](#known-limitations)
 - [Planned future work](#planned-future-work)
 
 ## Problem Statement
@@ -581,6 +581,10 @@ The general-purpose embedding model (all-MiniLM-L6-v2) ranks records by lexical 
 
 **Two-phase retrieval for category queries.** The query classifier also detects broad "category" queries — queries that combine a category indicator word ("any", "all", "list", "show", "what", "which", "every", "tell") with a resource type keyword. For example, "any medications?" or "list all conditions" are category queries. When detected, the retrieval pipeline uses a two-phase approach: **Phase 1** includes ALL records of the matched resource types regardless of score or topK (auto-expand), because the user explicitly asked for everything of that type and rare medical terms like "Granuloma annulare" can produce low cosine similarity against generic category words like "conditions" despite being a perfect type match. **Phase 2** fills remaining topK slots with the best non-type-matched records from the semantic adaptive cutoff (e.g., assessment notes that provide relevant context). For focused queries (no category indicator detected), topK remains the hard cap with semantic similarity and adaptive gap detection controlling inclusion. This ensures that "any conditions?" returns every condition record, while "does the patient have diabetes?" returns only the most semantically relevant records within topK.
 
+**Absent-data detection.** When the embedding pre-filter returns zero matching records for a query, the system returns a clear answer naming what was asked about — e.g., "There are no records about diabetes in this patient's chart" — without invoking the LLM at all. This avoids a wasteful inference round-trip and gives the clinician an unambiguous signal that the data is absent, rather than a hallucinated answer. The query's stopwords are stripped first (`stripQueryStopwords()`) so the answer names the clinical terms, not filler words. If no content words remain after stripping, a generic "There are no records matching your question" fallback is used. Additionally, a **z-score gate** (`ZERO_KEYWORD_MIN_Z_SCORE = 1.5`, requiring at least `MIN_RECORDS_FOR_Z_SCORE = 30` records) rejects results when no query keyword appears in any candidate record and the top semantic score is not a statistical outlier. This prevents the embedding model's tendency to group similar record types together (e.g., all lab tests scoring ~0.27 for "HB results") from producing false positives — the top score must be in the top ~6.7% of the score distribution to be accepted without keyword corroboration.
+
+**Recency cap extraction.** Queries like "last 7 weights" or "latest two blood pressure readings" contain natural-language recency constraints. The `extractRecencyCap()` method parses these using regex patterns that recognize both digit and word numbers (one through ten) combined with temporal keywords (last, latest, past, previous, recent, most recent). When a recency cap is detected, `capPerConcept()` limits the number of records per concept to the specified count. Since records are sorted most-recent-first, the first N per concept group are the most recent. Records without repeated measurements (conditions, allergies) are treated as unique groups and always kept — the recency cap only limits repeated measurements like vitals and lab results.
+
 **Configurable embedding model parameters.** The embedding model's token sequence length (`chartsearchai.embedding.maxSequenceLength`, default 256) and query-side prefix (`chartsearchai.embedding.queryPrefix`, default empty) are configurable via global properties. This supports swapping to alternative embedding models without code changes — for example, `BAAI/bge-base-en-v1.5` uses a 512-token limit and the prefix `"Represent this sentence for searching relevant passages: "`, while `all-mpnet-base-v2` uses 384 tokens. After changing the model file, vocab file, and these parameters, run the embedding backfill task to recompute all vectors.
 
 ### Chunking strategy
@@ -846,10 +850,6 @@ Embedding computation is faster (~50–200ms per patient) so the embedding lock 
 
 For the initial release targeting small clinics with low concurrent usage, the serialized approach is acceptable and avoids the complexity of managing multiple native contexts.
 
-## Known limitations
-
-- **Counting questions**: LLMs are unreliable at precise counting tasks (e.g., "how many weight records in the last 10 years?"). The model may undercount or overcount even when all relevant records are provided. Larger, more capable models perform better at counting but are still not perfectly reliable. This is a fundamental limitation of LLM inference, not a retrieval issue. Questions that require exact counts are better suited to structured queries.
-
 ## Decision 13: Lucene BM25 as an alternative retrieval pipeline
 
 ### Context
@@ -934,9 +934,13 @@ Do not adopt LangChain or LangChain4j. The module's purpose-built pipeline alrea
 
 **When to revisit:** If the module needs to support multiple LLM backends (local + cloud) or agent/tool-use patterns for multi-step reasoning, a framework like LangChain4j may become worthwhile. Until then, the purpose-built pipeline is simpler to deploy, easier to debug, has fewer dependencies, and gives full control over clinical-domain-specific scoring.
 
+## Known limitations
+
+- **Counting questions**: LLMs are unreliable at precise counting tasks (e.g., "how many weight records in the last 10 years?"). The model may undercount or overcount even when all relevant records are provided. Larger, more capable models perform better at counting but are still not perfectly reliable. This is a fundamental limitation of LLM inference, not a retrieval issue. Questions that require exact counts are better suited to structured queries.
+
 ## Planned future work
 
-- **Incremental embedding indexing**: Currently, `indexPatient()` deletes all embeddings for a patient and recomputes them from scratch on every data change. This is simple and guarantees consistency, but recomputes embeddings for records that haven't changed. An incremental approach would track which record maps to which embedding row and only add, update, or delete the specific embeddings affected. This matters for patients with large charts where AOP hooks fire frequently.
+- **Incremental embedding indexing**: The `EncounterService` AOP hook already uses an incremental strategy (indexes only new/changed encounters), but other data types (`ObsService`, `ConditionService`, etc.) still use `indexPatient()` which deletes all embeddings for a patient and recomputes from scratch. A fully incremental approach would track which record maps to which embedding row across all data types and only add, update, or delete the specific embeddings affected. This matters for patients with large charts where AOP hooks fire frequently.
 - **Reranking**: A cross-encoder reranking step between embedding retrieval and LLM inference could improve relevance. Currently deferred because: individual records are short (embedding similarity works well), the LLM itself reasons over all 10 retrieved records (acting as an implicit reranker), and adding another model increases RAM usage, latency, and concurrency bottlenecks. Worth revisiting if real-world usage reveals relevance gaps, if top-K is increased significantly (50+), or if patient charts grow very large with thousands of records.
 - **Concept graph traversal**: Complement embedding search with OpenMRS concept relationship traversal to improve retrieval for queries involving related concepts (e.g., finding NSAID allergies when asking about ibuprofen).
 - **Pre-computed summaries**: Cache LLM-generated summaries for common query patterns (e.g., "current medications", "active problems") to reduce inference latency for frequently asked questions.
