@@ -934,8 +934,8 @@ Do not adopt LangChain or LangChain4j. The module's purpose-built pipeline alrea
 The module was originally designed for local-only inference (GGUF models via java-llama.cpp, running in-process). This keeps patient data on the server and eliminates external dependencies. However, some hospitals have:
 
 - **Insufficient hardware** for local inference (8B models need ~10 GB RAM, GPUs improve speed significantly)
-- **Access to cloud APIs** (OpenAI, Google AI, Anthropic) or self-hosted GPU inference servers (vLLM, Ollama, text-generation-inference) that provide faster, more capable models
-- **Existing agreements** with cloud providers that address data privacy and compliance requirements
+- **Access to self-hosted GPU inference servers** (vLLM, Ollama, text-generation-inference) on a local network, or cloud APIs (OpenAI, Google AI, Anthropic) that provide faster, more capable models
+- **Existing infrastructure** — a GPU server on the local network, or agreements with cloud providers that address data privacy and compliance requirements
 
 ### Decision
 
@@ -966,7 +966,7 @@ RemoteLlmEngine
 └── SSE streaming support
 ```
 
-**Why OpenAI-compatible API format?** It is the de facto standard. OpenAI, Google AI (Gemini), Azure OpenAI, vLLM, Ollama, text-generation-inference, and many other providers all support this format. A single implementation covers all of these.
+**Why OpenAI-compatible API format?** It is the de facto standard. Self-hosted servers (vLLM, Ollama, text-generation-inference) and cloud providers (OpenAI, Google AI, Azure OpenAI) all support this format. A single implementation covers all of these.
 
 **Why not add a dependency on an LLM client library?** Java's built-in `HttpClient` handles the OpenAI chat completions format in ~200 lines. Adding a library (LangChain4j, OpenAI Java SDK) would bring transitive dependencies into the OpenMRS module classloader for minimal benefit.
 
@@ -974,11 +974,11 @@ RemoteLlmEngine
 
 | Aspect | Local engine | Remote engine |
 |---|---|---|
-| Data privacy | Data stays on server | Data sent to remote endpoint |
-| Latency | Higher (CPU inference) | Lower (GPU servers, cloud scale) |
-| Model capability | Limited by RAM (3B-12B) | Access to frontier models (GPT-4o, Claude, Gemini) |
-| Cost | Hardware only | Per-token API pricing |
-| Availability | Always available | Requires network, subject to API outages |
+| Data privacy | Data stays on server | Self-hosted: data stays on local network. Cloud: data sent to provider |
+| Latency | Higher (CPU inference) | Lower (GPU-accelerated inference) |
+| Model capability | Limited by RAM (3B-12B) | Self-hosted: limited by GPU VRAM. Cloud: access to frontier models |
+| Cost | Hardware only | Self-hosted: GPU hardware. Cloud: per-token API pricing |
+| Availability | Always available | Self-hosted: always available on local network. Cloud: requires internet, subject to API outages |
 | Setup | Download GGUF file | Configure endpoint URL, API key, model name |
 
 ### Configuration
@@ -986,9 +986,9 @@ RemoteLlmEngine
 | Property | Where | Description |
 |---|---|---|
 | `chartsearchai.llm.backend` | Global property | `local` (default) or `remote` |
-| `chartsearchai.llm.remote.endpointUrl` | Global property | Chat completions URL (e.g. `https://api.openai.com/v1/chat/completions`) |
+| `chartsearchai.llm.remote.endpointUrl` | Global property | Chat completions URL (e.g. `http://localhost:11434/v1/chat/completions` for Ollama, `https://api.openai.com/v1/chat/completions` for OpenAI) |
 | `chartsearchai.llm.remote.apiKey` | Runtime property | Bearer token for authentication |
-| `chartsearchai.llm.remote.modelName` | Global property | Model to request (e.g. `gpt-4o`, `gemini-2.5-pro`) |
+| `chartsearchai.llm.remote.modelName` | Global property | Model to request (e.g. `llama3.3` for Ollama, `gpt-4o` for OpenAI) |
 
 **API key storage:** The API key is stored in `openmrs-runtime.properties` (a filesystem file), not in the database. This prevents exposure via the Admin UI, database backups, or SQL queries. This follows the same pattern OpenMRS uses for the database password. The endpoint URL and model name are stored as global properties since they are not secrets.
 

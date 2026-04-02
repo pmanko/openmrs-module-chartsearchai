@@ -95,9 +95,9 @@ Set these global properties in **Admin > Settings**:
 
 | Property | Where | Description |
 |----------|-------|-------------|
-| `chartsearchai.llm.remote.endpointUrl` | Global property | Chat completions endpoint URL (e.g. `https://api.openai.com/v1/chat/completions`) |
-| `chartsearchai.llm.remote.apiKey` | `openmrs-runtime.properties` | API key for authentication (sent as `Bearer` token). Stored in runtime properties instead of the database for security |
-| `chartsearchai.llm.remote.modelName` | Global property | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`, `gemini-2.0-flash`) |
+| `chartsearchai.llm.remote.endpointUrl` | Global property | Chat completions endpoint URL (e.g. `http://localhost:11434/v1/chat/completions` for Ollama, `http://gpu-server:8000/v1/chat/completions` for vLLM, `https://api.openai.com/v1/chat/completions` for OpenAI) |
+| `chartsearchai.llm.remote.apiKey` | `openmrs-runtime.properties` | API key for authentication (sent as `Bearer` token). Stored in runtime properties instead of the database for security. For self-hosted servers that don't require auth, set to any non-empty value (e.g. `none`) |
+| `chartsearchai.llm.remote.modelName` | Global property | Model identifier (e.g. `llama3.3` for Ollama, `meta-llama/Llama-3.3-8B-Instruct` for vLLM, `gpt-4o` for OpenAI) |
 
 The API key is read from `openmrs-runtime.properties` (not from the database) so it is never exposed in the Admin UI or database backups. Add it to your runtime properties file:
 
@@ -105,7 +105,7 @@ The API key is read from `openmrs-runtime.properties` (not from the database) so
 chartsearchai.llm.remote.apiKey=sk-your-api-key-here
 ```
 
-The remote engine works with any provider that implements the OpenAI chat completions API format, including OpenAI, Azure OpenAI, Google AI, Anthropic (via proxy), vLLM, Ollama, and other self-hosted inference servers. No GGUF model download is needed when using the remote engine.
+The remote engine works with any server that implements the OpenAI chat completions API format, including self-hosted inference servers (vLLM, Ollama, text-generation-inference) and cloud providers (OpenAI, Azure OpenAI, Google AI, Anthropic via proxy). Self-hosted servers keep patient data on-premise while still benefiting from GPU-accelerated inference. No GGUF model download is needed when using the remote engine.
 
 #### Retrieval pipeline
 
