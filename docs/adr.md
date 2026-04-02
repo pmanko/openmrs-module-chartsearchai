@@ -972,7 +972,7 @@ RemoteLlmEngine
 
 ### Trade-offs
 
-| Aspect | Local backend | Remote backend |
+| Aspect | Local engine | Remote engine |
 |---|---|---|
 | Data privacy | Data stays on server | Data sent to remote endpoint |
 | Latency | Higher (CPU inference) | Lower (GPU servers, cloud scale) |

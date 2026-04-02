@@ -40,7 +40,7 @@
 	<globalProperty>
 		<property>chartsearchai.llm.backend</property>
 		<defaultValue>local</defaultValue>
-		<description>LLM inference backend. "local" (default) runs a GGUF model in-process via llama.cpp — no network calls, data stays on the server. "remote" calls an OpenAI-compatible chat completions API — requires chartsearchai.llm.remote.endpointUrl, chartsearchai.llm.remote.apiKey, and chartsearchai.llm.remote.modelName to be configured. Use "remote" for cloud-hosted models (OpenAI, Anthropic, Google AI) or self-hosted inference servers (vLLM, Ollama, text-generation-inference).</description>
+		<description>LLM inference engine. "local" (default) runs a GGUF model in-process via llama.cpp — no network calls, data stays on the server. "remote" calls an OpenAI-compatible chat completions API — requires chartsearchai.llm.remote.endpointUrl, chartsearchai.llm.remote.apiKey, and chartsearchai.llm.remote.modelName to be configured. Use "remote" for cloud-hosted models (OpenAI, Anthropic, Google AI) or self-hosted inference servers (vLLM, Ollama, text-generation-inference).</description>
 	</globalProperty>
 
 	<globalProperty>
