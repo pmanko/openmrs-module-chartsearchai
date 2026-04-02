@@ -51,11 +51,22 @@ public class RemoteLlmEngineTest {
 	}
 
 	@Test
-	public void buildRequestBody_shouldSetStreamTrue() throws IOException {
+	public void buildRequestBody_shouldNotIncludeStreamOptions() throws IOException {
+		String body = engine.buildRequestBody("system prompt", "user message", "gpt-4o", false);
+		JsonNode root = MAPPER.readTree(body);
+
+		assertTrue(root.path("stream_options").isMissingNode(),
+				"stream_options should not be present when stream is false");
+	}
+
+	@Test
+	public void buildRequestBody_shouldSetStreamTrueWithUsageOption() throws IOException {
 		String body = engine.buildRequestBody("sys", "usr", "model", true);
 		JsonNode root = MAPPER.readTree(body);
 
 		assertTrue(root.get("stream").asBoolean());
+		assertTrue(root.get("stream_options").get("include_usage").asBoolean(),
+				"stream_options.include_usage should be true for streaming requests");
 	}
 
 	@Test

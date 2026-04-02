@@ -43,7 +43,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -104,7 +103,6 @@ public class ChartSearchAiRestController {
 	@Qualifier("chartSearchAi.auditLogService")
 	private AuditLogService auditLogService;
 
-	@Transactional
 	@RequestMapping(value = "/search", method = RequestMethod.POST)
 	@ResponseBody
 	public ResponseEntity<Object> search(@RequestBody Map<String, String> body) {
@@ -461,7 +459,6 @@ public class ChartSearchAiRestController {
 		return new ResponseEntity<Object>(response, HttpStatus.OK);
 	}
 
-	@Transactional
 	@RequestMapping(value = "/feedback", method = RequestMethod.POST)
 	@ResponseBody
 	public ResponseEntity<Object> submitFeedback(@RequestBody Map<String, Object> body) {

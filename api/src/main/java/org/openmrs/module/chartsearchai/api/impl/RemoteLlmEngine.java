@@ -145,6 +145,11 @@ public class RemoteLlmEngine implements LlmEngine {
 		root.put("temperature", 0.0);
 		root.put("max_tokens", ChartSearchAiConstants.DEFAULT_MAX_TOKENS);
 		root.put("stream", stream);
+		if (stream) {
+			ObjectNode streamOptions = MAPPER.createObjectNode();
+			streamOptions.put("include_usage", true);
+			root.set("stream_options", streamOptions);
+		}
 
 		ObjectNode responseFormat = MAPPER.createObjectNode();
 		responseFormat.put("type", "json_object");
