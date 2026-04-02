@@ -190,6 +190,12 @@ The **embedding pipeline** is recommended for most deployments — it runs entir
 
 ### Testing the Elasticsearch pipeline locally
 
+> **License note:** The Elasticsearch pipeline uses [Reciprocal Rank Fusion (RRF)](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/reciprocal-rank-fusion), which requires a **Platinum or Enterprise** Elasticsearch subscription. The free basic license will return a `license is non-compliant for [Reciprocal Rank Fusion (RRF)]` error. You can start a [30-day trial](https://www.elastic.co/guide/en/elasticsearch/reference/current/start-trial.html) for testing:
+> ```
+> curl -X POST 'http://localhost:9200/_license/start_trial?acknowledge=true'
+> ```
+> If you do not have a paid license, use the **embedding** or **hybrid** pipeline instead.
+
 To test the Elasticsearch pipeline with the OpenMRS SDK:
 
 **1. Start Elasticsearch 8.14+ with Docker:**
