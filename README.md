@@ -93,11 +93,17 @@ Set these global properties in **Admin > Settings**:
 
 **Remote engine** — set `chartsearchai.llm.backend` to `remote` and configure:
 
-| Property | Description |
-|----------|-------------|
-| `chartsearchai.llm.remote.endpointUrl` | Chat completions endpoint URL (e.g. `https://api.openai.com/v1/chat/completions`) |
-| `chartsearchai.llm.remote.apiKey` | API key for authentication (sent as `Bearer` token) |
-| `chartsearchai.llm.remote.modelName` | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`, `gemini-2.0-flash`) |
+| Property | Where | Description |
+|----------|-------|-------------|
+| `chartsearchai.llm.remote.endpointUrl` | Global property | Chat completions endpoint URL (e.g. `https://api.openai.com/v1/chat/completions`) |
+| `chartsearchai.llm.remote.apiKey` | `openmrs-runtime.properties` | API key for authentication (sent as `Bearer` token). Stored in runtime properties instead of the database for security |
+| `chartsearchai.llm.remote.modelName` | Global property | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`, `gemini-2.0-flash`) |
+
+The API key is read from `openmrs-runtime.properties` (not from the database) so it is never exposed in the Admin UI or database backups. Add it to your runtime properties file:
+
+```
+chartsearchai.llm.remote.apiKey=sk-your-api-key-here
+```
 
 The remote engine works with any provider that implements the OpenAI chat completions API format, including OpenAI, Azure OpenAI, Google AI, Anthropic (via proxy), vLLM, Ollama, and other self-hosted inference servers. No GGUF model download is needed when using the remote engine.
 

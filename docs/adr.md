@@ -983,14 +983,14 @@ RemoteLlmEngine
 
 ### Configuration
 
-| Global property | Description |
-|---|---|
-| `chartsearchai.llm.backend` | `local` (default) or `remote` |
-| `chartsearchai.llm.remote.endpointUrl` | Chat completions URL (e.g. `https://api.openai.com/v1/chat/completions`) |
-| `chartsearchai.llm.remote.apiKey` | Bearer token for authentication |
-| `chartsearchai.llm.remote.modelName` | Model to request (e.g. `gpt-4o`, `gemini-2.5-pro`) |
+| Property | Where | Description |
+|---|---|---|
+| `chartsearchai.llm.backend` | Global property | `local` (default) or `remote` |
+| `chartsearchai.llm.remote.endpointUrl` | Global property | Chat completions URL (e.g. `https://api.openai.com/v1/chat/completions`) |
+| `chartsearchai.llm.remote.apiKey` | Runtime property | Bearer token for authentication |
+| `chartsearchai.llm.remote.modelName` | Global property | Model to request (e.g. `gpt-4o`, `gemini-2.5-pro`) |
 
-**API key storage:** The API key is stored as a plain-text OpenMRS global property. OpenMRS does not provide built-in encryption for global properties. Deployers should use their infrastructure's secrets management (environment variable substitution, vault integration) to protect the key.
+**API key storage:** The API key is stored in `openmrs-runtime.properties` (a filesystem file), not in the database. This prevents exposure via the Admin UI, database backups, or SQL queries. This follows the same pattern OpenMRS uses for the database password. The endpoint URL and model name are stored as global properties since they are not secrets.
 
 ## Known limitations
 

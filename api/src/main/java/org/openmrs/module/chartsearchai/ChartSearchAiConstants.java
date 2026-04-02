@@ -177,7 +177,7 @@ public class ChartSearchAiConstants {
 
 	public static final String GP_LLM_REMOTE_ENDPOINT_URL = "chartsearchai.llm.remote.endpointUrl";
 
-	public static final String GP_LLM_REMOTE_API_KEY = "chartsearchai.llm.remote.apiKey";
+	public static final String RP_LLM_REMOTE_API_KEY = "chartsearchai.llm.remote.apiKey";
 
 	public static final String GP_LLM_REMOTE_MODEL_NAME = "chartsearchai.llm.remote.modelName";
 

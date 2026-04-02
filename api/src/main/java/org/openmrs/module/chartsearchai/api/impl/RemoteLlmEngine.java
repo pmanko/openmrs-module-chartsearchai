@@ -19,6 +19,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Properties;
 import java.util.function.Consumer;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -50,9 +51,9 @@ public class RemoteLlmEngine implements LlmEngine {
 
 	@Override
 	public InferenceResult infer(String systemPrompt, String userMessage, int timeoutSeconds) {
-		String endpointUrl = getRequiredProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
-		String apiKey = getRequiredProperty(ChartSearchAiConstants.GP_LLM_REMOTE_API_KEY);
-		String modelName = getRequiredProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
+		String endpointUrl = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
+		String apiKey = getRequiredRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
+		String modelName = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
 
 		String requestBody = buildRequestBody(systemPrompt, userMessage, modelName, false);
 
@@ -72,8 +73,9 @@ public class RemoteLlmEngine implements LlmEngine {
 				log.error("Remote LLM API returned HTTP {}: {}", response.statusCode(),
 						truncateForLog(response.body()));
 				throw new APIException("Remote LLM API returned HTTP " + response.statusCode()
-						+ ". Check the endpoint URL, API key, and model name in the "
-						+ "chartsearchai.llm.remote.* global properties.");
+						+ ". Check the endpoint URL and model name in the "
+						+ "chartsearchai.llm.remote.* global properties, and the API key "
+						+ "in openmrs-runtime.properties.");
 			}
 
 			return parseResponse(response.body());
@@ -90,9 +92,9 @@ public class RemoteLlmEngine implements LlmEngine {
 	@Override
 	public InferenceResult inferStreaming(String systemPrompt, String userMessage,
 			int timeoutSeconds, Consumer<String> tokenConsumer) {
-		String endpointUrl = getRequiredProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
-		String apiKey = getRequiredProperty(ChartSearchAiConstants.GP_LLM_REMOTE_API_KEY);
-		String modelName = getRequiredProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
+		String endpointUrl = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
+		String apiKey = getRequiredRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
+		String modelName = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
 
 		String requestBody = buildRequestBody(systemPrompt, userMessage, modelName, true);
 
@@ -249,11 +251,22 @@ public class RemoteLlmEngine implements LlmEngine {
 		return new InferenceResult(fullText.toString(), tokenCount);
 	}
 
-	private String getRequiredProperty(String propertyName) {
+	private String getRequiredGlobalProperty(String propertyName) {
 		String value = Context.getAdministrationService().getGlobalProperty(propertyName);
 		if (value == null || value.trim().isEmpty()) {
 			throw new IllegalStateException(
-					"Required property not configured: " + propertyName);
+					"Required global property not configured: " + propertyName);
+		}
+		return value.trim();
+	}
+
+	private String getRequiredRuntimeProperty(String propertyName) {
+		Properties props = Context.getRuntimeProperties();
+		String value = props != null ? props.getProperty(propertyName) : null;
+		if (value == null || value.trim().isEmpty()) {
+			throw new IllegalStateException(
+					"Required runtime property not configured: " + propertyName
+							+ ". Add it to openmrs-runtime.properties.");
 		}
 		return value.trim();
 	}

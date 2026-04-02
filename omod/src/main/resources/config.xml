@@ -50,12 +50,6 @@
 	</globalProperty>
 
 	<globalProperty>
-		<property>chartsearchai.llm.remote.apiKey</property>
-		<defaultValue></defaultValue>
-		<description>API key for authenticating with the remote LLM endpoint. Required when chartsearchai.llm.backend is "remote". Sent as a Bearer token in the Authorization header.</description>
-	</globalProperty>
-
-	<globalProperty>
 		<property>chartsearchai.llm.remote.modelName</property>
 		<defaultValue></defaultValue>
 		<description>Model name to request from the remote LLM endpoint. Required when chartsearchai.llm.backend is "remote". Examples: gpt-4o, claude-sonnet-4-20250514, gemini-2.5-pro.</description>
