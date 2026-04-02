@@ -1056,1166 +1056,6 @@ public class LlmInferenceServiceTest {
 		return new LlmInferenceService.ScoredEmbedding(ce, score, keywordScore, semanticScore);
 	}
 
-	@Test
-	public void refineByKeywords_shouldFilterToKeywordMatchedSubset() {
-		// 3 records have strong keyword matches (2/6 terms), 2 don't.
-		// With queryTermCount=6, threshold = min(2, max(1, 2))/6 = 0.333...
-		double kwMatch = 2.0 / 6; // exact fraction avoids floating-point mismatch
-		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
-				makeScoredEmbedding(0.70, kwMatch),
-				makeScoredEmbedding(0.65, kwMatch),
-				makeScoredEmbedding(0.60, 0.0),
-				makeScoredEmbedding(0.55, kwMatch),
-				makeScoredEmbedding(0.50, 0.0));
-
-		List<LlmInferenceService.ScoredEmbedding> refined =
-				LlmInferenceService.refineByKeywords(candidates, 6);
-
-		assertEquals(3, refined.size(),
-				"Should keep only keyword-matched records when they form a proper subset");
-	}
-
-	@Test
-	public void refineByKeywords_shouldReturnAllWhenAllHaveKeywordMatches() {
-		// All records have keyword matches — keywords aren't discriminative
-		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
-				makeScoredEmbedding(0.70, 0.50),
-				makeScoredEmbedding(0.65, 0.33),
-				makeScoredEmbedding(0.60, 0.33));
-
-		List<LlmInferenceService.ScoredEmbedding> refined =
-				LlmInferenceService.refineByKeywords(candidates, 6);
-
-		assertEquals(3, refined.size(),
-				"Should return all records when keywords aren't discriminative");
-	}
-
-	@Test
-	public void refineByKeywords_shouldReturnAllWhenNoneHaveKeywordMatches() {
-		// No keyword matches — no signal to refine on
-		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
-				makeScoredEmbedding(0.70, 0.0),
-				makeScoredEmbedding(0.65, 0.0),
-				makeScoredEmbedding(0.60, 0.0));
-
-		List<LlmInferenceService.ScoredEmbedding> refined =
-				LlmInferenceService.refineByKeywords(candidates, 6);
-
-		assertEquals(3, refined.size(),
-				"Should return all records when no keyword signal exists");
-	}
-
-	@Test
-	public void refineByKeywords_shouldReturnAllWhenTooFewKeywordMatches() {
-		// Only 1 keyword match — below ADAPTIVE_MIN_RECORDS (2)
-		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
-				makeScoredEmbedding(0.70, 0.33),
-				makeScoredEmbedding(0.65, 0.0),
-				makeScoredEmbedding(0.60, 0.0),
-				makeScoredEmbedding(0.55, 0.0));
-
-		List<LlmInferenceService.ScoredEmbedding> refined =
-				LlmInferenceService.refineByKeywords(candidates, 6);
-
-		assertEquals(4, refined.size(),
-				"Should return all records when too few have keyword matches");
-	}
-
-	@Test
-	public void refineByKeywords_singleTermMatchesInLongQuery_shouldPassWhenMixed() {
-		// 2 records match 2/6 terms, 4 records match only 1/6.
-		// With minMatchCount=1, threshold = 1/6 = 0.167. All 6 pass.
-		// Since 6/6 is NOT a proper subset, refinement doesn't activate —
-		// returns all candidates. Gap detection is the primary noise filter.
-		double strongMatch = 2.0 / 6; // 0.333...
-		double weakMatch = 1.0 / 6;   // 0.166...
-		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
-				makeScoredEmbedding(0.70, strongMatch),
-				makeScoredEmbedding(0.65, weakMatch),
-				makeScoredEmbedding(0.60, weakMatch),
-				makeScoredEmbedding(0.55, strongMatch),
-				makeScoredEmbedding(0.50, weakMatch),
-				makeScoredEmbedding(0.45, weakMatch));
-
-		List<LlmInferenceService.ScoredEmbedding> refined =
-				LlmInferenceService.refineByKeywords(candidates, 6);
-
-		assertEquals(6, refined.size(),
-				"All candidates have keyword matches — refinement should not discriminate");
-	}
-
-	// --------------------------------------------------------
-	// Pipeline regression tests: verify the full scoring →
-	// gap detection → keyword refinement chain produces
-	// correct results for representative clinical query types.
-	// These tests should break if ANY future change causes a
-	// regression for a previously working query type.
-	// --------------------------------------------------------
-
-	/**
-	 * Runs the production pipeline with default config and returns the count
-	 * of records in the final result set.
-	 */
-	private static int runPipeline(double[] semanticScores, double[] keywordScores,
-			double keywordWeight, int queryTermCount) {
-		return runPipelineIndices(semanticScores, keywordScores, keywordWeight,
-				queryTermCount, 10).size();
-	}
-
-	private static int runPipeline(double[] semanticScores, double[] keywordScores,
-			double keywordWeight, int queryTermCount, int topK) {
-		return runPipelineIndices(semanticScores, keywordScores, keywordWeight,
-				queryTermCount, topK).size();
-	}
-
-	private static List<Integer> runPipelineIndices(double[] semanticScores,
-			double[] keywordScores, double keywordWeight, int queryTermCount, int topK) {
-		return runPipelineIndices(semanticScores, keywordScores,
-				keywordWeight, queryTermCount, topK, null);
-	}
-
-	/**
-	 * Calls the production {@link LlmInferenceService#filterPipeline} with
-	 * default config and returns the original array indices of the selected
-	 * records (sorted ascending). This is NOT a simulation — it exercises
-	 * the exact same code path as the production pipeline.
-	 */
-	private static List<Integer> runPipelineIndices(double[] semanticScores,
-			double[] keywordScores, double keywordWeight, int queryTermCount,
-			int topK, float[][] embeddingVectors) {
-		ChartEmbedding[] embeddings = new ChartEmbedding[semanticScores.length];
-		for (int i = 0; i < semanticScores.length; i++) {
-			ChartEmbedding ce = new ChartEmbedding();
-			ce.setResourceType("obs");
-			ce.setTextContent(String.valueOf(i));
-			ce.setEmbeddingId(i);
-			if (embeddingVectors != null && embeddingVectors[i] != null) {
-				ce.setEmbeddingVector(embeddingVectors[i]);
-			}
-			embeddings[i] = ce;
-		}
-
-		LlmInferenceService.PipelineConfig config =
-				new LlmInferenceService.PipelineConfig(
-						keywordWeight,
-						ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
-						ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
-						ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
-						ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO);
-
-		List<ChartEmbedding> results = LlmInferenceService.filterPipeline(
-				semanticScores, keywordScores, embeddings,
-				queryTermCount, topK, config);
-
-		List<Integer> indices = new ArrayList<Integer>();
-		for (ChartEmbedding ce : results) {
-			indices.add(Integer.parseInt(ce.getTextContent()));
-		}
-		Collections.sort(indices);
-		return indices;
-	}
-
-	@Test
-	public void pipeline_specificLabQuery_shouldReturnOnlyMatchingRecords() {
-		// Models: "latest CD4 count" — 3 terms, CD4 records match 2/3.
-		// Gap detection should separate the 3 high-scoring CD4 records from
-		// the lower-scoring non-CD4 records. Keyword refinement should not
-		// interfere because all gap-detected records have keyword matches.
-		double[] semantic = { 0.72, 0.70, 0.68, 0.35, 0.33, 0.31, 0.29, 0.27 };
-		double[] keyword  = { 0.67, 0.67, 0.67, 0.00, 0.00, 0.00, 0.00, 0.00 };
-
-		int result = runPipeline(semantic, keyword, 0.3, 3);
-
-		assertEquals(3, result,
-				"Specific lab query should return only matching records via gap detection");
-	}
-
-	@Test
-	public void pipeline_broadCategoryQuery_shouldReturnKeywordMatchedRecords() {
-		// Models: "active conditions first recorded resolved escalated" — 6 terms,
-		// conditions match 2/6 ("condition" + "active"). Scores overlap with
-		// non-conditions so gap detection can't separate them. Keyword refinement
-		// should filter to the 10 condition records.
-		double[] semantic = new double[25];
-		double[] keyword = new double[25];
-		// 10 conditions: semantic 0.55..0.37, keyword 2/6 = 0.333...
-		for (int i = 0; i < 10; i++) {
-			semantic[i] = 0.55 - i * 0.02;
-			keyword[i] = 2.0 / 6;
-		}
-		// 15 non-conditions: semantic 0.50..0.22, keyword 0
-		for (int i = 0; i < 15; i++) {
-			semantic[10 + i] = 0.50 - i * 0.02;
-			keyword[10 + i] = 0.0;
-		}
-
-		int result = runPipeline(semantic, keyword, 0.3, 6);
-
-		assertEquals(10, result,
-				"Broad category query should return keyword-matched records when gap detection fails");
-	}
-
-	@Test
-	public void pipeline_genericQuery_shouldCapToTopK() {
-		// Models: "tell me about this patient" — 2 terms after stopwords,
-		// no keyword matches. Gap detection finds no gap in the smooth
-		// distribution. With no keyword discrimination, the pipeline falls
-		// back to the ratio-based floor (topScore*0.80 = 0.40*0.80 = 0.32)
-		// + topK cap. Records scoring below 0.32 are filtered out.
-		double[] semantic = new double[12];
-		double[] keyword = new double[12];
-		for (int i = 0; i < 12; i++) {
-			semantic[i] = 0.40 - i * 0.01;
-			keyword[i] = 0.0;
-		}
-
-		int result = runPipeline(semantic, keyword, 0.3, 2);
-
-		assertTrue(result >= 8 && result <= 9,
-				"Generic query should return records above ratio floor (0.32), got " + result);
-	}
-
-	@Test
-	public void pipeline_incidentalKeywordMatches_shouldNotOverFilter() {
-		// Models: "HB results values moving normal range" — 6 terms.
-		// HB records match 2 terms ("hb" + one other) and get keyword bonus
-		// (≥2 matches). Some vital signs match only "normal" (1 term = 0.17)
-		// and get NO bonus. Gap detection separates the HB cluster (boosted
-		// to 0.69-0.75) from the "normal" cluster (0.38-0.48).
-		double[] semantic = new double[15];
-		double[] keyword = new double[15];
-		// 4 HB records: high semantic, keyword 2/6 = 0.33
-		for (int i = 0; i < 4; i++) {
-			semantic[i] = 0.65 - i * 0.02;
-			keyword[i] = 2.0 / 6;
-		}
-		// 6 records matching just "normal": medium semantic, keyword 1/6 = 0.17
-		for (int i = 0; i < 6; i++) {
-			semantic[4 + i] = 0.48 - i * 0.02;
-			keyword[4 + i] = 1.0 / 6;
-		}
-		// 5 records with no keyword match: low semantic
-		for (int i = 0; i < 5; i++) {
-			semantic[10 + i] = 0.35 - i * 0.02;
-			keyword[10 + i] = 0.0;
-		}
-
-		int result = runPipeline(semantic, keyword, 0.3, 6);
-
-		assertTrue(result <= 4,
-				"Should not include records with only incidental 'normal' keyword matches; got " + result);
-	}
-
-	@Test
-	public void pipeline_gapDetectionWorks_keywordRefinementShouldNotInterfere() {
-		// Models: a query where gap detection correctly separates relevant
-		// records (with keyword matches) from irrelevant (without). The
-		// keyword refinement should NOT further reduce the set because all
-		// gap-detected records already have keyword matches.
-		double[] semantic = new double[10];
-		double[] keyword = new double[10];
-		// 5 relevant: high semantic, keyword 2/3 = 0.67
-		for (int i = 0; i < 5; i++) {
-			semantic[i] = 0.70 - i * 0.02;
-			keyword[i] = 2.0 / 3;
-		}
-		// 5 irrelevant: low semantic, no keyword match
-		for (int i = 0; i < 5; i++) {
-			semantic[5 + i] = 0.35 - i * 0.02;
-			keyword[5 + i] = 0.0;
-		}
-
-		int result = runPipeline(semantic, keyword, 0.3, 3);
-
-		assertEquals(5, result,
-				"When gap detection works, keyword refinement should not reduce the result set");
-	}
-
-	@Test
-	public void pipeline_smoothDistributionNoKeywords_shouldReturnAllAboveFloor() {
-		// Models: "vital signs" — semantic similarity separates relevant
-		// records but no keyword matches (record text doesn't contain
-		// "vital" or "signs"). With smooth scores and no keyword signal,
-		// the ratio floor (0.50*0.80=0.40) filters out the 2 lowest
-		// records (0.38 and 0.36) that are < 80% of the top score.
-		double[] semantic = new double[8];
-		double[] keyword = new double[8];
-		for (int i = 0; i < 8; i++) {
-			semantic[i] = 0.50 - i * 0.02;
-			keyword[i] = 0.0;
-		}
-
-		int result = runPipeline(semantic, keyword, 0.3, 2);
-
-		assertEquals(6, result,
-				"Ratio floor (topScore*0.80=0.40) should exclude records below 80% of top score");
-	}
-
-	@Test
-	public void pipeline_keywordWeightZero_shouldDisableRefinement() {
-		// When keywordWeight is 0, keyword refinement should be completely
-		// disabled. The pipeline falls back to the ratio floor
-		// (0.55*0.80=0.44) which keeps only the records within 80% of top.
-		double[] semantic = new double[8];
-		double[] keyword = new double[8];
-		for (int i = 0; i < 3; i++) {
-			semantic[i] = 0.55 - i * 0.02;
-			keyword[i] = 0.50;
-		}
-		for (int i = 0; i < 5; i++) {
-			semantic[3 + i] = 0.48 - i * 0.02;
-			keyword[3 + i] = 0.0;
-		}
-
-		int result = runPipeline(semantic, keyword, 0.0, 4);
-
-		assertTrue(result >= 5 && result <= 6,
-				"With keywordWeight=0, ratio floor should filter low scores, got " + result);
-	}
-
-	@Test
-	public void pipeline_medicationQueryWithDrugOrders_shouldReturnOnlyMedications() {
-		// Models: "medications prescribed started" — 3 terms. Drug orders
-		// match "medication" via the embedding prefix (1/3 = 0.33). With
-		// the revised threshold for 3-term queries (min(2, max(1, 1))/3 =
-		// 0.33), a single strong match suffices. Conditions and findings
-		// score moderately on semantic similarity but have no keyword match.
-		double[] semantic = new double[15];
-		double[] keyword = new double[15];
-		// 3 drug orders: match "medication" via prefix → 1/3 = 0.33
-		for (int i = 0; i < 3; i++) {
-			semantic[i] = 0.50 - i * 0.02;
-			keyword[i] = 1.0 / 3;
-		}
-		// 12 conditions/findings: no keyword match
-		for (int i = 0; i < 12; i++) {
-			semantic[3 + i] = 0.45 - i * 0.02;
-			keyword[3 + i] = 0.0;
-		}
-
-		int result = runPipeline(semantic, keyword, 0.3, 3);
-
-		assertEquals(3, result,
-				"Medication query should return only drug orders when they match via prefix");
-	}
-
-	@Test
-	public void pipeline_medicationQueryNoDrugOrders_shouldReturnContext() {
-		// Models: "medications prescribed started" — 3 terms. Patient has NO
-		// drug orders, so no records match keyword "medication". The pipeline
-		// falls back to the ratio floor (0.40*0.80=0.32) which still returns
-		// enough context for the LLM to say "no medications found."
-		double[] semantic = new double[10];
-		double[] keyword = new double[10];
-		for (int i = 0; i < 10; i++) {
-			semantic[i] = 0.40 - i * 0.01;
-			keyword[i] = 0.0;
-		}
-
-		int result = runPipeline(semantic, keyword, 0.3, 3);
-
-		assertTrue(result >= 8 && result <= 9,
-				"No keyword matches should still return context via ratio floor, got " + result);
-	}
-
-	@Test
-	public void refineByKeywords_shortQuerySingleMatchShouldPass() {
-		// For 3-term queries, the threshold = min(2, max(1, 1))/3 = 0.33.
-		// A record matching 1/3 terms should pass (single discriminative match).
-		double kwMatch = 1.0 / 3;
-		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
-				makeScoredEmbedding(0.70, kwMatch),
-				makeScoredEmbedding(0.65, kwMatch),
-				makeScoredEmbedding(0.60, 0.0),
-				makeScoredEmbedding(0.55, 0.0),
-				makeScoredEmbedding(0.50, 0.0));
-
-		List<LlmInferenceService.ScoredEmbedding> refined =
-				LlmInferenceService.refineByKeywords(candidates, 3);
-
-		assertEquals(2, refined.size(),
-				"3-term query: single-match records should pass the threshold");
-	}
-
-	@Test
-	public void refineByKeywords_longQuerySingleMatchShouldPass() {
-		// For 6-term queries, threshold = 1/6 = 0.167. A record matching
-		// 1/6 terms (0.17) SHOULD pass — any keyword relevance is sufficient
-		// for refinement. Gap detection handles noise filtering.
-		double weakMatch = 1.0 / 6;
-		double strongMatch = 2.0 / 6;
-		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
-				makeScoredEmbedding(0.70, strongMatch),
-				makeScoredEmbedding(0.65, weakMatch),
-				makeScoredEmbedding(0.60, strongMatch),
-				makeScoredEmbedding(0.55, weakMatch),
-				makeScoredEmbedding(0.50, 0.0));
-
-		List<LlmInferenceService.ScoredEmbedding> refined =
-				LlmInferenceService.refineByKeywords(candidates, 6);
-
-		assertEquals(4, refined.size(),
-				"6-term query: single-match records (0.17) should pass refinement; " +
-				"zero-match records should not");
-	}
-
-	@Test
-	public void pipeline_noKeywordMatchesSmoothDistribution_shouldReturnEmpty() {
-		// Models: "HB results over time" — the patient has NO HB results.
-		// 93 records: 40 higher-scoring (0.35–0.33, tight cluster of vitals
-		// noise) and 53 lower-scoring (0.26–0.156, other record types).
-		// ZERO keyword matches. The z-score gate detects that the top
-		// score (0.35) is not a statistical outlier — the bimodal spread
-		// yields z ≈ 1.22 < 1.5 threshold. Without keyword corroboration,
-		// these results are unreliable and the pipeline returns empty.
-		int recordCount = 93;
-		double[] semantic = new double[recordCount];
-		double[] keyword = new double[recordCount];
-		for (int i = 0; i < 40; i++) {
-			semantic[i] = 0.35 - i * 0.0005;
-			keyword[i] = 0.0;
-		}
-		for (int i = 0; i < 53; i++) {
-			semantic[40 + i] = 0.26 - i * 0.002;
-			keyword[40 + i] = 0.0;
-		}
-
-		int result = runPipeline(semantic, keyword, 0.3, 7);
-
-		assertEquals(0, result,
-				"Z-score gate should reject smooth distribution with no keyword matches");
-	}
-
-	@Test
-	public void pipeline_keywordRefinementBypassesStrictFloorAndTopK() {
-		// When keyword refinement successfully narrows to a subset, the strict
-		// floor + topK fallback should NOT apply. Keywords identified the
-		// relevant records — trust them even if count exceeds topK.
-		// Models: 10 conditions out of 25 total records.
-		double[] semantic = new double[25];
-		double[] keyword = new double[25];
-		for (int i = 0; i < 10; i++) {
-			semantic[i] = 0.55 - i * 0.02;
-			keyword[i] = 2.0 / 6;
-		}
-		for (int i = 0; i < 15; i++) {
-			semantic[10 + i] = 0.45 - i * 0.02;
-			keyword[10 + i] = 0.0;
-		}
-
-		int result = runPipeline(semantic, keyword, 0.3, 6);
-
-		assertEquals(10, result,
-				"Keyword refinement should not be clipped by strict floor or topK");
-	}
-
-	@Test
-	public void pipeline_focusedQueryStrictFloorFiltersNoise() {
-		// Models: "does the patient have cancer?" — 1 term "cancer" after
-		// stopwords. 2 Kaposi sarcoma records score high semantically (0.45),
-		// 18 other records score lower (0.22-0.18). No keyword "cancer" in
-		// any text. With strict floor=0.25, only the 2 cancer records pass.
-		double[] semantic = new double[20];
-		double[] keyword = new double[20];
-		// 2 Kaposi sarcoma: high semantic, no keyword match
-		semantic[0] = 0.45;
-		semantic[1] = 0.43;
-		keyword[0] = 0.0;
-		keyword[1] = 0.0;
-		// 18 unrelated vitals: below strict floor
-		for (int i = 0; i < 18; i++) {
-			semantic[2 + i] = 0.22 - i * 0.002;
-			keyword[2 + i] = 0.0;
-		}
-
-		int result = runPipeline(semantic, keyword, 0.3, 1);
-
-		assertEquals(2, result,
-				"Focused query should return only records above strict floor when keywords can't help");
-	}
-
-	@Test
-	public void pipeline_focusedQueryRatioFloorExcludesMarginalRecords() {
-		// Regression test: "does the patient have cancer?" returned 3 records
-		// instead of 2. Photoallergy diagnosis scored 0.28 — above the
-		// absolute floor (0.25) but below topScore * similarityRatio
-		// (0.38 * 0.80 = 0.304). Scores are close enough that gap detection
-		// cannot separate them (gap 0.07 < minGap 0.10), so the strict
-		// fallback must use the ratio-based floor to exclude marginal records.
-		double[] semantic = new double[20];
-		double[] keyword = new double[20];
-		// 2 Kaposi sarcoma: moderately high semantic (close together)
-		semantic[0] = 0.38;
-		semantic[1] = 0.35;
-		// 1 Photoallergy: above absolute floor (0.25) but below ratio floor
-		semantic[2] = 0.28;
-		// 17 other records: below absolute floor
-		for (int i = 0; i < 17; i++) {
-			semantic[3 + i] = 0.22 - i * 0.002;
-		}
-		// No keyword matches for "cancer" in any record
-		Arrays.fill(keyword, 0.0);
-
-		int result = runPipeline(semantic, keyword, 0.3, 1);
-
-		assertEquals(2, result,
-				"Ratio-based floor (topScore*0.80=0.304) should exclude Photoallergy at 0.28");
-	}
-
-	@Test
-	public void pipeline_keywordRefinementCanExceedTopK() {
-		// When keyword refinement identifies a relevant subset that exceeds
-		// topK (10), all keyword-matched records should still be returned.
-		// Models: 15 conditions out of 30 total records.
-		double[] semantic = new double[30];
-		double[] keyword = new double[30];
-		for (int i = 0; i < 15; i++) {
-			semantic[i] = 0.55 - i * 0.02;
-			keyword[i] = 2.0 / 6;
-		}
-		for (int i = 0; i < 15; i++) {
-			semantic[15 + i] = 0.45 - i * 0.02;
-			keyword[15 + i] = 0.0;
-		}
-
-		int result = runPipeline(semantic, keyword, 0.3, 6);
-
-		assertEquals(15, result,
-				"Keyword refinement should return all 15 conditions even though topK is 10");
-	}
-
-	@Test
-	public void pipeline_allergyQueryShouldReturnOnlyAllergyRecords() {
-		// Regression test: "What is the patient allergic to?" returned 10
-		// records instead of 2. The query term "allergic" couldn't match
-		// "allergy" in record text, so keyword refinement didn't activate.
-		// With stem matching, "allergic" → stem "allerg" → matches "allergy",
-		// enabling keyword refinement to filter to just allergy records.
-		double[] semantic = new double[10];
-		double[] keyword = new double[10];
-		// 2 allergy records: "allergic" matches via stem "allerg" → "allergy"
-		semantic[0] = 0.42;
-		keyword[0] = 1.0; // "allergic" matches (1/1 term)
-		semantic[1] = 0.38;
-		keyword[1] = 1.0;
-		// 8 diagnosis records: no keyword match for "allergic"
-		for (int i = 0; i < 8; i++) {
-			semantic[2 + i] = 0.36 - i * 0.01;
-			keyword[2 + i] = 0.0;
-		}
-
-		int result = runPipeline(semantic, keyword, 0.3, 1);
-
-		assertEquals(2, result,
-				"Allergy query should return only allergy records via stem-based keyword refinement");
-	}
-
-
-	@Test
-	public void pipeline_cd4CountQuery_realData_shouldReturnExactlyTwoRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "What is the current CD4 Count?" → expected: exactly 2 CD4 records.
-		// "current" is a stopword → terms: ["cd4", "count"]. Both CD4 Count records
-		// match both terms (kw=1.0). Gap detection separates them from all others.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("What is the current CD4 Count?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "cd4", "count" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		assertEquals(1.0, keyword[8], 0.001, "[9] CD4 Count should match both terms");
-		assertEquals(1.0, keyword[85], 0.001, "[86] CD4 Count should match both terms");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[  8] = 0.58; // [  9]
-		semantic[ 85] = 0.54; // [ 86]
-
-		semantic[ 22] = 0.30; // [ 23]
-		semantic[ 17] = 0.28; // [ 18]
-		semantic[ 18] = 0.27; // [ 19]
-		semantic[ 19] = 0.26; // [ 20]
-		semantic[ 20] = 0.25; // [ 21]
-		semantic[ 23] = 0.24; // [ 24]
-		semantic[ 11] = 0.20; // [ 12]
-		semantic[  7] = 0.18; // [  8]
-		semantic[ 54] = 0.17; // [ 55]
-		semantic[  4] = 0.15; // [  5]
-		semantic[  0] = 0.14; // [  1]
-
-		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [9] CD4 Count: 988, [86] CD4 Count: 1191
-		assertEquals(Arrays.asList(8, 85),
-				result, "Should return exactly 2 record(s)");
-	}
-
-	@Test
-	public void pipeline_latestCd4CountQuery_realData_shouldReturnExactlyTwoRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "What is the latest CD4 Count?" → expected: exactly 2 CD4 records.
-		// "latest" is a stopword → terms: ["cd4", "count"]. Same targets as
-		// the "current CD4 Count" query.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("What is the latest CD4 Count?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "cd4", "count" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		assertEquals(1.0, keyword[8], 0.001, "[9] CD4 Count should match both terms");
-		assertEquals(1.0, keyword[85], 0.001, "[86] CD4 Count should match both terms");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[  8] = 0.56; // [  9]
-		semantic[ 85] = 0.52; // [ 86]
-
-		semantic[ 22] = 0.28; // [ 23]
-		semantic[ 17] = 0.26; // [ 18]
-		semantic[ 18] = 0.25; // [ 19]
-		semantic[ 23] = 0.23; // [ 24]
-		semantic[ 11] = 0.19; // [ 12]
-		semantic[  7] = 0.17; // [  8]
-
-		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [9] CD4 Count: 988, [86] CD4 Count: 1191
-		assertEquals(Arrays.asList(8, 85),
-				result, "Should return exactly 2 record(s)");
-	}
-
-	@Test
-	public void pipeline_fractureQuery_realData_shouldReturnNoRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "any fracture?" → expected: 0 records. No record in the dataset
-		// mentions fracture. All semantic scores below the gate threshold (0.25),
-		// so the pipeline returns empty.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("any fracture?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "fracture" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		// No record mentions "fracture" — verify no keyword matches
-		for (int i = 0; i < keyword.length; i++) {
-			assertEquals(0.0, keyword[i], 0.001);
-		}
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.15);
-
-		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		assertEquals(Collections.emptyList(), result,
-				"Should return no record(s)");
-	}
-
-	@Test
-	public void pipeline_medicationsQuery_realData_shouldReturnFourRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "is the patient on any medications?" → expected: 4 records.
-		// 2 drug orders match via "Medication prescription:" prefix,
-		// 2 visit notes match via "Medication adjusted" in text.
-		// Keyword bonus (kw=1.0) + semantic scores create clear gap.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("is the patient on any medications?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "medications" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		// Drug orders match via "Medication prescription:" prefix
-		assertEquals(1.0, keyword[0], 0.001, "[1] Drug order matches medications");
-		assertEquals(1.0, keyword[1], 0.001, "[2] Drug order matches medications");
-		// Visit notes with "Medication adjusted" also match
-		assertEquals(1.0, keyword[56], 0.001, "[57] Visit note matches medications");
-		assertEquals(1.0, keyword[91], 0.001, "[92] Visit note matches medications");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[  0] = 0.40; // [  1]
-		semantic[  1] = 0.39; // [  2]
-		semantic[ 56] = 0.38; // [ 57]
-		semantic[ 91] = 0.37; // [ 92]
-
-		semantic[  7] = 0.20; // [  8]
-		semantic[ 54] = 0.19; // [ 55]
-		semantic[  4] = 0.18; // [  5]
-		semantic[ 53] = 0.17; // [ 54]
-		semantic[ 11] = 0.15; // [ 12]
-		semantic[ 88] = 0.14; // [ 89]
-
-		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [1] Drug order: Azithromycin (REVISE), [2] Drug order: Azithromycin (NEW), [57] Visit note: Medication adjusted, [92] Visit note: Medication adjusted
-		assertEquals(Arrays.asList(0, 1, 56, 91),
-				result, "Should return exactly 4 record(s)");
-	}
-
-	@Test
-	public void pipeline_knownConditionsQuery_realData_shouldReturnExactlyTwoRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "any known conditions?" → expected: 2 records.
-		// "known" is a stopword → terms: ["conditions"]. Both Condition records
-		// match via "Medical condition: Condition:" prefix + content.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("any known conditions?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "conditions" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		// "conditions" matches Condition records via "Medical condition:" prefix
-		assertEquals(1.0, keyword[7], 0.001, "[8] TB condition matches");
-		assertEquals(1.0, keyword[54], 0.001, "[55] Hypertension condition matches");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[  7] = 0.40; // [  8]
-		semantic[ 54] = 0.38; // [ 55]
-
-		semantic[ 39] = 0.21; // [ 40]
-		semantic[ 71] = 0.20; // [ 72]
-		semantic[110] = 0.20; // [111]
-		semantic[ 52] = 0.19; // [ 53]
-		semantic[ 69] = 0.19; // [ 70]
-		semantic[ 12] = 0.17; // [ 13]
-		semantic[ 62] = 0.17; // [ 63]
-
-		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [8] Condition: TB, [55] Condition: Hypertension
-		assertEquals(Arrays.asList(7, 54),
-				result, "Should return exactly 2 record(s)");
-	}
-
-	@Test
-	public void pipeline_anemicQuery_realData_shouldReturnExactlyThreeRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "is the patient anemic?" → expected: 3 records.
-		// "anemic" (6 chars) is below the 7-char minimum for stem matching,
-		// so no keyword matches. Purely semantic: 2 "Assessment: Anemia"
-		// records ([30],[56]) + 1 "Diagnosis: Anemia" record ([73]).
-
-		String normalized = LlmInferenceService.stripQueryStopwords("is the patient anemic?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "anemic" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		// "anemic" is 6 chars < 7 minimum for stem matching → no keyword matches
-		for (int i = 0; i < keyword.length; i++) {
-			assertEquals(0.0, keyword[i], 0.001,
-					"No record should match anemic (too short for stemming)");
-		}
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[ 29] = 0.40; // [ 30]
-		semantic[ 55] = 0.38; // [ 56]
-		semantic[ 72] = 0.36; // [ 73]
-
-		semantic[  7] = 0.22; // [  8]
-		semantic[ 54] = 0.21; // [ 55]
-		semantic[ 39] = 0.20; // [ 40]
-		semantic[ 71] = 0.20; // [ 72]
-		semantic[ 52] = 0.19; // [ 53]
-		semantic[ 12] = 0.17; // [ 13]
-		semantic[ 62] = 0.17; // [ 63]
-		semantic[ 66] = 0.17; // [ 67]
-		semantic[  8] = 0.14; // [  9]
-		semantic[ 85] = 0.14; // [ 86]
-
-		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [30] Assessment: Anemia, [56] Assessment: Anemia, [73] Dx: Anemia (PROVISIONAL)
-		assertEquals(Arrays.asList(29, 55, 72),
-				result, "Should return exactly 3 record(s)");
-	}
-
-	@Test
-	public void pipeline_conditionsQuery_realData_shouldReturnExactlyTwoRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "any conditions" → expected: 2 records.
-		// terms: ["conditions"]. Same targets as "known conditions" query.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("any conditions");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "conditions" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		assertEquals(1.0, keyword[7], 0.001, "[8] TB condition matches");
-		assertEquals(1.0, keyword[54], 0.001, "[55] Hypertension condition matches");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[  7] = 0.40; // [  8]
-		semantic[ 54] = 0.38; // [ 55]
-
-		semantic[ 39] = 0.21; // [ 40]
-		semantic[ 71] = 0.20; // [ 72]
-		semantic[ 52] = 0.19; // [ 53]
-		semantic[ 69] = 0.19; // [ 70]
-		semantic[ 12] = 0.17; // [ 13]
-		semantic[ 62] = 0.17; // [ 63]
-
-		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [8] Condition: TB, [55] Condition: Hypertension
-		assertEquals(Arrays.asList(7, 54),
-				result, "Should return exactly 2 record(s)");
-	}
-
-	@Test
-	public void pipeline_stdQuery_realData_shouldReturnExactlySixRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "any sexually transmitted disease?" → expected: 6 HIV Disease records.
-		// terms: ["sexually", "transmitted", "disease"]. "disease" matches 8 records
-		// (6 HIV + 2 Fetishism visit notes). Bonus threshold is 2/3 so no bonus.
-		// Gap detection on semantic scores separates 6 HIV records (high semantic)
-		// from the 2 Fetishism notes (low semantic).
-
-		String normalized = LlmInferenceService.stripQueryStopwords("any sexually transmitted disease?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "sexually", "transmitted", "disease" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		// "disease" matches HIV Disease records (1/3 terms = 0.33)
-		assertEquals(0.3333, keyword[39], 0.01, "[40] HIV Disease matches disease");
-		assertEquals(0.3333, keyword[40], 0.01, "[41] HIV Disease matches disease");
-		assertEquals(0.3333, keyword[68], 0.01, "[69] HIV Disease matches disease");
-		assertEquals(0.3333, keyword[69], 0.01, "[70] HIV Disease matches disease");
-		assertEquals(0.3333, keyword[71], 0.01, "[72] HIV Disease matches disease");
-		assertEquals(0.3333, keyword[110], 0.01, "[111] HIV Disease matches disease");
-		// Non-HIV records also match "disease" but have low semantic scores
-		assertEquals(0.3333, keyword[56], 0.01, "[57] Fetishism note matches disease");
-		assertEquals(0.3333, keyword[91], 0.01, "[92] Fetishism note matches disease");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[ 39] = 0.40; // [ 40]
-		semantic[ 40] = 0.39; // [ 41]
-		semantic[ 68] = 0.38; // [ 69]
-		semantic[ 69] = 0.37; // [ 70]
-		semantic[ 71] = 0.36; // [ 72]
-		semantic[110] = 0.35; // [111]
-
-		// Fetishism notes share "disease" → model inflates their scores
-		// slightly, but noticeably less than the HIV Disease records
-		semantic[ 56] = 0.31; // [ 57] Fetishism "Chronic disease management" — "disease" word overlap
-		semantic[ 91] = 0.31; // [ 92] Fetishism "Chronic disease management" — "disease" word overlap
-		semantic[  7] = 0.20; // [  8]
-		semantic[ 54] = 0.19; // [ 55]
-		semantic[ 52] = 0.18; // [ 53]
-		semantic[ 12] = 0.17; // [ 13]
-		semantic[ 62] = 0.16; // [ 63]
-		semantic[ 66] = 0.16; // [ 67]
-		semantic[ 11] = 0.14; // [ 12]
-		semantic[ 88] = 0.14; // [ 89]
-
-		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [40] Dx: HIV Disease (CONFIRMED), [41] Assessment: HIV Disease, [69] Assessment: HIV Disease, [70] Dx: HIV Disease (PROVISIONAL), [72] Dx: HIV Disease (CONFIRMED), [111] Dx: HIV Disease (CONFIRMED)
-		assertEquals(Arrays.asList(39, 40, 68, 69, 71, 110),
-				result, "Should return exactly 6 record(s)");
-	}
-
-	@Test
-	public void pipeline_whatIsPatientAllergicToQuery_realData_shouldReturnExactlyTwoRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "What is the patient allergic to?" → expected: 2 allergy records.
-		// terms: ["allergic"]. Stem "allerg" matches "Allergy" in both
-		// allergy records ([5],[54]).
-
-		String normalized = LlmInferenceService.stripQueryStopwords("What is the patient allergic to?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "allergic" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		// "allergic" stem-matches "allergy" in allergy records
-		assertEquals(1.0, keyword[4], 0.001, "[5] Beef allergy matches");
-		assertEquals(1.0, keyword[53], 0.001, "[54] Fomepizole allergy matches");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[  4] = 0.40; // [  5]
-		semantic[ 53] = 0.38; // [ 54]
-
-		semantic[  7] = 0.20; // [  8]
-		semantic[ 54] = 0.19; // [ 55]
-		semantic[ 39] = 0.18; // [ 40]
-		semantic[ 11] = 0.15; // [ 12]
-		semantic[ 88] = 0.14; // [ 89]
-
-		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [5] Allergy: Beef, [54] Allergy: Fomepizole
-		assertEquals(Arrays.asList(4, 53),
-				result, "Should return exactly 2 record(s)");
-	}
-
-	@Test
-	public void pipeline_coughQuery_realData_shouldReturnExactlyOneRecord() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "any cough?" → expected: 1 record.
-		// terms: ["cough"]. Only record [51] contains "cough" in
-		// "persistent cough for the last 3 weeks".
-		// Gap detection cannot fire before position 2, but keyword
-		// refinement selects the single matching record.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("any cough?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "cough" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		assertEquals(1.0, keyword[50], 0.001, "[51] Cough visit note matches");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[ 50] = 0.40; // [ 51]
-
-		semantic[  7] = 0.20; // [  8]
-		semantic[ 54] = 0.19; // [ 55]
-		semantic[ 39] = 0.18; // [ 40]
-		semantic[ 11] = 0.17; // [ 12]
-		semantic[ 52] = 0.16; // [ 53]
-		semantic[ 12] = 0.15; // [ 13]
-
-		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [51] Cough visit note
-		assertEquals(Arrays.asList(50),
-				result, "Should return exactly 1 record(s)");
-	}
-
-	@Test
-	public void pipeline_doesPatientHaveAllergiesQuery_realData_shouldReturnExactlyTwoRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "does the patient have any allergies?" → expected: 2 allergy records.
-		// terms: ["allergies"]. Stem "allerg" matches both allergy records.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("does the patient have any allergies?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "allergies" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		// "allergies" stem-matches "Allergy" in allergy records
-		assertEquals(1.0, keyword[4], 0.001, "[5] Beef allergy matches");
-		assertEquals(1.0, keyword[53], 0.001, "[54] Fomepizole allergy matches");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[  4] = 0.40; // [  5]
-		semantic[ 53] = 0.38; // [ 54]
-
-		semantic[  7] = 0.20; // [  8]
-		semantic[ 54] = 0.19; // [ 55]
-		semantic[ 39] = 0.18; // [ 40]
-		semantic[ 11] = 0.15; // [ 12]
-
-		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [5] Allergy: Beef, [54] Allergy: Fomepizole
-		assertEquals(Arrays.asList(4, 53),
-				result, "Should return exactly 2 record(s)");
-	}
-
-	@Test
-	public void pipeline_allergyQuery_realData_shouldReturnExactlyTwoRecords() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "any allergies?" → expected: 2 allergy records.
-		// terms: ["allergies"]. Same allergy targets as other allergy queries.
-
-		String normalized = LlmInferenceService.stripQueryStopwords("any allergies?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertArrayEquals(new String[] { "allergies" }, queryTerms);
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		assertEquals(1.0, keyword[4], 0.001, "[5] Beef allergy matches");
-		assertEquals(1.0, keyword[53], 0.001, "[54] Fomepizole allergy matches");
-
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.1);
-
-		semantic[  4] = 0.40; // [  5]
-		semantic[ 53] = 0.38; // [ 54]
-
-		semantic[  7] = 0.20; // [  8]
-		semantic[ 54] = 0.19; // [ 55]
-		semantic[ 39] = 0.18; // [ 40]
-
-		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// [5] Allergy: Beef, [54] Allergy: Fomepizole
-		assertEquals(Arrays.asList(4, 53),
-				result, "Should return exactly 2 record(s)");
-	}
-
-
-	@Test
-	public void pipeline_vitalsTrendQuery_realData_shouldReturnBpWeightAndTemperature() {
-		// Full 153-record patient dataset: 16-year-old Male.
-		// Query: "How have this patient's blood pressure, weight, and
-		// temperature trended across their last 7 visits?"
-		// Multi-concept query with 7 terms. BP matches "blood"+"pressure"
-		// (2/7=0.29 → at bonus threshold), weight/temp match 1 term each
-		// (1/7=0.14 → below bonus threshold). Gap detection on semantic
-		// scores separates the 8 target vitals from all other records.
-
-		String normalized = LlmInferenceService.stripQueryStopwords(
-				"How have this patient's blood pressure, weight, and temperature "
-				+ "trended across their last 7 visits?");
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalized);
-		assertTrue(queryTerms.length >= 4,
-				"Should have at least blood/pressure/weight/temperature as terms");
-		List<String> termList = Arrays.asList(queryTerms);
-		assertTrue(termList.contains("blood"), "Should contain 'blood'");
-		assertTrue(termList.contains("pressure"), "Should contain 'pressure'");
-		assertTrue(termList.contains("weight"), "Should contain 'weight'");
-		assertTrue(termList.contains("temperature"), "Should contain 'temperature'");
-
-		double[] keyword = new double[FULL_PATIENT_DATASET.length];
-		for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
-			keyword[i] = LlmInferenceService.computeKeywordScore(queryTerms, FULL_PATIENT_DATASET[i]);
-		}
-
-		// BP records match "blood"+"pressure" (2 terms)
-		double bpKw = keyword[22]; // Systolic BP
-		assertTrue(bpKw > 0, "BP should match blood+pressure");
-		// Weight matches "weight" (1 term)
-		double weightKw = keyword[18]; // Weight
-		assertTrue(weightKw > 0, "Weight should match weight");
-		assertTrue(bpKw > weightKw, "BP should have higher keyword score than weight");
-		// Temperature matches "temperature" (1 term)
-		double tempKw = keyword[17]; // Temperature
-		assertTrue(tempKw > 0, "Temperature should match temperature");
-
-		// Realistic scores: the embedding model scores ALL vitals of the same
-		// type similarly — it cannot distinguish "recent" from "old" visits.
-		// ALL Blood Pressure, Weight, and Temperature records score high.
-		double[] semantic = new double[FULL_PATIENT_DATASET.length];
-		Arrays.fill(semantic, 0.10);
-
-		// ALL Systolic/Diastolic Blood Pressure records (~24 total)
-		semantic[ 22] = 0.50; // [ 23] Systolic BP: 97.0
-		semantic[ 23] = 0.50; // [ 24] Diastolic BP: 99.0
-		semantic[ 31] = 0.50; // [ 32] Diastolic BP: 92.0
-		semantic[ 36] = 0.50; // [ 37] Systolic BP: 122.0
-		semantic[ 47] = 0.50; // [ 48] Systolic BP: 101.0
-		semantic[ 48] = 0.50; // [ 49] Diastolic BP: 99.0
-		semantic[ 58] = 0.50; // [ 59] Systolic BP: 123.0
-		semantic[ 64] = 0.50; // [ 65] Diastolic BP: 71.0
-		semantic[ 73] = 0.50; // [ 74] Systolic BP: 137.0
-		semantic[ 74] = 0.50; // [ 75] Diastolic BP: 67.0
-		semantic[ 81] = 0.50; // [ 82] Diastolic BP: 105.0
-		semantic[ 93] = 0.50; // [ 94] Systolic BP: 147.0
-		semantic[ 94] = 0.50; // [ 95] Diastolic BP: 58.0
-		semantic[102] = 0.50; // [103] Diastolic BP: 50.0
-		semantic[107] = 0.50; // [108] Diastolic BP: 93.0
-		semantic[111] = 0.50; // [112] Systolic BP: 98.0
-		semantic[126] = 0.50; // [127] Systolic BP: 134.0
-		semantic[128] = 0.50; // [129] Systolic BP: 117.0
-		semantic[129] = 0.50; // [130] Diastolic BP: 70.0
-		semantic[137] = 0.50; // [138] Diastolic BP: 76.0
-		semantic[138] = 0.50; // [139] Systolic BP: 102.0
-		semantic[144] = 0.50; // [145] Diastolic BP: 78.0
-		semantic[147] = 0.50; // [148] Systolic BP: 151.0
-		semantic[148] = 0.50; // [149] Diastolic BP: 53.0
-		// ALL Weight records (~7 total)
-		semantic[ 18] = 0.50; // [ 19] Weight: 94.0
-		semantic[ 26] = 0.50; // [ 27] Weight: 107.0
-		semantic[ 33] = 0.50; // [ 34] Weight: 139.0
-		semantic[ 63] = 0.50; // [ 64] Weight: 38.0
-		semantic[ 77] = 0.50; // [ 78] Weight: 146.0
-		semantic[101] = 0.50; // [102] Weight: 68.0
-		semantic[114] = 0.50; // [115] Weight: 121.0
-		// ALL Temperature records (~9 total)
-		semantic[ 17] = 0.50; // [ 18] Temperature: 36.7
-		semantic[ 25] = 0.50; // [ 26] Temperature: 37.7
-		semantic[ 38] = 0.50; // [ 39] Temperature: 40.3
-		semantic[ 76] = 0.50; // [ 77] Temperature: 39.3
-		semantic[ 96] = 0.50; // [ 97] Temperature: 36.4
-		semantic[113] = 0.50; // [114] Temperature: 37.8
-		semantic[131] = 0.50; // [132] Temperature: 40.1
-		semantic[143] = 0.50; // [144] Temperature: 39.3
-		semantic[150] = 0.50; // [151] Temperature: 39.4
-		// Blood Oxygen also matches "blood" keyword
-		semantic[ 34] = 0.40; // [ 35] Blood O2: 88.0
-		semantic[ 45] = 0.40; // [ 46] Blood O2: 92.0
-		semantic[ 59] = 0.40; // [ 60] Blood O2: 86.0
-		semantic[ 79] = 0.40; // [ 80] Blood O2: 86.0
-		semantic[ 83] = 0.40; // [ 84] Blood O2: 100.0
-		semantic[103] = 0.40; // [104] Blood O2: 94.0
-		semantic[108] = 0.40; // [109] Blood O2: 95.0
-		semantic[116] = 0.40; // [117] Blood O2: 94.0
-		semantic[145] = 0.40; // [146] Blood O2: 88.0
-		semantic[151] = 0.40; // [152] Blood O2: 88.0
-
-		List<Integer> result = runPipelineIndices(semantic, keyword, 0.3, queryTerms.length, 10);
-
-		// All 40 BP + weight + temperature records (24 BP + 7 weight + 9 temp)
-		assertEquals(Arrays.asList(17, 18, 22, 23, 25, 26, 31, 33, 36, 38,
-				47, 48, 58, 63, 64, 73, 74, 76, 77, 81,
-				93, 94, 96, 101, 102, 107, 111, 113, 114, 126,
-				128, 129, 131, 137, 138, 143, 144, 147, 148, 150),
-				result, "Should return all 40 BP + weight + temperature records");
-	}
-
 	private static Date makeDate(int year, int month, int day) {
 		Calendar cal = Calendar.getInstance();
 		cal.set(year, month - 1, day, 0, 0, 0);
@@ -2300,6 +1140,12 @@ public class LlmInferenceServiceTest {
 
 	private static List<Integer> runRealModelPipeline(String query, int topK,
 			String[] dataset) {
+		return runRealModelPipeline(query, topK, dataset,
+				LlmInferenceService.PipelineConfig.defaults());
+	}
+
+	private static List<Integer> runRealModelPipeline(String query, int topK,
+			String[] dataset, LlmInferenceService.PipelineConfig config) {
 		org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider provider =
 				new org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider(
 						MODEL_PATH, VOCAB_PATH);
@@ -2321,7 +1167,7 @@ public class LlmInferenceServiceTest {
 			List<ChartEmbedding> results = LlmInferenceService.findSimilar(
 					allEmbeddings, provider, query, topK,
 					ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
-					LlmInferenceService.PipelineConfig.defaults());
+					config);
 
 			List<Integer> indices = new ArrayList<Integer>();
 			for (ChartEmbedding ce : results) {
@@ -2350,6 +1196,29 @@ public class LlmInferenceServiceTest {
 				93, 94, 96, 101, 102, 107, 111, 113, 114, 126,
 				128, 129, 131, 137, 138, 143, 144, 147, 148, 150),
 				result, "Should return all 40 BP + weight + temperature records");
+	}
+
+	@Test
+	public void realModel_vitalsTrendQuery_shouldExcludeBloodOxygenAndOtherFalsePositives() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "blood pressure, weight, and temperature" should NOT include
+		// records that coincidentally match "blood" (like blood oxygen
+		// saturation) but don't cover a unique query concept. The
+		// filterRedundantKeywordTier logic must drop them because
+		// "blood" is already covered by the BP records in the higher tier.
+		List<Integer> result = runRealModelPipeline(
+				"How have this patient's blood pressure, weight, and temperature "
+				+ "trended across their last 7 visits?", 10);
+
+		// Blood oxygen saturation records in FULL_PATIENT_DATASET
+		int[] bloodOxygenIndices = { 35, 46, 60, 80, 84, 104, 109, 117, 146, 152 };
+		for (int idx : bloodOxygenIndices) {
+			assertFalse(result.contains(idx),
+					"Should NOT include blood oxygen record at index " + idx
+					+ " — 'blood' is already covered by BP records, got: " + result);
+		}
 	}
 
 	@Test
@@ -2496,6 +1365,158 @@ public class LlmInferenceServiceTest {
 
 		assertEquals(Arrays.asList(39, 40, 68, 69, 71, 110), result,
 				"'any STD?' should return the same 6 HIV records as the full phrase");
+	}
+
+	@Test
+	public void integration_activeConditionsQuery_shouldReturnOnlyConditionRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"When were each of this patient's active conditions first "
+				+ "recorded, and have any resolved or escalated?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		// Dataset indices are 1-based in comments but 0-based in the array.
+		// [8] Tuberculosis = index 7, [55] Hypertension = index 54.
+		assertEquals(Arrays.asList(7, 54), result,
+				"Should return only the 2 active condition records "
+				+ "(Tuberculosis [8] and Hypertension [55])");
+	}
+
+	@Test
+	public void integration_currentCd4CountQuery_shouldReturnExactlyTwoRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"What is the current CD4 Count?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		// [9] CD4 Count: 988.0 = index 8, [86] CD4 Count: 1191.0 = index 85
+		assertEquals(Arrays.asList(8, 85), result,
+				"Should return only the 2 CD4 Count records");
+	}
+
+	@Test
+	public void integration_latestCd4CountQuery_shouldReturnExactlyTwoRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"What is the latest CD4 Count?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		assertEquals(Arrays.asList(8, 85), result,
+				"Should return only the 2 CD4 Count records");
+	}
+
+	@Test
+	public void integration_fractureQuery_shouldReturnNoRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"any fracture?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		assertTrue(result.isEmpty(),
+				"Patient has no fracture records, should return empty");
+	}
+
+	@Test
+	public void integration_medicationsQuery_shouldReturnMedicationRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"is the patient on any medications?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		// [2] Azithromycin = index 1, [57] and [92] "Medication adjusted" = indices 56, 91
+		assertEquals(Arrays.asList(1, 56, 91), result,
+				"Should return drug order and medication-related visit notes");
+	}
+
+	@Test
+	public void integration_knownConditionsQuery_shouldReturnExactlyTwoRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"any known conditions?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		// [8] Tuberculosis = index 7, [55] Hypertension = index 54
+		assertEquals(Arrays.asList(7, 54), result,
+				"Should return the 2 Medical condition records");
+	}
+
+	@Test
+	public void integration_conditionsQuery_shouldReturnExactlyTwoRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"any conditions",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		assertEquals(Arrays.asList(7, 54), result,
+				"Should return the 2 Medical condition records");
+	}
+
+	@Test
+	public void integration_whatIsPatientAllergicToQuery_shouldReturnExactlyTwoRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"What is the patient allergic to?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		// [5] Beef allergy = index 4, [54] Fomepizole allergy = index 53
+		assertEquals(Arrays.asList(4, 53), result,
+				"Should return the 2 allergy records");
+	}
+
+	@Test
+	public void integration_coughQuery_shouldReturnExactlyOneRecord() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"any cough?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		// [51] "persistent cough for 2 weeks" = index 50
+		assertEquals(Arrays.asList(50), result,
+				"Should return only the record mentioning cough");
+	}
+
+	@Test
+	public void integration_doesPatientHaveAllergiesQuery_shouldReturnExactlyTwoRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"does the patient have any allergies?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		assertEquals(Arrays.asList(4, 53), result,
+				"Should return the 2 allergy records");
+	}
+
+	@Test
+	public void integration_allergyQuery_shouldReturnExactlyTwoRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"any allergies?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		assertEquals(Arrays.asList(4, 53), result,
+				"Should return the 2 allergy records");
 	}
 
 	/** Known prefixes in the dataset text format. Order matters — longer
@@ -2714,6 +1735,82 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void realModel_secondDataset_vitalsTrendQuery_shouldReturnBpWeightAndTemperature() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// Use default config — exercises the coherent-gap path.
+		List<Integer> result = runRealModelPipeline(
+				"How have this patient's blood pressure, weight, and temperature "
+				+ "trended across their last 7 visits?", 10,
+				SECOND_PATIENT_DATASET);
+
+		// Temperature: 0-based 5, 20, 35, 46, 59
+		// Systolic BP: 0-based 6, 21, 36, 47, 60
+		// Diastolic BP: 0-based 7, 22, 37, 48, 61
+		// Weight: 0-based 10, 25, 40, 51, 64
+		assertEquals(Arrays.asList(5, 6, 7, 10, 20, 21, 22, 25, 35, 36, 37, 40,
+				46, 47, 48, 51, 59, 60, 61, 64),
+				result,
+				"Should return all 20 BP + weight + temperature records, got: " + result);
+	}
+
+	@Test
+	public void realModel_secondDataset_vitalsTrend_shouldExcludeBloodTransfusionCondition() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "Personal history of blood transfusion" matches "blood" but
+		// that term is already covered by BP records. It should be
+		// dropped as a false positive.
+		List<Integer> result = runRealModelPipeline(
+				"How have this patient's blood pressure, weight, and temperature "
+				+ "trended across their last 7 visits?", 10,
+				SECOND_PATIENT_DATASET);
+
+		// 0-based index 55 = "Medical condition: Condition: Personal
+		// history of blood transfusion. Status: ACTIVE"
+		assertFalse(result.contains(55),
+				"Should NOT include blood transfusion condition — 'blood' "
+				+ "is already covered by BP records, got: " + result);
+	}
+
+	@Test
+	public void realModel_secondDataset_bpAndPulse_shouldReturnBothConceptsAndExcludeSpO2() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// Different multi-concept query: "blood pressure and pulse".
+		// BP matches 2 terms ("blood"+"pressure"), pulse matches 1
+		// ("pulse"). SpO2 ("arterial blood oxygen saturation") matches
+		// "blood" only — a false positive that should be dropped.
+		List<Integer> result = runRealModelPipeline(
+				"blood pressure and pulse", 10, SECOND_PATIENT_DATASET);
+
+		// Systolic BP: 0-based 6, 21, 36, 47, 60
+		// Diastolic BP: 0-based 7, 22, 37, 48, 61
+		// Pulse: 0-based 8, 23, 38, 49, 62
+		for (int bpIdx : new int[]{ 6, 7, 21, 22, 36, 37, 47, 48, 60, 61 }) {
+			assertTrue(result.contains(bpIdx),
+					"Should include BP record at index " + bpIdx
+					+ ", got: " + result);
+		}
+		for (int pulseIdx : new int[]{ 8, 23, 38, 49, 62 }) {
+			assertTrue(result.contains(pulseIdx),
+					"Should include pulse record at index " + pulseIdx
+					+ ", got: " + result);
+		}
+
+		// SpO2: 0-based 9, 24, 39, 50, 63 — matches "blood" only,
+		// which is already covered by BP → false positive
+		for (int spo2Idx : new int[]{ 9, 24, 39, 50, 63 }) {
+			assertFalse(result.contains(spo2Idx),
+					"Should NOT include SpO2 record at index " + spo2Idx
+					+ " — 'blood' is already covered by BP, got: " + result);
+		}
+	}
+
+	@Test
 	public void realModel_diagnosticScoreDump() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
@@ -2740,8 +1837,7 @@ public class LlmInferenceServiceTest {
 				System.out.println("\n=== QUERY: \"" + query + "\" ===");
 				System.out.println("Terms: " + Arrays.toString(queryTerms)
 						+ " (N=" + queryTerms.length + ")");
-				double bonusThreshold = queryTerms.length >= 4
-						? 1.0 / queryTerms.length
+				double bonusThreshold = queryTerms.length == 0 ? 1.0
 						: (double) Math.min(2, queryTerms.length) / queryTerms.length;
 				System.out.println("BonusThreshold: " + bonusThreshold);
 
@@ -3007,6 +2103,225 @@ public class LlmInferenceServiceTest {
 
 		assertEquals(3, result.size(),
 				"Should not duplicate records already in cluster");
+	}
+
+	// ---- Integration tests replacing former synthetic pipeline_* tests ----
+	// Each test below replaces a specific deleted synthetic test, exercising
+	// the same pipeline mechanic with real ONNX embeddings.
+
+	@Test
+	public void integration_topKShouldCapResultsWhenNoKeywordMatches() {
+		// Replaces: pipeline_genericQuery_shouldCapToTopK
+		// When no records have keyword matches, topK caps the result set.
+		// "cancer" has zero keyword matches in the dataset, so topK applies.
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"does the patient have cancer?", 1, FULL_PATIENT_DATASET);
+
+		assertEquals(1, result.size(),
+				"With no keyword matches, topK=1 should cap to 1 record");
+	}
+
+	@Test
+	public void integration_keywordMatchedRecordsShouldBypassTopK() {
+		// Replaces: pipeline_incidentalKeywordMatches_shouldNotOverFilter
+		// When records have keyword matches, they bypass topK capping.
+		// CD4 Count records match "CD4"+"count" keywords — both should be
+		// returned even with topK=1, because keyword-matched records are
+		// not subject to topK truncation.
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"What is the current CD4 Count?", 1, FULL_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(8, 85), result,
+				"Keyword-matched records should bypass topK=1 — both CD4 records returned");
+	}
+
+	@Test
+	public void integration_gapDetectionShouldTakePrecedenceOverKeywords() {
+		// Replaces: pipeline_gapDetectionWorks_keywordRefinementShouldNotInterfere
+		// Gap detection finds a clear boundary between the 2 prescription
+		// records and everything else. Keyword refinement should not pull
+		// lower records into the result despite potential keyword overlap.
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"any prescriptions?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		assertEquals(Arrays.asList(0, 1), result,
+				"Gap detection should isolate the 2 drug order records");
+	}
+
+	@Test
+	public void integration_keywordRefinementShouldWorkWithSmoothScores() {
+		// Replaces: pipeline_smoothDistributionNoKeywords_shouldReturnAllAboveFloor
+		// When semantic scores are smooth (no clear gap), keyword refinement
+		// identifies relevant records via keyword discrimination.
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"list all allergies",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		assertEquals(Arrays.asList(4, 53), result,
+				"Keyword refinement should isolate allergy records from smooth scores");
+	}
+
+	@Test
+	public void integration_keywordWeightZeroShouldDisableRefinement() {
+		// Replaces: pipeline_keywordWeightZero_shouldDisableRefinement
+		// With keywordWeight=0, keyword refinement is disabled. On the
+		// second patient dataset, "any conditions?" normally returns all
+		// 10 condition records (keyword refinement rescues them). With
+		// keywordWeight=0, only the top semantic matches survive.
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		LlmInferenceService.PipelineConfig noKeywordConfig =
+				new LlmInferenceService.PipelineConfig(
+						0.0,
+						ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
+						ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
+						ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
+						ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO);
+
+		List<Integer> withKeywords = runRealModelPipeline("any conditions?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K,
+				SECOND_PATIENT_DATASET);
+		List<Integer> withoutKeywords = runRealModelPipeline("any conditions?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K,
+				SECOND_PATIENT_DATASET, noKeywordConfig);
+
+		assertEquals(10, withKeywords.size(),
+				"With default keywordWeight, should return all 10 conditions");
+		assertEquals(Arrays.asList(1, 31), withoutKeywords,
+				"With keywordWeight=0, only top semantic matches survive");
+		assertTrue(withoutKeywords.size() < withKeywords.size(),
+				"Disabling keywords should return fewer records");
+	}
+
+	@Test
+	public void integration_noMatchingRecordsShouldReturnEmpty() {
+		// Replaces: pipeline_medicationQueryNoDrugOrders_shouldReturnContext
+		// When the patient has no matching records, the pipeline should
+		// return empty — not dump noise into the LLM.
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"What are this patient's HB results over time, and are values "
+				+ "moving toward or away from the normal range?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		assertTrue(result.isEmpty(),
+				"Patient has no HB/hemoglobin records — should return empty");
+	}
+
+	@Test
+	public void integration_zScoreGateShouldBlockSmoothLowScores() {
+		// Replaces: pipeline_noKeywordMatchesSmoothDistribution_shouldReturnEmpty
+		// When no records match the query well (smooth, low semantic scores
+		// and no keyword matches), the z-score gate should block everything
+		// to prevent sending noise to the LLM.
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline("any fracture?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		assertTrue(result.isEmpty(),
+				"No fracture records exist — z-score gate should block all results");
+	}
+
+	@Test
+	public void integration_keywordRefinementShouldBypassFloorAndTopK() {
+		// Replaces: pipeline_keywordRefinementBypassesStrictFloorAndTopK
+		// All 10 condition records in the second dataset match "condition"
+		// via keyword. Keyword refinement should bypass both the ratio
+		// floor and topK, returning all 10 even with topK=5.
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline("any conditions?", 5,
+				SECOND_PATIENT_DATASET);
+
+		assertTrue(result.size() > 5,
+				"Keyword refinement should bypass topK=5, got " + result.size());
+		assertEquals(Arrays.asList(1, 2, 16, 17, 29, 30, 31, 44, 55, 56), result,
+				"Should return all 10 condition records from second dataset");
+	}
+
+	@Test
+	public void integration_focusedQueryShouldFilterNoise() {
+		// Replaces: pipeline_focusedQueryStrictFloorFiltersNoise
+		// A focused query should return only records that cluster high
+		// semantically, filtering out noise below the gap or floor.
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"does the patient have cancer?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		assertEquals(Arrays.asList(11, 88), result,
+				"Focused cancer query should return only 2 Kaposi sarcoma records, "
+				+ "filtering out all noise below the semantic gap");
+	}
+
+	@Test
+	public void integration_ratioFloorShouldExcludeMarginalRecords() {
+		// Replaces: pipeline_focusedQueryRatioFloorExcludesMarginalRecords
+		// The anemic query returns 3 records with default topK. With topK=1
+		// and no keyword matches on "anemic", topK caps the result —
+		// marginal records that scored below the top are excluded.
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> fullResult = runRealModelPipeline("is the patient anemic?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+		List<Integer> cappedResult = runRealModelPipeline("is the patient anemic?",
+				1, FULL_PATIENT_DATASET);
+
+		assertTrue(fullResult.size() > 1,
+				"Full result should have multiple anemia records");
+		assertTrue(cappedResult.size() < fullResult.size(),
+				"TopK=1 should exclude marginal records, got " + cappedResult);
+	}
+
+	@Test
+	public void integration_labOrdersQuery_shouldReturnEmptyWhenNoLabOrders() {
+		// FULL_PATIENT_DATASET has no "Lab test order:" records.
+		// Obs records mentioning "Labs ordered." in clinical notes should not match.
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"Were all lab orders placed for this patient resulted?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+		assertTrue(result.isEmpty(),
+				"No lab order records exist — should return empty, got: " + result);
+	}
+
+	@Test
+	public void integration_keywordRefinementCanExceedTopK() {
+		// Replaces: pipeline_keywordRefinementCanExceedTopK
+		// All 10 condition records match "condition" keyword. With topK=3,
+		// keyword refinement should keep all 10 — exceeding topK.
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline("any conditions?", 3,
+				SECOND_PATIENT_DATASET);
+
+		assertTrue(result.size() > 3,
+				"Keyword refinement should allow exceeding topK=3, got " + result.size());
 	}
 
 }

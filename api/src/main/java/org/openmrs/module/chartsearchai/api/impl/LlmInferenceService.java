@@ -658,7 +658,19 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 
 		return filterPipeline(semanticScores, keywordScores, embeddings,
-				queryTerms.length, topK, config);
+				queryTerms, topK, config);
+	}
+
+	/**
+	 * Overload that accepts a term count instead of actual query terms.
+	 * The keyword-tier subset check is skipped since the actual terms
+	 * are not available.
+	 */
+	static List<ChartEmbedding> filterPipeline(double[] semanticScores,
+			double[] keywordScores, ChartEmbedding[] embeddings,
+			int queryTermCount, int topK, PipelineConfig config) {
+		return filterPipeline(semanticScores, keywordScores, embeddings,
+				null, queryTermCount, topK, config);
 	}
 
 	/**
@@ -670,26 +682,33 @@ public class LlmInferenceService implements ChartSearchService {
 	 * @param semanticScores cosine similarity between query and each record
 	 * @param keywordScores keyword overlap fraction for each record
 	 * @param embeddings the chart embeddings (parallel to score arrays)
-	 * @param queryTermCount number of query terms after stopword removal
+	 * @param queryTerms query terms after stopword removal (null-safe:
+	 *        when null, the keyword-tier subset check is skipped)
 	 * @param topK maximum records to return (safety cap)
 	 * @param config pipeline tuning parameters
 	 * @return filtered list of relevant embeddings, or empty list
 	 */
 	static List<ChartEmbedding> filterPipeline(double[] semanticScores,
 			double[] keywordScores, ChartEmbedding[] embeddings,
-			int queryTermCount, int topK, PipelineConfig config) {
+			String[] queryTerms, int topK, PipelineConfig config) {
+		return filterPipeline(semanticScores, keywordScores, embeddings,
+				queryTerms, queryTerms != null ? queryTerms.length : 0,
+				topK, config);
+	}
+
+	private static List<ChartEmbedding> filterPipeline(double[] semanticScores,
+			double[] keywordScores, ChartEmbedding[] embeddings,
+			String[] queryTerms, int queryTermCount, int topK,
+			PipelineConfig config) {
 
 		double maxBaseScore = 0;
 		double maxSemanticScore = 0;
 
-		// For short queries (N≤3), require ≥2 term matches for bonus so that
-		// single coincidental matches (e.g. "history" in "immunization history"
-		// for "history of cancer") are penalized. For longer multi-concept
-		// queries (N≥4), matching ANY term is legitimate — the query spans
-		// multiple concepts and each record type may only match its own concept.
-		double bonusThreshold = queryTermCount >= 4
-				? 1.0 / queryTermCount
-				: queryTermCount == 0 ? 1.0
+		// Require ≥2 term matches for the keyword bonus so that single
+		// coincidental matches (e.g. "history" in "immunization history"
+		// for "history of cancer", or "lab" in "Labs ordered." for
+		// "lab orders placed resulted") don't inflate scores.
+		double bonusThreshold = queryTermCount == 0 ? 1.0
 				: (double) Math.min(2, queryTermCount) / queryTermCount;
 		List<ScoredEmbedding> scored = new ArrayList<ScoredEmbedding>();
 		for (int i = 0; i < embeddings.length; i++) {
@@ -872,10 +891,42 @@ public class LlmInferenceService implements ChartSearchService {
 								String.format("%.4f", semanticFloor),
 								candidates.size(), floored.size());
 						candidates = floored;
+					} else if (queryTerms != null) {
+						// Gap is NOT intra-topic. Before cutting, check
+						// if records below the gap add new concept
+						// coverage for a multi-concept query. This
+						// rescues e.g. "weight" and "temperature"
+						// records that cluster below BP records due to
+						// fewer keyword matches.
+						List<ScoredEmbedding> rescued =
+								filterRedundantKeywordTier(candidates,
+										queryTerms, kwMax);
+						if (rescued.size() >= refinedCutoff) {
+							log.debug("Refinement gap at {} is a "
+									+ "concept boundary: rescued {} "
+									+ "records with new coverage",
+									refinedCutoff, rescued.size()
+									- refinedCutoff);
+							candidates = rescued;
+						} else {
+							candidates = new ArrayList<ScoredEmbedding>(
+									candidates.subList(0, refinedCutoff));
+						}
 					} else {
 						candidates = new ArrayList<ScoredEmbedding>(
 								candidates.subList(0, refinedCutoff));
 					}
+				} else if (queryTerms != null) {
+					// Gap detection found no score gap. Check whether
+					// lower-tier records only match query terms already
+					// covered by the higher tier. If so, they add no
+					// information and are false positives (e.g. a program
+					// enrollment matching "active" when conditions already
+					// match "active" + "condition"). Records that match
+					// unique terms are kept (e.g. "weight" records in a
+					// "blood pressure weight temperature" query).
+					candidates = filterRedundantKeywordTier(
+							candidates, queryTerms, kwMax);
 				}
 			}
 		} else {
@@ -903,10 +954,21 @@ public class LlmInferenceService implements ChartSearchService {
 							candidates.subList(0, secondCutoff));
 				}
 			}
-			double ratioFloor = maxBaseScore * config.similarityRatio;
+			// Use the lower of maxBaseScore and maxSemanticScore for the
+			// floor. Keyword bonuses inflate combined scores for records
+			// with coincidental term matches (e.g. "pulse" in "pulse
+			// oximeter" inflates SpO2 for "blood pressure and pulse").
+			// Keyword penalties deflate combined scores below semantic
+			// (e.g. "history" in immunization records for "history of
+			// cancer"). Using the min avoids inflation from either side.
+			// The per-record check uses min(combined, semantic) so bonuses
+			// are stripped (checking semantic) and penalties are preserved
+			// (checking combined).
+			double ratioFloor = Math.min(maxBaseScore, maxSemanticScore)
+					* config.similarityRatio;
 			List<ScoredEmbedding> strict = new ArrayList<ScoredEmbedding>();
 			for (ScoredEmbedding se : candidates) {
-				if (se.score >= ratioFloor) {
+				if (Math.min(se.score, se.semanticScore) >= ratioFloor) {
 					strict.add(se);
 				}
 			}
@@ -1140,6 +1202,77 @@ public class LlmInferenceService implements ChartSearchService {
 		return candidates;
 	}
 
+	/**
+	 * Filters out lower-keyword-tier records whose matched query terms
+	 * are already fully covered by the higher-keyword tier. This removes
+	 * false positives like a program enrollment matching only "active"
+	 * when condition records already match "active" + "condition". Records
+	 * that match unique terms not covered by the higher tier are kept
+	 * (e.g. "weight" records in a "blood pressure weight temperature"
+	 * query, since the higher-tier BP records don't match "weight").
+	 *
+	 * @param candidates the refined candidate set with non-uniform keywords
+	 * @param queryTerms the query terms after stopword removal
+	 * @param kwMax the maximum keyword score in the candidate set
+	 * @return filtered candidates, or the original list if filtering
+	 *         would produce fewer than {@code ADAPTIVE_MIN_RECORDS}
+	 */
+	static List<ScoredEmbedding> filterRedundantKeywordTier(
+			List<ScoredEmbedding> candidates, String[] queryTerms,
+			double kwMax) {
+		// Collect query terms covered by the higher-keyword tier.
+		Set<String> coveredTerms = new HashSet<String>();
+		for (ScoredEmbedding se : candidates) {
+			if (se.keywordScore >= kwMax - 0.01) {
+				String text = ChartSearchAiConstants.getEmbeddingPrefix(
+						se.embedding.getResourceType(),
+						se.embedding.getTextContent())
+						+ se.embedding.getTextContent();
+				String lower = text.toLowerCase();
+				String[] words = lower.split("\\s+");
+				for (String term : queryTerms) {
+					if (termMatchesText(term, lower, words)) {
+						coveredTerms.add(term);
+					}
+				}
+			}
+		}
+
+		// Keep lower-tier records only if they match a term the higher
+		// tier doesn't cover.
+		List<ScoredEmbedding> filtered = new ArrayList<ScoredEmbedding>();
+		for (ScoredEmbedding se : candidates) {
+			if (se.keywordScore >= kwMax - 0.01) {
+				filtered.add(se);
+			} else {
+				String text = ChartSearchAiConstants.getEmbeddingPrefix(
+						se.embedding.getResourceType(),
+						se.embedding.getTextContent())
+						+ se.embedding.getTextContent();
+				String lower = text.toLowerCase();
+				String[] words = lower.split("\\s+");
+				boolean addsNewCoverage = false;
+				for (String term : queryTerms) {
+					if (!coveredTerms.contains(term)
+							&& termMatchesText(term, lower, words)) {
+						addsNewCoverage = true;
+						break;
+					}
+				}
+				if (addsNewCoverage) {
+					filtered.add(se);
+				}
+			}
+		}
+		if (filtered.size() >= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
+			log.debug("Keyword tier subset filter: {} -> {} "
+					+ "(coveredTerms={})",
+					candidates.size(), filtered.size(), coveredTerms);
+			return filtered;
+		}
+		return candidates;
+	}
+
 	private static double getScoreGapMultiplier() {
 		String value = org.openmrs.api.context.Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_SCORE_GAP_MULTIPLIER);
@@ -1275,44 +1408,63 @@ public class LlmInferenceService implements ChartSearchService {
 		String[] textWords = lowerText.split("\\s+");
 		int matched = 0;
 		for (String term : queryTerms) {
-			boolean termMatched = false;
-
-			// 1. Exact substring match
-			if (lowerText.contains(term)) {
-				termMatched = true;
-			}
-
-			// 2. Plural stem: strip trailing 's'
-			if (!termMatched && term.length() > 3
-					&& term.endsWith("s") && !term.endsWith("ss")) {
-				if (lowerText.contains(term.substring(0, term.length() - 1))) {
-					termMatched = true;
-				}
-			}
-
-			// 3. Morphological stem: trim 2-3 trailing characters to handle
-			// derivational variants (allergic/allergy, prescribed/prescription).
-			// Uses word-prefix matching instead of substring to avoid false
-			// positives from compound words (e.g. "allerg" inside "Photoallergy").
-			if (!termMatched && term.length() >= 7) {
-				for (int trim = 2; trim <= 3 && !termMatched; trim++) {
-					String stem = term.substring(0, term.length() - trim);
-					if (stem.length() >= 5) {
-						for (String word : textWords) {
-							if (word.startsWith(stem)) {
-								termMatched = true;
-								break;
-							}
-						}
-					}
-				}
-			}
-
-			if (termMatched) {
+			if (termMatchesText(term, lowerText, textWords)) {
 				matched++;
 			}
 		}
 		return (double) matched / queryTerms.length;
+	}
+
+	/**
+	 * Checks whether a single query term matches within the given text
+	 * using three matching strategies: exact substring, plural stem,
+	 * and morphological stem. This is the shared matching logic used
+	 * by both {@link #computeKeywordScore} and the keyword-tier
+	 * subset check in the filter pipeline.
+	 *
+	 * @param term the lowercase query term to match
+	 * @param lowerText the lowercase full text to search
+	 * @param textWords the lowercase text split into words
+	 * @return true if the term matches the text by any strategy
+	 */
+	static boolean termMatchesText(String term, String lowerText, String[] textWords) {
+		// 1. Exact substring match
+		if (lowerText.contains(term)) {
+			return true;
+		}
+
+		// 2. Plural stem: strip trailing 's' and match as a whole word
+		// (not substring) so "order" matches "order:" but not "ordered".
+		if (term.length() > 3
+				&& term.endsWith("s") && !term.endsWith("ss")) {
+			String stem = term.substring(0, term.length() - 1);
+			for (String word : textWords) {
+				// Strip trailing punctuation so "order:" becomes "order"
+				String clean = word.replaceAll("[^a-z0-9]+$", "");
+				if (clean.equals(stem)) {
+					return true;
+				}
+			}
+		}
+
+		// 3. Morphological stem: trim 2-3 trailing characters to handle
+		// derivational variants (allergic/allergy, prescribed/prescription).
+		// Uses word-prefix matching instead of substring to avoid false
+		// positives from compound words (e.g. "allerg" inside "Photoallergy").
+		if (term.length() >= 7) {
+			for (int trim = 2; trim <= 3; trim++) {
+				String stem = term.substring(0, term.length() - trim);
+				if (stem.length() >= 5) {
+					for (String word : textWords) {
+						if (word.startsWith(stem)) {
+							return true;
+						}
+					}
+				}
+			}
+		}
+
+		return false;
 	}
 
 	/**
