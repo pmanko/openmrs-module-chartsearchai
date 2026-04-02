@@ -992,6 +992,17 @@ RemoteLlmEngine
 
 **API key storage:** The API key is stored in `openmrs-runtime.properties` (a filesystem file), not in the database. This prevents exposure via the Admin UI, database backups, or SQL queries. This follows the same pattern OpenMRS uses for the database password. The endpoint URL and model name are stored as global properties since they are not secrets.
 
+### Why only the LLM, not the embedding model?
+
+The remote engine applies only to the generative LLM, not to the embedding model (all-MiniLM-L6-v2 ONNX). The embedding model is a fundamentally different situation:
+
+- **Tiny footprint**: ~90MB on disk and minimal RAM, vs ~5GB+ for the LLM.
+- **Fast on CPU**: Embedding computation takes milliseconds per record, vs seconds or minutes for LLM inference. No GPU needed.
+- **High call volume**: Embeddings are computed for every patient record during indexing (potentially thousands per patient), not just once per query. Making these network calls would add significant latency to indexing and retrieval.
+- **No hardware bottleneck**: The LLM justified a remote option because it requires large RAM (6–10GB+) and is painfully slow on CPU. The embedding model has none of these problems — it runs efficiently on any hardware that can run OpenMRS.
+
+For deployments that cannot host even the 90MB ONNX file, the Lucene pipeline (`chartsearchai.retrieval.pipeline=lucene`) provides a zero-model-download alternative with BM25 text search.
+
 ## Known limitations
 
 - **Counting questions**: LLMs are unreliable at precise counting tasks (e.g., "how many weight records in the last 10 years?"). The model may undercount or overcount even when all relevant records are provided. Larger, more capable models perform better at counting but are still not perfectly reliable. This is a fundamental limitation of LLM inference, not a retrieval issue. Questions that require exact counts are better suited to structured queries.
