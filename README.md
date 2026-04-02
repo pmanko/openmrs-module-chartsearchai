@@ -204,14 +204,27 @@ docker run -d --name elasticsearch \
 
 Verify it's running: `curl http://localhost:9200/_cluster/health`
 
+Install the **analysis-phonetic** plugin (required by the OpenMRS platform for Soundex-based person name search):
+
+```
+docker exec elasticsearch bin/elasticsearch-plugin install analysis-phonetic
+docker restart elasticsearch
+```
+
 **2. Configure OpenMRS to use Elasticsearch:**
 
 Add to your OpenMRS runtime properties file (e.g., `~/openmrs/openmrs-runtime.properties`):
 
 ```
 hibernate.search.backend.type=elasticsearch
+hibernate.search.backend.analysis.configurer=elasticsearchConfig
 hibernate.search.backend.uris=http://localhost:9200
+hibernate.search.backend.discovery.enabled=false
 ```
+
+> **Notes:**
+> - The `analysis.configurer` must match the backend type — use `elasticsearchConfig` for Elasticsearch and `luceneConfig` for Lucene (the default). If you see `Unknown filter type [phonetic]` errors, the `analysis-phonetic` plugin is missing from your Elasticsearch instance.
+> - Set `discovery.enabled=false` when running a single local node. When enabled, Hibernate Search may discover and connect to internal Docker network IPs (e.g., `172.17.x.x`) that are unreachable from the host, causing `Timeout connecting` errors.
 
 Or if using the SDK with Docker, pass the environment variable when running the server:
 
