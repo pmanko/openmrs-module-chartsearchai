@@ -112,7 +112,7 @@ The remote engine works with any server that implements the OpenAI chat completi
 | Property | Default | Description |
 |----------|---------|-------------|
 | `chartsearchai.embedding.preFilter` | `true` | When `true`, uses the selected retrieval pipeline to narrow patient records to the most relevant ones before sending to the LLM. Set to `false` to send the full chart instead |
-| `chartsearchai.retrieval.pipeline` | `embedding` | Selects the retrieval pipeline: `embedding` (default) uses vector similarity via an ONNX model with custom scoring; `lucene` uses Apache Lucene BM25 text search; `elasticsearch` uses Elasticsearch hybrid search combining BM25 text and kNN vector search via Reciprocal Rank Fusion (requires Elasticsearch 8.14+ configured in OpenMRS). All require `preFilter` to be `true`. Records are indexed automatically on first access. Changing this setting takes effect on the next query |
+| `chartsearchai.retrieval.pipeline` | `embedding` | Selects the retrieval pipeline: `embedding` (default) uses vector similarity via an ONNX model with custom scoring; `lucene` uses Apache Lucene BM25 text search; `hybrid` combines Lucene BM25 and embedding kNN search using Reciprocal Rank Fusion (RRF) — same quality as the Elasticsearch pipeline but with no external services required; `elasticsearch` uses Elasticsearch hybrid search combining BM25 text and kNN vector search via RRF (requires Elasticsearch 8.14+ configured in OpenMRS). All require `preFilter` to be `true`. Records are indexed automatically on first access. Changing this setting takes effect on the next query |
 
 #### Embedding pipeline tuning
 
@@ -128,8 +128,8 @@ These settings only apply when `chartsearchai.retrieval.pipeline` is `embedding`
 | `chartsearchai.embedding.typeBoostFactor` | `1.0` | Score multiplier applied to records whose resource type matches the query intent (e.g., drug orders when the query is about medications). Set to `1.0` to disable type boosting (default). Values like `1.2`–`1.5` provide moderate boosting. Must be between 1.0 and 3.0 |
 | `chartsearchai.embedding.queryPrefix` | *(empty)* | Prefix prepended to the user query before embedding. Leave empty for models like all-MiniLM-L6-v2 that were not trained with instruction prefixes. Set to `search_query: ` or `Represent this sentence for searching relevant passages: ` for models that support instruction-aware queries (e.g., BGE) |
 | `chartsearchai.embedding.maxSequenceLength` | `256` | Maximum WordPiece token sequence length for embedding input. Increase when using models that support longer contexts (e.g., 512 for BGE models). Must be between 32 and 8192 |
-| `chartsearchai.embedding.modelFilePath` | — | Required when using the embedding or elasticsearch pipeline. Relative path to the ONNX model file (all-MiniLM-L6-v2), e.g. `chartsearchai/all-MiniLM-L6-v2.onnx`. Not needed for the Lucene pipeline |
-| `chartsearchai.embedding.vocabFilePath` | — | Required when using the embedding or elasticsearch pipeline. Relative path to the WordPiece `vocab.txt` file, e.g. `chartsearchai/vocab.txt`. Not needed for the Lucene pipeline |
+| `chartsearchai.embedding.modelFilePath` | — | Required when using the embedding, hybrid, or elasticsearch pipeline. Relative path to the ONNX model file (all-MiniLM-L6-v2), e.g. `chartsearchai/all-MiniLM-L6-v2.onnx`. Not needed for the Lucene pipeline |
+| `chartsearchai.embedding.vocabFilePath` | — | Required when using the embedding, hybrid, or elasticsearch pipeline. Relative path to the WordPiece `vocab.txt` file, e.g. `chartsearchai/vocab.txt`. Not needed for the Lucene pipeline |
 
 #### LLM tuning
 
@@ -168,23 +168,25 @@ When `chartsearchai.embedding.preFilter` is `true` (default), patient records ar
 
 **Lucene pipeline** (`chartsearchai.retrieval.pipeline=lucene`): Uses Apache Lucene BM25 text search with English stemming. No ONNX model files are required. The Lucene index is stored at `<openmrs-application-data-directory>/chartsearchai/lucene-index/` and is built automatically on first patient access. This pipeline is simpler to set up (no model download needed) and may be preferred for environments where the ONNX model is unavailable.
 
+**Hybrid pipeline** (`chartsearchai.retrieval.pipeline=hybrid`): Combines Lucene BM25 text search with embedding kNN semantic search using Reciprocal Rank Fusion (RRF), the same algorithm used by the Elasticsearch pipeline. Provides Elasticsearch-quality hybrid retrieval without requiring any external services — everything runs in-process. Requires the ONNX embedding model (same as the embedding pipeline) for the kNN side. Both the Lucene index and embedding vectors are built automatically on first patient access. This is the best option when you want hybrid BM25+semantic search quality but don't have an Elasticsearch cluster.
+
 **Elasticsearch pipeline** (`chartsearchai.retrieval.pipeline=elasticsearch`): Uses Elasticsearch hybrid search combining BM25 text search with kNN dense vector search via Reciprocal Rank Fusion (RRF). Requires Elasticsearch 8.14+ configured in OpenMRS (set `hibernate.search.backend.uris` in runtime properties). Also requires the ONNX embedding model (same as the embedding pipeline) to compute vectors for the kNN side of the hybrid search. Patient records are indexed into a shared `chartsearchai-patient-records` Elasticsearch index with both text and embedding vector fields. The RRF algorithm fuses rankings from both signals — this means queries like "any cancer?" can find semantic matches (e.g. Kaposi sarcoma) via kNN even when the literal term is absent from the records, while also benefiting from BM25's lexical matching. If Elasticsearch is not available at query time, the pipeline automatically falls back to the embedding pipeline. After switching embedding models, delete the `chartsearchai-patient-records` index from Elasticsearch — it will be recreated with the new model's dimensions on the next patient access.
 
 **Choosing a pipeline:**
 
-| Consideration | Embedding *(default)* | Lucene | Elasticsearch |
-|--------------|----------------------|--------|---------------|
-| External dependencies | ONNX model files only | None | Elasticsearch 8.14+ cluster + ONNX model files |
-| Semantic matching (e.g., "cancer" finds "Kaposi sarcoma") | Yes | No | Yes (via kNN) |
-| Absent-data detection (returns "no records about X" instead of false positives) | Yes (z-score gate) | No | No |
-| Type-aware auto-expand (e.g., "any conditions?" returns all conditions) | Yes | No | No |
-| Adaptive result filtering (gap detection, similarity ratio) | Yes | No | No |
-| Keyword matching | Yes (hybrid scoring) | Yes (BM25 with stemming) | Yes (BM25 + kNN via RRF) |
-| Tunable parameters | Many (topK, similarityRatio, scoreGapMultiplier, keywordWeight, etc.) | Few (topK only) | Few (topK only; scoring delegated to Elasticsearch) |
-| Compute location | In-process (JVM) | In-process (JVM) | Elasticsearch cluster |
-| Graceful fallback | N/A (default) | Falls back to full chart on error | Falls back to embedding pipeline |
+| Consideration | Embedding *(default)* | Lucene | Hybrid | Elasticsearch |
+|--------------|----------------------|--------|--------|---------------|
+| External dependencies | ONNX model files only | None | ONNX model files only | Elasticsearch 8.14+ cluster + ONNX model files |
+| Semantic matching (e.g., "cancer" finds "Kaposi sarcoma") | Yes | No | Yes (via kNN) | Yes (via kNN) |
+| Absent-data detection (returns "no records about X" instead of false positives) | Yes (z-score gate) | No | No | No |
+| Type-aware auto-expand (e.g., "any conditions?" returns all conditions) | Yes | No | No | No |
+| Adaptive result filtering (gap detection, similarity ratio) | Yes | No | No | No |
+| Keyword matching | Yes (hybrid scoring) | Yes (BM25 with stemming) | Yes (BM25 + kNN via RRF) | Yes (BM25 + kNN via RRF) |
+| Tunable parameters | Many (topK, similarityRatio, scoreGapMultiplier, keywordWeight, etc.) | Few (topK only) | Few (topK only) | Few (topK only; scoring delegated to Elasticsearch) |
+| Compute location | In-process (JVM) | In-process (JVM) | In-process (JVM) | Elasticsearch cluster |
+| Graceful fallback | N/A (default) | Falls back to full chart on error | Falls back to full chart on error | Falls back to embedding pipeline |
 
-The **embedding pipeline** is recommended for most deployments — it runs entirely in-process, has the most sophisticated filtering (z-score gate for absent-data detection, gap detection for adaptive result cutoff, type-aware expansion), and requires no external services. The **Lucene pipeline** is the simplest option when the ONNX model is unavailable, but lacks semantic understanding. The **Elasticsearch pipeline** is best when you already have an ES cluster in your infrastructure and want to offload retrieval compute, but it lacks the embedding pipeline's absent-data detection and adaptive filtering — RRF always returns results from at least the kNN side, even when the patient has no relevant records.
+The **embedding pipeline** is recommended for most deployments — it runs entirely in-process, has the most sophisticated filtering (z-score gate for absent-data detection, gap detection for adaptive result cutoff, type-aware expansion), and requires no external services. The **hybrid pipeline** is the best choice when you want BM25+semantic search quality (same RRF algorithm as Elasticsearch) without any external services — it combines the Lucene and embedding pipelines in-process. The **Lucene pipeline** is the simplest option when the ONNX model is unavailable, but lacks semantic understanding. The **Elasticsearch pipeline** is best when you already have an ES cluster in your infrastructure and want to offload retrieval compute, but it lacks the embedding pipeline's absent-data detection and adaptive filtering — RRF always returns results from at least the kNN side, even when the patient has no relevant records.
 
 ### Testing the Elasticsearch pipeline locally
 
