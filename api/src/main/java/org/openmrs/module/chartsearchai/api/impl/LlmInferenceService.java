@@ -101,7 +101,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 		return new ChartAnswer(response.getAnswer(),
 				extractCitedReferences(response.getCitations(), chart.getMappings()),
-				response.getTokenCount());
+				response.getInputTokens(), response.getOutputTokens());
 	}
 
 	@Override
@@ -119,7 +119,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 		return new ChartAnswer(response.getAnswer(),
 				extractCitedReferences(response.getCitations(), chart.getMappings()),
-				response.getTokenCount());
+				response.getInputTokens(), response.getOutputTokens());
 	}
 
 	/**

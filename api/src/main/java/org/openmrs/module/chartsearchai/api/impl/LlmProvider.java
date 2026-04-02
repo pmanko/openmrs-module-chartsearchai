@@ -104,7 +104,7 @@ public class LlmProvider {
 		LlmEngine.InferenceResult result = getActiveEngine().infer(
 				systemPrompt, userMessage, timeoutSeconds);
 
-		return extractResponse(result.getText(), result.getTokenCount());
+		return extractResponse(result.getText(), result.getInputTokens(), result.getOutputTokens());
 	}
 
 	/**
@@ -126,12 +126,12 @@ public class LlmProvider {
 		LlmEngine.InferenceResult result = getActiveEngine().inferStreaming(
 				systemPrompt, userMessage, timeoutSeconds, tokenConsumer);
 
-		return extractResponse(result.getText(), result.getTokenCount());
+		return extractResponse(result.getText(), result.getInputTokens(), result.getOutputTokens());
 	}
 
-	static LlmResponse extractResponse(String response, int tokenCount) {
+	static LlmResponse extractResponse(String response, int inputTokens, int outputTokens) {
 		LlmResponse parsed = extractResponse(response);
-		return new LlmResponse(parsed.getAnswer(), parsed.getCitations(), tokenCount);
+		return new LlmResponse(parsed.getAnswer(), parsed.getCitations(), inputTokens, outputTokens);
 	}
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -195,16 +195,19 @@ public class LlmProvider {
 
 		private final List<Integer> citations;
 
-		private final int tokenCount;
+		private final int inputTokens;
+
+		private final int outputTokens;
 
 		LlmResponse(String answer, List<Integer> citations) {
-			this(answer, citations, 0);
+			this(answer, citations, 0, 0);
 		}
 
-		LlmResponse(String answer, List<Integer> citations, int tokenCount) {
+		LlmResponse(String answer, List<Integer> citations, int inputTokens, int outputTokens) {
 			this.answer = answer;
 			this.citations = Collections.unmodifiableList(new ArrayList<>(citations));
-			this.tokenCount = tokenCount;
+			this.inputTokens = inputTokens;
+			this.outputTokens = outputTokens;
 		}
 
 		String getAnswer() {
@@ -215,8 +218,12 @@ public class LlmProvider {
 			return citations;
 		}
 
-		int getTokenCount() {
-			return tokenCount;
+		int getInputTokens() {
+			return inputTokens;
+		}
+
+		int getOutputTokens() {
+			return outputTokens;
 		}
 	}
 

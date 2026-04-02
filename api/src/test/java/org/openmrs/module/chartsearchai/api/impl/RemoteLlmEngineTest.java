@@ -67,7 +67,8 @@ public class RemoteLlmEngineTest {
 
 		LlmEngine.InferenceResult result = engine.parseResponse(responseBody);
 		assertEquals("{\"answer\": \"test\", \"citations\": []}", result.getText());
-		assertEquals(150, result.getTokenCount());
+		assertEquals(100, result.getInputTokens());
+		assertEquals(50, result.getOutputTokens());
 	}
 
 	@Test
@@ -78,7 +79,8 @@ public class RemoteLlmEngineTest {
 
 		LlmEngine.InferenceResult result = engine.parseResponse(responseBody);
 		assertEquals("hello", result.getText());
-		assertEquals(0, result.getTokenCount());
+		assertEquals(0, result.getInputTokens());
+		assertEquals(0, result.getOutputTokens());
 	}
 
 	@Test
@@ -138,6 +140,7 @@ public class RemoteLlmEngineTest {
 				token -> {});
 
 		assertEquals("hi", result.getText());
-		assertEquals(100, result.getTokenCount());
+		assertEquals(80, result.getInputTokens());
+		assertEquals(20, result.getOutputTokens());
 	}
 }

@@ -25,7 +25,9 @@
 
 		<property name="responseTimeMs" column="response_time_ms" type="java.lang.Long"/>
 
-		<property name="tokenCount" column="token_count" type="java.lang.Integer"/>
+		<property name="inputTokens" column="input_tokens" type="java.lang.Integer"/>
+
+		<property name="outputTokens" column="output_tokens" type="java.lang.Integer"/>
 
 		<property name="dateCreated" column="date_created" type="timestamp" not-null="true"/>
 

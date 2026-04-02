@@ -116,12 +116,10 @@ public class LocalLlmEngine implements LlmEngine {
 			completionTokens++;
 		}
 
-		int tokenCount = prepared.promptTokens + completionTokens;
-		log.info("LLM token usage: {} total ({} prompt + {} completion)", tokenCount,
-				prepared.promptTokens, completionTokens);
+		log.info("LLM token usage: {} input + {} output", prepared.promptTokens, completionTokens);
 
 		resetIdleTimer();
-		return new InferenceResult(result.toString(), tokenCount);
+		return new InferenceResult(result.toString(), prepared.promptTokens, completionTokens);
 	}
 
 	@Override
@@ -148,12 +146,10 @@ public class LocalLlmEngine implements LlmEngine {
 			completionTokens++;
 		}
 
-		int tokenCount = prepared.promptTokens + completionTokens;
-		log.info("LLM token usage: {} total ({} prompt + {} completion)", tokenCount,
-				prepared.promptTokens, completionTokens);
+		log.info("LLM token usage: {} input + {} output", prepared.promptTokens, completionTokens);
 
 		resetIdleTimer();
-		return new InferenceResult(result.toString(), tokenCount);
+		return new InferenceResult(result.toString(), prepared.promptTokens, completionTokens);
 	}
 
 	@Override

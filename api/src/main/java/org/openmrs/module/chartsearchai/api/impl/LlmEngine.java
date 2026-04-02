@@ -24,7 +24,7 @@ public interface LlmEngine {
 	 * @param systemPrompt the system prompt
 	 * @param userMessage the user message (patient records + question)
 	 * @param timeoutSeconds maximum wall-clock seconds for the request
-	 * @return the inference result containing generated text and token counts
+	 * @return the inference result containing generated text and input/output token counts
 	 */
 	InferenceResult infer(String systemPrompt, String userMessage, int timeoutSeconds);
 
@@ -35,7 +35,7 @@ public interface LlmEngine {
 	 * @param userMessage the user message (patient records + question)
 	 * @param timeoutSeconds maximum wall-clock seconds for the request
 	 * @param tokenConsumer called with each token fragment as it is generated
-	 * @return the inference result containing the full generated text and token counts
+	 * @return the inference result containing the full generated text and input/output token counts
 	 */
 	InferenceResult inferStreaming(String systemPrompt, String userMessage, int timeoutSeconds,
 			Consumer<String> tokenConsumer);
@@ -58,19 +58,26 @@ public interface LlmEngine {
 
 		private final String text;
 
-		private final int tokenCount;
+		private final int inputTokens;
 
-		public InferenceResult(String text, int tokenCount) {
+		private final int outputTokens;
+
+		public InferenceResult(String text, int inputTokens, int outputTokens) {
 			this.text = text;
-			this.tokenCount = tokenCount;
+			this.inputTokens = inputTokens;
+			this.outputTokens = outputTokens;
 		}
 
 		public String getText() {
 			return text;
 		}
 
-		public int getTokenCount() {
-			return tokenCount;
+		public int getInputTokens() {
+			return inputTokens;
+		}
+
+		public int getOutputTokens() {
+			return outputTokens;
 		}
 	}
 }

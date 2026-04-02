@@ -99,4 +99,13 @@
 		</addColumn>
 	</changeSet>
 
+	<changeSet id="chartsearchai-005" author="openmrs">
+		<comment>Split token_count into separate input_tokens and output_tokens columns for accurate cost tracking</comment>
+		<addColumn tableName="chartsearchai_audit_log">
+			<column name="input_tokens" type="int"/>
+			<column name="output_tokens" type="int"/>
+		</addColumn>
+		<dropColumn tableName="chartsearchai_audit_log" columnName="token_count"/>
+	</changeSet>
+
 </databaseChangeLog>

@@ -38,7 +38,9 @@ public class ChartSearchAuditLog implements Serializable {
 
 	private Long responseTimeMs;
 
-	private Integer tokenCount;
+	private Integer inputTokens;
+
+	private Integer outputTokens;
 
 	private String rating;
 
@@ -110,12 +112,20 @@ public class ChartSearchAuditLog implements Serializable {
 		this.responseTimeMs = responseTimeMs;
 	}
 
-	public Integer getTokenCount() {
-		return tokenCount;
+	public Integer getInputTokens() {
+		return inputTokens;
 	}
 
-	public void setTokenCount(Integer tokenCount) {
-		this.tokenCount = tokenCount;
+	public void setInputTokens(Integer inputTokens) {
+		this.inputTokens = inputTokens;
+	}
+
+	public Integer getOutputTokens() {
+		return outputTokens;
+	}
+
+	public void setOutputTokens(Integer outputTokens) {
+		this.outputTokens = outputTokens;
 	}
 
 	public Date getDateCreated() {

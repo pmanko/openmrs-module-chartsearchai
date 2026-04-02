@@ -184,24 +184,24 @@ public class RemoteLlmEngine implements LlmEngine {
 			}
 		}
 
-		int tokenCount = 0;
+		int inputTokens = 0;
+		int outputTokens = 0;
 		JsonNode usage = root.get("usage");
 		if (usage != null) {
-			int promptTokens = usage.has("prompt_tokens") ? usage.get("prompt_tokens").asInt(0) : 0;
-			int completionTokens = usage.has("completion_tokens")
+			inputTokens = usage.has("prompt_tokens") ? usage.get("prompt_tokens").asInt(0) : 0;
+			outputTokens = usage.has("completion_tokens")
 					? usage.get("completion_tokens").asInt(0) : 0;
-			tokenCount = promptTokens + completionTokens;
-			log.info("Remote LLM token usage: {} total ({} prompt + {} completion)", tokenCount,
-					promptTokens, completionTokens);
+			log.info("Remote LLM token usage: {} input + {} output", inputTokens, outputTokens);
 		}
 
-		return new InferenceResult(text, tokenCount);
+		return new InferenceResult(text, inputTokens, outputTokens);
 	}
 
 	InferenceResult parseStreamingResponse(InputStream inputStream,
 			Consumer<String> tokenConsumer) throws IOException {
 		StringBuilder fullText = new StringBuilder();
-		int tokenCount = 0;
+		int inputTokens = 0;
+		int outputTokens = 0;
 
 		try (BufferedReader reader = new BufferedReader(
 				new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
@@ -232,11 +232,10 @@ public class RemoteLlmEngine implements LlmEngine {
 					// Check for usage in the final chunk
 					JsonNode usage = chunk.get("usage");
 					if (usage != null) {
-						int prompt = usage.has("prompt_tokens")
+						inputTokens = usage.has("prompt_tokens")
 								? usage.get("prompt_tokens").asInt(0) : 0;
-						int completion = usage.has("completion_tokens")
+						outputTokens = usage.has("completion_tokens")
 								? usage.get("completion_tokens").asInt(0) : 0;
-						tokenCount = prompt + completion;
 					}
 				}
 				catch (IOException e) {
@@ -245,10 +244,10 @@ public class RemoteLlmEngine implements LlmEngine {
 			}
 		}
 
-		if (tokenCount > 0) {
-			log.info("Remote LLM token usage: {} total", tokenCount);
+		if (inputTokens > 0 || outputTokens > 0) {
+			log.info("Remote LLM token usage: {} input + {} output", inputTokens, outputTokens);
 		}
-		return new InferenceResult(fullText.toString(), tokenCount);
+		return new InferenceResult(fullText.toString(), inputTokens, outputTokens);
 	}
 
 	private String getRequiredGlobalProperty(String propertyName) {
