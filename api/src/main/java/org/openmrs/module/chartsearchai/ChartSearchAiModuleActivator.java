@@ -90,8 +90,8 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 
 	private void validateConfiguration() {
 		String engineType = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_BACKEND);
-		boolean isRemote = ChartSearchAiConstants.LLM_BACKEND_REMOTE.equalsIgnoreCase(
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE);
+		boolean isRemote = ChartSearchAiConstants.LLM_ENGINE_REMOTE.equalsIgnoreCase(
 				engineType != null ? engineType.trim() : "");
 
 		if (!isRemote) {

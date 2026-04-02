@@ -38,7 +38,7 @@
 
 	<!-- Global Properties -->
 	<globalProperty>
-		<property>chartsearchai.llm.backend</property>
+		<property>chartsearchai.llm.engine</property>
 		<defaultValue>local</defaultValue>
 		<description>LLM inference engine. "local" (default) runs a GGUF model in-process via llama.cpp — no network calls, data stays on the server. "remote" calls an OpenAI-compatible chat completions API — requires chartsearchai.llm.remote.endpointUrl, chartsearchai.llm.remote.apiKey, and chartsearchai.llm.remote.modelName to be configured. Use "remote" for self-hosted GPU inference servers (vLLM, Ollama, text-generation-inference) or cloud-hosted models (OpenAI, Anthropic, Google AI).</description>
 	</globalProperty>
@@ -46,13 +46,13 @@
 	<globalProperty>
 		<property>chartsearchai.llm.remote.endpointUrl</property>
 		<defaultValue></defaultValue>
-		<description>URL of the OpenAI-compatible chat completions endpoint. Required when chartsearchai.llm.backend is "remote". Examples: http://localhost:11434/v1/chat/completions (Ollama), http://gpu-server:8000/v1/chat/completions (vLLM), https://api.openai.com/v1/chat/completions (OpenAI), https://generativelanguage.googleapis.com/v1beta/openai/chat/completions (Google AI).</description>
+		<description>URL of the OpenAI-compatible chat completions endpoint. Required when chartsearchai.llm.engine is "remote". Examples: http://localhost:11434/v1/chat/completions (Ollama), http://gpu-server:8000/v1/chat/completions (vLLM), https://api.openai.com/v1/chat/completions (OpenAI), https://generativelanguage.googleapis.com/v1beta/openai/chat/completions (Google AI).</description>
 	</globalProperty>
 
 	<globalProperty>
 		<property>chartsearchai.llm.remote.modelName</property>
 		<defaultValue></defaultValue>
-		<description>Model name to request from the remote LLM endpoint. Required when chartsearchai.llm.backend is "remote". Examples: llama3.3 (Ollama), meta-llama/Llama-3.3-8B-Instruct (vLLM), gpt-4o (OpenAI), gemini-2.5-pro (Google AI).</description>
+		<description>Model name to request from the remote LLM endpoint. Required when chartsearchai.llm.engine is "remote". Examples: llama3.3 (Ollama), meta-llama/Llama-3.3-8B-Instruct (vLLM), gpt-4o (OpenAI), gemini-2.5-pro (Google AI).</description>
 	</globalProperty>
 
 	<globalProperty>
@@ -126,7 +126,7 @@ Question: What lab orders were placed?
 	<globalProperty>
 		<property>chartsearchai.llm.idleTimeoutMinutes</property>
 		<defaultValue>30</defaultValue>
-		<description>Minutes of inactivity after which the local LLM model is unloaded from memory to free RAM. The model is automatically reloaded on the next query. Set to 0 to keep the model loaded indefinitely. Only applies when chartsearchai.llm.backend is "local".</description>
+		<description>Minutes of inactivity after which the local LLM model is unloaded from memory to free RAM. The model is automatically reloaded on the next query. Set to 0 to keep the model loaded indefinitely. Only applies when chartsearchai.llm.engine is "local".</description>
 	</globalProperty>
 
 	<globalProperty>

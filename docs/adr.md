@@ -939,7 +939,7 @@ The module was originally designed for local-only inference (GGUF models via jav
 
 ### Decision
 
-Add an `LlmEngine` interface with two implementations: `LocalLlmEngine` (existing llama.cpp logic) and `RemoteLlmEngine` (calls OpenAI-compatible chat completions APIs). Selection is via the `chartsearchai.llm.backend` global property (`local` or `remote`). Local remains the default.
+Add an `LlmEngine` interface with two implementations: `LocalLlmEngine` (existing llama.cpp logic) and `RemoteLlmEngine` (calls OpenAI-compatible chat completions APIs). Selection is via the `chartsearchai.llm.engine` global property (`local` or `remote`). Local remains the default.
 
 **Architecture:**
 
@@ -985,7 +985,7 @@ RemoteLlmEngine
 
 | Property | Where | Description |
 |---|---|---|
-| `chartsearchai.llm.backend` | Global property | `local` (default) or `remote` |
+| `chartsearchai.llm.engine` | Global property | `local` (default) or `remote` |
 | `chartsearchai.llm.remote.endpointUrl` | Global property | Chat completions URL (e.g. `http://localhost:11434/v1/chat/completions` for Ollama, `https://api.openai.com/v1/chat/completions` for OpenAI) |
 | `chartsearchai.llm.remote.apiKey` | Runtime property | Bearer token for authentication |
 | `chartsearchai.llm.remote.modelName` | Global property | Model to request (e.g. `llama3.3` for Ollama, `gpt-4o` for OpenAI) |

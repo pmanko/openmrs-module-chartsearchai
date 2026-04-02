@@ -83,7 +83,7 @@ Set these global properties in **Admin > Settings**:
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `chartsearchai.llm.backend` | `local` | LLM inference engine: `local` runs a GGUF model in-process via llama.cpp; `remote` calls an OpenAI-compatible API |
+| `chartsearchai.llm.engine` | `local` | LLM inference engine: `local` runs a GGUF model in-process via llama.cpp; `remote` calls an OpenAI-compatible API |
 
 **Local engine** (default) — requires a downloaded GGUF model file (see step 2):
 
@@ -91,7 +91,7 @@ Set these global properties in **Admin > Settings**:
 |----------|-------------|
 | `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf` |
 
-**Remote engine** — set `chartsearchai.llm.backend` to `remote` and configure:
+**Remote engine** — set `chartsearchai.llm.engine` to `remote` and configure:
 
 | Property | Where | Description |
 |----------|-------|-------------|

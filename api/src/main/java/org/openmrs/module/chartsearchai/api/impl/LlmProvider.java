@@ -32,8 +32,7 @@ import org.springframework.stereotype.Component;
 /**
  * Orchestrates LLM inference by constructing prompts, delegating to the active
  * {@link LlmEngine}, and parsing responses. The engine is selected via the
- * {@code chartsearchai.llm.backend} global property ({@code local} or {@code remote}).
- * Despite the property name using "backend", the internal abstraction uses "engine" terminology.
+ * {@code chartsearchai.llm.engine} global property ({@code local} or {@code remote}).
  */
 @Component
 public class LlmProvider {
@@ -266,9 +265,9 @@ public class LlmProvider {
 
 	LlmEngine getActiveEngine() {
 		String engineType = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_BACKEND);
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE);
 		if (engineType != null
-				&& ChartSearchAiConstants.LLM_BACKEND_REMOTE.equalsIgnoreCase(engineType.trim())) {
+				&& ChartSearchAiConstants.LLM_ENGINE_REMOTE.equalsIgnoreCase(engineType.trim())) {
 			return remoteEngine;
 		}
 		return localEngine;
