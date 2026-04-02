@@ -27,7 +27,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
-import org.openmrs.module.chartsearchai.embedding.StubEmbeddingProvider;
+import org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider;
 import org.openmrs.module.chartsearchai.eval.EvalCase;
 import org.openmrs.module.chartsearchai.eval.EvalDataset;
 import org.openmrs.module.chartsearchai.eval.EvalMetrics;
@@ -37,13 +37,22 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Eval suite for retrieval quality. Uses {@link StubEmbeddingProvider}
- * to test the scoring, gap detection, and keyword refinement pipeline
- * against the 153-record patient dataset.
+ * Eval suite for retrieval quality. Uses the real ONNX embedding model
+ * (all-MiniLM-L6-v2) to test the scoring, gap detection, and keyword
+ * refinement pipeline against the 153-record patient dataset.
+ *
+ * <p>Skipped automatically when the ONNX model files are not present.
  */
 public class RetrievalQualityEvalTest {
 
 	private static final Logger log = LoggerFactory.getLogger(RetrievalQualityEvalTest.class);
+
+	private static final String MODEL_DIR = System.getProperty(
+			"chartsearchai.embedding.model.dir", "../models/all-MiniLM-L6-v2");
+
+	private static final String MODEL_PATH = MODEL_DIR + "/model.onnx";
+
+	private static final String VOCAB_PATH = MODEL_DIR + "/vocab.txt";
 
 	// Same dataset used in LlmInferenceServiceTest
 	private static final String[] DATASET = LlmInferenceServiceTest.FULL_PATIENT_DATASET;
@@ -54,6 +63,11 @@ public class RetrievalQualityEvalTest {
 
 	private static List<ChartEmbedding> allEmbeddings;
 
+	private static boolean embeddingModelFilesExist() {
+		return new java.io.File(MODEL_PATH).exists()
+				&& new java.io.File(VOCAB_PATH).exists();
+	}
+
 	private static EvalDataset getEvalDataset() {
 		if (evalDataset == null) {
 			try {
@@ -62,7 +76,7 @@ public class RetrievalQualityEvalTest {
 			catch (IOException e) {
 				throw new RuntimeException(e);
 			}
-			embeddingProvider = new StubEmbeddingProvider();
+			embeddingProvider = new OnnxEmbeddingProvider(MODEL_PATH, VOCAB_PATH);
 			allEmbeddings = buildEmbeddings();
 		}
 		return evalDataset;
@@ -173,6 +187,8 @@ public class RetrievalQualityEvalTest {
 	@ParameterizedTest(name = "[{index}] {0}")
 	@MethodSource("retrievalCases")
 	public void retrievalRecall_perCase(String caseId, EvalCase evalCase) {
+		org.junit.jupiter.api.Assumptions.assumeTrue(embeddingModelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
 		long start = System.currentTimeMillis();
 		List<Integer> retrievedIndices = retrieveTopK(evalCase);
 		long elapsed = System.currentTimeMillis() - start;
@@ -190,6 +206,8 @@ public class RetrievalQualityEvalTest {
 
 	@Test
 	public void retrievalRecall_shouldMeetMinimumThreshold() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(embeddingModelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
 		int totalCases = 0;
 		double totalRecall = 0;
 
