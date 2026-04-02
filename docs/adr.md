@@ -551,20 +551,7 @@ As a safety net, any slash-separated citations that small LLMs occasionally prod
 
 ### Candidate models
 
-| Model | Quantized Size (Q4_K_M) | RAM | Context Window | CPU Speed (approx.) |
-|-------|------------------------|-----|----------------|---------------------|
-| Qwen 2.5 1.5B | ~1GB | ~2GB | 32K tokens | ~40–50 tok/s |
-| Llama 3.2 3B | ~2GB | ~4GB | 128K tokens | ~20–30 tok/s |
-| Phi-3 Mini 3.8B | ~2GB | ~4GB | 4K tokens (128K variant available) | ~15–25 tok/s |
-| Mistral 7B | ~4GB | ~8GB | 32K tokens | ~10–15 tok/s |
-| Llama 3.3 8B | ~4.5GB | ~8GB | 128K tokens | ~8–12 tok/s |
-| Qwen 2.5 7B | ~4GB | ~8GB | 128K tokens | ~8–12 tok/s |
-| Gemma 2 9B Instruct | ~5GB | ~10GB | 8K tokens | ~5–10 tok/s |
-| Mistral Nemo 12B | ~7GB | ~12GB | 128K tokens | ~4–8 tok/s |
-| Phi-3-Medium 14B | ~8GB | ~14GB | 4K tokens (128K variant available) | ~3–6 tok/s |
-| Qwen 2.5 14B | ~8GB | ~14GB | 128K tokens | ~3–6 tok/s |
-| MedGemma 4B | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s |
-| MedGemma 27B Text | ~16.5GB | ~20–24GB | 128K tokens | ~1–2 tok/s |
+See the [Evaluated models](../README.md#evaluated-models) section in the README for the full comparison table of all models tested, including size, RAM, context window, CPU speed, and licensing. The discussion below covers the detailed per-model analysis and trade-offs behind the recommendation.
 
 ### Recommended model: Llama 3.3 8B
 

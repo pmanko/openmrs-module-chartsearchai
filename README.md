@@ -9,7 +9,7 @@ For project background, community discussion, and roadmap, see the [wiki project
 - [Requirements](#requirements)
 - [Setup](#setup)
   - [1. Build](#1-build)
-  - [2. Download the LLM model](#2-download-the-llm-model)
+  - [2. Download the LLM model](#2-download-the-llm-model-local-mode-only)
   - [3. Download the embedding model](#3-download-the-embedding-model)
   - [4. Install](#4-install)
   - [5. Configure](#5-configure)
@@ -24,6 +24,7 @@ For project background, community discussion, and roadmap, see the [wiki project
   - [Audit log](#audit-log)
 - [Patient access control](#patient-access-control)
 - [Evals](#evals)
+- [Evaluated models](#evaluated-models)
 - [Architecture](#architecture)
 - [License](#license)
 
@@ -53,7 +54,7 @@ Download Llama 3.3 8B (Q4_K_M quantization) in GGUF format (~5GB) from [Hugging 
 
 Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<openmrs-application-data-directory>/chartsearchai/`). Model paths are resolved relative to this directory for security.
 
-**Available models:**
+**Recommended models for local inference:**
 
 | Model | RAM Needed | Chat Template | Download |
 |-------|-----------|---------------|----------|
@@ -62,7 +63,7 @@ Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<op
 | Llama 3.3 8B *(default)* | ~10GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF) |
 | Mistral Nemo 12B | ~12GB total | `mistral` | [GGUF](https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF) |
 
-MedGemma is a medical-domain fine-tune of Gemma 3 by Google, trained on clinical text comprehension — it may produce more accurate clinical answers than general-purpose models of similar size. Larger models produce more accurate answers with better instruction following. Smaller models use less RAM but may produce lower quality responses. To switch models, update `chartsearchai.llm.modelFilePath` and `chartsearchai.llm.chatTemplate` — no rebuild needed.
+To switch models, update `chartsearchai.llm.modelFilePath` and `chartsearchai.llm.chatTemplate` — no rebuild needed. See [Evaluated models](#evaluated-models) for a full comparison of all models tested, including size trade-offs and licensing.
 
 ### 3. Download the embedding model
 
@@ -378,6 +379,47 @@ Each suite is driven by a JSON dataset in `api/src/test/resources/eval/`. To add
 ### Metrics report
 
 Each run appends per-case and summary metrics to `api/target/eval-results.csv` for tracking regressions over time.
+
+## Evaluated models
+
+The following models were evaluated for local inference via java-llama.cpp (Q4_K_M quantization, GGUF format). All figures are approximate and depend on hardware.
+
+| Model | Params | File Size | Total RAM | Context Window | CPU Speed | Chat Template |
+|-------|--------|-----------|-----------|----------------|-----------|---------------|
+| Qwen 2.5 1.5B | 1.5B | ~1GB | ~2GB | 32K tokens | ~40–50 tok/s | chatml |
+| Llama 3.2 3B | 3B | ~2GB | ~6GB | 128K tokens | ~20–30 tok/s | llama3 |
+| Phi-3 Mini 3.8B | 3.8B | ~2GB | ~4GB | 4K tokens | ~15–25 tok/s | phi3 |
+| MedGemma 4B | 4B | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s | gemma |
+| Mistral 7B | 7B | ~4GB | ~8GB | 32K tokens | ~10–15 tok/s | mistral |
+| Qwen 2.5 7B | 7B | ~4GB | ~8GB | 128K tokens | ~8–12 tok/s | chatml |
+| **Llama 3.3 8B** *(default)* | 8B | ~4.5GB | ~10GB | 128K tokens | ~8–12 tok/s | llama3 |
+| Gemma 2 9B Instruct | 9B | ~5GB | ~10GB | 8K tokens | ~5–10 tok/s | gemma |
+| Mistral Nemo 12B | 12B | ~7GB | ~12GB | 128K tokens | ~4–8 tok/s | mistral |
+| Phi-3-Medium 14B | 14B | ~8GB | ~14GB | 4K tokens | ~3–6 tok/s | phi3 |
+| Qwen 2.5 14B | 14B | ~8GB | ~14GB | 128K tokens | ~3–6 tok/s | chatml |
+| MedGemma 27B Text | 27B | ~16.5GB | ~20–24GB | 128K tokens | ~1–2 tok/s | gemma |
+
+### Model size guidance
+
+- **3B models** (Llama 3.2 3B): Most deployable in low-resource settings but weaker instruction following — may produce verbose or hedging responses.
+- **4B models** (MedGemma 4B): Medical-domain fine-tuning at ~3B resource cost. Good for low-resource deployments where clinical accuracy matters. Licensed under [Health AI Developer Foundations Terms](https://developers.google.com/health-ai-developer-foundations/terms) — requires validation before clinical deployment.
+- **8B models** (Llama 3.3 8B): Recommended default. Significantly better reasoning and instruction following than 3B, feasible on 10GB RAM.
+- **12B models** (Mistral Nemo 12B): Best sub-15B option for clinical Q&A. Strong medical text comprehension.
+- **14B models** (Qwen 2.5 14B, Phi-3-Medium 14B): Best CPU-viable response quality, but slower (~2–4 tok/s) and need 14–16GB RAM.
+- **27B models** (MedGemma 27B Text): Highest potential clinical accuracy, but CPU inference (~1–2 tok/s) is too slow for interactive use — practical only with GPU acceleration.
+
+A server running OpenMRS typically uses 1–2GB for the JVM heap. A 4GB machine is insufficient — the smallest viable model requires at least 3–4GB on its own.
+
+### Licensing notes
+
+- **Llama 3.x** (Meta): Free for research and commercial use under the [Llama 3.2 Community License](https://www.llama.com/llama3_2/license/). Not technically "open source" by OSI definition — the only meaningful restriction is that products with over 700M monthly active users require a separate license.
+- **Mistral** (Mistral AI): Apache 2.0 license.
+- **MedGemma** (Google): [Health AI Developer Foundations Terms](https://developers.google.com/health-ai-developer-foundations/terms) — more restrictive than Llama. Requires validation before clinical deployment.
+- **Phi-3** (Microsoft): MIT license — fully permissive with no usage restrictions.
+- **Qwen 2.5** (Alibaba): Apache 2.0 license. Developed by a Chinese company subject to China's data laws — while GGUF models run locally with no data leaving the machine, some organizations may have compliance concerns.
+- **Gemma 2** (Google): [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+
+See [docs/adr.md](docs/adr.md) (Decision 10) for detailed per-model analysis, trade-off discussion, and architectural rationale.
 
 ## Architecture
 
