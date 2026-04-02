@@ -47,7 +47,7 @@ public class RemoteLlmEngine implements LlmEngine {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
 
-	private volatile HttpClient httpClient;
+	private HttpClient httpClient;
 
 	@Override
 	public InferenceResult infer(String systemPrompt, String userMessage, int timeoutSeconds) {
@@ -129,7 +129,7 @@ public class RemoteLlmEngine implements LlmEngine {
 	}
 
 	@Override
-	public void close() {
+	public synchronized void close() {
 		httpClient = null;
 	}
 
@@ -271,15 +271,13 @@ public class RemoteLlmEngine implements LlmEngine {
 		return value.trim();
 	}
 
-	private HttpClient getHttpClient() {
-		HttpClient client = httpClient;
-		if (client == null) {
-			client = HttpClient.newBuilder()
+	private synchronized HttpClient getHttpClient() {
+		if (httpClient == null) {
+			httpClient = HttpClient.newBuilder()
 					.connectTimeout(Duration.ofSeconds(30))
 					.build();
-			httpClient = client;
 		}
-		return client;
+		return httpClient;
 	}
 
 	private static String truncateForLog(String text) {

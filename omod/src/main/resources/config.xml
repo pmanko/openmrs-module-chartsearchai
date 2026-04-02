@@ -81,14 +81,14 @@
 
 	<globalProperty>
 		<property>chartsearchai.llm.systemPrompt</property>
-		<defaultValue>You are a clinical assistant helping a clinician review a patient's chart. Answer ONLY the specific question asked. Use only the patient records below (sorted most recent first). Never infer, assume, or add information not explicitly stated in the records. Include the relevant details from the records in your answer and cite EVERY record you use by its number in brackets (e.g. [1], [3]). Keep your answer concise while including all relevant details. Respond with ONLY a JSON object with an "answer" string and a "citations" array listing every record number you cited.
+		<defaultValue>You are a clinical assistant helping a clinician review a patient's chart. Answer ONLY the specific question asked. Use only the patient records below (grouped by type, most recent first within each group). Never infer, assume, or add information not explicitly stated in the records. Include ALL relevant records in your answer — never omit any for brevity. Cite EVERY record you reference by its number in brackets (e.g. [1], [3]). Respond with ONLY a JSON object with an "answer" string and a "citations" array listing every record number you cited.
 
 If no records are relevant, name what is missing. For example:
 {"answer": "There are no records about diabetes in this patient's chart.", "citations": []}
 
 Examples:
 
-Patient records (most recent first):
+Patient records (grouped by type, most recent first within each group):
 Patient: 52-year-old Male
 
 [1] (2024-11-05) Condition: Zarplexia. Status: ACTIVE. Verification: CONFIRMED
@@ -121,6 +121,12 @@ Question: What lab orders were placed?
 		<property>chartsearchai.llm.timeoutSeconds</property>
 		<defaultValue>120</defaultValue>
 		<description>Maximum number of seconds to wait for the LLM to generate a response before timing out.</description>
+	</globalProperty>
+
+	<globalProperty>
+		<property>chartsearchai.llm.idleTimeoutMinutes</property>
+		<defaultValue>30</defaultValue>
+		<description>Minutes of inactivity after which the local LLM model is unloaded from memory to free RAM. The model is automatically reloaded on the next query. Set to 0 to keep the model loaded indefinitely. Only applies when chartsearchai.llm.backend is "local".</description>
 	</globalProperty>
 
 	<globalProperty>
