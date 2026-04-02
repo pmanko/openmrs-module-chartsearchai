@@ -139,10 +139,10 @@ public class LlmAnswerQualityTest {
 			// proceed without grammar
 		}
 
-		String template = LlmProvider.PRESET_TEMPLATES.get(templateName);
+		String template = LocalLlmEngine.PRESET_TEMPLATES.get(templateName);
 		String prompt = template.replace("{system}", systemPrompt).replace("{user}", userMessage);
 		InferenceParameters params = new InferenceParameters(prompt)
-				.setStopStrings(LlmProvider.resolveStopStrings(templateName))
+				.setStopStrings(LocalLlmEngine.resolveStopStrings(templateName))
 				.setTemperature(0.0f)
 				.setSeed(42)
 				.setCachePrompt(false)

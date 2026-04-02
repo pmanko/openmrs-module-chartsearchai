@@ -32,7 +32,7 @@ For project background, community discussion, and roadmap, see the [wiki project
 - Java 11+
 - OpenMRS Platform 2.8.0+
 - Webservices REST module 2.44.0+
-- 10GB+ RAM recommended (for LLM inference with the default 8B model)
+- 10GB+ RAM recommended (for local LLM inference with the default 8B model; not required when using a remote LLM)
 - Elasticsearch 8.14+ *(optional, for the hybrid retrieval pipeline; the default embedding and Lucene pipelines require no external services)*
 
 ## Setup
@@ -45,7 +45,9 @@ mvn package
 
 The `.omod` file is in `omod/target/`.
 
-### 2. Download the LLM model
+### 2. Download the LLM model *(local mode only)*
+
+> **Skip this step** if you plan to use a remote LLM (see [LLM engine](#llm-engine) below).
 
 Download Llama 3.3 8B (Q4_K_M quantization) in GGUF format (~5GB) from [Hugging Face](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF).
 
@@ -76,11 +78,27 @@ Copy the `.omod` file into the `modules` folder of the OpenMRS application data 
 
 Set these global properties in **Admin > Settings**:
 
-#### Required
+#### LLM engine
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `chartsearchai.llm.backend` | `local` | LLM inference engine: `local` runs a GGUF model in-process via llama.cpp; `remote` calls an OpenAI-compatible API |
+
+**Local engine** (default) — requires a downloaded GGUF model file (see step 2):
 
 | Property | Description |
 |----------|-------------|
 | `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf` |
+
+**Remote engine** — set `chartsearchai.llm.backend` to `remote` and configure:
+
+| Property | Description |
+|----------|-------------|
+| `chartsearchai.llm.remote.endpointUrl` | Chat completions endpoint URL (e.g. `https://api.openai.com/v1/chat/completions`) |
+| `chartsearchai.llm.remote.apiKey` | API key for authentication (sent as `Bearer` token) |
+| `chartsearchai.llm.remote.modelName` | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`, `gemini-2.0-flash`) |
+
+The remote engine works with any provider that implements the OpenAI chat completions API format, including OpenAI, Azure OpenAI, Google AI, Anthropic (via proxy), vLLM, Ollama, and other self-hosted inference servers. No GGUF model download is needed when using the remote engine.
 
 #### Retrieval pipeline
 
@@ -110,10 +128,10 @@ These settings only apply when `chartsearchai.retrieval.pipeline` is `embedding`
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `chartsearchai.llm.chatTemplate` | `llama3` | Chat template for formatting prompts. Presets: `llama3`, `mistral`, `phi3`, `chatml`, `gemma`. Set to `auto` to use the model's built-in GGUF chat template. Or a custom template string with `{system}` and `{user}` placeholders |
 | `chartsearchai.llm.systemPrompt` | *(built-in clinical prompt)* | System prompt that guides how the LLM responds — e.g. answering only the question asked, using only the provided patient records, citing records by number, naming what is missing when records lack relevant information (e.g. "There are no records about diabetes in this patient's chart"), keeping answers concise, and returning structured JSON |
 | `chartsearchai.llm.timeoutSeconds` | `120` | Maximum seconds to wait for LLM inference before timing out |
-| `chartsearchai.llm.idleTimeoutMinutes` | `30` | Minutes of inactivity after which the LLM model is unloaded from memory to free RAM. The model is automatically reloaded on the next query. Set to `0` to keep the model loaded indefinitely |
+| `chartsearchai.llm.chatTemplate` | `llama3` | *(Local engine only)* Chat template for formatting prompts. Presets: `llama3`, `mistral`, `phi3`, `chatml`, `gemma`. Set to `auto` to use the model's built-in GGUF chat template. Or a custom template string with `{system}` and `{user}` placeholders |
+| `chartsearchai.llm.idleTimeoutMinutes` | `30` | *(Local engine only)* Minutes of inactivity after which the LLM model is unloaded from memory to free RAM. The model is automatically reloaded on the next query. Set to `0` to keep the model loaded indefinitely |
 
 #### Rate limiting and caching
 

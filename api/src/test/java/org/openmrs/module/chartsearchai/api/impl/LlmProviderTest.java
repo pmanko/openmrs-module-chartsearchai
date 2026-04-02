@@ -9,7 +9,6 @@
  */
 package org.openmrs.module.chartsearchai.api.impl;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -20,8 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 
 /**
- * Pure unit tests for {@link LlmProvider} configuration logic.
- * Uses a subclass to override Context-dependent methods.
+ * Pure unit tests for {@link LlmProvider} response parsing and configuration logic.
  */
 public class LlmProviderTest {
 
@@ -46,32 +44,6 @@ public class LlmProviderTest {
 				"System prompt must instruct LLM to include ALL relevant records");
 		assertTrue(LlmProvider.DEFAULT_SYSTEM_PROMPT.contains("never omit"),
 				"System prompt must explicitly tell LLM not to omit records for brevity");
-	}
-
-
-	@Test
-	public void close_shouldNotFailWhenModelIsNull() {
-		LlmProvider provider = new LlmProvider();
-		// Should not throw
-		provider.close();
-	}
-
-	@Test
-	public void getTimeoutSeconds_shouldReturnDefault() {
-		LlmProvider provider = createProviderWithTimeout(-1);
-
-		// The overridden method returns the default constant
-		int timeout = provider.getTimeoutSeconds();
-		assertTrue(timeout > 0);
-	}
-
-	@Test
-	public void getSystemPrompt_shouldTrimCustomPrompt() {
-		LlmProvider provider = createProvider("  custom prompt  ");
-
-		String prompt = provider.getSystemPrompt();
-		assertFalse(prompt.startsWith(" "));
-		assertEquals("custom prompt", prompt);
 	}
 
 	@Test
@@ -189,137 +161,26 @@ public class LlmProviderTest {
 	}
 
 	@Test
-	public void formatPrompt_shouldUseLlama3Template() {
-		String result = LlmProvider.formatPrompt("llama3", "sys", "usr");
-		assertTrue(result.contains("<|begin_of_text|>"));
-		assertTrue(result.contains("<|start_header_id|>system<|end_header_id|>\n\nsys<|eot_id|>"));
-		assertTrue(result.contains("<|start_header_id|>user<|end_header_id|>\n\nusr<|eot_id|>"));
-		assertTrue(result.contains("<|start_header_id|>assistant<|end_header_id|>"));
-	}
-
-	@Test
-	public void formatPrompt_shouldUseMistralTemplate() {
-		String result = LlmProvider.formatPrompt("mistral", "sys", "usr");
-		assertEquals("[INST] sys\n\nusr [/INST]", result);
-	}
-
-	@Test
-	public void formatPrompt_shouldUsePhi3Template() {
-		String result = LlmProvider.formatPrompt("phi3", "sys", "usr");
-		assertTrue(result.startsWith("<|system|>\nsys<|end|>"));
-		assertTrue(result.contains("<|user|>\nusr<|end|>"));
-		assertTrue(result.endsWith("<|assistant|>\n"));
-	}
-
-	@Test
-	public void formatPrompt_shouldUseChatMlTemplate() {
-		String result = LlmProvider.formatPrompt("chatml", "sys", "usr");
-		assertTrue(result.contains("<|im_start|>system\nsys<|im_end|>"));
-		assertTrue(result.contains("<|im_start|>user\nusr<|im_end|>"));
-		assertTrue(result.contains("<|im_start|>assistant"));
-	}
-
-	@Test
-	public void formatPrompt_shouldBeCaseInsensitive() {
-		String lower = LlmProvider.formatPrompt("llama3", "sys", "usr");
-		String upper = LlmProvider.formatPrompt("LLAMA3", "sys", "usr");
-		assertEquals(lower, upper);
-	}
-
-	@Test
-	public void formatPrompt_shouldUseCustomTemplateWithPlaceholders() {
-		String custom = "<<SYS>>{system}<</SYS>>[INST]{user}[/INST]";
-		String result = LlmProvider.formatPrompt(custom, "my system", "my question");
-		assertEquals("<<SYS>>my system<</SYS>>[INST]my question[/INST]", result);
-	}
-
-	@Test
-	public void resolveStopStrings_shouldReturnLlama3Stops() {
-		assertArrayEquals(new String[]{"<|eot_id|>", "<|end_of_text|>"},
-				LlmProvider.resolveStopStrings("llama3"));
-	}
-
-	@Test
-	public void resolveStopStrings_shouldReturnMistralStops() {
-		assertArrayEquals(new String[]{"</s>"}, LlmProvider.resolveStopStrings("mistral"));
-	}
-
-	@Test
-	public void resolveStopStrings_shouldReturnPhi3Stops() {
-		assertArrayEquals(new String[]{"<|end|>"}, LlmProvider.resolveStopStrings("phi3"));
-	}
-
-	@Test
-	public void resolveStopStrings_shouldReturnChatMlStops() {
-		assertArrayEquals(new String[]{"<|im_end|>"}, LlmProvider.resolveStopStrings("chatml"));
-	}
-
-	@Test
-	public void formatPrompt_shouldUseGemmaTemplate() {
-		String result = LlmProvider.formatPrompt("gemma", "sys", "usr");
-		assertTrue(result.contains("<start_of_turn>user\nsys\n\nusr<end_of_turn>"));
-		assertTrue(result.endsWith("<start_of_turn>model\n"));
-	}
-
-	@Test
-	public void resolveStopStrings_shouldReturnGemmaStops() {
-		assertArrayEquals(new String[]{"<end_of_turn>"}, LlmProvider.resolveStopStrings("gemma"));
-	}
-
-	@Test
-	public void resolveStopStrings_shouldReturnEmptyForCustomTemplate() {
-		assertArrayEquals(new String[0],
-				LlmProvider.resolveStopStrings("<<SYS>>{system}<</SYS>>"));
-	}
-
-	@Test
-	public void getIdleTimeoutMinutes_shouldReturnDefault() {
-		LlmProvider provider = createProviderWithIdleTimeout(-1);
-		assertEquals(ChartSearchAiConstants.DEFAULT_LLM_IDLE_TIMEOUT_MINUTES,
-				provider.getIdleTimeoutMinutes());
-	}
-
-	@Test
-	public void getIdleTimeoutMinutes_shouldReturnConfiguredValue() {
-		LlmProvider provider = createProviderWithIdleTimeout(15);
-		assertEquals(15, provider.getIdleTimeoutMinutes());
-	}
-
-	@Test
-	public void getIdleTimeoutMinutes_shouldReturnZeroToDisable() {
-		LlmProvider provider = createProviderWithIdleTimeout(0);
-		assertEquals(0, provider.getIdleTimeoutMinutes());
-	}
-
-	@Test
 	public void defaultRepeatPenalty_shouldBeDisabledToAllowFullEnumeration() {
-		// Repeat penalty must be 1.0 (disabled). Any value > 1.0 causes
-		// greedy decoding (temperature=0) to stop enumerating after ~7
-		// items because structural tokens (commas, brackets) accumulate
-		// penalties. The JSON grammar, nPredict cap, and inference timeout
-		// provide sufficient safeguards against repetition loops.
 		assertEquals(1.0f, ChartSearchAiConstants.DEFAULT_REPEAT_PENALTY,
 				"Repeat penalty must be 1.0 (disabled) to allow complete enumeration");
 	}
 
 	@Test
-	public void close_shouldBeIdempotent() {
-		LlmProvider provider = new LlmProvider();
-		provider.close();
-		provider.close(); // Should not throw
+	public void getSystemPrompt_shouldTrimCustomPrompt() {
+		LlmProvider provider = createProvider("  custom prompt  ");
+
+		String prompt = provider.getSystemPrompt();
+		assertFalse(prompt.startsWith(" "));
+		assertEquals("custom prompt", prompt);
 	}
 
-	private LlmProvider createProviderWithIdleTimeout(final int timeout) {
-		return new LlmProvider() {
+	@Test
+	public void getTimeoutSeconds_shouldReturnDefault() {
+		LlmProvider provider = createProviderWithTimeout(-1);
 
-			@Override
-			protected int getIdleTimeoutMinutes() {
-				if (timeout >= 0) {
-					return timeout;
-				}
-				return ChartSearchAiConstants.DEFAULT_LLM_IDLE_TIMEOUT_MINUTES;
-			}
-		};
+		int timeout = provider.getTimeoutSeconds();
+		assertTrue(timeout > 0);
 	}
 
 	private LlmProvider createProvider(final String customSystemPrompt) {
@@ -348,7 +209,7 @@ public class LlmProviderTest {
 				if (timeout > 0) {
 					return timeout;
 				}
-				return org.openmrs.module.chartsearchai.ChartSearchAiConstants.DEFAULT_LLM_TIMEOUT_SECONDS;
+				return ChartSearchAiConstants.DEFAULT_LLM_TIMEOUT_SECONDS;
 			}
 		};
 	}

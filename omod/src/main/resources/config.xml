@@ -38,6 +38,30 @@
 
 	<!-- Global Properties -->
 	<globalProperty>
+		<property>chartsearchai.llm.backend</property>
+		<defaultValue>local</defaultValue>
+		<description>LLM inference backend. "local" (default) runs a GGUF model in-process via llama.cpp — no network calls, data stays on the server. "remote" calls an OpenAI-compatible chat completions API — requires chartsearchai.llm.remote.endpointUrl, chartsearchai.llm.remote.apiKey, and chartsearchai.llm.remote.modelName to be configured. Use "remote" for cloud-hosted models (OpenAI, Anthropic, Google AI) or self-hosted inference servers (vLLM, Ollama, text-generation-inference).</description>
+	</globalProperty>
+
+	<globalProperty>
+		<property>chartsearchai.llm.remote.endpointUrl</property>
+		<defaultValue></defaultValue>
+		<description>URL of the OpenAI-compatible chat completions endpoint. Required when chartsearchai.llm.backend is "remote". Examples: https://api.openai.com/v1/chat/completions (OpenAI), https://generativelanguage.googleapis.com/v1beta/openai/chat/completions (Google AI), http://localhost:11434/v1/chat/completions (Ollama).</description>
+	</globalProperty>
+
+	<globalProperty>
+		<property>chartsearchai.llm.remote.apiKey</property>
+		<defaultValue></defaultValue>
+		<description>API key for authenticating with the remote LLM endpoint. Required when chartsearchai.llm.backend is "remote". Sent as a Bearer token in the Authorization header.</description>
+	</globalProperty>
+
+	<globalProperty>
+		<property>chartsearchai.llm.remote.modelName</property>
+		<defaultValue></defaultValue>
+		<description>Model name to request from the remote LLM endpoint. Required when chartsearchai.llm.backend is "remote". Examples: gpt-4o, claude-sonnet-4-20250514, gemini-2.5-pro.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.llm.modelFilePath</property>
 		<defaultValue>chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf</defaultValue>
 		<description>Relative path, including the filename, within the OpenMRS application data directory to the GGUF LLM model file used for inference. Example: chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf (resolves to &lt;application-data-directory&gt;/chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf). The recommended model is Llama 3.3 8B Instruct (Q4_K_M quantization, ~5GB). Download from https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF. Path traversal (e.g. "..") is not allowed.</description>

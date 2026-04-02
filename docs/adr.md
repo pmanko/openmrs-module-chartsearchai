@@ -21,6 +21,7 @@ This document captures the architectural decisions made for the Chart Search AI 
 - [Decision 13: Lucene BM25 as an alternative retrieval pipeline](#decision-13-lucene-bm25-as-an-alternative-retrieval-pipeline)
 - [Decision 14: Elasticsearch hybrid search pipeline with RRF](#decision-14-elasticsearch-hybrid-search-pipeline-with-rrf)
 - [Decision 15: LangChain / LangChain4j not adopted](#decision-15-langchain--langchain4j-not-adopted)
+- [Decision 16: Remote LLM backend support](#decision-16-remote-llm-backend-support)
 - [Known limitations](#known-limitations)
 - [Planned future work](#planned-future-work)
 
@@ -937,7 +938,72 @@ Do not adopt LangChain or LangChain4j. The module's purpose-built pipeline alrea
 
 **Why not LangChain4j?** Removes the language mismatch, but the module's custom retrieval logic (z-score gating for absent-data detection, adaptive gap detection, type-aware auto-expansion, GBNF constrained decoding) has no equivalent in LangChain4j's standard retrievers. Adopting LangChain4j would mean either losing these features or bypassing its retrieval abstractions entirely and using it only as a thin LLM client wrapper — not worth the dependency. The one feature LangChain4j would simplify — swapping cloud LLM providers via its `ChatLanguageModel` interface — can be achieved more simply by adding a provider interface to the existing `LlmProvider` if that need arises.
 
-**When to revisit:** If the module needs to support multiple LLM backends (local + cloud) or agent/tool-use patterns for multi-step reasoning, a framework like LangChain4j may become worthwhile. Until then, the purpose-built pipeline is simpler to deploy, easier to debug, has fewer dependencies, and gives full control over clinical-domain-specific scoring.
+**When to revisit:** If the module needs agent/tool-use patterns for multi-step reasoning, a framework like LangChain4j may become worthwhile. Remote LLM backend support was added without LangChain4j (see [Decision 16](#decision-16-remote-llm-backend-support)). Until then, the purpose-built pipeline is simpler to deploy, easier to debug, has fewer dependencies, and gives full control over clinical-domain-specific scoring.
+
+## Decision 16: Remote LLM backend support
+
+### Context
+
+The module was originally designed for local-only inference (GGUF models via java-llama.cpp, running in-process). This keeps patient data on the server and eliminates external dependencies. However, some hospitals have:
+
+- **Insufficient hardware** for local inference (8B models need ~10 GB RAM, GPUs improve speed significantly)
+- **Access to cloud APIs** (OpenAI, Google AI, Anthropic) or self-hosted GPU inference servers (vLLM, Ollama, text-generation-inference) that provide faster, more capable models
+- **Existing agreements** with cloud providers that address data privacy and compliance requirements
+
+### Decision
+
+Add an `LlmEngine` interface with two implementations: `LocalLlmEngine` (existing llama.cpp logic) and `RemoteLlmEngine` (calls OpenAI-compatible chat completions APIs). Selection is via the `chartsearchai.llm.backend` global property (`local` or `remote`). Local remains the default.
+
+**Architecture:**
+
+```
+LlmProvider (orchestrator)
+├── constructs system prompt + user message
+├── delegates to active LlmEngine
+└── parses JSON response (extractResponse)
+
+LlmEngine (interface)
+├── infer(systemPrompt, userMessage, timeout) → InferenceResult
+└── inferStreaming(systemPrompt, userMessage, timeout, tokenConsumer) → InferenceResult
+
+LocalLlmEngine (default)
+├── java-llama.cpp JNI, GGUF models
+├── GBNF grammar constraint for JSON output
+├── Chat template formatting (llama3, mistral, phi3, chatml, gemma, auto)
+└── Idle timer for memory management
+
+RemoteLlmEngine
+├── java.net.http.HttpClient (no new dependencies)
+├── OpenAI-compatible /chat/completions endpoint
+├── response_format: {"type": "json_object"} for structured output
+└── SSE streaming support
+```
+
+**Why OpenAI-compatible API format?** It is the de facto standard. OpenAI, Google AI (Gemini), Azure OpenAI, vLLM, Ollama, text-generation-inference, and many other providers all support this format. A single implementation covers all of these.
+
+**Why not add a dependency on an LLM client library?** Java's built-in `HttpClient` handles the OpenAI chat completions format in ~200 lines. Adding a library (LangChain4j, OpenAI Java SDK) would bring transitive dependencies into the OpenMRS module classloader for minimal benefit.
+
+### Trade-offs
+
+| Aspect | Local backend | Remote backend |
+|---|---|---|
+| Data privacy | Data stays on server | Data sent to remote endpoint |
+| Latency | Higher (CPU inference) | Lower (GPU servers, cloud scale) |
+| Model capability | Limited by RAM (3B-12B) | Access to frontier models (GPT-4o, Claude, Gemini) |
+| Cost | Hardware only | Per-token API pricing |
+| Availability | Always available | Requires network, subject to API outages |
+| Setup | Download GGUF file | Configure endpoint URL, API key, model name |
+
+### Configuration
+
+| Global property | Description |
+|---|---|
+| `chartsearchai.llm.backend` | `local` (default) or `remote` |
+| `chartsearchai.llm.remote.endpointUrl` | Chat completions URL (e.g. `https://api.openai.com/v1/chat/completions`) |
+| `chartsearchai.llm.remote.apiKey` | Bearer token for authentication |
+| `chartsearchai.llm.remote.modelName` | Model to request (e.g. `gpt-4o`, `gemini-2.5-pro`) |
+
+**API key storage:** The API key is stored as a plain-text OpenMRS global property. OpenMRS does not provide built-in encryption for global properties. Deployers should use their infrastructure's secrets management (environment variable substitution, vault integration) to protect the key.
 
 ## Known limitations
 

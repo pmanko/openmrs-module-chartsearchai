@@ -169,6 +169,18 @@ public class ChartSearchAiConstants {
 
 	public static final int DEFAULT_AUDIT_LOG_RETENTION_DAYS = 90;
 
+	public static final String GP_LLM_BACKEND = "chartsearchai.llm.backend";
+
+	public static final String LLM_BACKEND_LOCAL = "local";
+
+	public static final String LLM_BACKEND_REMOTE = "remote";
+
+	public static final String GP_LLM_REMOTE_ENDPOINT_URL = "chartsearchai.llm.remote.endpointUrl";
+
+	public static final String GP_LLM_REMOTE_API_KEY = "chartsearchai.llm.remote.apiKey";
+
+	public static final String GP_LLM_REMOTE_MODEL_NAME = "chartsearchai.llm.remote.modelName";
+
 	public static final String GP_LLM_CHAT_TEMPLATE = "chartsearchai.llm.chatTemplate";
 
 	public static final String GP_SYSTEM_PROMPT = "chartsearchai.llm.systemPrompt";

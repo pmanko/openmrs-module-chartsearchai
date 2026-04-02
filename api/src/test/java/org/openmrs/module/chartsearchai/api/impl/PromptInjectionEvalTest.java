@@ -69,7 +69,7 @@ public class PromptInjectionEvalTest {
 
 	static Stream<Arguments> payloadTemplateCombinations() {
 		List<Arguments> args = new ArrayList<>();
-		for (Map.Entry<String, String> entry : LlmProvider.PRESET_TEMPLATES.entrySet()) {
+		for (Map.Entry<String, String> entry : LocalLlmEngine.PRESET_TEMPLATES.entrySet()) {
 			String templateName = entry.getKey();
 			for (EvalCase evalCase : getDataset().getCases()) {
 				if (evalCase.getPayload() != null && !evalCase.getPayload().isEmpty()) {
@@ -85,7 +85,7 @@ public class PromptInjectionEvalTest {
 	@MethodSource("injectionPayloads")
 	public void stripSpecialTokens_perPayload(String caseId, EvalCase evalCase) {
 		String payload = evalCase.getPayload();
-		String sanitized = LlmProvider.stripSpecialTokens(payload);
+		String sanitized = LocalLlmEngine.stripSpecialTokens(payload);
 
 		boolean hasTokens = SPECIAL_TOKEN_PATTERN.matcher(sanitized).find();
 
@@ -106,7 +106,7 @@ public class PromptInjectionEvalTest {
 		String systemPrompt = "You are a clinical assistant.";
 		String payload = evalCase.getPayload();
 
-		String prompt = LlmProvider.formatPrompt(templateName, systemPrompt, payload);
+		String prompt = LocalLlmEngine.formatPrompt(templateName, systemPrompt, payload);
 
 		// System prompt should appear exactly once
 		int firstIdx = prompt.indexOf(systemPrompt);
@@ -117,7 +117,7 @@ public class PromptInjectionEvalTest {
 				label + ": system prompt appears multiple times");
 
 		// Verify that the sanitized user content is in the prompt
-		String sanitizedPayload = LlmProvider.stripSpecialTokens(payload);
+		String sanitizedPayload = LocalLlmEngine.stripSpecialTokens(payload);
 		assertTrue(prompt.contains(sanitizedPayload),
 				label + ": sanitized payload not found in prompt");
 
@@ -134,7 +134,7 @@ public class PromptInjectionEvalTest {
 
 	@Test
 	public void stripSpecialTokens_shouldHandleNullAndEmpty() {
-		assertEquals("", LlmProvider.stripSpecialTokens(null));
-		assertEquals("", LlmProvider.stripSpecialTokens(""));
+		assertEquals("", LocalLlmEngine.stripSpecialTokens(null));
+		assertEquals("", LocalLlmEngine.stripSpecialTokens(""));
 	}
 }

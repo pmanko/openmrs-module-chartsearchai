@@ -89,7 +89,14 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 	}
 
 	private void validateConfiguration() {
-		validateModelFile(ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH, "LLM");
+		String backend = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_BACKEND);
+		boolean isRemote = ChartSearchAiConstants.LLM_BACKEND_REMOTE.equalsIgnoreCase(
+				backend != null ? backend.trim() : "");
+
+		if (!isRemote) {
+			validateModelFile(ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH, "LLM");
+		}
 
 		String preFilter = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
