@@ -266,6 +266,41 @@ public class LuceneIndexer implements Closeable {
 		}
 	}
 
+	/**
+	 * Re-indexes the patient if the current retrieval pipeline uses a Lucene
+	 * index and the patient already has indexed data. Called by AOP advice
+	 * classes after patient data changes.
+	 */
+	public void reindexIfActive(Patient patient) {
+		if (patient == null) {
+			return;
+		}
+		String pipeline = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
+		if (!ChartSearchAiConstants.usesLuceneIndex(pipeline)) {
+			return;
+		}
+		if (hasIndex(patient)) {
+			indexPatient(patient);
+		}
+	}
+
+	/**
+	 * Deletes the patient's Lucene index if the current retrieval pipeline
+	 * uses a Lucene index. Called by AOP advice after patient merges.
+	 */
+	public void deleteIfActive(Patient patient) {
+		if (patient == null) {
+			return;
+		}
+		String pipeline = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
+		if (!ChartSearchAiConstants.usesLuceneIndex(pipeline)) {
+			return;
+		}
+		deletePatientIndex(patient);
+	}
+
 	@Override
 	public void close() throws IOException {
 		synchronized (lock) {

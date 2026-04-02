@@ -499,6 +499,43 @@ public class ElasticsearchIndexer implements Closeable {
 		return uris[0].trim();
 	}
 
+	/**
+	 * Re-indexes the patient if the current retrieval pipeline is Elasticsearch
+	 * and the patient already has indexed data. Called by AOP advice classes
+	 * after patient data changes.
+	 */
+	public void reindexIfActive(Patient patient) {
+		if (patient == null) {
+			return;
+		}
+		String pipeline = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
+		if (!ChartSearchAiConstants.PIPELINE_ELASTICSEARCH.equalsIgnoreCase(
+				pipeline != null ? pipeline.trim() : "")) {
+			return;
+		}
+		if (hasIndex(patient)) {
+			indexPatient(patient);
+		}
+	}
+
+	/**
+	 * Deletes the patient's Elasticsearch index if the current retrieval
+	 * pipeline is Elasticsearch. Called by AOP advice after patient merges.
+	 */
+	public void deleteIfActive(Patient patient) {
+		if (patient == null) {
+			return;
+		}
+		String pipeline = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
+		if (!ChartSearchAiConstants.PIPELINE_ELASTICSEARCH.equalsIgnoreCase(
+				pipeline != null ? pipeline.trim() : "")) {
+			return;
+		}
+		deletePatientIndex(patient);
+	}
+
 	@Override
 	public void close() throws IOException {
 		synchronized (lock) {

@@ -165,6 +165,32 @@ public class ChartSearchAiConstants {
 
 	public static final String PIPELINE_ELASTICSEARCH = "elasticsearch";
 
+	public static final String PIPELINE_HYBRID = "hybrid";
+
+	/** RRF window size — number of top results from each retriever
+	 * considered during rank fusion. Matches the Elasticsearch pipeline's
+	 * setting so both pipelines produce comparable results. */
+	public static final int RRF_RANK_WINDOW_SIZE = 100;
+
+	/** RRF rank constant (k) — controls how quickly lower-ranked results
+	 * lose influence: score = 1 / (k + rank). Higher k produces more
+	 * uniform weighting across ranks. */
+	public static final int RRF_RANK_CONSTANT = 60;
+
+	/**
+	 * Returns true if the given pipeline value uses a Lucene index
+	 * (either the pure Lucene pipeline or the hybrid pipeline that
+	 * combines Lucene BM25 with embedding kNN).
+	 */
+	public static boolean usesLuceneIndex(String pipeline) {
+		if (pipeline == null) {
+			return false;
+		}
+		String trimmed = pipeline.trim();
+		return PIPELINE_LUCENE.equalsIgnoreCase(trimmed)
+				|| PIPELINE_HYBRID.equalsIgnoreCase(trimmed);
+	}
+
 	public static final String GP_AUDIT_LOG_RETENTION_DAYS = "chartsearchai.auditLogRetentionDays";
 
 	public static final int DEFAULT_AUDIT_LOG_RETENTION_DAYS = 90;
@@ -308,6 +334,29 @@ public class ChartSearchAiConstants {
 		}
 
 		return modelFile.getAbsolutePath();
+	}
+
+	/**
+	 * Computes cosine similarity between two embedding vectors.
+	 *
+	 * @param a first embedding vector
+	 * @param b second embedding vector
+	 * @return cosine similarity in [-1, 1], or 0 if either vector is
+	 *         null, empty, or the vectors differ in length
+	 */
+	public static double cosineSimilarity(float[] a, float[] b) {
+		if (a == null || b == null || a.length == 0 || b.length == 0
+				|| a.length != b.length) {
+			return 0;
+		}
+		double dot = 0, normA = 0, normB = 0;
+		for (int i = 0; i < a.length; i++) {
+			dot += a[i] * b[i];
+			normA += a[i] * a[i];
+			normB += b[i] * b[i];
+		}
+		double denom = Math.sqrt(normA) * Math.sqrt(normB);
+		return denom == 0 ? 0 : dot / denom;
 	}
 
 	private ChartSearchAiConstants() {

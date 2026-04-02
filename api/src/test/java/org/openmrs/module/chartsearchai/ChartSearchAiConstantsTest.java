@@ -9,6 +9,7 @@
  */
 package org.openmrs.module.chartsearchai;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -46,6 +47,23 @@ public class ChartSearchAiConstantsTest extends BaseModuleContextSensitiveTest {
 	public void resolveModelPath_shouldThrowWhenFileDoesNotExist() {
 		assertThrows(IllegalStateException.class,
 				() -> ChartSearchAiConstants.resolveModelPath("chartsearchai/nonexistent-model.gguf", GP_NAME));
+	}
+
+	@Test
+	public void usesLuceneIndex_shouldReturnTrueForLuceneAndHybrid() {
+		assertTrue(ChartSearchAiConstants.usesLuceneIndex("lucene"));
+		assertTrue(ChartSearchAiConstants.usesLuceneIndex("LUCENE"));
+		assertTrue(ChartSearchAiConstants.usesLuceneIndex("hybrid"));
+		assertTrue(ChartSearchAiConstants.usesLuceneIndex("HYBRID"));
+		assertTrue(ChartSearchAiConstants.usesLuceneIndex("  hybrid  "));
+	}
+
+	@Test
+	public void usesLuceneIndex_shouldReturnFalseForOtherPipelines() {
+		assertFalse(ChartSearchAiConstants.usesLuceneIndex("embedding"));
+		assertFalse(ChartSearchAiConstants.usesLuceneIndex("elasticsearch"));
+		assertFalse(ChartSearchAiConstants.usesLuceneIndex(""));
+		assertFalse(ChartSearchAiConstants.usesLuceneIndex(null));
 	}
 
 	@Test

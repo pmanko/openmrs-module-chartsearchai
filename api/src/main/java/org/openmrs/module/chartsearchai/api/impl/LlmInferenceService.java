@@ -35,6 +35,7 @@ import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.api.EmbeddingIndexer;
 import org.openmrs.module.chartsearchai.api.ElasticsearchIndexer;
+import org.openmrs.module.chartsearchai.api.HybridRetriever;
 import org.openmrs.module.chartsearchai.api.LuceneIndexer;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
@@ -82,6 +83,9 @@ public class LlmInferenceService implements ChartSearchService {
 
 	@Autowired
 	private ElasticsearchIndexer elasticsearchIndexer;
+
+	@Autowired
+	private HybridRetriever hybridRetriever;
 
 	@Autowired
 	private LlmProvider llmProvider;
@@ -275,6 +279,9 @@ public class LlmInferenceService implements ChartSearchService {
 			return chartSerializer.serialize(patient);
 		}
 
+		if (isHybridPipeline()) {
+			return buildChartWithHybrid(patient, question);
+		}
 		if (isElasticsearchPipeline()) {
 			return buildChartWithElasticsearch(patient, question);
 		}
@@ -410,6 +417,44 @@ public class LlmInferenceService implements ChartSearchService {
 		return filterAndSerialize(patient, question, relevantKeys);
 	}
 
+	private PatientChart buildChartWithHybrid(Patient patient, String question) {
+		try {
+			hybridRetriever.ensureIndexed(patient);
+		}
+		catch (Exception e) {
+			log.error("Failed to index patient [id={}] for hybrid pipeline, falling back to full chart",
+					patient.getPatientId(), e);
+			return chartSerializer.serialize(patient);
+		}
+
+		String normalizedQuery = stripQueryStopwords(question);
+		if (normalizedQuery.isEmpty()) {
+			return chartSerializer.serialize(patient);
+		}
+
+		Set<String> relevantKeys;
+		try {
+			relevantKeys = hybridRetriever.search(
+					patient, normalizedQuery, getQueryPrefix(), getTopK());
+		}
+		catch (Exception e) {
+			log.error("Hybrid search failed for patient [id={}], falling back to full chart",
+					patient.getPatientId(), e);
+			return chartSerializer.serialize(patient);
+		}
+
+		if (relevantKeys.isEmpty()) {
+			log.debug("Hybrid returned no results for query '{}', returning empty chart",
+					normalizedQuery);
+			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
+		}
+
+		log.debug("Hybrid returned {} results for query '{}'",
+				relevantKeys.size(), normalizedQuery);
+
+		return filterAndSerialize(patient, question, relevantKeys);
+	}
+
 	private PatientChart filterAndSerialize(Patient patient, String question,
 			Set<String> relevantKeys) {
 		List<SerializedRecord> allRecords = recordLoader.loadAll(patient);
@@ -422,8 +467,9 @@ public class LlmInferenceService implements ChartSearchService {
 
 		log.debug("Pre-filtered {} records to {} using {}",
 				allRecords.size(), filtered.size(),
-				isElasticsearchPipeline() ? "Elasticsearch" :
-						isLucenePipeline() ? "Lucene" : "embeddings");
+				isHybridPipeline() ? "Hybrid" :
+						isElasticsearchPipeline() ? "Elasticsearch" :
+								isLucenePipeline() ? "Lucene" : "embeddings");
 
 		int recencyCap = extractRecencyCap(question);
 		if (recencyCap > 0) {
@@ -434,6 +480,13 @@ public class LlmInferenceService implements ChartSearchService {
 		filtered = groupByConcept(filtered);
 
 		return chartSerializer.serialize(patient, filtered);
+	}
+
+	boolean isHybridPipeline() {
+		String pipeline = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE);
+		return ChartSearchAiConstants.PIPELINE_HYBRID.equalsIgnoreCase(
+				pipeline != null ? pipeline.trim() : "");
 	}
 
 	boolean isElasticsearchPipeline() {
@@ -1477,18 +1530,7 @@ public class LlmInferenceService implements ChartSearchService {
 	 * @return cosine similarity in [-1, 1], or 0 if either vector is empty
 	 */
 	static double cosineSimilarity(float[] a, float[] b) {
-		if (a == null || b == null || a.length == 0 || b.length == 0
-				|| a.length != b.length) {
-			return 0;
-		}
-		double dot = 0, normA = 0, normB = 0;
-		for (int i = 0; i < a.length; i++) {
-			dot += a[i] * b[i];
-			normA += a[i] * a[i];
-			normB += b[i] * b[i];
-		}
-		double denom = Math.sqrt(normA) * Math.sqrt(normB);
-		return denom == 0 ? 0 : dot / denom;
+		return ChartSearchAiConstants.cosineSimilarity(a, b);
 	}
 
 	/**
