@@ -44,9 +44,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
  * dense vector search. Selected via the {@code chartsearchai.retrieval.pipeline}
  * global property set to {@code elasticsearch}.
  *
- * <p>Requires an Elasticsearch 8.14+ instance configured in the OpenMRS
- * runtime properties ({@code hibernate.search.backend.uris}). Uses the
- * low-level REST client already on the classpath via Hibernate Search.
+ * <p>Requires an Elasticsearch 8.14+ or OpenSearch 2.19+ instance
+ * configured in the OpenMRS runtime properties
+ * ({@code hibernate.search.backend.uris}). Uses the low-level REST
+ * client already on the classpath via Hibernate Search. The backend
+ * type (Elasticsearch vs OpenSearch) is auto-detected on first use.
  *
  * <p>Each document stores the patient ID, resource type, resource ID,
  * the prefixed text (for BM25), and the embedding vector (for kNN).
@@ -85,6 +87,10 @@ public class ElasticsearchIndexer implements Closeable {
 	 * at the cost of latency. */
 	static final int KNN_NUM_CANDIDATES = 100;
 
+	static final String SEARCH_PIPELINE_NAME = "chartsearchai-rrf";
+
+	enum BackendType { ELASTICSEARCH, OPENSEARCH }
+
 	@Autowired
 	private PatientRecordLoader recordLoader;
 
@@ -95,6 +101,10 @@ public class ElasticsearchIndexer implements Closeable {
 	private volatile RestClient client;
 
 	private volatile boolean indexCreated;
+
+	private volatile boolean pipelineCreated;
+
+	private volatile BackendType backendType;
 
 	private final Object lock = new Object();
 
@@ -134,6 +144,42 @@ public class ElasticsearchIndexer implements Closeable {
 	}
 
 	/**
+	 * Allows tests to set the backend type directly.
+	 */
+	void setBackendType(BackendType type) {
+		this.backendType = type;
+	}
+
+	BackendType getBackendType() {
+		return backendType;
+	}
+
+	/**
+	 * Auto-detects whether the backend is Elasticsearch or OpenSearch
+	 * by checking for the {@code distribution} field in the root response.
+	 */
+	void detectBackendType() throws IOException {
+		if (backendType != null) {
+			return;
+		}
+		RestClient c = getClient();
+		if (c == null) {
+			return;
+		}
+		Response response = c.performRequest(new Request("GET", "/"));
+		String body = EntityUtils.toString(response.getEntity());
+		JsonNode root = mapper.readTree(body);
+		JsonNode distribution = root.path("version").path("distribution");
+		if (!distribution.isMissingNode() && "opensearch".equals(distribution.asText())) {
+			backendType = BackendType.OPENSEARCH;
+			log.info("Detected OpenSearch backend");
+		} else {
+			backendType = BackendType.ELASTICSEARCH;
+			log.info("Detected Elasticsearch backend");
+		}
+	}
+
+	/**
 	 * Returns true if Elasticsearch is configured in the OpenMRS runtime
 	 * properties and the cluster is reachable.
 	 */
@@ -157,6 +203,7 @@ public class ElasticsearchIndexer implements Closeable {
 	 * first call, detecting embedding dimensions from the provider.
 	 */
 	void ensureIndex() throws IOException {
+		detectBackendType();
 		if (indexCreated) {
 			// Verify the index still exists to handle external deletion
 			RestClient c = getClient();
@@ -186,8 +233,15 @@ public class ElasticsearchIndexer implements Closeable {
 			// Check if index already exists
 			try {
 				c.performRequest(new Request("HEAD", "/" + INDEX_NAME));
-				indexCreated = true;
-				return;
+				if (hasMismatchedMapping(c)) {
+					log.info("Index '{}' has incompatible mapping for {} backend, recreating",
+							INDEX_NAME, backendType);
+					c.performRequest(new Request("DELETE", "/" + INDEX_NAME));
+				} else {
+					indexCreated = true;
+					ensureSearchPipeline();
+					return;
+				}
 			}
 			catch (ResponseException e) {
 				if (e.getResponse().getStatusLine().getStatusCode() != 404) {
@@ -209,16 +263,79 @@ public class ElasticsearchIndexer implements Closeable {
 			createReq.setJsonEntity(buildIndexMapping(dims));
 			c.performRequest(createReq);
 			indexCreated = true;
-			log.info("Created Elasticsearch index '{}' with {} dimensions", INDEX_NAME, dims);
+			log.info("Created index '{}' with {} dimensions (backend: {})",
+					INDEX_NAME, dims, backendType);
+			ensureSearchPipeline();
 		}
 	}
 
 	/**
+	 * Creates the RRF search pipeline on OpenSearch if it doesn't exist.
+	 * No-op for Elasticsearch (which uses the retriever API instead).
+	 */
+	void ensureSearchPipeline() throws IOException {
+		if (backendType != BackendType.OPENSEARCH || pipelineCreated) {
+			return;
+		}
+		RestClient c = getClient();
+		if (c == null) {
+			return;
+		}
+		Request req = new Request("PUT", "/_search/pipeline/" + SEARCH_PIPELINE_NAME);
+		req.setJsonEntity(buildSearchPipelineBody());
+		c.performRequest(req);
+		pipelineCreated = true;
+		log.info("Created OpenSearch search pipeline '{}'", SEARCH_PIPELINE_NAME);
+	}
+
+	/**
+	 * Checks if the existing index mapping is incompatible with the
+	 * detected backend. OpenSearch requires {@code knn_vector};
+	 * Elasticsearch requires {@code dense_vector}.
+	 */
+	private boolean hasMismatchedMapping(RestClient c) {
+		try {
+			Request req = new Request("GET", "/" + INDEX_NAME + "/_mapping");
+			Response response = c.performRequest(req);
+			String body = EntityUtils.toString(response.getEntity());
+			JsonNode root = mapper.readTree(body);
+			String embeddingType = root.path(INDEX_NAME).path("mappings")
+					.path("properties").path(FIELD_EMBEDDING).path("type").asText("");
+			if (backendType == BackendType.OPENSEARCH) {
+				return !"knn_vector".equals(embeddingType);
+			}
+			return !"dense_vector".equals(embeddingType);
+		}
+		catch (Exception e) {
+			log.debug("Failed to check index mapping, assuming mismatch", e);
+			return true;
+		}
+	}
+
+	/**
+	 * Builds the OpenSearch search pipeline JSON body for RRF.
+	 */
+	String buildSearchPipelineBody() throws IOException {
+		ObjectNode body = mapper.createObjectNode();
+		ArrayNode processors = body.putArray("phase_results_processors");
+		ObjectNode processor = processors.addObject().putObject("score-ranker-processor");
+		ObjectNode combination = processor.putObject("combination");
+		combination.put("technique", "rrf");
+		combination.put("rank_constant", RRF_RANK_CONSTANT);
+		return mapper.writeValueAsString(body);
+	}
+
+	/**
 	 * Builds the index creation JSON with mappings for text (BM25) and
-	 * dense_vector (kNN) fields.
+	 * dense_vector/knn_vector fields, adapting to the detected backend.
 	 */
 	String buildIndexMapping(int dims) throws IOException {
 		ObjectNode body = mapper.createObjectNode();
+
+		if (backendType == BackendType.OPENSEARCH) {
+			body.putObject("settings").put("index.knn", true);
+		}
+
 		ObjectNode mappings = body.putObject("mappings");
 		ObjectNode properties = mappings.putObject("properties");
 
@@ -228,10 +345,19 @@ public class ElasticsearchIndexer implements Closeable {
 		properties.putObject(FIELD_TEXT).put("type", "text").put("analyzer", "english");
 
 		ObjectNode embeddingField = properties.putObject(FIELD_EMBEDDING);
-		embeddingField.put("type", "dense_vector");
-		embeddingField.put("dims", dims);
-		embeddingField.put("index", true);
-		embeddingField.put("similarity", "cosine");
+		if (backendType == BackendType.OPENSEARCH) {
+			embeddingField.put("type", "knn_vector");
+			embeddingField.put("dimension", dims);
+			ObjectNode method = embeddingField.putObject("method");
+			method.put("name", "hnsw");
+			method.put("space_type", "cosinesimil");
+			method.put("engine", "lucene");
+		} else {
+			embeddingField.put("type", "dense_vector");
+			embeddingField.put("dims", dims);
+			embeddingField.put("index", true);
+			embeddingField.put("similarity", "cosine");
+		}
 
 		return mapper.writeValueAsString(body);
 	}
@@ -403,9 +529,15 @@ public class ElasticsearchIndexer implements Closeable {
 		}
 
 		try {
+			detectBackendType();
+			ensureSearchPipeline();
 			String searchBody = buildSearchQuery(patient.getPatientId(),
 					queryText, queryVector, maxResults);
-			Request req = new Request("POST", "/" + INDEX_NAME + "/_search");
+			String endpoint = "/" + INDEX_NAME + "/_search";
+			if (backendType == BackendType.OPENSEARCH) {
+				endpoint += "?search_pipeline=" + SEARCH_PIPELINE_NAME;
+			}
+			Request req = new Request("POST", endpoint);
 			req.setJsonEntity(searchBody);
 			Response response = c.performRequest(req);
 			String responseBody = EntityUtils.toString(response.getEntity());
@@ -433,10 +565,23 @@ public class ElasticsearchIndexer implements Closeable {
 	}
 
 	/**
-	 * Builds the RRF hybrid search query JSON using the Elasticsearch
-	 * retriever API (ES 8.14+).
+	 * Builds the hybrid search query JSON, adapting to the detected backend.
+	 * Elasticsearch uses the retriever API (ES 8.14+); OpenSearch uses
+	 * a hybrid query with a search pipeline for RRF (OS 2.19+).
 	 */
 	String buildSearchQuery(int patientId, String queryText,
+			float[] queryVector, int maxResults) throws IOException {
+		if (backendType == BackendType.OPENSEARCH) {
+			return buildOpenSearchQuery(patientId, queryText, queryVector, maxResults);
+		}
+		return buildElasticsearchQuery(patientId, queryText, queryVector, maxResults);
+	}
+
+	/**
+	 * Builds the RRF hybrid search query using the Elasticsearch
+	 * retriever API (ES 8.14+).
+	 */
+	String buildElasticsearchQuery(int patientId, String queryText,
 			float[] queryVector, int maxResults) throws IOException {
 		ObjectNode body = mapper.createObjectNode();
 		body.put("size", maxResults);
@@ -470,6 +615,44 @@ public class ElasticsearchIndexer implements Closeable {
 		knnRetriever.put("k", Math.min(maxResults, KNN_NUM_CANDIDATES));
 		knnRetriever.put("num_candidates", KNN_NUM_CANDIDATES);
 		knnRetriever.putObject("filter")
+				.putObject("term").put(FIELD_PATIENT_ID, patientId);
+
+		return mapper.writeValueAsString(body);
+	}
+
+	/**
+	 * Builds the hybrid search query for OpenSearch (OS 2.19+).
+	 * Uses the hybrid query type with BM25 and kNN sub-queries;
+	 * RRF is applied via the search pipeline set on the request.
+	 */
+	String buildOpenSearchQuery(int patientId, String queryText,
+			float[] queryVector, int maxResults) throws IOException {
+		ObjectNode body = mapper.createObjectNode();
+		body.put("size", maxResults);
+
+		ArrayNode source = body.putArray("_source");
+		source.add(FIELD_RESOURCE_TYPE);
+		source.add(FIELD_RESOURCE_ID);
+
+		ObjectNode hybrid = body.putObject("query").putObject("hybrid");
+		ArrayNode queries = hybrid.putArray("queries");
+
+		// BM25 text query
+		ObjectNode bm25Bool = queries.addObject().putObject("bool");
+		bm25Bool.putArray("must").addObject()
+				.putObject("match").put(FIELD_TEXT, queryText);
+		bm25Bool.putArray("filter").addObject()
+				.putObject("term").put(FIELD_PATIENT_ID, patientId);
+
+		// kNN vector query
+		ObjectNode knnOuter = queries.addObject().putObject("knn");
+		ObjectNode knnInner = knnOuter.putObject(FIELD_EMBEDDING);
+		ArrayNode qv = knnInner.putArray("vector");
+		for (float v : queryVector) {
+			qv.add(v);
+		}
+		knnInner.put("k", Math.min(maxResults, KNN_NUM_CANDIDATES));
+		knnInner.putObject("filter")
 				.putObject("term").put(FIELD_PATIENT_ID, patientId);
 
 		return mapper.writeValueAsString(body);
@@ -544,6 +727,8 @@ public class ElasticsearchIndexer implements Closeable {
 				client = null;
 			}
 			indexCreated = false;
+			pipelineCreated = false;
+			backendType = null;
 		}
 	}
 
