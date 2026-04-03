@@ -190,15 +190,31 @@ The **embedding pipeline** is recommended for most deployments — it runs entir
 
 ### Testing the Elasticsearch pipeline locally
 
-> **License note:** The Elasticsearch pipeline uses [Reciprocal Rank Fusion (RRF)](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/reciprocal-rank-fusion), which requires a **Platinum or Enterprise** Elasticsearch subscription. The free basic license will return a `license is non-compliant for [Reciprocal Rank Fusion (RRF)]` error. You can start a [30-day trial](https://www.elastic.co/guide/en/elasticsearch/reference/current/start-trial.html) for testing:
-> ```
-> curl -X POST 'http://localhost:9200/_license/start_trial?acknowledge=true'
-> ```
-> If you do not have a paid license, use the **embedding** or **hybrid** pipeline instead.
+The module auto-detects whether the backend is Elasticsearch or OpenSearch and adapts its queries accordingly. **OpenSearch is recommended** because RRF is free; Elasticsearch requires a paid Platinum or Enterprise subscription for RRF.
 
 To test the Elasticsearch pipeline with the OpenMRS SDK:
 
-**1. Start Elasticsearch 8.14+ with Docker:**
+**1. Start OpenSearch 2.19+ (recommended) or Elasticsearch 8.14+ with Docker:**
+
+OpenSearch (RRF is free):
+
+```
+docker run -d --name opensearch \
+  -p 9200:9200 \
+  -e "discovery.type=single-node" \
+  -e "DISABLE_SECURITY_PLUGIN=true" \
+  opensearchproject/opensearch:2.19.0
+```
+
+Install the **analysis-phonetic** plugin (required by the OpenMRS platform for Soundex-based person name search):
+
+```
+docker exec opensearch bin/opensearch-plugin install analysis-phonetic
+docker restart opensearch
+```
+
+<details>
+<summary>Alternatively, use Elasticsearch (requires paid license for RRF)</summary>
 
 ```
 docker run -d --name elasticsearch \
@@ -208,14 +224,20 @@ docker run -d --name elasticsearch \
   elasticsearch:8.17.2
 ```
 
-Verify it's running: `curl http://localhost:9200/_cluster/health`
-
-Install the **analysis-phonetic** plugin (required by the OpenMRS platform for Soundex-based person name search):
-
 ```
 docker exec elasticsearch bin/elasticsearch-plugin install analysis-phonetic
 docker restart elasticsearch
 ```
+
+Start a 30-day trial to enable RRF:
+
+```
+curl -X POST 'http://localhost:9200/_license/start_trial?acknowledge=true'
+```
+
+</details>
+
+Verify it's running: `curl http://localhost:9200/_cluster/health`
 
 **2. Configure OpenMRS to use Elasticsearch:**
 
