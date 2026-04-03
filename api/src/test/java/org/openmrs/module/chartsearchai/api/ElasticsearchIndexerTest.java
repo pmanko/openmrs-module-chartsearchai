@@ -19,6 +19,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -121,8 +122,8 @@ public class ElasticsearchIndexerTest {
 		// RRF retriever structure
 		JsonNode rrf = root.path("retriever").path("rrf");
 		assertFalse(rrf.isMissingNode(), "Should have rrf retriever");
-		assertEquals(ElasticsearchIndexer.RRF_RANK_WINDOW_SIZE, rrf.path("rank_window_size").asInt());
-		assertEquals(ElasticsearchIndexer.RRF_RANK_CONSTANT, rrf.path("rank_constant").asInt());
+		assertEquals(ChartSearchAiConstants.RRF_RANK_WINDOW_SIZE, rrf.path("rank_window_size").asInt());
+		assertEquals(ChartSearchAiConstants.RRF_RANK_CONSTANT, rrf.path("rank_constant").asInt());
 
 		JsonNode retrievers = rrf.path("retrievers");
 		assertEquals(2, retrievers.size(), "Should have BM25 and kNN retrievers");
@@ -275,7 +276,7 @@ public class ElasticsearchIndexerTest {
 		JsonNode combination = processors.get(0)
 				.path("score-ranker-processor").path("combination");
 		assertEquals("rrf", combination.path("technique").asText());
-		assertEquals(ElasticsearchIndexer.RRF_RANK_CONSTANT,
+		assertEquals(ChartSearchAiConstants.RRF_RANK_CONSTANT,
 				combination.path("rank_constant").asInt());
 	}
 

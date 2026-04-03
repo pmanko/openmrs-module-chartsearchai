@@ -91,13 +91,9 @@ public class HybridRetrieverTest {
 	}
 
 	@Test
-	public void fuseRRF_rrfConstantShouldMatchElasticsearchPipeline() {
+	public void fuseRRF_rrfConstantsShouldHaveExpectedValues() {
 		assertEquals(100, ChartSearchAiConstants.RRF_RANK_WINDOW_SIZE);
 		assertEquals(60, ChartSearchAiConstants.RRF_RANK_CONSTANT);
-		assertEquals(ElasticsearchIndexer.RRF_RANK_WINDOW_SIZE,
-				ChartSearchAiConstants.RRF_RANK_WINDOW_SIZE);
-		assertEquals(ElasticsearchIndexer.RRF_RANK_CONSTANT,
-				ChartSearchAiConstants.RRF_RANK_CONSTANT);
 	}
 
 	@Test

@@ -73,15 +73,6 @@ public class ElasticsearchIndexer implements Closeable {
 
 	static final String FIELD_EMBEDDING = "embedding";
 
-	/** RRF window size — number of top results from each retriever
-	 * considered during rank fusion. */
-	static final int RRF_RANK_WINDOW_SIZE = 100;
-
-	/** RRF rank constant (k) — controls how quickly lower-ranked results
-	 * lose influence: score = 1 / (k + rank). Higher k produces more
-	 * uniform weighting across ranks. */
-	static final int RRF_RANK_CONSTANT = 60;
-
 	/** Number of approximate nearest-neighbor candidates evaluated per
 	 * shard before selecting the top-k. Higher values improve recall
 	 * at the cost of latency. */
@@ -162,20 +153,25 @@ public class ElasticsearchIndexer implements Closeable {
 		if (backendType != null) {
 			return;
 		}
-		RestClient c = getClient();
-		if (c == null) {
-			return;
-		}
-		Response response = c.performRequest(new Request("GET", "/"));
-		String body = EntityUtils.toString(response.getEntity());
-		JsonNode root = mapper.readTree(body);
-		JsonNode distribution = root.path("version").path("distribution");
-		if (!distribution.isMissingNode() && "opensearch".equals(distribution.asText())) {
-			backendType = BackendType.OPENSEARCH;
-			log.info("Detected OpenSearch backend");
-		} else {
-			backendType = BackendType.ELASTICSEARCH;
-			log.info("Detected Elasticsearch backend");
+		synchronized (lock) {
+			if (backendType != null) {
+				return;
+			}
+			RestClient c = getClient();
+			if (c == null) {
+				return;
+			}
+			Response response = c.performRequest(new Request("GET", "/"));
+			String body = EntityUtils.toString(response.getEntity());
+			JsonNode root = mapper.readTree(body);
+			JsonNode distribution = root.path("version").path("distribution");
+			if (!distribution.isMissingNode() && "opensearch".equals(distribution.asText())) {
+				backendType = BackendType.OPENSEARCH;
+				log.info("Detected OpenSearch backend");
+			} else {
+				backendType = BackendType.ELASTICSEARCH;
+				log.info("Detected Elasticsearch backend");
+			}
 		}
 	}
 
@@ -321,7 +317,7 @@ public class ElasticsearchIndexer implements Closeable {
 		ObjectNode processor = processors.addObject().putObject("score-ranker-processor");
 		ObjectNode combination = processor.putObject("combination");
 		combination.put("technique", "rrf");
-		combination.put("rank_constant", RRF_RANK_CONSTANT);
+		combination.put("rank_constant", ChartSearchAiConstants.RRF_RANK_CONSTANT);
 		return mapper.writeValueAsString(body);
 	}
 
@@ -592,8 +588,8 @@ public class ElasticsearchIndexer implements Closeable {
 
 		ObjectNode retriever = body.putObject("retriever");
 		ObjectNode rrf = retriever.putObject("rrf");
-		rrf.put("rank_window_size", RRF_RANK_WINDOW_SIZE);
-		rrf.put("rank_constant", RRF_RANK_CONSTANT);
+		rrf.put("rank_window_size", ChartSearchAiConstants.RRF_RANK_WINDOW_SIZE);
+		rrf.put("rank_constant", ChartSearchAiConstants.RRF_RANK_CONSTANT);
 
 		ArrayNode retrievers = rrf.putArray("retrievers");
 
