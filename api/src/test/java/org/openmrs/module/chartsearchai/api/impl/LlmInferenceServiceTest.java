@@ -39,6 +39,9 @@ public class LlmInferenceServiceTest {
 	private static final String[] SECOND_PATIENT_DATASET =
 			TestDatasetHelper.SECOND_PATIENT_DATASET;
 
+	private static final String[] THIRD_PATIENT_DATASET =
+			TestDatasetHelper.THIRD_PATIENT_DATASET;
+
 	@Test
 	public void extractCitedReferences_shouldExtractReferencesFromCitations() {
 		List<RecordMapping> mappings = Arrays.asList(
