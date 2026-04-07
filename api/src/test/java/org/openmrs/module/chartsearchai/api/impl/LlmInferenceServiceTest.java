@@ -27,6 +27,7 @@ import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
@@ -865,7 +866,7 @@ public class LlmInferenceServiceTest {
 		for (int i = 0; i < dataset.length; i++) {
 			String resourceType = TestDatasetHelper.inferResourceType(dataset[i]);
 			String textContent = TestDatasetHelper.stripDatasetPrefixAndDate(dataset[i]);
-			String embeddingText = ChartSearchAiConstants.buildPrefixedText(
+			String embeddingText = ChartSearchAiUtils.buildPrefixedText(
 					resourceType, textContent);
 			float[] docVector = provider.embed(embeddingText);
 			if (embeddingVectors != null) {
@@ -1546,7 +1547,7 @@ public class LlmInferenceServiceTest {
 				for (int i = 0; i < FULL_PATIENT_DATASET.length; i++) {
 					String rt = TestDatasetHelper.inferResourceType(FULL_PATIENT_DATASET[i]);
 					String tc = TestDatasetHelper.stripDatasetPrefixAndDate(FULL_PATIENT_DATASET[i]);
-					String kwText = ChartSearchAiConstants.buildPrefixedText(rt, tc);
+					String kwText = ChartSearchAiUtils.buildPrefixedText(rt, tc);
 					double kw = LlmInferenceService.computeKeywordScore(
 							queryTerms, kwText);
 					indexed[i][0] = i;

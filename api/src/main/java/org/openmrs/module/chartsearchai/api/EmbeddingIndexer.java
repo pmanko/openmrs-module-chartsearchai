@@ -19,6 +19,7 @@ import org.openmrs.Encounter;
 import org.openmrs.Obs;
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
@@ -169,7 +170,7 @@ public class EmbeddingIndexer {
 		ce.setResourceId(resourceId);
 		ce.setTextContent(text);
 		ce.setEmbeddingVector(embeddingProvider.embed(
-				ChartSearchAiConstants.buildPrefixedText(resourceType, text)));
+				ChartSearchAiUtils.buildPrefixedText(resourceType, text)));
 		ce.setDateCreated(now);
 		dao.saveChartEmbedding(ce);
 	}
@@ -180,7 +181,7 @@ public class EmbeddingIndexer {
 		if (existing != null) {
 			existing.setTextContent(text);
 			existing.setEmbeddingVector(embeddingProvider.embed(
-					ChartSearchAiConstants.buildPrefixedText(resourceType, text)));
+					ChartSearchAiUtils.buildPrefixedText(resourceType, text)));
 			existing.setDateCreated(now);
 			dao.saveChartEmbedding(existing);
 		} else {
@@ -208,7 +209,7 @@ public class EmbeddingIndexer {
 				ce.setResourceId(record.getResourceId());
 				ce.setTextContent(record.getText());
 				ce.setEmbeddingVector(provider.embed(
-						ChartSearchAiConstants.buildPrefixedText(
+						ChartSearchAiUtils.buildPrefixedText(
 								record.getResourceType(), record.getText())));
 				result.add(ce);
 			}

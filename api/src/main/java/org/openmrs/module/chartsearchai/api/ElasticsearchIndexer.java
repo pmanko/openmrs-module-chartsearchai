@@ -24,6 +24,7 @@ import org.elasticsearch.client.RestClient;
 import org.openmrs.Patient;
 import org.openmrs.api.context.Context;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
@@ -420,7 +421,7 @@ public class ElasticsearchIndexer implements Closeable {
 		StringBuilder bulk = new StringBuilder();
 		int batchCount = 0;
 		for (org.openmrs.module.chartsearchai.model.ChartEmbedding ce : embeddings) {
-			String prefixedText = ChartSearchAiConstants.buildPrefixedText(
+			String prefixedText = ChartSearchAiUtils.buildPrefixedText(
 					ce.getResourceType(), ce.getTextContent());
 			String docId = patientId + "_"
 					+ ce.getResourceType() + "_" + ce.getResourceId();

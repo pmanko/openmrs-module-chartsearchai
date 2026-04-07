@@ -36,6 +36,7 @@ import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
 import org.openmrs.util.OpenmrsUtil;
@@ -277,7 +278,7 @@ public class LuceneIndexer implements Closeable {
 		}
 		String pipeline = org.openmrs.api.context.Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
-		if (!ChartSearchAiConstants.usesLuceneIndex(pipeline)) {
+		if (!ChartSearchAiUtils.usesLuceneIndex(pipeline)) {
 			return;
 		}
 		if (hasIndex(patient)) {
@@ -295,7 +296,7 @@ public class LuceneIndexer implements Closeable {
 		}
 		String pipeline = org.openmrs.api.context.Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
-		if (!ChartSearchAiConstants.usesLuceneIndex(pipeline)) {
+		if (!ChartSearchAiUtils.usesLuceneIndex(pipeline)) {
 			return;
 		}
 		deletePatientIndex(patient);
@@ -333,7 +334,7 @@ public class LuceneIndexer implements Closeable {
 				String.valueOf(record.getResourceId()), Field.Store.YES));
 		// Index the prefixed text so Lucene gets the same type signals
 		// as the embedding pipeline (e.g. "Medical condition: Condition: ...")
-		String prefixedText = ChartSearchAiConstants.buildPrefixedText(
+		String prefixedText = ChartSearchAiUtils.buildPrefixedText(
 				record.getResourceType(), record.getText());
 		doc.add(new TextField(FIELD_TEXT, prefixedText, Field.Store.NO));
 		return doc;

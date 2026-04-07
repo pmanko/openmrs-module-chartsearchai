@@ -52,7 +52,7 @@ public class ArchitectureGuardTest {
 		List<String> violations = scanForPattern(
 				SRC_ROOT,
 				Pattern.compile("getEmbeddingPrefix\\s*\\("),
-				"ChartSearchAiConstants.java|ArchitectureGuardTest.java",
+				"ChartSearchAiConstants.java|ChartSearchAiUtils.java|ArchitectureGuardTest.java",
 				"Should use buildPrefixedText() instead of getEmbeddingPrefix()");
 		assertNoViolations(violations);
 	}
@@ -77,14 +77,14 @@ public class ArchitectureGuardTest {
 				+ "|Program enrollment: |Medication dispensed: )\"");
 		List<String> violations = scanForPattern(
 				SRC_ROOT, pattern,
-				"ChartSearchAiConstants.java|TestDatasetHelper.java|ArchitectureGuardTest.java",
+				"ChartSearchAiConstants.java|ChartSearchAiUtils.java|TestDatasetHelper.java|ArchitectureGuardTest.java",
 				"Should use buildPrefixedText() instead of hardcoded prefix strings");
 		assertNoViolations(violations);
 	}
 
 	/**
 	 * No file should reimplement cosine similarity. The canonical
-	 * implementation is in ChartSearchAiConstants.cosineSimilarity().
+	 * implementation is in ChartSearchAiUtils.cosineSimilarity().
 	 * Reimplementations typically contain {@code dot +=} and
 	 * {@code na +=} or {@code normA +=} in the same method.
 	 */
@@ -96,8 +96,8 @@ public class ArchitectureGuardTest {
 				"dot\\s*\\+=\\s*[ab]\\[");
 		List<String> violations = scanForPattern(
 				SRC_ROOT, pattern,
-				"ChartSearchAiConstants.java",
-				"Should use ChartSearchAiConstants.cosineSimilarity() "
+				"ChartSearchAiConstants.java|ChartSearchAiUtils.java",
+				"Should use ChartSearchAiUtils.cosineSimilarity() "
 				+ "instead of reimplementing the formula");
 		assertNoViolations(violations);
 	}

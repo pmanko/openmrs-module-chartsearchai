@@ -32,6 +32,7 @@ import de.kherud.llama.Pair;
 import org.openmrs.api.APIException;
 import org.openmrs.api.context.Context;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -306,7 +307,7 @@ public class LocalLlmEngine implements LlmEngine {
 					"LLM model path not configured. Set the global property: "
 							+ ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH);
 		}
-		String modelPath = ChartSearchAiConstants.resolveModelPath(
+		String modelPath = ChartSearchAiUtils.resolveModelPath(
 				configuredPath.trim(), ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH);
 
 		if (model != null && !modelPath.equals(loadedModelPath)) {

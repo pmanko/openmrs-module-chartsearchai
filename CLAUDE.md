@@ -21,9 +21,9 @@
 
 These methods are the ONLY correct entry points for their respective operations. Do not reimplement their logic inline, call their internal helpers directly, or hardcode their output values.
 
-- **Prefixed text**: Use `ChartSearchAiConstants.buildPrefixedText(resourceType, text)`. Never call `getEmbeddingPrefix()` directly (it is private) or hardcode prefix strings like `"Clinical observation: "`.
+- **Prefixed text**: Use `ChartSearchAiUtils.buildPrefixedText(resourceType, text)`. Never call `getEmbeddingPrefix()` directly (it is private) or hardcode prefix strings like `"Clinical observation: "`.
 - **Query embedding input**: Use `LlmInferenceService.prepareEmbeddingInput(question, queryPrefix)`. Never manually chain `stripQueryStopwords` → `buildEmbeddingQuery` → embed.
 - **Retrieval pipeline**: Use `LlmInferenceService.findSimilar()`. Never reimplement scoring/ranking/filtering by calling `cosineSimilarity`, `computeKeywordScore`, or `extractQueryTerms` in a loop.
 - **Building embeddings**: Use `EmbeddingIndexer.buildEmbeddings()`. Never construct `ChartEmbedding` objects manually with `provider.embed()`.
-- **Cosine similarity**: Use `ChartSearchAiConstants.cosineSimilarity()`. Never reimplement the formula.
+- **Cosine similarity**: Use `ChartSearchAiUtils.cosineSimilarity()`. Never reimplement the formula.
 - **Test datasets**: Use `TestDatasetHelper.FULL_PATIENT_DATASET`, `TestDatasetHelper.SECOND_PATIENT_DATASET`, `TestDatasetHelper.toSerializedRecords()`, `TestDatasetHelper.inferResourceType()`, `TestDatasetHelper.stripDatasetPrefixAndDate()`. Never duplicate these helpers in individual test files.

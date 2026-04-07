@@ -19,6 +19,7 @@ import java.util.Set;
 
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
@@ -91,7 +92,7 @@ public class HybridRetriever {
 				luceneIndexer.search(patient, queryText, windowSize);
 		List<String> bm25Ranked = new ArrayList<String>(bm25Results.size());
 		for (LuceneIndexer.LuceneSearchResult r : bm25Results) {
-			bm25Ranked.add(ChartSearchAiConstants.resourceKey(r.getResourceType(), r.getResourceId()));
+			bm25Ranked.add(ChartSearchAiUtils.resourceKey(r.getResourceType(), r.getResourceId()));
 		}
 
 		// kNN ranked list from embeddings — defer ranking until we know
@@ -121,17 +122,17 @@ public class HybridRetriever {
 			for (int i = 0; i < allEmbeddings.size(); i++) {
 				ChartEmbedding ce = allEmbeddings.get(i);
 				float[] vec = ce.getEmbeddingVector();
-				double sim = ChartSearchAiConstants.cosineSimilarity(
+				double sim = ChartSearchAiUtils.cosineSimilarity(
 						queryVector, vec);
 				sims[i] = sim;
 				allScored.add(new SimilarityResult(
-						ChartSearchAiConstants.resourceKey(ce.getResourceType(), ce.getResourceId()),
+						ChartSearchAiUtils.resourceKey(ce.getResourceType(), ce.getResourceId()),
 						sim, vec));
 			}
 
 			double effectiveMin = ChartSearchAiConstants.KNN_MIN_SIMILARITY;
 			if (allEmbeddings.size() >= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
-				effectiveMin = ChartSearchAiConstants.zScoreFloor(sims,
+				effectiveMin = ChartSearchAiUtils.zScoreFloor(sims,
 						effectiveMin,
 						ChartSearchAiConstants.KNN_FALLBACK_Z_SCORE);
 			}
@@ -171,7 +172,7 @@ public class HybridRetriever {
 				for (int i = 0; i < zScoreSurvivors.size(); i++) {
 					vectors[i] = zScoreSurvivors.get(i).vector;
 				}
-				boolean[] keep = ChartSearchAiConstants
+				boolean[] keep = ChartSearchAiUtils
 						.filterByCoherence(vectors);
 				List<SimilarityResult> coherent =
 						new ArrayList<SimilarityResult>();
@@ -224,8 +225,8 @@ public class HybridRetriever {
 				new ArrayList<Map.Entry<String, Double>>(embeddings.size());
 		for (ChartEmbedding ce : embeddings) {
 			float[] vec = ce.getEmbeddingVector();
-			double sim = ChartSearchAiConstants.cosineSimilarity(queryVector, vec);
-			String key = ChartSearchAiConstants.resourceKey(ce.getResourceType(), ce.getResourceId());
+			double sim = ChartSearchAiUtils.cosineSimilarity(queryVector, vec);
+			String key = ChartSearchAiUtils.resourceKey(ce.getResourceType(), ce.getResourceId());
 			scored.add(new java.util.AbstractMap.SimpleEntry<String, Double>(key, sim));
 		}
 

@@ -20,6 +20,7 @@ import ai.onnxruntime.OrtSession;
 
 import org.openmrs.api.context.Context;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.embedding.WordPieceTokenizer.TokenizedInput;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -193,7 +194,7 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 						"Embedding model path not configured. Set the global property: "
 								+ ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
 			}
-			modelPath = ChartSearchAiConstants.resolveModelPath(
+			modelPath = ChartSearchAiUtils.resolveModelPath(
 					configuredPath.trim(), ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH);
 		}
 
@@ -226,7 +227,7 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 							"Embedding vocabulary path not configured. Set the global property: "
 									+ ChartSearchAiConstants.GP_EMBEDDING_VOCAB_FILE_PATH);
 				}
-				vocabPath = ChartSearchAiConstants.resolveModelPath(
+				vocabPath = ChartSearchAiUtils.resolveModelPath(
 						configuredPath.trim(), ChartSearchAiConstants.GP_EMBEDDING_VOCAB_FILE_PATH);
 			}
 			int maxSeqLen = explicitMaxSeqLen > 0

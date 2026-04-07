@@ -21,49 +21,49 @@ import org.junit.jupiter.api.Test;
 import org.openmrs.test.jupiter.BaseModuleContextSensitiveTest;
 import org.openmrs.util.OpenmrsUtil;
 
-public class ChartSearchAiConstantsTest extends BaseModuleContextSensitiveTest {
+public class ChartSearchAiUtilsTest extends BaseModuleContextSensitiveTest {
 
 	private static final String GP_NAME = "chartsearchai.test.modelPath";
 
 	@Test
 	public void resolveModelPath_shouldRejectPathContainingDotDot() {
 		assertThrows(IllegalStateException.class,
-				() -> ChartSearchAiConstants.resolveModelPath("../etc/passwd", GP_NAME));
+				() -> ChartSearchAiUtils.resolveModelPath("../etc/passwd", GP_NAME));
 	}
 
 	@Test
 	public void resolveModelPath_shouldRejectAbsolutePath() {
 		assertThrows(IllegalStateException.class,
-				() -> ChartSearchAiConstants.resolveModelPath("/etc/passwd", GP_NAME));
+				() -> ChartSearchAiUtils.resolveModelPath("/etc/passwd", GP_NAME));
 	}
 
 	@Test
 	public void resolveModelPath_shouldRejectPathThatEscapesDataDirectory() {
 		assertThrows(IllegalStateException.class,
-				() -> ChartSearchAiConstants.resolveModelPath("subdir/../../outside", GP_NAME));
+				() -> ChartSearchAiUtils.resolveModelPath("subdir/../../outside", GP_NAME));
 	}
 
 	@Test
 	public void resolveModelPath_shouldThrowWhenFileDoesNotExist() {
 		assertThrows(IllegalStateException.class,
-				() -> ChartSearchAiConstants.resolveModelPath("chartsearchai/nonexistent-model.gguf", GP_NAME));
+				() -> ChartSearchAiUtils.resolveModelPath("chartsearchai/nonexistent-model.gguf", GP_NAME));
 	}
 
 	@Test
 	public void usesLuceneIndex_shouldReturnTrueForLuceneAndHybrid() {
-		assertTrue(ChartSearchAiConstants.usesLuceneIndex("lucene"));
-		assertTrue(ChartSearchAiConstants.usesLuceneIndex("LUCENE"));
-		assertTrue(ChartSearchAiConstants.usesLuceneIndex("hybrid"));
-		assertTrue(ChartSearchAiConstants.usesLuceneIndex("HYBRID"));
-		assertTrue(ChartSearchAiConstants.usesLuceneIndex("  hybrid  "));
+		assertTrue(ChartSearchAiUtils.usesLuceneIndex("lucene"));
+		assertTrue(ChartSearchAiUtils.usesLuceneIndex("LUCENE"));
+		assertTrue(ChartSearchAiUtils.usesLuceneIndex("hybrid"));
+		assertTrue(ChartSearchAiUtils.usesLuceneIndex("HYBRID"));
+		assertTrue(ChartSearchAiUtils.usesLuceneIndex("  hybrid  "));
 	}
 
 	@Test
 	public void usesLuceneIndex_shouldReturnFalseForOtherPipelines() {
-		assertFalse(ChartSearchAiConstants.usesLuceneIndex("embedding"));
-		assertFalse(ChartSearchAiConstants.usesLuceneIndex("elasticsearch"));
-		assertFalse(ChartSearchAiConstants.usesLuceneIndex(""));
-		assertFalse(ChartSearchAiConstants.usesLuceneIndex(null));
+		assertFalse(ChartSearchAiUtils.usesLuceneIndex("embedding"));
+		assertFalse(ChartSearchAiUtils.usesLuceneIndex("elasticsearch"));
+		assertFalse(ChartSearchAiUtils.usesLuceneIndex(""));
+		assertFalse(ChartSearchAiUtils.usesLuceneIndex(null));
 	}
 
 	@Test
@@ -75,7 +75,7 @@ public class ChartSearchAiConstantsTest extends BaseModuleContextSensitiveTest {
 		try {
 			assertTrue(tempFile.createNewFile(), "Temp file should be created");
 
-			String resolved = ChartSearchAiConstants.resolveModelPath("chartsearchai/test-model.gguf", GP_NAME);
+			String resolved = ChartSearchAiUtils.resolveModelPath("chartsearchai/test-model.gguf", GP_NAME);
 
 			assertNotNull(resolved);
 			assertTrue(resolved.endsWith("chartsearchai" + File.separator + "test-model.gguf"));

@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.openmrs.Patient;
 import org.openmrs.api.context.Context;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.ChartAnswer;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
 import org.openmrs.module.chartsearchai.api.EmbeddingIndexer;
@@ -212,10 +213,10 @@ public class EndToEndSearchTest extends BaseModuleContextSensitiveTest {
 		try {
 			float[] query = provider.embed("how do the vitals look like");
 			String spo2Text = "Finding — Arterial blood oxygen saturation (pulse oximeter): 96.6 %";
-			float[] spo2 = provider.embed(ChartSearchAiConstants.buildPrefixedText(
+			float[] spo2 = provider.embed(ChartSearchAiUtils.buildPrefixedText(
 					ChartSearchAiConstants.RESOURCE_TYPE_OBS, spo2Text));
 			String conditionText = "Condition: Nonparalytic stroke. Status: ACTIVE";
-			float[] condition = provider.embed(ChartSearchAiConstants.buildPrefixedText(
+			float[] condition = provider.embed(ChartSearchAiUtils.buildPrefixedText(
 					ChartSearchAiConstants.RESOURCE_TYPE_CONDITION, conditionText));
 
 			double vitalsScore = cos(query, spo2);
@@ -248,7 +249,7 @@ public class EndToEndSearchTest extends BaseModuleContextSensitiveTest {
 	}
 
 	private static double cos(float[] a, float[] b) {
-		return ChartSearchAiConstants.cosineSimilarity(a, b);
+		return ChartSearchAiUtils.cosineSimilarity(a, b);
 	}
 
 	/**
@@ -340,7 +341,7 @@ public class EndToEndSearchTest extends BaseModuleContextSensitiveTest {
 
 				// Stored vectors should be identical to fresh embeddings
 				ChartEmbedding sample = stored.get(0);
-				String sampleText = ChartSearchAiConstants.buildPrefixedText(
+				String sampleText = ChartSearchAiUtils.buildPrefixedText(
 						sample.getResourceType(), sample.getTextContent());
 				float[] fresh = provider.embed(sampleText);
 				double roundTripCos = cos(fresh, sample.getEmbeddingVector());

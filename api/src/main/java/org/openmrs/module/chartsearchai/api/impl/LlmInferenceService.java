@@ -32,6 +32,7 @@ import java.util.regex.Pattern;
 
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.api.EmbeddingIndexer;
 import org.openmrs.module.chartsearchai.api.ElasticsearchIndexer;
@@ -293,7 +294,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 		Set<String> relevantKeys = new HashSet<String>();
 		for (ChartEmbedding ce : similar) {
-			relevantKeys.add(ChartSearchAiConstants.resourceKey(ce.getResourceType(), ce.getResourceId()));
+			relevantKeys.add(ChartSearchAiUtils.resourceKey(ce.getResourceType(), ce.getResourceId()));
 		}
 
 		log.debug("findSimilar returned {} records for query '{}' patient [id={}]: {}",
@@ -331,7 +332,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 		Set<String> relevantKeys = new HashSet<String>();
 		for (LuceneIndexer.LuceneSearchResult result : results) {
-			relevantKeys.add(ChartSearchAiConstants.resourceKey(result.getResourceType(), result.getResourceId()));
+			relevantKeys.add(ChartSearchAiUtils.resourceKey(result.getResourceType(), result.getResourceId()));
 		}
 
 		log.debug("Lucene returned {} results for query '{}'",
@@ -397,7 +398,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 		Set<String> relevantKeys = new HashSet<String>();
 		for (ElasticsearchIndexer.ElasticsearchSearchResult result : filtered) {
-			relevantKeys.add(ChartSearchAiConstants.resourceKey(result.getResourceType(), result.getResourceId()));
+			relevantKeys.add(ChartSearchAiUtils.resourceKey(result.getResourceType(), result.getResourceId()));
 		}
 
 		log.debug("Elasticsearch returned {} results ({} after filter pipeline) for query '{}': {}",
@@ -439,7 +440,7 @@ public class LlmInferenceService implements ChartSearchService {
 		ChartEmbedding[] embeddings = new ChartEmbedding[valid.size()];
 		for (int i = 0; i < valid.size(); i++) {
 			ElasticsearchIndexer.ElasticsearchSearchResult r = valid.get(i);
-			semanticScores[i] = ChartSearchAiConstants.cosineSimilarity(
+			semanticScores[i] = ChartSearchAiUtils.cosineSimilarity(
 					queryVector, r.getEmbedding());
 			keywordScores[i] = r.getText() != null
 					? computeKeywordScore(queryTerms, r.getText()) : 0;
@@ -457,13 +458,13 @@ public class LlmInferenceService implements ChartSearchService {
 
 		Set<String> survivorKeys = new HashSet<String>();
 		for (ChartEmbedding ce : filtered) {
-			survivorKeys.add(ChartSearchAiConstants.resourceKey(ce.getResourceType(), ce.getResourceId()));
+			survivorKeys.add(ChartSearchAiUtils.resourceKey(ce.getResourceType(), ce.getResourceId()));
 		}
 
 		List<ElasticsearchIndexer.ElasticsearchSearchResult> out =
 				new ArrayList<ElasticsearchIndexer.ElasticsearchSearchResult>();
 		for (ElasticsearchIndexer.ElasticsearchSearchResult r : results) {
-			if (survivorKeys.contains(ChartSearchAiConstants.resourceKey(r.getResourceType(), r.getResourceId()))) {
+			if (survivorKeys.contains(ChartSearchAiUtils.resourceKey(r.getResourceType(), r.getResourceId()))) {
 				out.add(r);
 			}
 		}
@@ -513,7 +514,7 @@ public class LlmInferenceService implements ChartSearchService {
 		List<SerializedRecord> allRecords = recordLoader.loadAll(patient);
 		List<SerializedRecord> filtered = new ArrayList<SerializedRecord>();
 		for (SerializedRecord record : allRecords) {
-			if (relevantKeys.contains(ChartSearchAiConstants.resourceKey(record.getResourceType(), record.getResourceId()))) {
+			if (relevantKeys.contains(ChartSearchAiUtils.resourceKey(record.getResourceType(), record.getResourceId()))) {
 				filtered.add(record);
 			}
 		}
@@ -752,7 +753,7 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 			embeddings[validCount] = ce;
 			semanticScores[validCount] = cosineSimilarity(queryVector, vector);
-			String keywordText = ChartSearchAiConstants.buildPrefixedText(
+			String keywordText = ChartSearchAiUtils.buildPrefixedText(
 					ce.getResourceType(), ce.getTextContent());
 			keywordScores[validCount] = computeKeywordScore(queryTerms, keywordText);
 			validCount++;
@@ -1424,7 +1425,7 @@ public class LlmInferenceService implements ChartSearchService {
 		Set<String> coveredTerms = new HashSet<String>();
 		for (ScoredEmbedding se : candidates) {
 			if (se.keywordScore >= kwMax - 0.01) {
-				String text = ChartSearchAiConstants.buildPrefixedText(
+				String text = ChartSearchAiUtils.buildPrefixedText(
 						se.embedding.getResourceType(),
 						se.embedding.getTextContent());
 				String lower = text.toLowerCase();
@@ -1444,7 +1445,7 @@ public class LlmInferenceService implements ChartSearchService {
 			if (se.keywordScore >= kwMax - 0.01) {
 				filtered.add(se);
 			} else {
-				String text = ChartSearchAiConstants.buildPrefixedText(
+				String text = ChartSearchAiUtils.buildPrefixedText(
 						se.embedding.getResourceType(),
 						se.embedding.getTextContent());
 				String lower = text.toLowerCase();
@@ -1691,7 +1692,7 @@ public class LlmInferenceService implements ChartSearchService {
 	 * @return cosine similarity in [-1, 1], or 0 if either vector is empty
 	 */
 	static double cosineSimilarity(float[] a, float[] b) {
-		return ChartSearchAiConstants.cosineSimilarity(a, b);
+		return ChartSearchAiUtils.cosineSimilarity(a, b);
 	}
 
 	/**
@@ -1847,7 +1848,7 @@ public class LlmInferenceService implements ChartSearchService {
 			vectors[i] = candidates.get(i).embedding.getEmbeddingVector();
 		}
 
-		boolean[] keep = ChartSearchAiConstants.filterByCoherence(vectors);
+		boolean[] keep = ChartSearchAiUtils.filterByCoherence(vectors);
 
 		int keepCount = 0;
 		for (boolean k : keep) {

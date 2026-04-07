@@ -118,7 +118,7 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 		}
 
 		try {
-			String resolvedPath = ChartSearchAiConstants.resolveModelPath(
+			String resolvedPath = ChartSearchAiUtils.resolveModelPath(
 					configuredPath.trim(), globalProperty);
 			File modelFile = new File(resolvedPath);
 			if (!modelFile.canRead()) {
