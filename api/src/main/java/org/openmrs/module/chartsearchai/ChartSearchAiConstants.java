@@ -64,8 +64,8 @@ public class ChartSearchAiConstants {
 	 * top semantic score when fewer than {@link #ADAPTIVE_MIN_RECORDS}
 	 * records match any query keyword. Without keyword corroboration, the
 	 * top semantic score must be a statistical outlier — not just part of
-	 * the noise floor. A z-score of 2.5 means the best match is in the
-	 * top ~0.6% of the score distribution, indicating genuine semantic
+	 * the noise floor. A z-score of 1.5 means the best match is in the
+	 * top ~6.7% of the score distribution, indicating genuine semantic
 	 * affinity rather than the embedding model grouping similar record
 	 * types together (e.g. all pulse records scoring ~0.26 for "CD4
 	 * count"). This threshold automatically adapts to any embedding
@@ -259,26 +259,19 @@ public class ChartSearchAiConstants {
 			return keep;
 		}
 
-		// Compute pairwise cosine similarities
-		double[][] pairSim = new double[n][n];
+		// Compute average coherence per vector without allocating O(n²)
+		// matrix — accumulate pairwise sums directly into per-vector totals.
+		double[] coherence = new double[n];
+		double[] pairSum = new double[n];
 		for (int i = 0; i < n; i++) {
 			for (int j = i + 1; j < n; j++) {
 				double sim = cosineSimilarity(vectors[i], vectors[j]);
-				pairSim[i][j] = sim;
-				pairSim[j][i] = sim;
+				pairSum[i] += sim;
+				pairSum[j] += sim;
 			}
 		}
-
-		// Average coherence per vector
-		double[] coherence = new double[n];
 		for (int i = 0; i < n; i++) {
-			double s = 0;
-			for (int j = 0; j < n; j++) {
-				if (j != i) {
-					s += pairSim[i][j];
-				}
-			}
-			coherence[i] = s / (n - 1);
+			coherence[i] = pairSum[i] / (n - 1);
 		}
 
 		// Sort by coherence descending
@@ -405,6 +398,19 @@ public class ChartSearchAiConstants {
 	public static final String RESOURCE_TYPE_PROGRAM = "program";
 
 	public static final String RESOURCE_TYPE_MEDICATION_DISPENSE = "medication_dispense";
+
+	/**
+	 * Builds a composite key from a resource type and resource ID.
+	 * This is the single canonical format for resource keys used across
+	 * retrieval pipelines, filter methods, and result sets.
+	 *
+	 * @param resourceType the resource type constant
+	 * @param resourceId the resource ID
+	 * @return a key in the format "resourceType:resourceId"
+	 */
+	public static String resourceKey(String resourceType, int resourceId) {
+		return resourceType + ":" + resourceId;
+	}
 
 	/**
 	 * Returns a semantic prefix for the given resource type and text, used when computing

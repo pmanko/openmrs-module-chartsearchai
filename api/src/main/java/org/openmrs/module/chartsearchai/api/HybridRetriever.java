@@ -91,22 +91,17 @@ public class HybridRetriever {
 				luceneIndexer.search(patient, queryText, windowSize);
 		List<String> bm25Ranked = new ArrayList<String>(bm25Results.size());
 		for (LuceneIndexer.LuceneSearchResult r : bm25Results) {
-			bm25Ranked.add(r.getResourceType() + ":" + r.getResourceId());
+			bm25Ranked.add(ChartSearchAiConstants.resourceKey(r.getResourceType(), r.getResourceId()));
 		}
 
-		// kNN ranked list from embeddings
+		// kNN ranked list from embeddings — defer ranking until we know
+		// whether BM25 returned results, to avoid wasted cosine similarity
+		// computations when the kNN fallback path recomputes them anyway.
 		List<ChartEmbedding> allEmbeddings = dao.getByPatient(patient);
-		List<String> knnRanked;
 		float[] queryVector = null;
-		if (allEmbeddings == null || allEmbeddings.isEmpty()) {
-			knnRanked = new ArrayList<String>();
-		} else {
+		if (allEmbeddings != null && !allEmbeddings.isEmpty()) {
 			queryVector = embeddingProvider.embed(queryPrefix + queryText);
-			knnRanked = rankByCosineSimilarity(allEmbeddings, queryVector, windowSize);
 		}
-
-		log.debug("Hybrid: BM25 returned {} results, kNN returned {} results for query '{}'",
-				bm25Ranked.size(), knnRanked.size(), queryText);
 
 		if (bm25Ranked.isEmpty()) {
 			// No keyword matches — fall back to kNN results that pass a
@@ -130,7 +125,7 @@ public class HybridRetriever {
 						queryVector, vec);
 				sims[i] = sim;
 				allScored.add(new SimilarityResult(
-						ce.getResourceType() + ":" + ce.getResourceId(),
+						ChartSearchAiConstants.resourceKey(ce.getResourceType(), ce.getResourceId()),
 						sim, vec));
 			}
 
@@ -202,6 +197,16 @@ public class HybridRetriever {
 			return new LinkedHashSet<String>(filtered);
 		}
 
+		List<String> knnRanked;
+		if (queryVector == null || allEmbeddings == null || allEmbeddings.isEmpty()) {
+			knnRanked = new ArrayList<String>();
+		} else {
+			knnRanked = rankByCosineSimilarity(allEmbeddings, queryVector, windowSize);
+		}
+
+		log.debug("Hybrid: BM25 returned {} results, kNN returned {} results for query '{}'",
+				bm25Ranked.size(), knnRanked.size(), queryText);
+
 		List<String> fused = fuseRRF(bm25Ranked, knnRanked,
 				ChartSearchAiConstants.RRF_RANK_CONSTANT, maxResults);
 
@@ -220,7 +225,7 @@ public class HybridRetriever {
 		for (ChartEmbedding ce : embeddings) {
 			float[] vec = ce.getEmbeddingVector();
 			double sim = ChartSearchAiConstants.cosineSimilarity(queryVector, vec);
-			String key = ce.getResourceType() + ":" + ce.getResourceId();
+			String key = ChartSearchAiConstants.resourceKey(ce.getResourceType(), ce.getResourceId());
 			scored.add(new java.util.AbstractMap.SimpleEntry<String, Double>(key, sim));
 		}
 
@@ -240,29 +245,6 @@ public class HybridRetriever {
 	}
 
 	/**
-	 * Ranks embeddings by cosine similarity and returns only those above
-	 * the minimum threshold. Used as a fallback when BM25 returns no
-	 * keyword matches — allows purely semantic discovery (e.g. "any cancer?"
-	 * finding "Kaposi sarcoma") while filtering out irrelevant noise.
-	 *
-	 * @param embeddings all embeddings for the patient
-	 * @param queryVector the embedded query vector
-	 * @param minSimilarity minimum cosine similarity to include
-	 * @param maxResults maximum number of results to return
-	 * @return resource keys above the threshold, sorted by similarity descending
-	 */
-	public static List<String> filterByMinSimilarity(List<ChartEmbedding> embeddings,
-			float[] queryVector, double minSimilarity, int maxResults) {
-		List<SimilarityResult> results = filterByMinSimilarityWithVectors(
-				embeddings, queryVector, minSimilarity, maxResults);
-		List<String> keys = new ArrayList<String>(results.size());
-		for (SimilarityResult sr : results) {
-			keys.add(sr.key);
-		}
-		return keys;
-	}
-
-	/**
 	 * Holds a similarity result with its key, similarity, and embedding
 	 * vector for coherence filtering.
 	 */
@@ -276,36 +258,6 @@ public class HybridRetriever {
 			this.similarity = similarity;
 			this.vector = vector;
 		}
-	}
-
-	/**
-	 * Like {@link #filterByMinSimilarity} but also returns the embedding
-	 * vector for each survivor, needed for coherence filtering.
-	 */
-	static List<SimilarityResult> filterByMinSimilarityWithVectors(
-			List<ChartEmbedding> embeddings, float[] queryVector,
-			double minSimilarity, int maxResults) {
-		List<SimilarityResult> scored = new ArrayList<SimilarityResult>();
-		for (ChartEmbedding ce : embeddings) {
-			float[] vec = ce.getEmbeddingVector();
-			double sim = ChartSearchAiConstants.cosineSimilarity(queryVector, vec);
-			if (sim >= minSimilarity) {
-				String key = ce.getResourceType() + ":" + ce.getResourceId();
-				scored.add(new SimilarityResult(key, sim, vec));
-			}
-		}
-
-		scored.sort(new Comparator<SimilarityResult>() {
-			@Override
-			public int compare(SimilarityResult a, SimilarityResult b) {
-				return Double.compare(b.similarity, a.similarity);
-			}
-		});
-
-		if (scored.size() > maxResults) {
-			return scored.subList(0, maxResults);
-		}
-		return scored;
 	}
 
 	/**

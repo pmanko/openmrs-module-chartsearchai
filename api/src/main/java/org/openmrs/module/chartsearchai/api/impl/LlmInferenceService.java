@@ -293,7 +293,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 		Set<String> relevantKeys = new HashSet<String>();
 		for (ChartEmbedding ce : similar) {
-			relevantKeys.add(ce.getResourceType() + ":" + ce.getResourceId());
+			relevantKeys.add(ChartSearchAiConstants.resourceKey(ce.getResourceType(), ce.getResourceId()));
 		}
 
 		log.debug("findSimilar returned {} records for query '{}' patient [id={}]: {}",
@@ -331,7 +331,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 		Set<String> relevantKeys = new HashSet<String>();
 		for (LuceneIndexer.LuceneSearchResult result : results) {
-			relevantKeys.add(result.getResourceType() + ":" + result.getResourceId());
+			relevantKeys.add(ChartSearchAiConstants.resourceKey(result.getResourceType(), result.getResourceId()));
 		}
 
 		log.debug("Lucene returned {} results for query '{}'",
@@ -387,7 +387,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// pipeline to remove noise — RRF always returns up to maxResults
 		// from the kNN side even when most are irrelevant.
 		List<ElasticsearchIndexer.ElasticsearchSearchResult> filtered =
-				filterEsResults(results, queryVector, question);
+				filterEsResults(results, queryVector, normalizedQuery);
 
 		if (filtered.isEmpty()) {
 			log.debug("Elasticsearch: all {} results filtered out for query '{}'",
@@ -397,7 +397,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 		Set<String> relevantKeys = new HashSet<String>();
 		for (ElasticsearchIndexer.ElasticsearchSearchResult result : filtered) {
-			relevantKeys.add(result.getResourceType() + ":" + result.getResourceId());
+			relevantKeys.add(ChartSearchAiConstants.resourceKey(result.getResourceType(), result.getResourceId()));
 		}
 
 		log.debug("Elasticsearch returned {} results ({} after filter pipeline) for query '{}': {}",
@@ -411,11 +411,15 @@ public class LlmInferenceService implements ChartSearchService {
 	 * detection pipeline used by the embedding retrieval path. Computes
 	 * cosine similarity and keyword scores from the returned embedding
 	 * vectors and text, then applies filterPipeline() to remove noise.
+	 *
+	 * @param results the raw ES search results
+	 * @param queryVector the embedded query vector
+	 * @param normalizedQuery the query after stopword removal (pre-computed
+	 *        by the caller to avoid redundant processing)
 	 */
 	static List<ElasticsearchIndexer.ElasticsearchSearchResult> filterEsResults(
 			List<ElasticsearchIndexer.ElasticsearchSearchResult> results,
-			float[] queryVector, String question) {
-		String normalizedQuery = stripQueryStopwords(question);
+			float[] queryVector, String normalizedQuery) {
 		String[] queryTerms = extractQueryTerms(normalizedQuery);
 
 		// Build parallel arrays for filterPipeline
@@ -453,13 +457,13 @@ public class LlmInferenceService implements ChartSearchService {
 
 		Set<String> survivorKeys = new HashSet<String>();
 		for (ChartEmbedding ce : filtered) {
-			survivorKeys.add(ce.getResourceType() + ":" + ce.getResourceId());
+			survivorKeys.add(ChartSearchAiConstants.resourceKey(ce.getResourceType(), ce.getResourceId()));
 		}
 
 		List<ElasticsearchIndexer.ElasticsearchSearchResult> out =
 				new ArrayList<ElasticsearchIndexer.ElasticsearchSearchResult>();
 		for (ElasticsearchIndexer.ElasticsearchSearchResult r : results) {
-			if (survivorKeys.contains(r.getResourceType() + ":" + r.getResourceId())) {
+			if (survivorKeys.contains(ChartSearchAiConstants.resourceKey(r.getResourceType(), r.getResourceId()))) {
 				out.add(r);
 			}
 		}
@@ -509,7 +513,7 @@ public class LlmInferenceService implements ChartSearchService {
 		List<SerializedRecord> allRecords = recordLoader.loadAll(patient);
 		List<SerializedRecord> filtered = new ArrayList<SerializedRecord>();
 		for (SerializedRecord record : allRecords) {
-			if (relevantKeys.contains(record.getResourceType() + ":" + record.getResourceId())) {
+			if (relevantKeys.contains(ChartSearchAiConstants.resourceKey(record.getResourceType(), record.getResourceId()))) {
 				filtered.add(record);
 			}
 		}
@@ -1833,133 +1837,31 @@ public class LlmInferenceService implements ChartSearchService {
 	static List<ScoredEmbedding> filterByCoherence(List<ScoredEmbedding> candidates) {
 		int n = candidates.size();
 
-		// Cache embedding vectors to avoid redundant byte[] → float[]
-		// decoding in the O(n²) pairwise loop.
+		// Extract embedding vectors for the shared coherence filter
 		float[][] vectors = new float[n][];
-		boolean allValid = true;
 		for (int i = 0; i < n; i++) {
 			byte[] raw = candidates.get(i).embedding.getEmbedding();
 			if (raw == null || raw.length == 0) {
-				allValid = false;
-				break;
+				return candidates;
 			}
 			vectors[i] = candidates.get(i).embedding.getEmbeddingVector();
 		}
-		if (!allValid) {
-			return candidates;
+
+		boolean[] keep = ChartSearchAiConstants.filterByCoherence(vectors);
+
+		int keepCount = 0;
+		for (boolean k : keep) {
+			if (k) keepCount++;
 		}
-
-		// Compute pairwise cosine similarities between candidate embeddings
-		double[][] pairSim = new double[n][n];
-		for (int i = 0; i < n; i++) {
-			for (int j = i + 1; j < n; j++) {
-				double sim = cosineSimilarity(vectors[i], vectors[j]);
-				pairSim[i][j] = sim;
-				pairSim[j][i] = sim;
-			}
-		}
-
-		// Compute coherence: average similarity to all other candidates
-		double[] coherence = new double[n];
-		for (int i = 0; i < n; i++) {
-			double sum = 0;
-			for (int j = 0; j < n; j++) {
-				if (j != i) {
-					sum += pairSim[i][j];
-				}
-			}
-			coherence[i] = sum / (n - 1);
-		}
-
-		// Build index array sorted by coherence descending
-		Integer[] sortedIdx = new Integer[n];
-		for (int i = 0; i < n; i++) {
-			sortedIdx[i] = i;
-		}
-		Arrays.sort(sortedIdx, new Comparator<Integer>() {
-
-			@Override
-			public int compare(Integer a, Integer b) {
-				return Double.compare(coherence[b], coherence[a]);
-			}
-		});
-
-		// Gap detection on coherence scores: find where coherence drops
-		// sharply. Uses adaptive minGap proportional to max coherence so
-		// the threshold scales with the actual inter-candidate similarity
-		// range. The multiplier (2.0) is moderate — we only remove clear
-		// outliers, not borderline records.
-		double maxCoherence = coherence[sortedIdx[0]];
-		double minCoherence = coherence[sortedIdx[n - 1]];
-		double coherenceRange = maxCoherence - minCoherence;
-		int refPairs = ChartSearchAiConstants.COHERENCE_REFERENCE_N - 1;
-		double scaleFactor = Math.max(1.0,
-				Math.sqrt((double) refPairs / (n - 1)));
-		// For small candidate sets (n ≤ COHERENCE_REFERENCE_N), coherence
-		// values compress into a narrow band (especially with production-
-		// format embeddings that omit dates). Range-based minGap adapts to
-		// the actual spread, allowing the detector to find gaps that are
-		// small in absolute terms but significant relative to the
-		// distribution. For larger sets, the distribution is stable and
-		// max-based minGap prevents over-cutting homogeneous groups
-		// (e.g. 40 vitals records with a modest intra-type gap).
-		double base = n <= ChartSearchAiConstants.COHERENCE_REFERENCE_N
-				? coherenceRange : maxCoherence;
-		double coherenceMinGap = base
-				* ChartSearchAiConstants.COHERENCE_ADAPTIVE_GAP_RATIO
-				* scaleFactor;
-
-		int keepCount = n;
-		double gapSum = 0;
-		for (int i = 1; i < n; i++) {
-			double gap = coherence[sortedIdx[i - 1]] - coherence[sortedIdx[i]];
-			if (i >= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS && i >= 2) {
-				double avgGap = gapSum / (i - 1);
-				if (gap > avgGap * ChartSearchAiConstants.COHERENCE_GAP_MULTIPLIER
-						&& gap > coherenceMinGap) {
-					keepCount = i;
-					log.debug(
-							"Coherence gap at position {}: gap={}, avgGap={}, "
-									+ "removed={} outlier(s)",
-							i, String.format("%.4f", gap),
-							String.format("%.4f", avgGap), n - i);
-					break;
-				}
-			}
-			gapSum += gap;
-		}
-
 		if (keepCount == n) {
 			return candidates;
 		}
 
-		// Absolute coherence floor: if the highest-coherence candidate being
-		// removed still has high absolute coherence with the group, it belongs
-		// to the same topic and should not be removed. This prevents duplicate
-		// embeddings (identical text → cosine 1.0) from inflating the coherence
-		// range and making a same-topic record look like an outlier (e.g.
-		// "Diagnosis: Anemia" vs two identical "Assessment: Anemia" records).
-		// Threshold of 0.70 was determined empirically: same-topic candidates
-		// removed incorrectly have coherence ~0.91+, while true cross-topic
-		// outliers have coherence ~0.49-.
-		double highestRemovedCoherence = coherence[sortedIdx[keepCount]];
-		if (highestRemovedCoherence >= ChartSearchAiConstants.COHERENCE_SAME_TOPIC_FLOOR) {
-			log.debug("Coherence cut suppressed: removed candidate coherence {}"
-					+ " >= same-topic floor {} — not a true outlier",
-					String.format("%.4f", highestRemovedCoherence),
-					ChartSearchAiConstants.COHERENCE_SAME_TOPIC_FLOOR);
-			return candidates;
-		}
+		log.debug("Coherence filter removed {} outlier(s)", n - keepCount);
 
-		// Build the set of indices to keep, then filter preserving
-		// the original combined-score order
-		Set<Integer> keepSet = new HashSet<Integer>();
-		for (int i = 0; i < keepCount; i++) {
-			keepSet.add(sortedIdx[i]);
-		}
 		List<ScoredEmbedding> filtered = new ArrayList<ScoredEmbedding>();
 		for (int i = 0; i < n; i++) {
-			if (keepSet.contains(i)) {
+			if (keep[i]) {
 				filtered.add(candidates.get(i));
 			}
 		}

@@ -215,8 +215,9 @@ public class ElasticsearchKnnFallbackTest {
 			String question, int topK) {
 		float[] queryVector = embedQuery(question);
 		List<ElasticsearchSearchResult> results = search(question, topK);
+		String normalizedQuery = LlmInferenceService.stripQueryStopwords(question);
 		return LlmInferenceService.filterEsResults(
-				results, queryVector, question);
+				results, queryVector, normalizedQuery);
 	}
 
 	private static List<Integer> sortedIds(List<ElasticsearchSearchResult> results) {
