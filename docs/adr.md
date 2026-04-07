@@ -204,7 +204,7 @@ The module applies the CQRS (Command Query Responsibility Segregation) principle
 
 - **Embedding store** (`chartsearchai_embedding` table) — pre-serialized text and embedding vectors for cosine similarity search
 - **Lucene store** (on-disk index) — BM25 full-text index with English stemming, using the same serialized text
-- **Elasticsearch store** (external cluster) — combines BM25 text search with kNN dense vector search via Reciprocal Rank Fusion
+- **Elasticsearch store** (external service) — combines BM25 text search with kNN dense vector search via Reciprocal Rank Fusion
 
 Only one query store is active at a time, selected via the `chartsearchai.retrieval.pipeline` global property. AOP advice hooks (`PatientDataIndexingAdvice`, `ObsIndexingAdvice`, `EncounterIndexingAdvice`) on clinical services act as the event bridge, triggering projection rebuilds in the active query store to keep it eventually consistent with the transactional source. The module never writes to OpenMRS clinical tables.
 
@@ -892,11 +892,11 @@ Add an Elasticsearch hybrid search pipeline as a third retrieval option (`charts
 
 4. **Graceful fallback** — if Elasticsearch is not available (not configured or unreachable), the pipeline falls back to the embedding pipeline at query time. This makes it safe to set `pipeline=elasticsearch` even in environments where ES may be temporarily unavailable.
 
-5. **Connection from runtime properties** — reads `hibernate.search.backend.uris` from `Context.getRuntimeProperties()` to find the ES cluster. No additional configuration beyond what OpenMRS already provides for Hibernate Search.
+5. **Connection from runtime properties** — reads `hibernate.search.backend.uris` from `Context.getRuntimeProperties()` to find the ES instance. No additional configuration beyond what OpenMRS already provides for Hibernate Search.
 
 **Why RRF over a weighted linear combination?** RRF is rank-based, not score-based. It doesn't require normalizing BM25 scores (which are unbounded) against cosine similarity scores (which range 0–1). This avoids the calibration problem that made the embedding pipeline's `keywordWeight` parameter sensitive to tune.
 
-**Why not replace the embedding pipeline?** The embedding pipeline works without any external services — it runs entirely in-process with the ONNX model. The Elasticsearch pipeline requires a running ES cluster, which not all OpenMRS deployments have. The embedding pipeline remains the default for self-contained deployments.
+**Why not replace the embedding pipeline?** The embedding pipeline works without any external services — it runs entirely in-process with the ONNX model. The Elasticsearch pipeline requires a running Elasticsearch instance, which not all OpenMRS deployments have. The embedding pipeline remains the default for self-contained deployments.
 
 **Why `provided` scope for the ES REST client?** The `elasticsearch-rest-client` JAR is already on the classpath via `hibernate-search-backend-elasticsearch`. Using `provided` scope avoids bundling a duplicate in the `.omod` and prevents version conflicts.
 
@@ -904,7 +904,7 @@ Add an Elasticsearch hybrid search pipeline as a third retrieval option (`charts
 
 ### Context
 
-Each existing retrieval pipeline has a blind spot. The Lucene pipeline (Decision 13) provides fast keyword search with no external dependencies, but misses semantic matches — "any cancer?" returns nothing when the patient has Kaposi sarcoma records because no record contains the literal word "cancer." The embedding pipeline (Decision 3) captures these semantic relationships, but misses exact keyword matches — a search for a specific drug name may rank semantically similar but wrong medications higher than an exact match. The Elasticsearch pipeline (Decision 14) solves both problems with hybrid RRF search, but requires a running ES 8.14+ cluster — a dependency that many OpenMRS deployments do not have, especially in low-resource settings where the platform runs with only MySQL.
+Each existing retrieval pipeline has a blind spot. The Lucene pipeline (Decision 13) provides fast keyword search with no external dependencies, but misses semantic matches — "any cancer?" returns nothing when the patient has Kaposi sarcoma records because no record contains the literal word "cancer." The embedding pipeline (Decision 3) captures these semantic relationships, but misses exact keyword matches — a search for a specific drug name may rank semantically similar but wrong medications higher than an exact match. The Elasticsearch pipeline (Decision 14) solves both problems with hybrid RRF search, but requires a running Elasticsearch 8.14+ instance — a dependency that many OpenMRS deployments do not have, especially in low-resource settings where the platform runs with only MySQL.
 
 This left deployments without Elasticsearch forced to choose between keyword-only or semantic-only retrieval, each with known failure modes that the other would catch.
 
@@ -923,7 +923,7 @@ Add an in-process hybrid retrieval pipeline (`chartsearchai.retrieval.pipeline=h
 
 4. **Same retrieval interface** — the pipeline returns a `Set<String>` of resource keys (`type:id`), the same format as all other pipelines. The downstream LLM inference code does not need to know which pipeline produced the results.
 
-**Why not just use the Elasticsearch pipeline?** The Elasticsearch pipeline requires a running ES 8.14+ cluster. Many OpenMRS deployments — especially in low-resource settings — run only the core platform with MySQL. The hybrid pipeline provides the same search quality (BM25 + kNN + RRF) using only in-process components (Lucene + ONNX embeddings + Java RRF implementation).
+**Why not just use the Elasticsearch pipeline?** The Elasticsearch pipeline requires a running Elasticsearch 8.14+ instance. Many OpenMRS deployments — especially in low-resource settings — run only the core platform with MySQL. The hybrid pipeline provides the same search quality (BM25 + kNN + RRF) using only in-process components (Lucene + ONNX embeddings + Java RRF implementation).
 
 **Why RRF instead of a weighted linear combination?** Same reasoning as Decision 14: RRF is rank-based, not score-based, so it avoids the calibration problem of normalizing BM25 scores (unbounded) against cosine similarity scores (0–1).
 
