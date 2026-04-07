@@ -13,9 +13,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,15 +44,11 @@ public class RetrievalQualityEvalTest {
 
 	private static final Logger log = LoggerFactory.getLogger(RetrievalQualityEvalTest.class);
 
-	private static final String MODEL_DIR = System.getProperty(
-			"chartsearchai.embedding.model.dir", "../models/all-MiniLM-L6-v2");
+	private static final String MODEL_PATH = TestDatasetHelper.MODEL_PATH;
 
-	private static final String MODEL_PATH = MODEL_DIR + "/model.onnx";
+	private static final String VOCAB_PATH = TestDatasetHelper.VOCAB_PATH;
 
-	private static final String VOCAB_PATH = MODEL_DIR + "/vocab.txt";
-
-	// Same dataset used in LlmInferenceServiceTest
-	private static final String[] DATASET = LlmInferenceServiceTest.FULL_PATIENT_DATASET;
+	private static final String[] DATASET = TestDatasetHelper.FULL_PATIENT_DATASET;
 
 	private static EvalDataset evalDataset;
 
@@ -64,8 +57,7 @@ public class RetrievalQualityEvalTest {
 	private static List<ChartEmbedding> allEmbeddings;
 
 	private static boolean embeddingModelFilesExist() {
-		return new java.io.File(MODEL_PATH).exists()
-				&& new java.io.File(VOCAB_PATH).exists();
+		return TestDatasetHelper.modelFilesExist();
 	}
 
 	private static EvalDataset getEvalDataset() {
@@ -93,43 +85,24 @@ public class RetrievalQualityEvalTest {
 	}
 
 	private static List<ChartEmbedding> buildEmbeddings() {
-		List<ChartEmbedding> embeddings = new ArrayList<>();
-		Date now = new Date();
-		for (int i = 0; i < DATASET.length; i++) {
-			String text = DATASET[i];
-			String resourceType = inferResourceType(text);
-			int index = i + 1;
-
-			ChartEmbedding ce = new ChartEmbedding();
-			ce.setEmbeddingId(index);
-			ce.setResourceType(resourceType);
-			ce.setResourceId(index * 100);
-			ce.setTextContent(text);
-			String prefixed = ChartSearchAiConstants.getEmbeddingPrefix(resourceType, text) + text;
-			ce.setEmbeddingVector(embeddingProvider.embed(prefixed));
-			ce.setDateCreated(now);
-			embeddings.add(ce);
+		// Use the production EmbeddingIndexer.buildEmbeddings() to ensure
+		// embedding text format (prefix, no date) matches what runs in prod.
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> records =
+				TestDatasetHelper.toSerializedRecords(DATASET);
+		// Eval dataset uses 1-based resourceId (* 100) for metric matching
+		for (int i = 0; i < records.size(); i++) {
+			records.set(i, new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+					records.get(i).getResourceType(), (i + 1) * 100,
+					records.get(i).getText(), null));
+		}
+		List<ChartEmbedding> embeddings =
+				org.openmrs.module.chartsearchai.api.EmbeddingIndexer.buildEmbeddings(
+						records, embeddingProvider);
+		// Set embeddingId to 1-based index for eval metric matching
+		for (int i = 0; i < embeddings.size(); i++) {
+			embeddings.get(i).setEmbeddingId(i + 1);
 		}
 		return embeddings;
-	}
-
-	private static String inferResourceType(String text) {
-		if (text.startsWith("Medication prescription:") || text.startsWith("Lab test order:")) {
-			return "order";
-		}
-		if (text.startsWith("Medical condition:")) {
-			return "condition";
-		}
-		if (text.startsWith("Clinical diagnosis:")) {
-			return "diagnosis";
-		}
-		if (text.startsWith("Patient allergy:")) {
-			return "allergy";
-		}
-		if (text.startsWith("Program enrollment:")) {
-			return "program";
-		}
-		return "obs";
 	}
 
 	static Stream<Arguments> retrievalCases() {
@@ -141,45 +114,15 @@ public class RetrievalQualityEvalTest {
 	}
 
 	private static List<Integer> retrieveTopK(EvalCase evalCase) {
-		String normalizedQuery = LlmInferenceService.stripQueryStopwords(evalCase.getQuestion());
-		String[] queryTerms = LlmInferenceService.extractQueryTerms(normalizedQuery);
-		float[] queryVector = getEmbeddingProvider().embed(normalizedQuery);
+		List<ChartEmbedding> results = LlmInferenceService.findSimilar(
+				getAllEmbeddings(), getEmbeddingProvider(),
+				evalCase.getQuestion(), 30,
+				ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
+				LlmInferenceService.PipelineConfig.defaults());
 
-		double keywordWeight = 0.3;
-		double bonusThreshold = queryTerms.length >= 4
-				? 1.0 / queryTerms.length
-				: queryTerms.length == 0 ? 1.0
-				: (double) Math.min(2, queryTerms.length) / queryTerms.length;
-
-		List<LlmInferenceService.ScoredEmbedding> scored = new ArrayList<>();
-		for (ChartEmbedding ce : getAllEmbeddings()) {
-			float[] vector = ce.getEmbeddingVector();
-			double semanticScore = LlmInferenceService.cosineSimilarity(queryVector, vector);
-			String keywordText = ChartSearchAiConstants.getEmbeddingPrefix(
-					ce.getResourceType(), ce.getTextContent()) + ce.getTextContent();
-			double keywordScore = LlmInferenceService.computeKeywordScore(queryTerms, keywordText);
-			double keywordBonus = keywordScore >= bonusThreshold ? keywordScore : 0.0;
-			double keywordPenalty = 0.0;
-			if (queryTerms.length <= 2 && keywordScore > 0 && keywordScore < bonusThreshold) {
-				keywordPenalty = keywordScore;
-			}
-			double baseScore = semanticScore + keywordWeight * keywordBonus
-					- keywordWeight * keywordPenalty;
-			scored.add(new LlmInferenceService.ScoredEmbedding(ce, baseScore, keywordScore, semanticScore));
-		}
-
-		Collections.sort(scored, new Comparator<LlmInferenceService.ScoredEmbedding>() {
-			@Override
-			public int compare(LlmInferenceService.ScoredEmbedding a,
-					LlmInferenceService.ScoredEmbedding b) {
-				return Double.compare(b.score, a.score);
-			}
-		});
-
-		int topK = Math.min(30, scored.size());
 		List<Integer> retrievedIndices = new ArrayList<>();
-		for (int i = 0; i < topK; i++) {
-			retrievedIndices.add(scored.get(i).embedding.getEmbeddingId());
+		for (ChartEmbedding ce : results) {
+			retrievedIndices.add(ce.getEmbeddingId());
 		}
 		return retrievedIndices;
 	}

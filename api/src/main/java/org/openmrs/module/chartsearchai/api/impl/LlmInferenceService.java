@@ -90,16 +90,10 @@ public class LlmInferenceService implements ChartSearchService {
 	@Autowired
 	private LlmProvider llmProvider;
 
-	private static final String NO_RECORDS_ANSWER = "No clinical records found for this patient.";
 
 	@Override
 	public ChartAnswer search(Patient patient, String question) {
 		PatientChart chart = buildChart(patient, question);
-
-		if (chart.getMappings().isEmpty()) {
-			String answer = buildNoMatchAnswer(question);
-			return new ChartAnswer(answer, Collections.emptyList());
-		}
 
 		LlmResponse response = llmProvider.search(chart.getText(), question);
 
@@ -113,34 +107,11 @@ public class LlmInferenceService implements ChartSearchService {
 			Consumer<String> tokenConsumer) {
 		PatientChart chart = buildChart(patient, question);
 
-		if (chart.getMappings().isEmpty()) {
-			String answer = buildNoMatchAnswer(question);
-			tokenConsumer.accept(answer);
-			return new ChartAnswer(answer, Collections.emptyList());
-		}
-
 		LlmResponse response = llmProvider.searchStreaming(chart.getText(), question, tokenConsumer);
 
 		return new ChartAnswer(response.getAnswer(),
 				extractCitedReferences(response.getCitations(), chart.getMappings()),
 				response.getInputTokens(), response.getOutputTokens());
-	}
-
-	/**
-	 * Builds a specific "no match" answer that names what was asked about,
-	 * rather than returning a generic "no records found" message. This
-	 * avoids an unnecessary LLM round-trip and gives the clinician a
-	 * clear signal about what data is absent.
-	 *
-	 * @param question the original user question
-	 * @return a human-readable answer naming the missing data
-	 */
-	static String buildNoMatchAnswer(String question) {
-		String terms = stripQueryStopwords(question);
-		if (terms.isEmpty()) {
-			return NO_RECORDS_ANSWER;
-		}
-		return "There are no records about " + terms + " in this patient's chart.";
 	}
 
 	private static final String NUMBER_GROUP =
@@ -315,7 +286,8 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 
 		if (similar.isEmpty()) {
-			log.debug("No records matched the query, returning empty chart");
+			log.debug("No records matched the query '{}' for patient [id={}], returning empty chart",
+					question, patient.getPatientId());
 			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
 
@@ -323,6 +295,9 @@ public class LlmInferenceService implements ChartSearchService {
 		for (ChartEmbedding ce : similar) {
 			relevantKeys.add(ce.getResourceType() + ":" + ce.getResourceId());
 		}
+
+		log.debug("findSimilar returned {} records for query '{}' patient [id={}]: {}",
+				similar.size(), question, patient.getPatientId(), relevantKeys);
 
 		return filterAndSerialize(patient, question, relevantKeys);
 	}
@@ -388,9 +363,10 @@ public class LlmInferenceService implements ChartSearchService {
 			return chartSerializer.serialize(patient);
 		}
 
+		String embeddingInput = prepareEmbeddingInput(question, getQueryPrefix());
 		float[] queryVector;
 		try {
-			queryVector = embeddingProvider.embed(getQueryPrefix() + normalizedQuery);
+			queryVector = embeddingProvider.embed(embeddingInput);
 		}
 		catch (Exception e) {
 			log.error("Failed to embed query for ES search, falling back to embeddings", e);
@@ -398,7 +374,8 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 
 		List<ElasticsearchIndexer.ElasticsearchSearchResult> results =
-				elasticsearchIndexer.search(patient, normalizedQuery, queryVector, getTopK());
+				elasticsearchIndexer.search(patient, normalizedQuery, queryVector,
+						getTopK() * ChartSearchAiConstants.ES_FETCH_MULTIPLIER);
 
 		if (results.isEmpty()) {
 			log.debug("Elasticsearch returned no results for query '{}', returning empty chart",
@@ -406,15 +383,87 @@ public class LlmInferenceService implements ChartSearchService {
 			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
 
+		// Run ES results through the same filter pipeline as the embedding
+		// pipeline to remove noise — RRF always returns up to maxResults
+		// from the kNN side even when most are irrelevant.
+		List<ElasticsearchIndexer.ElasticsearchSearchResult> filtered =
+				filterEsResults(results, queryVector, question);
+
+		if (filtered.isEmpty()) {
+			log.debug("Elasticsearch: all {} results filtered out for query '{}'",
+					results.size(), normalizedQuery);
+			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
+		}
+
 		Set<String> relevantKeys = new HashSet<String>();
-		for (ElasticsearchIndexer.ElasticsearchSearchResult result : results) {
+		for (ElasticsearchIndexer.ElasticsearchSearchResult result : filtered) {
 			relevantKeys.add(result.getResourceType() + ":" + result.getResourceId());
 		}
 
-		log.debug("Elasticsearch returned {} results for query '{}'",
-				relevantKeys.size(), normalizedQuery);
+		log.debug("Elasticsearch returned {} results ({} after filter pipeline) for query '{}': {}",
+				results.size(), relevantKeys.size(), normalizedQuery, relevantKeys);
 
 		return filterAndSerialize(patient, question, relevantKeys);
+	}
+
+	/**
+	 * Filters Elasticsearch results through the same scoring and gap
+	 * detection pipeline used by the embedding retrieval path. Computes
+	 * cosine similarity and keyword scores from the returned embedding
+	 * vectors and text, then applies filterPipeline() to remove noise.
+	 */
+	static List<ElasticsearchIndexer.ElasticsearchSearchResult> filterEsResults(
+			List<ElasticsearchIndexer.ElasticsearchSearchResult> results,
+			float[] queryVector, String question) {
+		String normalizedQuery = stripQueryStopwords(question);
+		String[] queryTerms = extractQueryTerms(normalizedQuery);
+
+		// Build parallel arrays for filterPipeline
+		List<ElasticsearchIndexer.ElasticsearchSearchResult> valid =
+				new ArrayList<ElasticsearchIndexer.ElasticsearchSearchResult>();
+		for (ElasticsearchIndexer.ElasticsearchSearchResult r : results) {
+			if (r.getEmbedding() != null && r.getEmbedding().length == queryVector.length) {
+				valid.add(r);
+			}
+		}
+		if (valid.isEmpty()) {
+			return results;
+		}
+
+		double[] semanticScores = new double[valid.size()];
+		double[] keywordScores = new double[valid.size()];
+		ChartEmbedding[] embeddings = new ChartEmbedding[valid.size()];
+		for (int i = 0; i < valid.size(); i++) {
+			ElasticsearchIndexer.ElasticsearchSearchResult r = valid.get(i);
+			semanticScores[i] = ChartSearchAiConstants.cosineSimilarity(
+					queryVector, r.getEmbedding());
+			keywordScores[i] = r.getText() != null
+					? computeKeywordScore(queryTerms, r.getText()) : 0;
+
+			ChartEmbedding ce = new ChartEmbedding();
+			ce.setResourceType(r.getResourceType());
+			ce.setResourceId(r.getResourceId());
+			ce.setEmbeddingVector(r.getEmbedding());
+			embeddings[i] = ce;
+		}
+
+		List<ChartEmbedding> filtered = filterPipeline(semanticScores,
+				keywordScores, embeddings, queryTerms, valid.size(),
+				PipelineConfig.defaults());
+
+		Set<String> survivorKeys = new HashSet<String>();
+		for (ChartEmbedding ce : filtered) {
+			survivorKeys.add(ce.getResourceType() + ":" + ce.getResourceId());
+		}
+
+		List<ElasticsearchIndexer.ElasticsearchSearchResult> out =
+				new ArrayList<ElasticsearchIndexer.ElasticsearchSearchResult>();
+		for (ElasticsearchIndexer.ElasticsearchSearchResult r : results) {
+			if (survivorKeys.contains(r.getResourceType() + ":" + r.getResourceId())) {
+				out.add(r);
+			}
+		}
+		return out;
 	}
 
 	private PatientChart buildChartWithHybrid(Patient patient, String question) {
@@ -699,8 +748,8 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 			embeddings[validCount] = ce;
 			semanticScores[validCount] = cosineSimilarity(queryVector, vector);
-			String keywordText = ChartSearchAiConstants.getEmbeddingPrefix(
-					ce.getResourceType(), ce.getTextContent()) + ce.getTextContent();
+			String keywordText = ChartSearchAiConstants.buildPrefixedText(
+					ce.getResourceType(), ce.getTextContent());
 			keywordScores[validCount] = computeKeywordScore(queryTerms, keywordText);
 			validCount++;
 		}
@@ -1045,18 +1094,14 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
-		// Inter-candidate coherence filter: remove "topic outliers" that
-		// scored similarly to the query by coincidence but are unrelated to
-		// the other results.
+		// Phase 1: Outlier removal — remove individual candidates that
+		// are topically unrelated to the majority of results. Uses gap
+		// detection on inter-candidate coherence scores.
 		//
-		// At n=3 the filter is restricted to tight clusters: it only
-		// removes the outlier if its semantic score is ≥ 90% of the top
-		// candidate's score. In tight clusters (e.g. 0.279 vs 0.276 for
-		// "cancer") the embedding model can't distinguish relevant from
-		// irrelevant, so coherence is the right tie-breaker. When the
-		// outlier's score is significantly lower (< 90%), it's likely a
-		// genuine different-topic result (e.g. Syphilitic Cirrhosis
-		// at 83% of top for an STD query) that should be kept.
+		// At n=3 this is restricted to tight clusters (score ratio ≥ 0.90)
+		// because with spread scores the minority candidate may be the
+		// only correct result (e.g. Syphilitic Cirrhosis at 83% of top
+		// for an STD query — a genuine hit that shouldn't be removed).
 		if (candidates.size() >= 4) {
 			candidates = filterByCoherence(candidates);
 		} else if (candidates.size() == 3) {
@@ -1074,6 +1119,104 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 			if (topSemantic > 0 && lowestSemantic / topSemantic >= 0.90) {
 				candidates = filterByCoherence(candidates);
+			}
+		}
+
+		// Phase 2: Zero-keyword validation — when no surviving candidate
+		// has keyword support, the result set is purely semantic and
+		// must pass two orthogonal confidence checks. Keywords are
+		// direct evidence of relevance (the record literally contains
+		// the queried term) and bypass this gate entirely.
+		//
+		// The two checks catch complementary noise patterns:
+		//
+		// - Coherence: are the candidates about the same topic? Rejects
+		//   scattered false positives about unrelated topics (e.g.
+		//   Female Infertility + Granuloma Annulare for an HIV query).
+		//
+		// - Z-score: is the model confident? Rejects uniform false
+		//   positives about the same irrelevant topic (e.g. 3 pulse
+		//   readings for a CD4 query) where mutual coherence is high
+		//   but query relevance is low.
+		{
+			boolean candidatesHaveKeywords = false;
+			for (ScoredEmbedding se : candidates) {
+				if (se.keywordScore > 0) {
+					candidatesHaveKeywords = true;
+					break;
+				}
+			}
+			if (log.isDebugEnabled()) {
+				StringBuilder sb = new StringBuilder();
+				for (ScoredEmbedding se : candidates) {
+					if (sb.length() > 0) sb.append(", ");
+					sb.append(se.embedding.getResourceType())
+						.append(':').append(se.embedding.getResourceId())
+						.append(" sem=").append(String.format("%.4f", se.semanticScore))
+						.append(" kw=").append(String.format("%.4f", se.keywordScore));
+				}
+				log.debug("Phase 2: candidatesHaveKeywords={}, candidates={}: [{}]",
+						candidatesHaveKeywords, candidates.size(), sb);
+			}
+			if (!candidatesHaveKeywords && !candidates.isEmpty()) {
+				if (candidates.size() >= 2) {
+					candidates = filterByMeanCoherence(candidates, config);
+				}
+				if (!candidates.isEmpty()
+						&& scored.size()
+						>= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
+					double sum = 0;
+					for (ScoredEmbedding se : scored) {
+						sum += se.semanticScore;
+					}
+					double mean = sum / scored.size();
+					double sqSum = 0;
+					for (ScoredEmbedding se : scored) {
+						double d = se.semanticScore - mean;
+						sqSum += d * d;
+					}
+					double std = Math.sqrt(sqSum / scored.size());
+
+					if (std > 0) {
+						// For small clusters (≤3 candidates), use
+						// max z-score: each candidate was selected
+						// for a reason and a single strong match IS
+						// the signal. For larger clusters (≥4), use
+						// the median z-score: a single high-scoring
+						// false positive can push the max above
+						// threshold while the cluster as a whole is
+						// noise (e.g. 5 pulse readings for a CD4
+						// query where one outlier hits z=2.79 but
+						// the median is 2.39). This mirrors Phase 1
+						// coherence logic which also treats n≤3
+						// differently from n≥4.
+						double[] zScores =
+								new double[candidates.size()];
+						for (int i = 0; i < candidates.size(); i++) {
+							zScores[i] = (candidates.get(i).semanticScore
+									- mean) / std;
+						}
+						java.util.Arrays.sort(zScores);
+						double zRepresentative = candidates.size() <= 3
+								? zScores[zScores.length - 1]
+								: zScores[zScores.length / 2];
+						log.debug("Zero-keyword z-score check: "
+								+ "mean={}, std={}, z={} ({}), "
+								+ "threshold={}, candidates={}, scored={}",
+								String.format("%.4f", mean),
+								String.format("%.4f", std),
+								String.format("%.2f", zRepresentative),
+								candidates.size() <= 3 ? "max" : "median",
+								ChartSearchAiConstants
+										.ZERO_KEYWORD_CLUSTER_MIN_Z,
+								candidates.size(), scored.size());
+						if (zRepresentative < ChartSearchAiConstants
+								.ZERO_KEYWORD_CLUSTER_MIN_Z) {
+							log.debug("Zero-keyword results rejected");
+							candidates = Collections.emptyList();
+						}
+					}
+				}
 			}
 		}
 
@@ -1277,10 +1420,9 @@ public class LlmInferenceService implements ChartSearchService {
 		Set<String> coveredTerms = new HashSet<String>();
 		for (ScoredEmbedding se : candidates) {
 			if (se.keywordScore >= kwMax - 0.01) {
-				String text = ChartSearchAiConstants.getEmbeddingPrefix(
+				String text = ChartSearchAiConstants.buildPrefixedText(
 						se.embedding.getResourceType(),
-						se.embedding.getTextContent())
-						+ se.embedding.getTextContent();
+						se.embedding.getTextContent());
 				String lower = text.toLowerCase();
 				String[] words = lower.split("\\s+");
 				for (String term : queryTerms) {
@@ -1298,10 +1440,9 @@ public class LlmInferenceService implements ChartSearchService {
 			if (se.keywordScore >= kwMax - 0.01) {
 				filtered.add(se);
 			} else {
-				String text = ChartSearchAiConstants.getEmbeddingPrefix(
+				String text = ChartSearchAiConstants.buildPrefixedText(
 						se.embedding.getResourceType(),
-						se.embedding.getTextContent())
-						+ se.embedding.getTextContent();
+						se.embedding.getTextContent());
 				String lower = text.toLowerCase();
 				String[] words = lower.split("\\s+");
 				boolean addsNewCoverage = false;
@@ -1406,13 +1547,29 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
+	 * Prepares the full embedding input string from a raw question.
+	 * This is the production pipeline: strip stopwords, build the
+	 * embedding query, and prepend the query prefix. Both production
+	 * code and tests should use this method to ensure consistency.
+	 *
+	 * @param question the raw user question (e.g. "any cancer?")
+	 * @param queryPrefix the prefix to prepend (e.g. "" or "search_query: ")
+	 * @return the text to pass to the embedding provider
+	 */
+	static String prepareEmbeddingInput(String question, String queryPrefix) {
+		String normalized = stripQueryStopwords(question);
+		String embeddingQuery = buildEmbeddingQuery(normalized);
+		return queryPrefix + embeddingQuery;
+	}
+
+	/**
 	 * Builds the query string used for embedding by stripping stopwords
 	 * from the normalized query. This removes filler words like "any" or
 	 * "does" that dilute the embedding signal, while keeping all
 	 * non-stopword tokens (including short terms like numbers).
 	 * Falls back to the full normalized query when all words are stopwords.
 	 */
-	static String buildEmbeddingQuery(String normalizedQuery) {
+	private static String buildEmbeddingQuery(String normalizedQuery) {
 		String[] words = normalizedQuery.split("\\s+");
 		StringBuilder sb = new StringBuilder();
 		for (String w : words) {
@@ -1807,6 +1964,56 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 		return filtered;
+	}
+
+	/**
+	 * Checks whether a small set of candidates (n ≤ 3) are mutually
+	 * coherent by computing mean pairwise cosine similarity. If the mean
+	 * is below the gap validation threshold, all candidates are rejected
+	 * as false positives — they are unrelated topics that individually
+	 * scored well against the query but are not coherent as a group.
+	 *
+	 * <p>This complements {@link #filterByCoherence}, which uses gap
+	 * detection and cannot remove candidates when coherence values are
+	 * uniformly low (stddev ≈ 0). Mean pairwise coherence catches the
+	 * case where ALL candidates are false positives (e.g. blood
+	 * transfusion, syphilitic cirrhosis, and granuloma annulare for
+	 * "has the patient ever been immunized?").
+	 */
+	static List<ScoredEmbedding> filterByMeanCoherence(
+			List<ScoredEmbedding> candidates, PipelineConfig config) {
+		boolean allHaveEmbeddings = true;
+		for (ScoredEmbedding se : candidates) {
+			byte[] raw = se.embedding.getEmbedding();
+			if (raw == null || raw.length == 0) {
+				allHaveEmbeddings = false;
+				break;
+			}
+		}
+		if (!allHaveEmbeddings) {
+			return candidates;
+		}
+
+		double sumCosine = 0;
+		int pairCount = 0;
+		for (int i = 0; i < candidates.size(); i++) {
+			for (int j = i + 1; j < candidates.size(); j++) {
+				sumCosine += cosineSimilarity(
+						candidates.get(i).embedding.getEmbeddingVector(),
+						candidates.get(j).embedding.getEmbeddingVector());
+				pairCount++;
+			}
+		}
+		double meanCoherence = sumCosine / pairCount;
+		if (meanCoherence < config.gapValidationCosineThreshold) {
+			log.debug("{} candidates are not mutually coherent "
+					+ "(meanCosine={}, threshold={}), returning empty",
+					candidates.size(),
+					String.format("%.4f", meanCoherence),
+					config.gapValidationCosineThreshold);
+			return Collections.emptyList();
+		}
+		return candidates;
 	}
 
 	/**

@@ -61,7 +61,9 @@ public class ElasticsearchIndexer implements Closeable {
 
 	private static final Logger log = LoggerFactory.getLogger(ElasticsearchIndexer.class);
 
-	static final String INDEX_NAME = "chartsearchai-patient-records";
+	static final String DEFAULT_INDEX_NAME = "chartsearchai-patient-records";
+
+	private String indexName = DEFAULT_INDEX_NAME;
 
 	static final String FIELD_PATIENT_ID = "patient_id";
 
@@ -141,6 +143,13 @@ public class ElasticsearchIndexer implements Closeable {
 		this.backendType = type;
 	}
 
+	/**
+	 * Allows tests to use a dedicated index name.
+	 */
+	void setIndexName(String name) {
+		this.indexName = name;
+	}
+
 	BackendType getBackendType() {
 		return backendType;
 	}
@@ -205,7 +214,7 @@ public class ElasticsearchIndexer implements Closeable {
 			RestClient c = getClient();
 			if (c != null) {
 				try {
-					c.performRequest(new Request("HEAD", "/" + INDEX_NAME));
+					c.performRequest(new Request("HEAD", "/" + indexName));
 					return;
 				}
 				catch (ResponseException e) {
@@ -228,11 +237,11 @@ public class ElasticsearchIndexer implements Closeable {
 
 			// Check if index already exists
 			try {
-				c.performRequest(new Request("HEAD", "/" + INDEX_NAME));
+				c.performRequest(new Request("HEAD", "/" + indexName));
 				if (hasMismatchedMapping(c)) {
 					log.info("Index '{}' has incompatible mapping for {} backend, recreating",
-							INDEX_NAME, backendType);
-					c.performRequest(new Request("DELETE", "/" + INDEX_NAME));
+							indexName, backendType);
+					c.performRequest(new Request("DELETE", "/" + indexName));
 				} else {
 					indexCreated = true;
 					ensureSearchPipeline();
@@ -255,12 +264,12 @@ public class ElasticsearchIndexer implements Closeable {
 				throw new IOException("Unable to detect embedding dimensions");
 			}
 
-			Request createReq = new Request("PUT", "/" + INDEX_NAME);
+			Request createReq = new Request("PUT", "/" + indexName);
 			createReq.setJsonEntity(buildIndexMapping(dims));
 			c.performRequest(createReq);
 			indexCreated = true;
 			log.info("Created index '{}' with {} dimensions (backend: {})",
-					INDEX_NAME, dims, backendType);
+					indexName, dims, backendType);
 			ensureSearchPipeline();
 		}
 	}
@@ -291,11 +300,11 @@ public class ElasticsearchIndexer implements Closeable {
 	 */
 	private boolean hasMismatchedMapping(RestClient c) {
 		try {
-			Request req = new Request("GET", "/" + INDEX_NAME + "/_mapping");
+			Request req = new Request("GET", "/" + indexName + "/_mapping");
 			Response response = c.performRequest(req);
 			String body = EntityUtils.toString(response.getEntity());
 			JsonNode root = mapper.readTree(body);
-			String embeddingType = root.path(INDEX_NAME).path("mappings")
+			String embeddingType = root.path(indexName).path("mappings")
 					.path("properties").path(FIELD_EMBEDDING).path("type").asText("");
 			if (backendType == BackendType.OPENSEARCH) {
 				return !"knn_vector".equals(embeddingType);
@@ -381,63 +390,71 @@ public class ElasticsearchIndexer implements Closeable {
 				return;
 			}
 
-			int bulkBatchSize = 100;
-			StringBuilder bulk = new StringBuilder();
-			int indexed = 0;
-			int batchCount = 0;
-			for (SerializedRecord record : records) {
-				try {
-					String prefixedText = ChartSearchAiConstants.getEmbeddingPrefix(
-							record.getResourceType(), record.getText()) + record.getText();
-					float[] embedding = embeddingProvider.embed(prefixedText);
-
-					String docId = patient.getPatientId() + "_"
-							+ record.getResourceType() + "_" + record.getResourceId();
-
-					ObjectNode action = mapper.createObjectNode();
-					action.putObject("index")
-							.put("_index", INDEX_NAME)
-							.put("_id", docId);
-					bulk.append(mapper.writeValueAsString(action)).append('\n');
-
-					ObjectNode doc = mapper.createObjectNode();
-					doc.put(FIELD_PATIENT_ID, patient.getPatientId());
-					doc.put(FIELD_RESOURCE_TYPE, record.getResourceType());
-					doc.put(FIELD_RESOURCE_ID, record.getResourceId());
-					doc.put(FIELD_TEXT, prefixedText);
-					ArrayNode embArr = doc.putArray(FIELD_EMBEDDING);
-					for (float v : embedding) {
-						embArr.add(v);
-					}
-					bulk.append(mapper.writeValueAsString(doc)).append('\n');
-					indexed++;
-					batchCount++;
-				}
-				catch (Exception e) {
-					log.warn("Failed to prepare ES document for {} [id={}]: {}",
-							record.getResourceType(), record.getResourceId(), e.getMessage());
-				}
-
-				if (batchCount >= bulkBatchSize) {
-					sendBulkRequest(c, bulk.toString(), patient.getPatientId());
-					bulk.setLength(0);
-					batchCount = 0;
-				}
-			}
-
-			if (batchCount > 0) {
-				sendBulkRequest(c, bulk.toString(), patient.getPatientId());
-			}
-
-			c.performRequest(new Request("POST", "/" + INDEX_NAME + "/_refresh"));
+			List<org.openmrs.module.chartsearchai.model.ChartEmbedding> embeddings =
+					EmbeddingIndexer.buildEmbeddings(records, embeddingProvider);
+			indexEmbeddings(patient.getPatientId(), embeddings);
 
 			log.info("Elasticsearch: indexed {} of {} records for patient [id={}]",
-					indexed, records.size(), patient.getPatientId());
+					embeddings.size(), records.size(), patient.getPatientId());
 		}
 		catch (IOException e) {
 			log.error("Elasticsearch: failed to index patient [id={}]",
 					patient.getPatientId(), e);
 		}
+	}
+
+	/**
+	 * Indexes pre-built embeddings into the current ES index. Used by
+	 * {@link #indexPatient(Patient)} and integration tests that load
+	 * records from test datasets rather than from the database.
+	 */
+	void indexEmbeddings(int patientId,
+			List<org.openmrs.module.chartsearchai.model.ChartEmbedding> embeddings)
+			throws IOException {
+		RestClient c = getClient();
+		if (c == null || embeddings.isEmpty()) {
+			return;
+		}
+
+		int bulkBatchSize = 100;
+		StringBuilder bulk = new StringBuilder();
+		int batchCount = 0;
+		for (org.openmrs.module.chartsearchai.model.ChartEmbedding ce : embeddings) {
+			String prefixedText = ChartSearchAiConstants.buildPrefixedText(
+					ce.getResourceType(), ce.getTextContent());
+			String docId = patientId + "_"
+					+ ce.getResourceType() + "_" + ce.getResourceId();
+
+			ObjectNode action = mapper.createObjectNode();
+			action.putObject("index")
+					.put("_index", indexName)
+					.put("_id", docId);
+			bulk.append(mapper.writeValueAsString(action)).append('\n');
+
+			ObjectNode doc = mapper.createObjectNode();
+			doc.put(FIELD_PATIENT_ID, patientId);
+			doc.put(FIELD_RESOURCE_TYPE, ce.getResourceType());
+			doc.put(FIELD_RESOURCE_ID, ce.getResourceId());
+			doc.put(FIELD_TEXT, prefixedText);
+			ArrayNode embArr = doc.putArray(FIELD_EMBEDDING);
+			for (float v : ce.getEmbeddingVector()) {
+				embArr.add(v);
+			}
+			bulk.append(mapper.writeValueAsString(doc)).append('\n');
+			batchCount++;
+
+			if (batchCount >= bulkBatchSize) {
+				sendBulkRequest(c, bulk.toString(), patientId);
+				bulk.setLength(0);
+				batchCount = 0;
+			}
+		}
+
+		if (batchCount > 0) {
+			sendBulkRequest(c, bulk.toString(), patientId);
+		}
+
+		c.performRequest(new Request("POST", "/" + indexName + "/_refresh"));
 	}
 
 	private void sendBulkRequest(RestClient c, String body, int patientId) throws IOException {
@@ -465,7 +482,7 @@ public class ElasticsearchIndexer implements Closeable {
 			return;
 		}
 		try {
-			Request req = new Request("POST", "/" + INDEX_NAME + "/_delete_by_query");
+			Request req = new Request("POST", "/" + indexName + "/_delete_by_query");
 			req.setJsonEntity(buildPatientTermQuery(patient.getPatientId()));
 			c.performRequest(req);
 		}
@@ -491,7 +508,7 @@ public class ElasticsearchIndexer implements Closeable {
 			return false;
 		}
 		try {
-			Request req = new Request("POST", "/" + INDEX_NAME + "/_count");
+			Request req = new Request("POST", "/" + indexName + "/_count");
 			req.setJsonEntity(buildPatientTermQuery(patient.getPatientId()));
 			Response response = c.performRequest(req);
 			String body = EntityUtils.toString(response.getEntity());
@@ -529,7 +546,7 @@ public class ElasticsearchIndexer implements Closeable {
 			ensureSearchPipeline();
 			String searchBody = buildSearchQuery(patient.getPatientId(),
 					queryText, queryVector, maxResults);
-			String endpoint = "/" + INDEX_NAME + "/_search";
+			String endpoint = "/" + indexName + "/_search";
 			if (backendType == BackendType.OPENSEARCH) {
 				endpoint += "?search_pipeline=" + SEARCH_PIPELINE_NAME;
 			}
@@ -546,10 +563,20 @@ public class ElasticsearchIndexer implements Closeable {
 					log.warn("Elasticsearch: skipping hit with missing fields");
 					continue;
 				}
+				float[] embedding = null;
+				JsonNode embNode = src.path(FIELD_EMBEDDING);
+				if (embNode.isArray() && embNode.size() > 0) {
+					embedding = new float[embNode.size()];
+					for (int i = 0; i < embNode.size(); i++) {
+						embedding[i] = (float) embNode.get(i).doubleValue();
+					}
+				}
+				String text = src.has(FIELD_TEXT) ? src.get(FIELD_TEXT).asText() : null;
 				results.add(new ElasticsearchSearchResult(
 						src.get(FIELD_RESOURCE_TYPE).asText(),
 						src.get(FIELD_RESOURCE_ID).asInt(),
-						hit.has("_score") ? hit.get("_score").floatValue() : 0f));
+						hit.has("_score") ? hit.get("_score").floatValue() : 0f,
+						embedding, text));
 			}
 		}
 		catch (Exception e) {
@@ -577,14 +604,20 @@ public class ElasticsearchIndexer implements Closeable {
 	 * Builds the RRF hybrid search query using the Elasticsearch
 	 * retriever API (ES 8.14+).
 	 */
-	String buildElasticsearchQuery(int patientId, String queryText,
-			float[] queryVector, int maxResults) throws IOException {
+	private ObjectNode newSearchBody(int maxResults) {
 		ObjectNode body = mapper.createObjectNode();
 		body.put("size", maxResults);
-
 		ArrayNode source = body.putArray("_source");
 		source.add(FIELD_RESOURCE_TYPE);
 		source.add(FIELD_RESOURCE_ID);
+		source.add(FIELD_EMBEDDING);
+		source.add(FIELD_TEXT);
+		return body;
+	}
+
+	String buildElasticsearchQuery(int patientId, String queryText,
+			float[] queryVector, int maxResults) throws IOException {
+		ObjectNode body = newSearchBody(maxResults);
 
 		ObjectNode retriever = body.putObject("retriever");
 		ObjectNode rrf = retriever.putObject("rrf");
@@ -623,12 +656,7 @@ public class ElasticsearchIndexer implements Closeable {
 	 */
 	String buildOpenSearchQuery(int patientId, String queryText,
 			float[] queryVector, int maxResults) throws IOException {
-		ObjectNode body = mapper.createObjectNode();
-		body.put("size", maxResults);
-
-		ArrayNode source = body.putArray("_source");
-		source.add(FIELD_RESOURCE_TYPE);
-		source.add(FIELD_RESOURCE_ID);
+		ObjectNode body = newSearchBody(maxResults);
 
 		ObjectNode hybrid = body.putObject("query").putObject("hybrid");
 		ArrayNode queries = hybrid.putArray("queries");
@@ -684,13 +712,7 @@ public class ElasticsearchIndexer implements Closeable {
 	 * after patient data changes.
 	 */
 	public void reindexIfActive(Patient patient) {
-		if (patient == null) {
-			return;
-		}
-		String pipeline = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
-		if (!ChartSearchAiConstants.PIPELINE_ELASTICSEARCH.equalsIgnoreCase(
-				pipeline != null ? pipeline.trim() : "")) {
+		if (!isElasticsearchPipelineActive(patient)) {
 			return;
 		}
 		if (hasIndex(patient)) {
@@ -703,16 +725,20 @@ public class ElasticsearchIndexer implements Closeable {
 	 * pipeline is Elasticsearch. Called by AOP advice after patient merges.
 	 */
 	public void deleteIfActive(Patient patient) {
-		if (patient == null) {
-			return;
-		}
-		String pipeline = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
-		if (!ChartSearchAiConstants.PIPELINE_ELASTICSEARCH.equalsIgnoreCase(
-				pipeline != null ? pipeline.trim() : "")) {
+		if (!isElasticsearchPipelineActive(patient)) {
 			return;
 		}
 		deletePatientIndex(patient);
+	}
+
+	private boolean isElasticsearchPipelineActive(Patient patient) {
+		if (patient == null) {
+			return false;
+		}
+		String pipeline = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_RETRIEVAL_PIPELINE, "");
+		return ChartSearchAiConstants.PIPELINE_ELASTICSEARCH.equalsIgnoreCase(
+				pipeline != null ? pipeline.trim() : "");
 	}
 
 	@Override
@@ -739,10 +765,17 @@ public class ElasticsearchIndexer implements Closeable {
 
 		private final float score;
 
-		public ElasticsearchSearchResult(String resourceType, int resourceId, float score) {
+		private final float[] embedding;
+
+		private final String text;
+
+		public ElasticsearchSearchResult(String resourceType, int resourceId,
+				float score, float[] embedding, String text) {
 			this.resourceType = resourceType;
 			this.resourceId = resourceId;
 			this.score = score;
+			this.embedding = embedding;
+			this.text = text;
 		}
 
 		public String getResourceType() {
@@ -755,6 +788,14 @@ public class ElasticsearchIndexer implements Closeable {
 
 		public float getScore() {
 			return score;
+		}
+
+		public float[] getEmbedding() {
+			return embedding;
+		}
+
+		public String getText() {
+			return text;
 		}
 	}
 }

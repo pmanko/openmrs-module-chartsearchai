@@ -75,12 +75,9 @@ public class EndToEndSearchTest extends BaseModuleContextSensitiveTest {
 		executeDataSet(TEST_DATA);
 	}
 
-	private static final String MODEL_DIR = System.getProperty(
-			"chartsearchai.embedding.model.dir", "../models/all-MiniLM-L6-v2");
+	private static final String MODEL_PATH = TestDatasetHelper.MODEL_PATH;
 
-	private static final String MODEL_PATH = MODEL_DIR + "/model.onnx";
-
-	private static final String VOCAB_PATH = MODEL_DIR + "/vocab.txt";
+	private static final String VOCAB_PATH = TestDatasetHelper.VOCAB_PATH;
 
 	/**
 	 * Path to the GGUF LLM model file. Configure via the
@@ -126,8 +123,7 @@ public class EndToEndSearchTest extends BaseModuleContextSensitiveTest {
 	}
 
 	private static boolean embeddingModelFilesExist() {
-		return new java.io.File(MODEL_PATH).exists()
-				&& new java.io.File(VOCAB_PATH).exists();
+		return TestDatasetHelper.modelFilesExist();
 	}
 
 	private static boolean llmModelFileExists() {
@@ -215,10 +211,12 @@ public class EndToEndSearchTest extends BaseModuleContextSensitiveTest {
 						MODEL_PATH, VOCAB_PATH);
 		try {
 			float[] query = provider.embed("how do the vitals look like");
-			float[] spo2 = provider.embed(
-					"Clinical observation: Finding — Arterial blood oxygen saturation (pulse oximeter): 96.6 %");
-			float[] condition = provider.embed(
-					"Medical condition: Condition: Nonparalytic stroke. Status: ACTIVE");
+			String spo2Text = "Finding — Arterial blood oxygen saturation (pulse oximeter): 96.6 %";
+			float[] spo2 = provider.embed(ChartSearchAiConstants.buildPrefixedText(
+					ChartSearchAiConstants.RESOURCE_TYPE_OBS, spo2Text));
+			String conditionText = "Condition: Nonparalytic stroke. Status: ACTIVE";
+			float[] condition = provider.embed(ChartSearchAiConstants.buildPrefixedText(
+					ChartSearchAiConstants.RESOURCE_TYPE_CONDITION, conditionText));
 
 			double vitalsScore = cos(query, spo2);
 			double conditionScore = cos(query, condition);
@@ -250,13 +248,7 @@ public class EndToEndSearchTest extends BaseModuleContextSensitiveTest {
 	}
 
 	private static double cos(float[] a, float[] b) {
-		double dot = 0, na = 0, nb = 0;
-		for (int i = 0; i < a.length; i++) {
-			dot += a[i] * b[i];
-			na += a[i] * a[i];
-			nb += b[i] * b[i];
-		}
-		return Math.sqrt(na) * Math.sqrt(nb) == 0 ? 0 : dot / (Math.sqrt(na) * Math.sqrt(nb));
+		return ChartSearchAiConstants.cosineSimilarity(a, b);
 	}
 
 	/**
@@ -348,9 +340,8 @@ public class EndToEndSearchTest extends BaseModuleContextSensitiveTest {
 
 				// Stored vectors should be identical to fresh embeddings
 				ChartEmbedding sample = stored.get(0);
-				String sampleText = ChartSearchAiConstants.getEmbeddingPrefix(
-						sample.getResourceType(), sample.getTextContent())
-						+ sample.getTextContent();
+				String sampleText = ChartSearchAiConstants.buildPrefixedText(
+						sample.getResourceType(), sample.getTextContent());
 				float[] fresh = provider.embed(sampleText);
 				double roundTripCos = cos(fresh, sample.getEmbeddingVector());
 				assertEquals(1.0, roundTripCos, 1e-6,
@@ -456,6 +447,19 @@ public class EndToEndSearchTest extends BaseModuleContextSensitiveTest {
 							+ ref.getResourceType()
 							+ " for resourceId " + ref.getResourceId());
 				}
+
+				// Query about data absent from this dataset should still
+				// reach the LLM for reasoning (no short-circuit).
+				// The second dataset has no family planning records.
+				String absentQuestion =
+						"does the patient use any method of family planning?";
+				ChartAnswer absentAnswer = service.search(
+						patient, absentQuestion);
+
+				assertNotNull(absentAnswer.getAnswer(),
+						"LLM should still produce an answer for absent data");
+				assertFalse(absentAnswer.getAnswer().trim().isEmpty(),
+						"LLM answer for absent data should not be empty");
 			} finally {
 				restoreEmbeddingProviders(originals);
 			}

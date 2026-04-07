@@ -333,8 +333,8 @@ public class LuceneIndexer implements Closeable {
 				String.valueOf(record.getResourceId()), Field.Store.YES));
 		// Index the prefixed text so Lucene gets the same type signals
 		// as the embedding pipeline (e.g. "Medical condition: Condition: ...")
-		String prefixedText = ChartSearchAiConstants.getEmbeddingPrefix(
-				record.getResourceType(), record.getText()) + record.getText();
+		String prefixedText = ChartSearchAiConstants.buildPrefixedText(
+				record.getResourceType(), record.getText());
 		doc.add(new TextField(FIELD_TEXT, prefixedText, Field.Store.NO));
 		return doc;
 	}

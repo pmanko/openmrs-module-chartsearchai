@@ -97,15 +97,110 @@ public class HybridRetriever {
 		// kNN ranked list from embeddings
 		List<ChartEmbedding> allEmbeddings = dao.getByPatient(patient);
 		List<String> knnRanked;
+		float[] queryVector = null;
 		if (allEmbeddings == null || allEmbeddings.isEmpty()) {
 			knnRanked = new ArrayList<String>();
 		} else {
-			float[] queryVector = embeddingProvider.embed(queryPrefix + queryText);
+			queryVector = embeddingProvider.embed(queryPrefix + queryText);
 			knnRanked = rankByCosineSimilarity(allEmbeddings, queryVector, windowSize);
 		}
 
 		log.debug("Hybrid: BM25 returned {} results, kNN returned {} results for query '{}'",
 				bm25Ranked.size(), knnRanked.size(), queryText);
+
+		if (bm25Ranked.isEmpty()) {
+			// No keyword matches — fall back to kNN results that pass a
+			// minimum similarity threshold plus a z-score gate, then
+			// coherence filtering to remove topic outliers.
+			if (queryVector == null || allEmbeddings == null || allEmbeddings.isEmpty()) {
+				log.debug("Hybrid: no BM25 matches and no embeddings for query '{}', "
+						+ "returning empty", queryText);
+				return new LinkedHashSet<String>();
+			}
+
+			// Compute all similarities once upfront for both z-score
+			// distribution and threshold filtering
+			List<SimilarityResult> allScored =
+					new ArrayList<SimilarityResult>(allEmbeddings.size());
+			double[] sims = new double[allEmbeddings.size()];
+			for (int i = 0; i < allEmbeddings.size(); i++) {
+				ChartEmbedding ce = allEmbeddings.get(i);
+				float[] vec = ce.getEmbeddingVector();
+				double sim = ChartSearchAiConstants.cosineSimilarity(
+						queryVector, vec);
+				sims[i] = sim;
+				allScored.add(new SimilarityResult(
+						ce.getResourceType() + ":" + ce.getResourceId(),
+						sim, vec));
+			}
+
+			double effectiveMin = ChartSearchAiConstants.KNN_MIN_SIMILARITY;
+			if (allEmbeddings.size() >= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
+				effectiveMin = ChartSearchAiConstants.zScoreFloor(sims,
+						effectiveMin,
+						ChartSearchAiConstants.KNN_FALLBACK_Z_SCORE);
+			}
+
+			// Filter using pre-computed similarities
+			List<SimilarityResult> zScoreSurvivors =
+					new ArrayList<SimilarityResult>();
+			for (SimilarityResult sr : allScored) {
+				if (sr.similarity >= effectiveMin) {
+					zScoreSurvivors.add(sr);
+				}
+			}
+			// If z-score gate is too aggressive, fall back to absolute floor
+			if (zScoreSurvivors.size()
+					< ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS
+					&& effectiveMin > ChartSearchAiConstants.KNN_MIN_SIMILARITY) {
+				zScoreSurvivors.clear();
+				for (SimilarityResult sr : allScored) {
+					if (sr.similarity >= ChartSearchAiConstants.KNN_MIN_SIMILARITY) {
+						zScoreSurvivors.add(sr);
+					}
+				}
+			}
+			zScoreSurvivors.sort(new Comparator<SimilarityResult>() {
+				@Override
+				public int compare(SimilarityResult a, SimilarityResult b) {
+					return Double.compare(b.similarity, a.similarity);
+				}
+			});
+			if (zScoreSurvivors.size() > maxResults) {
+				zScoreSurvivors = zScoreSurvivors.subList(0, maxResults);
+			}
+
+			// Apply coherence filtering to remove topic outliers
+			if (zScoreSurvivors.size() >= 3) {
+				float[][] vectors = new float[zScoreSurvivors.size()][];
+				for (int i = 0; i < zScoreSurvivors.size(); i++) {
+					vectors[i] = zScoreSurvivors.get(i).vector;
+				}
+				boolean[] keep = ChartSearchAiConstants
+						.filterByCoherence(vectors);
+				List<SimilarityResult> coherent =
+						new ArrayList<SimilarityResult>();
+				for (int i = 0; i < zScoreSurvivors.size(); i++) {
+					if (keep[i]) {
+						coherent.add(zScoreSurvivors.get(i));
+					}
+				}
+				log.debug("Hybrid: coherence filter reduced {} to {} "
+						+ "candidates for query '{}'",
+						zScoreSurvivors.size(), coherent.size(), queryText);
+				zScoreSurvivors = coherent;
+			}
+
+			List<String> filtered = new ArrayList<String>(
+					zScoreSurvivors.size());
+			for (SimilarityResult sr : zScoreSurvivors) {
+				filtered.add(sr.key);
+			}
+			log.debug("Hybrid: no BM25 matches for query '{}', kNN fallback "
+					+ "returned {} results after z-score gate and coherence "
+					+ "filtering", queryText, filtered.size());
+			return new LinkedHashSet<String>(filtered);
+		}
 
 		List<String> fused = fuseRRF(bm25Ranked, knnRanked,
 				ChartSearchAiConstants.RRF_RANK_CONSTANT, maxResults);
@@ -142,6 +237,75 @@ public class HybridRetriever {
 			result.add(scored.get(i).getKey());
 		}
 		return result;
+	}
+
+	/**
+	 * Ranks embeddings by cosine similarity and returns only those above
+	 * the minimum threshold. Used as a fallback when BM25 returns no
+	 * keyword matches — allows purely semantic discovery (e.g. "any cancer?"
+	 * finding "Kaposi sarcoma") while filtering out irrelevant noise.
+	 *
+	 * @param embeddings all embeddings for the patient
+	 * @param queryVector the embedded query vector
+	 * @param minSimilarity minimum cosine similarity to include
+	 * @param maxResults maximum number of results to return
+	 * @return resource keys above the threshold, sorted by similarity descending
+	 */
+	public static List<String> filterByMinSimilarity(List<ChartEmbedding> embeddings,
+			float[] queryVector, double minSimilarity, int maxResults) {
+		List<SimilarityResult> results = filterByMinSimilarityWithVectors(
+				embeddings, queryVector, minSimilarity, maxResults);
+		List<String> keys = new ArrayList<String>(results.size());
+		for (SimilarityResult sr : results) {
+			keys.add(sr.key);
+		}
+		return keys;
+	}
+
+	/**
+	 * Holds a similarity result with its key, similarity, and embedding
+	 * vector for coherence filtering.
+	 */
+	static class SimilarityResult {
+		final String key;
+		final double similarity;
+		final float[] vector;
+
+		SimilarityResult(String key, double similarity, float[] vector) {
+			this.key = key;
+			this.similarity = similarity;
+			this.vector = vector;
+		}
+	}
+
+	/**
+	 * Like {@link #filterByMinSimilarity} but also returns the embedding
+	 * vector for each survivor, needed for coherence filtering.
+	 */
+	static List<SimilarityResult> filterByMinSimilarityWithVectors(
+			List<ChartEmbedding> embeddings, float[] queryVector,
+			double minSimilarity, int maxResults) {
+		List<SimilarityResult> scored = new ArrayList<SimilarityResult>();
+		for (ChartEmbedding ce : embeddings) {
+			float[] vec = ce.getEmbeddingVector();
+			double sim = ChartSearchAiConstants.cosineSimilarity(queryVector, vec);
+			if (sim >= minSimilarity) {
+				String key = ce.getResourceType() + ":" + ce.getResourceId();
+				scored.add(new SimilarityResult(key, sim, vec));
+			}
+		}
+
+		scored.sort(new Comparator<SimilarityResult>() {
+			@Override
+			public int compare(SimilarityResult a, SimilarityResult b) {
+				return Double.compare(b.similarity, a.similarity);
+			}
+		});
+
+		if (scored.size() > maxResults) {
+			return scored.subList(0, maxResults);
+		}
+		return scored;
 	}
 
 	/**

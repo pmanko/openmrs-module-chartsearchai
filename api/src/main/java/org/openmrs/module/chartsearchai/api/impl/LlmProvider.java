@@ -48,8 +48,8 @@ public class LlmProvider {
 			+ "Respond with ONLY a JSON object with an \"answer\" string and a \"citations\" array "
 			+ "listing every record number you cited.\n\n"
 			+ "If no records are relevant, name what is missing. For example:\n"
-			+ "{\"answer\": \"There are no records about diabetes in this patient's chart.\", \"citations\": []}\n\n"
-			+ "Examples:\n\n"
+			+ "{\"answer\": \"There are no records about diabetes in this patient's chart.\", \"citations\": []}"
+			+ "\n\nExamples:\n\n"
 			+ "Patient records (grouped by type, most recent first within each group):\n"
 			+ "Patient: 52-year-old Male\n\n"
 			+ "[1] (2024-11-05) Condition: Zarplexia. Status: ACTIVE. Verification: CONFIRMED\n"
@@ -96,7 +96,7 @@ public class LlmProvider {
 	 */
 	public LlmResponse search(String numberedRecords, String question) {
 		String systemPrompt = getSystemPrompt();
-		String userMessage = "Patient records (most recent first):\n" + numberedRecords.stripTrailing()
+		String userMessage = "Patient records (most recent first):\n" + normalizeRecords(numberedRecords)
 				+ "\n\nQuestion: " + question;
 		int timeoutSeconds = getTimeoutSeconds();
 
@@ -118,7 +118,7 @@ public class LlmProvider {
 	public LlmResponse searchStreaming(String numberedRecords, String question,
 			Consumer<String> tokenConsumer) {
 		String systemPrompt = getSystemPrompt();
-		String userMessage = "Patient records (most recent first):\n" + numberedRecords.stripTrailing()
+		String userMessage = "Patient records (most recent first):\n" + normalizeRecords(numberedRecords)
 				+ "\n\nQuestion: " + question;
 		int timeoutSeconds = getTimeoutSeconds();
 
@@ -126,6 +126,12 @@ public class LlmProvider {
 				systemPrompt, userMessage, timeoutSeconds, tokenConsumer);
 
 		return extractResponse(result.getText(), result.getInputTokens(), result.getOutputTokens());
+	}
+
+	private static String normalizeRecords(String numberedRecords) {
+		return (numberedRecords == null || numberedRecords.trim().isEmpty())
+				? "This patient has no records matching this query."
+				: numberedRecords.stripTrailing();
 	}
 
 	static LlmResponse extractResponse(String response, int inputTokens, int outputTokens) {

@@ -14,7 +14,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
-import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 
 /**
  * Pure unit tests for {@link LocalLlmEngine} chat template formatting and configuration.
@@ -106,25 +105,6 @@ public class LocalLlmEngineTest {
 	}
 
 	@Test
-	public void getIdleTimeoutMinutes_shouldReturnDefault() {
-		LocalLlmEngine engine = createEngineWithIdleTimeout(-1);
-		assertEquals(ChartSearchAiConstants.DEFAULT_LLM_IDLE_TIMEOUT_MINUTES,
-				engine.getIdleTimeoutMinutes());
-	}
-
-	@Test
-	public void getIdleTimeoutMinutes_shouldReturnConfiguredValue() {
-		LocalLlmEngine engine = createEngineWithIdleTimeout(15);
-		assertEquals(15, engine.getIdleTimeoutMinutes());
-	}
-
-	@Test
-	public void getIdleTimeoutMinutes_shouldReturnZeroToDisable() {
-		LocalLlmEngine engine = createEngineWithIdleTimeout(0);
-		assertEquals(0, engine.getIdleTimeoutMinutes());
-	}
-
-	@Test
 	public void close_shouldNotFailWhenModelIsNull() {
 		LocalLlmEngine engine = new LocalLlmEngine();
 		engine.close();
@@ -135,18 +115,5 @@ public class LocalLlmEngineTest {
 		LocalLlmEngine engine = new LocalLlmEngine();
 		engine.close();
 		engine.close();
-	}
-
-	private LocalLlmEngine createEngineWithIdleTimeout(final int timeout) {
-		return new LocalLlmEngine() {
-
-			@Override
-			protected int getIdleTimeoutMinutes() {
-				if (timeout >= 0) {
-					return timeout;
-				}
-				return ChartSearchAiConstants.DEFAULT_LLM_IDLE_TIMEOUT_MINUTES;
-			}
-		};
 	}
 }

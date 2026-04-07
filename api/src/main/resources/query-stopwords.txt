@@ -239,6 +239,7 @@ check
 current
 currently
 latest
+status
 describe
 detail
 details

@@ -64,13 +64,25 @@ public class ChartSearchAiConstants {
 	 * top semantic score when fewer than {@link #ADAPTIVE_MIN_RECORDS}
 	 * records match any query keyword. Without keyword corroboration, the
 	 * top semantic score must be a statistical outlier — not just part of
-	 * the noise floor. A z-score of 1.5 means the best match is in the
-	 * top ~6.7% of the score distribution, indicating genuine semantic
+	 * the noise floor. A z-score of 2.5 means the best match is in the
+	 * top ~0.6% of the score distribution, indicating genuine semantic
 	 * affinity rather than the embedding model grouping similar record
-	 * types together (e.g. all lab tests scoring ~0.27 for "HB results").
-	 * This threshold automatically adapts to any embedding model and
-	 * dataset size since it is relative to the score distribution. */
+	 * types together (e.g. all pulse records scoring ~0.26 for "CD4
+	 * count"). This threshold automatically adapts to any embedding
+	 * model and dataset size since it is relative to the score
+	 * distribution. */
 	public static final double ZERO_KEYWORD_MIN_Z_SCORE = 1.5;
+
+	/** Minimum z-score for zero-keyword candidates. After gap
+	 * detection and coherence filtering, surviving zero-keyword
+	 * candidates may be noise — records about an irrelevant topic
+	 * (e.g. pulse readings for a CD4 query) that scored slightly
+	 * above the dataset baseline. For small clusters (≤3
+	 * candidates) the max z-score is checked; for larger clusters
+	 * (≥4) the median z-score is used. This prevents a single
+	 * high-scoring false positive from pushing the max above
+	 * threshold while the cluster as a whole is noise. */
+	public static final double ZERO_KEYWORD_CLUSTER_MIN_Z = 2.5;
 
 	/** Minimum number of records required for the z-score gate to
 	 * activate. Below this threshold, the score distribution has too
@@ -167,6 +179,15 @@ public class ChartSearchAiConstants {
 
 	public static final String PIPELINE_HYBRID = "hybrid";
 
+	/** Fetch multiplier for the Elasticsearch pipeline. The ES pipeline
+	 * requests {@code topK * ES_FETCH_MULTIPLIER} results from the search
+	 * engine, then passes all of them through the filter pipeline. This
+	 * gives keyword rescue enough candidates to find all matching records
+	 * — without it, RRF's fixed window would limit keyword rescue to
+	 * only the top-K results, missing records that the embedding pipeline
+	 * (which scores ALL records) would find. */
+	public static final int ES_FETCH_MULTIPLIER = 10;
+
 	/** RRF window size — number of top results from each retriever
 	 * considered during rank fusion. Matches the Elasticsearch pipeline's
 	 * setting so both pipelines produce comparable results. */
@@ -176,6 +197,143 @@ public class ChartSearchAiConstants {
 	 * lose influence: score = 1 / (k + rank). Higher k produces more
 	 * uniform weighting across ranks. */
 	public static final int RRF_RANK_CONSTANT = 60;
+
+	/** Minimum cosine similarity for kNN results to be considered relevant.
+	 * Uses the same value as {@link #ABSOLUTE_SIMILARITY_FLOOR}
+	 * so both pipelines use the same relevance bar. */
+	public static final double KNN_MIN_SIMILARITY = ABSOLUTE_SIMILARITY_FLOOR;
+
+	/** Z-score threshold for the kNN fallback gate. When BM25 returns no
+	 * keyword matches, kNN results must score this many standard deviations
+	 * above the mean of all patient scores to be considered relevant. */
+	public static final double KNN_FALLBACK_Z_SCORE = 2.5;
+
+	/**
+	 * Computes a dynamic similarity floor using z-score gating. Returns
+	 * the higher of {@code absoluteFloor} and {@code mean + zThreshold * stddev}.
+	 *
+	 * @param scores all scores in the distribution
+	 * @param absoluteFloor minimum floor regardless of distribution
+	 * @param zThreshold number of standard deviations above mean
+	 * @return the effective minimum score threshold
+	 */
+	public static double zScoreFloor(double[] scores, double absoluteFloor,
+			double zThreshold) {
+		if (scores.length == 0) {
+			return absoluteFloor;
+		}
+		double sum = 0;
+		for (double s : scores) {
+			sum += s;
+		}
+		double mean = sum / scores.length;
+		double variance = 0;
+		for (double s : scores) {
+			variance += (s - mean) * (s - mean);
+		}
+		double stddev = Math.sqrt(variance / scores.length);
+		double zFloor = mean + zThreshold * stddev;
+		return Math.max(absoluteFloor, zFloor);
+	}
+
+	/**
+	 * Filters a set of embedding vectors by pairwise coherence, removing
+	 * topic outliers. Returns a boolean array where {@code true} means
+	 * the vector at that index should be kept.
+	 *
+	 * <p>Computes average pairwise cosine similarity for each vector against
+	 * all others. Detects a gap in the coherence distribution using the
+	 * same gap-multiplier approach as the embedding pipeline's coherence
+	 * filter: a gap must exceed both {@code COHERENCE_GAP_MULTIPLIER} times
+	 * the running average gap AND an adaptive minimum gap proportional to
+	 * the coherence range. Vectors below the gap are marked for removal.
+	 *
+	 * @param vectors the embedding vectors to filter
+	 * @return boolean array indicating which vectors to keep
+	 */
+	public static boolean[] filterByCoherence(float[][] vectors) {
+		int n = vectors.length;
+		boolean[] keep = new boolean[n];
+		if (n < 3) {
+			java.util.Arrays.fill(keep, true);
+			return keep;
+		}
+
+		// Compute pairwise cosine similarities
+		double[][] pairSim = new double[n][n];
+		for (int i = 0; i < n; i++) {
+			for (int j = i + 1; j < n; j++) {
+				double sim = cosineSimilarity(vectors[i], vectors[j]);
+				pairSim[i][j] = sim;
+				pairSim[j][i] = sim;
+			}
+		}
+
+		// Average coherence per vector
+		double[] coherence = new double[n];
+		for (int i = 0; i < n; i++) {
+			double s = 0;
+			for (int j = 0; j < n; j++) {
+				if (j != i) {
+					s += pairSim[i][j];
+				}
+			}
+			coherence[i] = s / (n - 1);
+		}
+
+		// Sort by coherence descending
+		Integer[] sortedIdx = new Integer[n];
+		for (int i = 0; i < n; i++) {
+			sortedIdx[i] = i;
+		}
+		java.util.Arrays.sort(sortedIdx, new java.util.Comparator<Integer>() {
+			@Override
+			public int compare(Integer a, Integer b) {
+				return Double.compare(coherence[b], coherence[a]);
+			}
+		});
+
+		// Gap detection
+		double maxCoherence = coherence[sortedIdx[0]];
+		double minCoherence = coherence[sortedIdx[n - 1]];
+		double coherenceRange = maxCoherence - minCoherence;
+		int refPairs = COHERENCE_REFERENCE_N - 1;
+		double scaleFactor = Math.max(1.0,
+				Math.sqrt((double) refPairs / (n - 1)));
+		double base = n <= COHERENCE_REFERENCE_N
+				? coherenceRange : maxCoherence;
+		double coherenceMinGap = base
+				* COHERENCE_ADAPTIVE_GAP_RATIO * scaleFactor;
+
+		int keepCount = n;
+		double gapSum = 0;
+		for (int i = 1; i < n; i++) {
+			double gap = coherence[sortedIdx[i - 1]] - coherence[sortedIdx[i]];
+			if (i >= ADAPTIVE_MIN_RECORDS && i >= 2) {
+				double avgGap = gapSum / (i - 1);
+				if (gap > avgGap * COHERENCE_GAP_MULTIPLIER
+						&& gap > coherenceMinGap) {
+					keepCount = i;
+					break;
+				}
+			}
+			gapSum += gap;
+		}
+
+		// Same-topic floor check
+		if (keepCount < n) {
+			double highestRemovedCoherence = coherence[sortedIdx[keepCount]];
+			if (highestRemovedCoherence >= COHERENCE_SAME_TOPIC_FLOOR) {
+				keepCount = n;
+			}
+		}
+
+		java.util.Arrays.fill(keep, false);
+		for (int i = 0; i < keepCount; i++) {
+			keep[sortedIdx[i]] = true;
+		}
+		return keep;
+	}
 
 	/**
 	 * Returns true if the given pipeline value uses a Lucene index
@@ -259,7 +417,7 @@ public class ChartSearchAiConstants {
 	 *        that have sub-types (e.g. drug orders vs test orders)
 	 * @return a descriptive prefix ending with ": "
 	 */
-	public static String getEmbeddingPrefix(String resourceType, String text) {
+	private static String getEmbeddingPrefix(String resourceType, String text) {
 		switch (resourceType) {
 			case RESOURCE_TYPE_OBS:
 				return "Clinical observation: ";
@@ -287,6 +445,19 @@ public class ChartSearchAiConstants {
 			default:
 				return "";
 		}
+	}
+
+	/**
+	 * Builds the full prefixed text used for embedding and keyword matching.
+	 * This is the single source of truth for the
+	 * {@code getEmbeddingPrefix(resourceType, text) + text} pattern.
+	 *
+	 * @param resourceType the resource type constant
+	 * @param text the serialized record text
+	 * @return the prefixed text ready for embedding or keyword scoring
+	 */
+	public static String buildPrefixedText(String resourceType, String text) {
+		return getEmbeddingPrefix(resourceType, text) + text;
 	}
 
 	/**

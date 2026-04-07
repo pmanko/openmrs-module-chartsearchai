@@ -117,7 +117,7 @@ public class ElasticsearchIndexerTest {
 
 		JsonNode source = root.path("_source");
 		assertTrue(source.isArray());
-		assertEquals(2, source.size());
+		assertEquals(4, source.size());
 
 		// RRF retriever structure
 		JsonNode rrf = root.path("retriever").path("rrf");
@@ -200,7 +200,7 @@ public class ElasticsearchIndexerTest {
 
 		JsonNode source = root.path("_source");
 		assertTrue(source.isArray());
-		assertEquals(2, source.size());
+		assertEquals(4, source.size());
 
 		assertTrue(root.path("retriever").isMissingNode(),
 				"OpenSearch should not have retriever API");
@@ -319,10 +319,14 @@ public class ElasticsearchIndexerTest {
 
 	@Test
 	public void elasticsearchSearchResult_shouldExposeFields() {
+		float[] embedding = new float[] { 0.1f, 0.2f };
 		ElasticsearchIndexer.ElasticsearchSearchResult result =
-				new ElasticsearchIndexer.ElasticsearchSearchResult("obs", 42, 1.5f);
+				new ElasticsearchIndexer.ElasticsearchSearchResult(
+						"obs", 42, 1.5f, embedding, "test text");
 		assertEquals("obs", result.getResourceType());
 		assertEquals(42, result.getResourceId());
 		assertEquals(1.5f, result.getScore(), 0.001f);
+		assertEquals(embedding, result.getEmbedding());
+		assertEquals("test text", result.getText());
 	}
 }

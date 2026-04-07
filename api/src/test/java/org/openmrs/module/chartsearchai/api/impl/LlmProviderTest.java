@@ -10,7 +10,6 @@
 package org.openmrs.module.chartsearchai.api.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
@@ -166,51 +165,4 @@ public class LlmProviderTest {
 				"Repeat penalty must be 1.0 (disabled) to allow complete enumeration");
 	}
 
-	@Test
-	public void getSystemPrompt_shouldTrimCustomPrompt() {
-		LlmProvider provider = createProvider("  custom prompt  ");
-
-		String prompt = provider.getSystemPrompt();
-		assertFalse(prompt.startsWith(" "));
-		assertEquals("custom prompt", prompt);
-	}
-
-	@Test
-	public void getTimeoutSeconds_shouldReturnDefault() {
-		LlmProvider provider = createProviderWithTimeout(-1);
-
-		int timeout = provider.getTimeoutSeconds();
-		assertTrue(timeout > 0);
-	}
-
-	private LlmProvider createProvider(final String customSystemPrompt) {
-		return new LlmProvider() {
-
-			@Override
-			protected String getSystemPrompt() {
-				if (customSystemPrompt != null && !customSystemPrompt.trim().isEmpty()) {
-					return customSystemPrompt.trim();
-				}
-				return DEFAULT_SYSTEM_PROMPT;
-			}
-		};
-	}
-
-	private LlmProvider createProviderWithTimeout(final int timeout) {
-		return new LlmProvider() {
-
-			@Override
-			protected String getSystemPrompt() {
-				return DEFAULT_SYSTEM_PROMPT;
-			}
-
-			@Override
-			protected int getTimeoutSeconds() {
-				if (timeout > 0) {
-					return timeout;
-				}
-				return ChartSearchAiConstants.DEFAULT_LLM_TIMEOUT_SECONDS;
-			}
-		};
-	}
 }

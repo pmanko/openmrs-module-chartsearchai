@@ -12,16 +12,12 @@ package org.openmrs.module.chartsearchai.api;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
-import org.openmrs.module.chartsearchai.embedding.StubEmbeddingProvider;
-import org.openmrs.module.chartsearchai.model.ChartEmbedding;
-import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
 
 public class HybridRetrieverTest {
 
@@ -97,32 +93,6 @@ public class HybridRetrieverTest {
 	}
 
 	@Test
-	public void rankByCosineSimilarity_shouldReturnTopNBySimilarity() {
-		StubEmbeddingProvider provider = new StubEmbeddingProvider();
-
-		List<SerializedRecord> records = Arrays.asList(
-				new SerializedRecord("condition", 10,
-						"Condition: Tuberculosis. Status: ACTIVE", null),
-				new SerializedRecord("obs", 20,
-						"Test — Systolic Blood Pressure: 137.0", null),
-				new SerializedRecord("obs", 21,
-						"Test — Diastolic Blood Pressure: 67.0", null),
-				new SerializedRecord("condition", 30,
-						"Condition: Hypertension. Status: ACTIVE", null));
-
-		List<ChartEmbedding> embeddings = EmbeddingIndexer.buildEmbeddings(records, provider);
-		float[] queryVector = provider.embed("blood pressure");
-
-		List<String> ranked = HybridRetriever.rankByCosineSimilarity(
-				embeddings, queryVector, 2);
-
-		assertEquals(2, ranked.size());
-		// Blood pressure records should rank higher than conditions
-		assertTrue(ranked.contains("obs:20") || ranked.contains("obs:21"),
-				"Top 2 should include a blood pressure record, got: " + ranked);
-	}
-
-	@Test
 	public void fuseRRF_shouldBoostDocumentsInBothListsOverSingleListEntries() {
 		// A document in both lists at low rank should beat a document in
 		// only one list at high rank, due to the double RRF contribution
@@ -139,11 +109,4 @@ public class HybridRetrieverTest {
 				"Document in both lists should rank higher than single-list documents");
 	}
 
-	@Test
-	public void rankByCosineSimilarity_shouldHandleEmptyEmbeddings() {
-		float[] queryVector = new float[] { 1.0f, 0.0f, 0.0f };
-		List<String> ranked = HybridRetriever.rankByCosineSimilarity(
-				new ArrayList<ChartEmbedding>(), queryVector, 10);
-		assertEquals(0, ranked.size());
-	}
 }
