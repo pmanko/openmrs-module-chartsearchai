@@ -49,16 +49,14 @@ public class LlmProvider {
 			+ "listing every record number you cited.\n\n"
 			+ "If no records are relevant, name what is missing. For example:\n"
 			+ "{\"answer\": \"There are no records about diabetes in this patient's chart.\", \"citations\": []}"
-			+ "\n\nExamples:\n\n"
+			+ "\n\n<examples>\n"
 			+ "Patient records (grouped by type, most recent first within each group):\n"
 			+ "Patient: 52-year-old Male\n\n"
 			+ "[1] (2024-11-05) Condition: Zarplexia. Status: ACTIVE. Verification: CONFIRMED\n"
 			+ "[2] (2024-09-20) Drug order: Venoflax 500mg. Dose: 1.0 Tablet(s) Oral twice daily."
 			+ " Action: NEW. Urgency: ROUTINE\n"
 			+ "[3] (2024-08-15) Test — Flobnar level: 12.4 mg/dL (HIGH)\n"
-			+ "[4] (2024-06-10) Test — Flobnar level: 9.8 mg/dL\n"
-			+ "[5] (2024-05-01) Allergy: Zyphenicol (drug allergen). Severity: Severe."
-			+ " Reactions: Rash\n\n"
+			+ "[4] (2024-06-10) Test — Flobnar level: 9.8 mg/dL\n\n"
 			+ "Question: What are the Flobnar levels?\n"
 			+ "{\"answer\": \"The Flobnar levels are 12.4 mg/dL (HIGH) on 2024-08-15 [3]"
 			+ " and 9.8 mg/dL on 2024-06-10 [4].\","
@@ -66,9 +64,6 @@ public class LlmProvider {
 			+ "Question: What medications is the patient on?\n"
 			+ "{\"answer\": \"The patient is on Venoflax 500mg, 1 tablet orally twice daily [2].\","
 			+ " \"citations\": [2]}\n\n"
-			+ "Question: Does the patient have any allergies?\n"
-			+ "{\"answer\": \"Yes, the patient has a severe allergy to Zyphenicol with a reaction"
-			+ " of Rash [5].\", \"citations\": [5]}\n\n"
 			+ "Question: How has the Flobnar level trended?\n"
 			+ "{\"answer\": \"The Flobnar level increased from 9.8 mg/dL on 2024-06-10 [4]"
 			+ " to 12.4 mg/dL (HIGH) on 2024-08-15 [3].\", \"citations\": [4, 3]}\n\n"
@@ -77,7 +72,8 @@ public class LlmProvider {
 			+ " \"citations\": []}\n\n"
 			+ "Question: What lab orders were placed?\n"
 			+ "{\"answer\": \"There are no lab order records in this patient's chart.\","
-			+ " \"citations\": []}";
+			+ " \"citations\": []}\n"
+			+ "</examples>";
 
 	@Autowired
 	@Qualifier("chartSearchAi.localLlmEngine")
