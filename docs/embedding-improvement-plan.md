@@ -27,7 +27,7 @@ This means queries like *"oral medications"*, *"twice daily dosing"*, or *"30-da
 
 ### A2. Semantic Prefix + First Sentence Creates a Narrow, Rigid Embedding
 
-**File:** `EmbeddingIndexer.java`, `ChartSearchAiConstants.java` (`getEmbeddingPrefix`)
+**File:** `EmbeddingIndexer.java`, `ChartSearchAiUtils.java` (`buildPrefixedText`, internal `getEmbeddingPrefix`)
 
 The embedded text is: `prefix + firstSentence(text)`. For example:
 ```
