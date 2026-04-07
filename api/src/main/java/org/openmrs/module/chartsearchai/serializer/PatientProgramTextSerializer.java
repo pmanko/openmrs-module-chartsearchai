@@ -30,6 +30,10 @@ public class PatientProgramTextSerializer implements ClinicalTextSerializer<Pati
 
 		if (patientProgram.getProgram() != null && patientProgram.getProgram().getName() != null) {
 			sb.append("Program: ").append(patientProgram.getProgram().getName());
+			String description = patientProgram.getProgram().getDescription();
+			if (description != null && !description.trim().isEmpty()) {
+				sb.append(" (").append(description.trim()).append(")");
+			}
 		}
 
 		if (patientProgram.getDateEnrolled() != null) {
