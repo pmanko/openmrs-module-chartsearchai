@@ -33,7 +33,7 @@ For project background, community discussion, and roadmap, see the [wiki project
 - Java 11+
 - OpenMRS Platform 2.8.0+
 - Webservices REST module 2.44.0+
-- 10GB+ RAM recommended (for local LLM inference with the default 8B model; not required when using a remote LLM)
+- 6GB+ RAM recommended (for local LLM inference with the default MedGemma 4B model; not required when using a remote LLM)
 - Elasticsearch 8.14+ *(optional, for the hybrid retrieval pipeline; the default embedding and Lucene pipelines require no external services)*
 
 ## Setup
@@ -50,7 +50,7 @@ The `.omod` file is in `omod/target/`.
 
 > **Skip this step** if you plan to use a remote LLM (see [LLM engine](#llm-engine) below).
 
-Download Llama 3.3 8B (Q4_K_M quantization) in GGUF format (~5GB) from [Hugging Face](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF).
+Download MedGemma 4B (Q4_K_M quantization) in GGUF format (~2.5GB) from [Hugging Face](https://huggingface.co/unsloth/medgemma-4b-it-GGUF).
 
 Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<openmrs-application-data-directory>/chartsearchai/`). Model paths are resolved relative to this directory for security.
 
@@ -59,8 +59,8 @@ Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<op
 | Model | RAM Needed | Chat Template | Download |
 |-------|-----------|---------------|----------|
 | Llama 3.2 3B | ~6GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) |
-| MedGemma 4B | ~5GB total | `gemma` | [GGUF](https://huggingface.co/unsloth/medgemma-4b-it-GGUF) |
-| Llama 3.3 8B *(default)* | ~10GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF) |
+| **MedGemma 4B** *(default)* | ~5GB total | `gemma` | [GGUF](https://huggingface.co/unsloth/medgemma-4b-it-GGUF) |
+| Llama 3.3 8B | ~10GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF) |
 | Mistral Nemo 12B | ~12GB total | `mistral` | [GGUF](https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF) |
 
 To switch models, update `chartsearchai.llm.modelFilePath` and `chartsearchai.llm.chatTemplate` — no rebuild needed. See [Evaluated models](#evaluated-models) for a full comparison of all models tested, including size trade-offs and licensing.
@@ -89,7 +89,7 @@ Set these global properties in **Admin > Settings**:
 
 | Property | Description |
 |----------|-------------|
-| `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf` |
+| `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/medgemma-4b-it-Q4_K_M.gguf` |
 
 **Remote engine** — set `chartsearchai.llm.engine` to `remote` and configure:
 
@@ -138,7 +138,7 @@ These settings apply when `chartsearchai.retrieval.pipeline` is `embedding` (the
 |----------|---------|-------------|
 | `chartsearchai.llm.systemPrompt` | *(built-in clinical prompt)* | System prompt that guides how the LLM responds — e.g. answering only the question asked, using only the provided patient records, citing records by number, naming what is missing when records lack relevant information (e.g. "There are no records about diabetes in this patient's chart"), keeping answers concise, and returning structured JSON |
 | `chartsearchai.llm.timeoutSeconds` | `120` | Maximum seconds to wait for LLM inference before timing out |
-| `chartsearchai.llm.chatTemplate` | `llama3` | *(Local engine only)* Chat template for formatting prompts. Presets: `llama3`, `mistral`, `phi3`, `chatml`, `gemma`. Set to `auto` to use the model's built-in GGUF chat template. Or a custom template string with `{system}` and `{user}` placeholders |
+| `chartsearchai.llm.chatTemplate` | `gemma` | *(Local engine only)* Chat template for formatting prompts. Presets: `llama3`, `mistral`, `phi3`, `chatml`, `gemma`. Set to `auto` to use the model's built-in GGUF chat template. Or a custom template string with `{system}` and `{user}` placeholders |
 | `chartsearchai.llm.idleTimeoutMinutes` | `30` | *(Local engine only)* Minutes of inactivity after which the LLM model is unloaded from memory to free RAM. The model is automatically reloaded on the next query. Set to `0` to keep the model loaded indefinitely |
 
 #### Rate limiting and caching
@@ -450,10 +450,10 @@ The following models were evaluated for local inference via java-llama.cpp (Q4_K
 | Qwen 2.5 1.5B | 1.5B | ~1GB | ~2GB | 32K tokens | ~40–50 tok/s | chatml |
 | Llama 3.2 3B | 3B | ~2GB | ~6GB | 128K tokens | ~20–30 tok/s | llama3 |
 | Phi-3 Mini 3.8B | 3.8B | ~2GB | ~4GB | 4K tokens | ~15–25 tok/s | phi3 |
-| MedGemma 4B | 4B | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s | gemma |
+| **MedGemma 4B** *(default)* | 4B | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s | gemma |
 | Mistral 7B | 7B | ~4GB | ~8GB | 32K tokens | ~10–15 tok/s | mistral |
 | Qwen 2.5 7B | 7B | ~4GB | ~8GB | 128K tokens | ~8–12 tok/s | chatml |
-| **Llama 3.3 8B** *(default)* | 8B | ~4.5GB | ~10GB | 128K tokens | ~8–12 tok/s | llama3 |
+| Llama 3.3 8B | 8B | ~4.5GB | ~10GB | 128K tokens | ~8–12 tok/s | llama3 |
 | Gemma 2 9B Instruct | 9B | ~5GB | ~10GB | 8K tokens | ~5–10 tok/s | gemma |
 | Mistral Nemo 12B | 12B | ~7GB | ~12GB | 128K tokens | ~4–8 tok/s | mistral |
 | Phi-3-Medium 14B | 14B | ~8GB | ~14GB | 4K tokens | ~3–6 tok/s | phi3 |
@@ -463,8 +463,8 @@ The following models were evaluated for local inference via java-llama.cpp (Q4_K
 ### Model size guidance
 
 - **3B models** (Llama 3.2 3B): Most deployable in low-resource settings but weaker instruction following — may produce verbose or hedging responses.
-- **4B models** (MedGemma 4B): Medical-domain fine-tuning at ~3B resource cost. Good for low-resource deployments where clinical accuracy matters. Licensed under [Health AI Developer Foundations Terms](https://developers.google.com/health-ai-developer-foundations/terms) — requires validation before clinical deployment.
-- **8B models** (Llama 3.3 8B): Recommended default. Significantly better reasoning and instruction following than 3B, feasible on 10GB RAM.
+- **4B models** (MedGemma 4B): Recommended default. Medical-domain fine-tuning at ~3B resource cost, with a 128K context window and ~10–20 tok/s CPU inference. Licensed under [Health AI Developer Foundations Terms](https://developers.google.com/health-ai-developer-foundations/terms) — requires validation before clinical deployment.
+- **8B models** (Llama 3.3 8B): Significantly better general reasoning and instruction following than 4B, feasible on 10GB RAM.
 - **12B models** (Mistral Nemo 12B): Best sub-15B option for clinical Q&A. Strong medical text comprehension.
 - **14B models** (Qwen 2.5 14B, Phi-3-Medium 14B): Best CPU-viable response quality, but slower (~2–4 tok/s) and need 14–16GB RAM.
 - **27B models** (MedGemma 27B Text): Highest potential clinical accuracy, but CPU inference (~1–2 tok/s) is too slow for interactive use — practical only with GPU acceleration.

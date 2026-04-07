@@ -562,16 +562,17 @@ As a safety net, any slash-separated citations that small LLMs occasionally prod
 
 See the [Evaluated models](../README.md#evaluated-models) section in the README for the full comparison table of all models tested, including size, RAM, context window, CPU speed, and licensing. The discussion below covers the detailed per-model analysis and trade-offs behind the recommendation.
 
-### Recommended model: Llama 3.3 8B
+### Recommended model: MedGemma 4B
 
-Llama 3.3 8B is the default recommendation. Its 128K token context window can hold approximately 6,000 serialized patient records (~15 tokens each), which comfortably accommodates even the largest patient charts. At 8B parameters with Q4_K_M quantization, it is ~5GB on disk and requires ~10GB total RAM. It offers strong instruction following and medical text comprehension — significantly better than 3B models at reasoning, citation accuracy, and avoiding hallucinations.
+MedGemma 4B is the default recommendation. Built on the Gemma 3 architecture and fine-tuned on clinical text, biomedical literature, medical Q&A, and synthetic EHR data, it is the smallest medical-specialist model in the MedGemma family. Its 128K token context window can hold approximately 6,000 serialized patient records (~15 tokens each), which comfortably accommodates even the largest patient charts. At 4B parameters with Q4_K_M quantization, it is ~2.5GB on disk and requires ~6–8GB total RAM. CPU inference is ~10–20 tok/s, fast enough for interactive use. Licensed under the [Health AI Developer Foundations Terms of Use](https://developers.google.com/health-ai-developer-foundations/terms) — requires validation before clinical deployment.
 
 ### Alternative models
 
 | Model | RAM Needed | Chat Template | Why |
 |-------|-----------|---------------|-----|
-| **Llama 3.2 3B** | ~6GB total | `llama3` | For low-resource deployments where 10GB RAM is not available. Faster inference but weaker instruction following and reasoning. |
-| **Mistral Nemo 12B** | ~12GB total | `mistral` | Best sub-15B option for clinical Q&A. Strong medical text comprehension and 128K context window. Requires changing both model path and chat template. |
+| **Llama 3.2 3B** | ~6GB total | `llama3` | For low-resource deployments where medical-domain fine-tuning is not required. Faster inference but weaker instruction following. Requires changing model path and chat template to `llama3`. |
+| **Llama 3.3 8B** | ~10GB total | `llama3` | Significantly better general reasoning and instruction following than 4B. Recommended when 10GB RAM is available. Requires changing model path and chat template to `llama3`. |
+| **Mistral Nemo 12B** | ~12GB total | `mistral` | Best sub-15B option for clinical Q&A. Strong medical text comprehension and 128K context window. Requires changing model path and chat template to `mistral`. |
 
 These models are from US/EU organizations (Meta and Mistral AI respectively), have strong performance on medical benchmarks, and use chat templates already supported by the module. Switching requires only two global property changes (`modelFilePath` and `chatTemplate`) — no code changes or module rebuild.
 
@@ -655,7 +656,7 @@ The module works with any GGUF-format model. Larger models produce better respon
 
 **4B models** (e.g. MedGemma 4B) occupy a sweet spot between 3B and 7B — similar resource cost to 3B models (~6–8GB total RAM) but with medical-domain fine-tuning. MedGemma 4B's 128K context window and ~10–20 tok/s CPU inference make it viable for interactive use in low-resource settings. The trade-off versus general-purpose 8B models is that medical fine-tuning improves clinical text comprehension but may reduce general instruction-following ability compared to Llama 3.3 8B. Note that the Health AI Developer Foundations license requires validation before clinical deployment.
 
-**8B models** (e.g. Llama 3.3 8B) are the recommended default — significantly better instruction following and clinical reasoning than 3B, while still feasible on a server with 10GB RAM.
+**8B models** (e.g. Llama 3.3 8B) offer significantly better instruction following and clinical reasoning than 3B, while still feasible on a server with 10GB RAM. Recommended upgrade when hardware allows.
 
 **9B models** (e.g. Gemma 2 9B Instruct) offer excellent reasoning and instruction following. Note that Gemma 2's 8K context window is smaller than Llama or Qwen models, so embedding pre-filtering is strongly recommended.
 
@@ -669,7 +670,7 @@ A server running OpenMRS typically uses 1–2GB for the JVM heap. A 4GB machine 
 
 The module requires sufficient RAM for both the OpenMRS JVM and the LLM model:
 - **Minimum**: ~6GB total (1–2GB JVM + 3–4GB for a 3B model). Usable but with weaker instruction following and reasoning.
-- **Recommended**: ~10GB total for the default 8B model, which provides significantly better response quality.
+- **Recommended**: ~6–8GB total for the default MedGemma 4B model. Upgrade to ~10GB for the 8B model, which provides significantly better general reasoning.
 - The embedding pre-filter (default: enabled) reduces the number of tokens sent to the LLM, which improves both response quality and latency for large patient charts.
 
 ### Decision

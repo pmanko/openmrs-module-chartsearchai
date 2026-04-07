@@ -57,8 +57,8 @@
 
 	<globalProperty>
 		<property>chartsearchai.llm.modelFilePath</property>
-		<defaultValue>chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf</defaultValue>
-		<description>Relative path, including the filename, within the OpenMRS application data directory to the GGUF LLM model file used for inference. Example: chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf (resolves to &lt;application-data-directory&gt;/chartsearchai/Llama-3.3-8B-Instruct-Q4_K_M.gguf). The recommended model is Llama 3.3 8B Instruct (Q4_K_M quantization, ~5GB). Download from https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF. Path traversal (e.g. "..") is not allowed.</description>
+		<defaultValue>chartsearchai/medgemma-4b-it-Q4_K_M.gguf</defaultValue>
+		<description>Relative path, including the filename, within the OpenMRS application data directory to the GGUF LLM model file used for inference. Example: chartsearchai/medgemma-4b-it-Q4_K_M.gguf (resolves to &lt;application-data-directory&gt;/chartsearchai/medgemma-4b-it-Q4_K_M.gguf). The recommended model is MedGemma 4B Instruct (Q4_K_M quantization, ~2.5GB). Download from https://huggingface.co/unsloth/medgemma-4b-it-GGUF. Path traversal (e.g. "..") is not allowed.</description>
 	</globalProperty>
 
 	<globalProperty>
@@ -75,8 +75,8 @@
 
 	<globalProperty>
 		<property>chartsearchai.llm.chatTemplate</property>
-		<defaultValue>llama3</defaultValue>
-		<description>Chat template for formatting prompts sent to the LLM. Use a preset name (llama3, mistral, phi3, chatml, gemma) or a custom template string with {system} and {user} placeholders. Default: llama3.</description>
+		<defaultValue>gemma</defaultValue>
+		<description>Chat template for formatting prompts sent to the LLM. Use a preset name (llama3, mistral, phi3, chatml, gemma) or a custom template string with {system} and {user} placeholders. Default: gemma.</description>
 	</globalProperty>
 
 	<globalProperty>
