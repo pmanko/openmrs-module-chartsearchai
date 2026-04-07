@@ -133,6 +133,8 @@ Split patient chart into time-based segments, classify each for relevance, only 
 
 Semantic search index as the primary retrieval mechanism. Concept graph traversal is deferred to future work as a potential complement for structured data lookups.
 
+> **Note:** Later decisions combine this embedding approach with keyword search for better recall. Decision 14 adds Elasticsearch hybrid search (BM25 + kNN via RRF), and Decision 15 provides the same hybrid approach entirely in-process with no external dependencies.
+
 ## Decision 4: Concise text as LLM input format
 
 ### Analysis
@@ -873,9 +875,11 @@ Add Lucene BM25 as an alternative retrieval pipeline, selectable via the `charts
 
 The embedding pipeline (Decision 3) uses a custom scoring system with cosine similarity, keyword matching, gap detection, z-score gating, coherence filtering, and type boosting. While effective, this hand-rolled scoring logic is complex — many tunable parameters, subtle interactions between stages, and edge cases that require careful calibration. The Lucene pipeline (Decision 13) demonstrated that BM25 alone misses semantic matches: "any cancer?" returns nothing when the patient has Kaposi sarcoma records, because no record contains the literal word "cancer".
 
-OpenMRS Platform 2.8+ supports Elasticsearch 8.17 via Hibernate Search, configured through the `OMRS_SEARCH=elasticsearch` environment variable which sets `hibernate.search.backend.type=elasticsearch` and `hibernate.search.backend.uris` in runtime properties. The low-level `elasticsearch-rest-client` is already on the classpath.
+OpenMRS Platform 2.8+ supports Elasticsearch 8.17 via Hibernate Search, configured through the `OMRS_SEARCH=elasticsearch` environment variable which sets `hibernate.search.backend.type=elasticsearch` and `hibernate.search.backend.uris` in runtime properties. The low-level `elasticsearch-rest-client` is already on the classpath. A single-node instance is sufficient — multi-node clustering is not required.
 
 Elasticsearch 8.14+ provides a native Reciprocal Rank Fusion (RRF) retriever that combines multiple ranking signals in a single query. RRF is an established algorithm: `score = Σ 1/(k + rank_i)` where `k` is a constant (typically 60) and `rank_i` is the document's position in each ranking. This fuses BM25 text search with kNN approximate nearest neighbor search without requiring custom scoring code.
+
+**Important licensing constraint:** Elasticsearch's RRF retriever requires a paid Platinum or Enterprise subscription. **OpenSearch 2.19+ is the recommended alternative** because it provides RRF for free. The module auto-detects whether the backend is Elasticsearch or OpenSearch and adapts its queries accordingly. If neither a paid Elasticsearch subscription nor OpenSearch is available, the in-process hybrid pipeline (Decision 15) provides the same BM25 + kNN + RRF approach with no external dependencies.
 
 ### Decision
 
@@ -888,7 +892,7 @@ Add an Elasticsearch hybrid search pipeline as a third retrieval option (`charts
    - A `knn` retriever running approximate nearest neighbor search on the `embedding` field (handles semantic matches)
    - RRF fuses the rankings: a document that appears in both rankings scores higher than one in only one
 
-3. **Post-retrieval filter pipeline** — Elasticsearch RRF handles scoring and fusion, but the kNN sub-retriever always returns its full `size` of results regardless of relevance. Unlike BM25 (which only returns documents containing query terms), kNN returns the *k nearest* vectors — and in a small patient chart, even the "nearest" vectors can be semantically unrelated to the query. RRF then ranks these low-quality kNN results alongside genuine BM25 matches, inflating the final result set with noise. Without post-retrieval filtering, a query like "latest blood pressure" could return 10 results where only 2 are actually about blood pressure, because 8 irrelevant records happened to be the nearest neighbors in embedding space. To address this, `LlmInferenceService.filterEsResults()` applies a post-retrieval filter pipeline to the RRF results: gap detection (large score drops between consecutive results), keyword scoring (exact query-term overlap), z-score gating (statistical outlier removal), and coherence filtering (topic-outlier removal via pairwise embedding similarity). This reuses the same filter logic as the embedding pipeline but applies it *after* Elasticsearch ranking rather than *instead of* it.
+3. **Post-retrieval filter pipeline** (applied only to Elasticsearch RRF results, not to the base embedding pipeline) — Elasticsearch RRF handles scoring and fusion, but the kNN sub-retriever always returns its full `size` of results regardless of relevance. Unlike BM25 (which only returns documents containing query terms), kNN returns the *k nearest* vectors — and in a small patient chart, even the "nearest" vectors can be semantically unrelated to the query. RRF then ranks these low-quality kNN results alongside genuine BM25 matches, inflating the final result set with noise. Without post-retrieval filtering, a query like "latest blood pressure" could return 10 results where only 2 are actually about blood pressure, because 8 irrelevant records happened to be the nearest neighbors in embedding space. To address this, `LlmInferenceService.filterEsResults()` applies a post-retrieval filter pipeline to the RRF results: gap detection (large score drops between consecutive results), keyword scoring (exact query-term overlap), z-score gating (statistical outlier removal), and coherence filtering (topic-outlier removal via pairwise embedding similarity). This reuses the same filter logic as the embedding pipeline but applies it *after* Elasticsearch ranking rather than *instead of* it.
 
 4. **Graceful fallback** — if Elasticsearch is not available (not configured or unreachable), the pipeline falls back to the embedding pipeline at query time. This makes it safe to set `pipeline=elasticsearch` even in environments where ES may be temporarily unavailable.
 
@@ -896,7 +900,7 @@ Add an Elasticsearch hybrid search pipeline as a third retrieval option (`charts
 
 **Why RRF over a weighted linear combination?** RRF is rank-based, not score-based. It doesn't require normalizing BM25 scores (which are unbounded) against cosine similarity scores (which range 0–1). This avoids the calibration problem that made the embedding pipeline's `keywordWeight` parameter sensitive to tune.
 
-**Why not replace the embedding pipeline?** The embedding pipeline works without any external services — it runs entirely in-process with the ONNX model. The Elasticsearch pipeline requires a running Elasticsearch instance, which not all OpenMRS deployments have. The embedding pipeline remains the default for self-contained deployments.
+**Why not replace the embedding pipeline?** The embedding pipeline works without any external services — it runs entirely in-process with the ONNX model. The Elasticsearch pipeline requires a running Elasticsearch or OpenSearch instance, which not all OpenMRS deployments have. The embedding pipeline remains the default for self-contained deployments. For deployments that want hybrid search quality without running Elasticsearch or OpenSearch, see Decision 15 for an in-process alternative.
 
 **Why `provided` scope for the ES REST client?** The `elasticsearch-rest-client` JAR is already on the classpath via `hibernate-search-backend-elasticsearch`. Using `provided` scope avoids bundling a duplicate in the `.omod` and prevents version conflicts.
 
@@ -906,7 +910,7 @@ Add an Elasticsearch hybrid search pipeline as a third retrieval option (`charts
 
 Each existing retrieval pipeline has a blind spot. The Lucene pipeline (Decision 13) provides fast keyword search with no external dependencies, but misses semantic matches — "any cancer?" returns nothing when the patient has Kaposi sarcoma records because no record contains the literal word "cancer." The embedding pipeline (Decision 3) captures these semantic relationships, but misses exact keyword matches — a search for a specific drug name may rank semantically similar but wrong medications higher than an exact match. The Elasticsearch pipeline (Decision 14) solves both problems with hybrid RRF search, but requires a running Elasticsearch 8.14+ instance — a dependency that many OpenMRS deployments do not have, especially in low-resource settings where the platform runs with only MySQL.
 
-This left deployments without Elasticsearch forced to choose between keyword-only or semantic-only retrieval, each with known failure modes that the other would catch.
+This left deployments without Elasticsearch (or without a paid Elasticsearch subscription / OpenSearch instance — see Decision 14's licensing note) forced to choose between keyword-only or semantic-only retrieval, each with known failure modes that the other would catch.
 
 ### Decision
 
@@ -926,6 +930,8 @@ Add an in-process hybrid retrieval pipeline (`chartsearchai.retrieval.pipeline=h
 **Why not just use the Elasticsearch pipeline?** The Elasticsearch pipeline requires a running Elasticsearch 8.14+ instance. Many OpenMRS deployments — especially in low-resource settings — run only the core platform with MySQL. The hybrid pipeline provides the same search quality (BM25 + kNN + RRF) using only in-process components (Lucene + ONNX embeddings + Java RRF implementation).
 
 **Why RRF instead of a weighted linear combination?** Same reasoning as Decision 14: RRF is rank-based, not score-based, so it avoids the calibration problem of normalizing BM25 scores (unbounded) against cosine similarity scores (0–1).
+
+**Benchmark comparison**: On a 153-record evaluation dataset, the embedding pipeline achieved 0.748 average recall while the hybrid pipeline achieved 0.659. The gap is due to the hybrid pipeline's fixed-size `topK` output — it always returns exactly `topK` records, which fails on adversarial queries (cannot return empty when no records match) and broad queries (e.g., blood pressure) where more than `topK` records are relevant. The embedding pipeline's adaptive filtering (gap detection, floor gates, type-aware expansion) handles these cases. The hybrid pipeline is still valuable for deployments that need both keyword and semantic matching without Elasticsearch, but the embedding pipeline is recommended as the default.
 
 **Trade-off vs. Elasticsearch pipeline**: The in-process kNN search is exact (brute-force cosine similarity over all patient embeddings), not approximate. This is fine for typical patient chart sizes (hundreds to low thousands of records) but would not scale to corpus-wide search. The Elasticsearch pipeline uses approximate kNN via HNSW, which scales better for large indexes.
 
