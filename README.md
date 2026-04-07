@@ -277,6 +277,17 @@ Also ensure the ONNX embedding model and vocab files are configured (same as the
 curl http://localhost:9200/chartsearchai-patient-records/_count
 ```
 
+### Elasticsearch unavailability
+
+If Elasticsearch is unreachable (not running, network issue, misconfigured URI), the module continues to work normally:
+
+- **Startup:** The module starts successfully without checking Elasticsearch connectivity. The client is created lazily on first use.
+- **Queries:** Each query calls `GET /_cluster/health` to check availability. If the check fails, the query automatically falls back to the embedding pipeline. No error is returned to the caller — users still get search results.
+- **Indexing:** When patient data changes (new obs, conditions, orders, etc.), the module attempts to re-index in Elasticsearch. If the connection fails, the error is logged and swallowed — the data change proceeds normally.
+- **Recovery:** There is no retry or circuit-breaker logic. Each request independently checks availability, so if Elasticsearch comes back online, the next query automatically uses it.
+
+In short, the Elasticsearch pipeline is a best-effort enhancement. The module never fails because of Elasticsearch — it silently degrades to the embedding pipeline and silently recovers when Elasticsearch becomes available again.
+
 **5. To reset and re-index**, delete the ES index:
 
 ```
