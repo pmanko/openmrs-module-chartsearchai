@@ -40,7 +40,7 @@ public class LlmProvider {
 	private static final Logger log = LoggerFactory.getLogger(LlmProvider.class);
 
 	static final String DEFAULT_SYSTEM_PROMPT = "You are a clinical assistant helping a clinician "
-			+ "review a patient's chart. Answer ONLY the specific question asked. "
+			+ "review a patient's chart. Answer ONLY the specific query. "
 			+ "Use only the patient records below (grouped by type, most recent first within each group). "
 			+ "Never infer, assume, or add information not explicitly stated in the records. "
 			+ "Include ALL relevant records in your answer — never omit any for brevity. "
@@ -54,10 +54,10 @@ public class LlmProvider {
 			+ "[1] (2024-03-10) Fruit delivery: 12 apples\n"
 			+ "[2] (2024-02-15) Fruit delivery: 8 oranges\n"
 			+ "[3] (2024-01-20) Fruit delivery: 5 apples\n\n"
-			+ "Question: How many apples were delivered?\n"
+			+ "Clinician's query: How many apples were delivered?\n"
 			+ "{\"answer\": \"12 apples on 2024-03-10 [1] and 5 apples on 2024-01-20 [3].\","
 			+ " \"citations\": [1, 3]}\n\n"
-			+ "Question: Were any bananas delivered?\n"
+			+ "Clinician's query: Were any bananas delivered?\n"
 			+ "{\"answer\": \"There are no records of banana deliveries.\", \"citations\": []}\n\n"
 			+ "END OF FORMAT DEMONSTRATION. Now answer using ONLY the actual patient records below.";
 
@@ -79,7 +79,7 @@ public class LlmProvider {
 	public LlmResponse search(String numberedRecords, String question) {
 		String systemPrompt = getSystemPrompt();
 		String userMessage = "Patient records (most recent first):\n" + normalizeRecords(numberedRecords)
-				+ "\n\nQuestion: " + question;
+				+ "\n\nClinician's query: " + question;
 		int timeoutSeconds = getTimeoutSeconds();
 
 		LlmEngine.InferenceResult result = getActiveEngine().infer(
@@ -101,7 +101,7 @@ public class LlmProvider {
 			Consumer<String> tokenConsumer) {
 		String systemPrompt = getSystemPrompt();
 		String userMessage = "Patient records (most recent first):\n" + normalizeRecords(numberedRecords)
-				+ "\n\nQuestion: " + question;
+				+ "\n\nClinician's query: " + question;
 		int timeoutSeconds = getTimeoutSeconds();
 
 		LlmEngine.InferenceResult result = getActiveEngine().inferStreaming(
