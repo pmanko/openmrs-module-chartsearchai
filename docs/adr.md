@@ -950,7 +950,7 @@ Do not adopt LangChain or LangChain4j. The module's purpose-built pipeline alrea
 | Document loaders | `PatientRecordLoader` + per-type text serializers |
 | Text splitting | Not needed — clinical records are discrete units |
 | Embeddings | `OnnxEmbeddingProvider` (in-process ONNX Runtime) |
-| Vector store | Hibernate-backed `chart_embedding` table |
+| Vector store | Hibernate-backed `chartsearchai_embedding` table |
 | Retrievers | 3 pipelines with z-score gate, gap detection, type-aware expansion |
 | LLM client | `LlmProvider` via java-llama.cpp |
 | Output parsing | GBNF grammar constraint + JSON extraction |
@@ -1012,7 +1012,7 @@ RemoteLlmEngine
 |---|---|---|
 | Data privacy | Data stays on server | Self-hosted: data stays on local network. Cloud: data sent to provider |
 | Latency | Higher (CPU inference) | Lower (GPU-accelerated inference) |
-| Model capability | Limited by RAM (3B-12B) | Self-hosted: limited by GPU VRAM. Cloud: access to frontier models |
+| Model capability | Limited by RAM (3B-27B) | Self-hosted: limited by GPU VRAM. Cloud: access to frontier models |
 | Cost | Hardware only | Self-hosted: GPU hardware. Cloud: per-token API pricing |
 | Availability | Always available | Self-hosted: always available on local network. Cloud: requires internet, subject to API outages |
 | Setup | Download GGUF file | Configure endpoint URL, API key, model name |
