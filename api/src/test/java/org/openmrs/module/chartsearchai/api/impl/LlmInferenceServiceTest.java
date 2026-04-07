@@ -2028,4 +2028,22 @@ public class LlmInferenceServiceTest {
 				"Keyword refinement should allow exceeding topK=3, got " + result.size());
 	}
 
+	@Test
+	public void integration_pregnancyQuery_shouldReturnAbortionRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"ever got pregnant?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K,
+				THIRD_PATIENT_DATASET);
+
+		// [137] Self-Induced Abortion condition = index 136
+		// [139] Self-Induced Abortion diagnosis = index 138
+		assertTrue(result.contains(136),
+				"Should include Self-Induced Abortion condition, got: " + result);
+		assertTrue(result.contains(138),
+				"Should include Self-Induced Abortion diagnosis, got: " + result);
+	}
+
 }
