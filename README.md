@@ -116,7 +116,7 @@ The remote engine works with any server that implements the OpenAI chat completi
 
 #### Embedding pipeline tuning
 
-These settings only apply when `chartsearchai.retrieval.pipeline` is `embedding` (the default). They have no effect on the Lucene or Elasticsearch pipelines.
+These settings apply when `chartsearchai.retrieval.pipeline` is `embedding` (the default). The Elasticsearch pipeline also uses `scoreGapMultiplier`, `minScoreGap`, `gapValidationCosineThreshold`, `keywordWeight`, and `similarityRatio` in its post-retrieval filter pipeline. They have no effect on the Lucene or hybrid pipelines.
 
 | Property | Default | Description |
 |----------|---------|-------------|
@@ -124,6 +124,7 @@ These settings only apply when `chartsearchai.retrieval.pipeline` is `embedding`
 | `chartsearchai.embedding.similarityRatio` | `0.80` | Minimum similarity score as a fraction of the top result's score. Records scoring below this ratio are excluded even if within the topK limit. Must be between 0 and 1 |
 | `chartsearchai.embedding.scoreGapMultiplier` | `2.5` | Controls adaptive topK by detecting natural cluster boundaries in similarity scores. Higher values include more records; lower values cut more aggressively. Set to a very large value (e.g. 999) to disable gap detection |
 | `chartsearchai.embedding.minScoreGap` | `0.10` | Minimum absolute gap between consecutive similarity scores required for the adaptive cutoff detector to trigger. Prevents premature cutting when a relatively large gap (compared to a tight cluster's running average) is still small in absolute terms. Only applies when gap detection is active |
+| `chartsearchai.embedding.gapValidationCosineThreshold` | `0.47` | Cosine similarity threshold for validating whether a detected gap is intra-topic or inter-topic. When the average cosine between records above and below the gap meets or exceeds this value, the gap is considered intra-topic and the cut is skipped. Must be between 0 and 1 |
 | `chartsearchai.embedding.keywordWeight` | `0.3` | Additive keyword bonus weight in the hybrid retrieval formula: `finalScore = semanticScore + weight × keywordScore`. Keyword overlap can only increase the score, never decrease it. Set to `0` to disable keyword matching |
 | `chartsearchai.embedding.typeBoostFactor` | `1.0` | Score multiplier applied to records whose resource type matches the query intent (e.g., drug orders when the query is about medications). Set to `1.0` to disable type boosting (default). Values like `1.2`–`1.5` provide moderate boosting. Must be between 1.0 and 3.0 |
 | `chartsearchai.embedding.queryPrefix` | *(empty)* | Prefix prepended to the user query before embedding. Leave empty for models like all-MiniLM-L6-v2 that were not trained with instruction prefixes. Set to `search_query: ` or `Represent this sentence for searching relevant passages: ` for models that support instruction-aware queries (e.g., BGE) |
