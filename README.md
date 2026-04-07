@@ -33,7 +33,7 @@ For project background, community discussion, and roadmap, see the [wiki project
 - Java 11+
 - OpenMRS Platform 2.8.0+
 - Webservices REST module 2.44.0+
-- 6GB+ RAM recommended (for local LLM inference with the default MedGemma 4B model; not required when using a remote LLM)
+- 6GB+ RAM recommended (for local LLM inference with the default MedGemma 1.5 4B model; not required when using a remote LLM)
 - Elasticsearch 8.14+ *(optional, for the hybrid retrieval pipeline; the default embedding and Lucene pipelines require no external services)*
 
 ## Setup
@@ -50,7 +50,7 @@ The `.omod` file is in `omod/target/`.
 
 > **Skip this step** if you plan to use a remote LLM (see [LLM engine](#llm-engine) below).
 
-Download MedGemma 4B (Q4_K_M quantization) in GGUF format (~2.5GB) from [Hugging Face](https://huggingface.co/unsloth/medgemma-4b-it-GGUF).
+Download MedGemma 1.5 4B (Q4_K_M quantization) in GGUF format (~2.5GB) from [Hugging Face](https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF).
 
 Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<openmrs-application-data-directory>/chartsearchai/`). Model paths are resolved relative to this directory for security.
 
@@ -59,9 +59,12 @@ Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<op
 | Model | RAM Needed | Chat Template | Download |
 |-------|-----------|---------------|----------|
 | Llama 3.2 3B | ~6GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) |
-| **MedGemma 4B** *(default)* | ~6–8GB total | `gemma` | [GGUF](https://huggingface.co/unsloth/medgemma-4b-it-GGUF) |
+| **MedGemma 1.5 4B** *(default)* | ~6–8GB total | `gemma` | [GGUF](https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF) |
+| Gemma 4 E4B | ~6–8GB total | `gemma` | [GGUF](https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF) |
 | Llama 3.3 8B | ~10GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF) |
+| Gemma 3 12B | ~12GB total | `gemma` | [GGUF](https://huggingface.co/bartowski/google_gemma-3-12b-it-GGUF) |
 | Mistral Nemo 12B | ~12GB total | `mistral` | [GGUF](https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF) |
+| Gemma 4 31B | ~20–24GB total | `gemma` | [GGUF](https://huggingface.co/bartowski/google_gemma-4-31B-it-GGUF) |
 
 To switch models, update `chartsearchai.llm.modelFilePath` and `chartsearchai.llm.chatTemplate` — no rebuild needed. See [Evaluated models](#evaluated-models) for a full comparison of all models tested, including size trade-offs and licensing.
 
@@ -89,7 +92,7 @@ Set these global properties in **Admin > Settings**:
 
 | Property | Description |
 |----------|-------------|
-| `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/medgemma-4b-it-Q4_K_M.gguf` |
+| `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/medgemma-1.5-4b-it-Q4_K_M.gguf` |
 
 **Remote engine** — set `chartsearchai.llm.engine` to `remote` and configure:
 
@@ -448,37 +451,51 @@ The following models were evaluated for local inference via java-llama.cpp (Q4_K
 | Model | Params | File Size | Total RAM | Context Window | CPU Speed | Chat Template |
 |-------|--------|-----------|-----------|----------------|-----------|---------------|
 | Qwen 2.5 1.5B | 1.5B | ~1GB | ~2GB | 32K tokens | ~40–50 tok/s | chatml |
+| Gemma 3 1B | 1B | ~0.7GB | ~2GB | 32K tokens | ~40–50 tok/s | gemma |
+| Gemma 3n E2B | E2B (5B total) | ~1.5GB | ~3GB | 32K tokens | ~25–35 tok/s | gemma |
+| Gemma 4 E2B | E2B (2.3B eff) | ~1.5GB | ~3–5GB | 128K tokens | ~25–35 tok/s | gemma |
 | Llama 3.2 3B | 3B | ~2GB | ~6GB | 128K tokens | ~20–30 tok/s | llama3 |
 | Phi-3 Mini 3.8B | 3.8B | ~2GB | ~4GB | 4K tokens | ~15–25 tok/s | phi3 |
-| **MedGemma 4B** *(default)* | 4B | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s | gemma |
+| Gemma 3 4B | 4B | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s | gemma |
+| Gemma 3n E4B | E4B (8B total) | ~2.5GB | ~3–5GB | 32K tokens | ~15–25 tok/s | gemma |
+| Gemma 4 E4B | E4B (4.5B eff) | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s | gemma |
+| **MedGemma 1.5 4B** *(default)* | 4B | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s | gemma |
+| MedGemma 4B | 4B | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s | gemma |
 | Mistral 7B | 7B | ~4GB | ~8GB | 32K tokens | ~10–15 tok/s | mistral |
 | Qwen 2.5 7B | 7B | ~4GB | ~8GB | 128K tokens | ~8–12 tok/s | chatml |
 | Llama 3.3 8B | 8B | ~4.5GB | ~10GB | 128K tokens | ~8–12 tok/s | llama3 |
 | Gemma 2 9B Instruct | 9B | ~5GB | ~10GB | 8K tokens | ~5–10 tok/s | gemma |
+| Gemma 3 12B | 12B | ~7GB | ~12GB | 128K tokens | ~4–8 tok/s | gemma |
 | Mistral Nemo 12B | 12B | ~7GB | ~12GB | 128K tokens | ~4–8 tok/s | mistral |
 | Phi-3-Medium 14B | 14B | ~8GB | ~14GB | 4K tokens | ~3–6 tok/s | phi3 |
 | Qwen 2.5 14B | 14B | ~8GB | ~14GB | 128K tokens | ~3–6 tok/s | chatml |
+| Gemma 4 26B MoE | 26B (3.8B active) | ~15GB | ~18–22GB | 256K tokens | ~3–6 tok/s | gemma |
+| Gemma 3 27B | 27B | ~16.5GB | ~20–24GB | 128K tokens | ~1–2 tok/s | gemma |
 | MedGemma 27B Text | 27B | ~16.5GB | ~20–24GB | 128K tokens | ~1–2 tok/s | gemma |
+| Gemma 4 31B | 31B | ~18GB | ~22–26GB | 256K tokens | ~1–2 tok/s | gemma |
 
 ### Model size guidance
 
+- **1–2B models** (Gemma 3 1B, Gemma 3n E2B, Gemma 4 E2B): Ultra-low-resource or on-device deployments. Gemma 3n and Gemma 4 "E" models use Per-Layer Embeddings (PLE) for memory efficiency — E2B runs in as little as ~3GB RAM. Weaker reasoning but fast inference. Gemma 4 E2B offers 128K context; Gemma 3 1B and 3n E2B are limited to 32K.
 - **3B models** (Llama 3.2 3B): Most deployable in low-resource settings but weaker instruction following — may produce verbose or hedging responses.
-- **4B models** (MedGemma 4B): Recommended default. Medical-domain fine-tuning at ~3B resource cost, with a 128K context window and ~10–20 tok/s CPU inference. Licensed under [Health AI Developer Foundations Terms](https://developers.google.com/health-ai-developer-foundations/terms) — requires validation before clinical deployment.
+- **4B models** (MedGemma 1.5 4B, Gemma 4 E4B): Recommended default tier. MedGemma 1.5 4B provides medical-domain fine-tuning with improved medical imaging support. Gemma 4 E4B is a strong general-purpose alternative under the permissive Apache 2.0 license. Both offer 128K context and ~10–20 tok/s CPU inference at ~6–8GB total RAM.
 - **8B models** (Llama 3.3 8B): Significantly better general reasoning and instruction following than 4B, feasible on 10GB RAM.
-- **12B models** (Mistral Nemo 12B): Best sub-15B option for clinical Q&A. Strong medical text comprehension.
+- **12B models** (Gemma 3 12B, Mistral Nemo 12B): Best sub-15B options for clinical Q&A. Gemma 3 12B offers 128K context with strong reasoning. Mistral Nemo 12B has strong medical text comprehension.
 - **14B models** (Qwen 2.5 14B, Phi-3-Medium 14B): Best CPU-viable response quality, but slower (~2–4 tok/s) and need 14–16GB RAM.
-- **27B models** (MedGemma 27B Text): Highest potential clinical accuracy, but CPU inference (~1–2 tok/s) is too slow for interactive use — practical only with GPU acceleration.
+- **26–31B models** (Gemma 4 26B MoE, Gemma 4 31B, MedGemma 27B Text): Highest quality tier. Gemma 4 26B MoE activates only 3.8B parameters per token, offering faster inference than dense models at this size. Gemma 4 31B Dense offers the best general reasoning under Apache 2.0. MedGemma 27B Text is the medical-domain specialist. All require ~20GB+ RAM and are practical mainly with GPU acceleration.
 
 A server running OpenMRS typically uses 1–2GB for the JVM heap. A 4GB machine is insufficient — the smallest viable model requires at least 3–4GB on its own.
 
 ### Licensing notes
 
+- **Gemma 4** (Google): Apache 2.0 license — fully permissive, no usage restrictions. The first Gemma family release under a standard open-source license.
+- **Gemma 3, Gemma 3n** (Google): [Gemma Terms of Use](https://ai.google.dev/gemma/terms) — custom license that permits commercial use but reserves Google's right to terminate access for policy violations. More restrictive than Apache 2.0.
+- **Gemma 2** (Google): [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+- **MedGemma** (Google): [Health AI Developer Foundations Terms](https://developers.google.com/health-ai-developer-foundations/terms) — more restrictive than Gemma. Requires validation before clinical deployment. Applies to both MedGemma 1.5 4B and MedGemma 27B Text.
 - **Llama 3.x** (Meta): Free for research and commercial use under the [Llama 3.2 Community License](https://www.llama.com/llama3_2/license/). Not technically "open source" by OSI definition — the only meaningful restriction is that products with over 700M monthly active users require a separate license.
 - **Mistral** (Mistral AI): Apache 2.0 license.
-- **MedGemma** (Google): [Health AI Developer Foundations Terms](https://developers.google.com/health-ai-developer-foundations/terms) — more restrictive than Llama. Requires validation before clinical deployment.
 - **Phi-3** (Microsoft): MIT license — fully permissive with no usage restrictions.
 - **Qwen 2.5** (Alibaba): Apache 2.0 license. Developed by a Chinese company subject to China's data laws — while GGUF models run locally with no data leaving the machine, some organizations may have compliance concerns.
-- **Gemma 2** (Google): [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
 
 See [docs/adr.md](docs/adr.md) (Decision 10) for detailed per-model analysis, trade-off discussion, and architectural rationale.
 
@@ -491,5 +508,9 @@ See [docs/adr.md](docs/adr.md) for architectural decisions and design rationale.
 This project is licensed under the [MPL 2.0](http://openmrs.org/license/).
 
 MedGemma is licensed under the [Health AI Developer Foundations License](https://developers.google.com/health-ai-developer-foundations/terms), Copyright (C) Google LLC. All Rights Reserved.
+
+Gemma 4 is licensed under the [Apache 2.0 License](https://www.apache.org/licenses/LICENSE-2.0).
+
+Gemma 3 and Gemma 3n are licensed under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms), Copyright (C) Google LLC. All Rights Reserved.
 
 Llama 3.3 is licensed under the [Llama 3.2 Community License](https://www.llama.com/llama3_2/license/), Copyright (C) Meta Platforms, Inc. All Rights Reserved.
