@@ -230,6 +230,8 @@ Three complementary strategies ensure embeddings stay current:
   - `OrderService` — full patient re-index on save/saveRetrospective/void/unvoid/purge/discontinue
   - `ProgramWorkflowService` — full patient re-index on save/void/unvoid/purge of program enrollments
   - `MedicationDispenseService` — full patient re-index on save/void/unvoid/delete of medication dispenses
+  All AOP advice classes coordinate across pipelines via `IndexingHelper`, which triggers re-indexing in whichever secondary pipelines are active (Lucene, Elasticsearch) in addition to the embedding index. This ensures all active query stores stay consistent regardless of which pipeline is selected — a data change triggers updates to every store that needs it.
+
 - **Backfill**: A one-time scheduled task (`EmbeddingIndexTask`) indexes all patients that don't yet have embeddings. Handles initial population when the module is installed on a system with existing data. Skips already-indexed patients, so it is safe to re-run and picks up where it left off if stopped. Admins trigger it from the scheduler UI; it does not run automatically.
 
 ## Decision 9: Text serialization — ClinicalTextSerializer pattern
@@ -441,6 +443,10 @@ Cross-checked against FHIR clinical resources to verify completeness:
 
 Resource types (e.g., `"obs"`, `"condition"`, `"order"`) are defined as `public static final String` constants in `ChartSearchAiConstants`, not as a Java enum. This is because resource type values are stored as strings in the `chartsearchai_embedding` database table and returned as strings in the REST API's JSON response. Using an enum would require mapping between the enum and its string representation at every persistence and serialization boundary. String constants avoid this overhead while still providing compile-time references and a single source of truth for the values.
 
+### Build-time architecture guards
+
+`ArchitectureGuardTest` enforces API surface rules at build time by scanning all production source files for violations. If any code bypasses the required entry points — for example, calling `getEmbeddingPrefix()` directly instead of `buildPrefixedText()`, hardcoding prefix strings like `"Clinical observation: "`, reimplementing the cosine similarity formula, or duplicating test dataset helpers — the build fails. This prevents regression where a developer unfamiliar with the API contracts accidentally reimplements pipeline logic inline.
+
 ## Decision 10: Single LLM architecture with optional embedding pre-filter
 
 ### Context
@@ -597,6 +603,8 @@ The model runs **in-process** inside the OpenMRS JVM via [java-llama.cpp](https:
 1. The `.omod` module file (includes the java-llama.cpp dependency)
 2. The `.gguf` model file (placed in the OpenMRS application data directory)
 
+On module startup, `ChartSearchAiModuleActivator` validates that all configured model files (LLM GGUF, ONNX embedding, WordPiece vocabulary) exist and are readable, logging warnings for any missing files. It also registers the embedding backfill and audit log purge scheduled tasks. On module shutdown, it gracefully closes all native resources — the LLM provider (llama.cpp), ONNX embedding provider, Elasticsearch client, and Lucene index — to prevent native memory leaks.
+
 The model path is configured via the `chartsearchai.llm.modelFilePath` global property. The model loads into memory on first query (lazy loading) and is automatically unloaded after a configurable idle period (`chartsearchai.llm.idleTimeoutMinutes`, default 30 minutes) to free RAM. The model is transparently reloaded on the next query. This debounced idle timer uses a single daemon thread with a `ScheduledExecutorService` — after each inference completes, any pending unload is cancelled and a new one is scheduled. Setting the idle timeout to 0 keeps the model loaded indefinitely. If the model path global property is changed, the model is automatically unloaded and the new model is loaded on the next query — no restart required.
 
 Inference uses temperature 0.0, a fixed seed, and prompt caching disabled (`setCachePrompt(false)`) for deterministic output. Prompt caching had to be disabled because llama.cpp's KV cache reuse caused non-deterministic responses — the first query for a given prompt produced a different answer than subsequent identical queries. With caching off, identical inputs always produce identical answers, which is important for clinical trust and for the answer cache to be meaningful.
@@ -713,6 +721,10 @@ The general-purpose embedding model (all-MiniLM-L6-v2) ranks records by lexical 
 
 **Recency cap extraction.** Queries like "last 7 weights" or "latest two blood pressure readings" contain natural-language recency constraints. The `extractRecencyCap()` method parses these using regex patterns that recognize both digit and word numbers (one through ten) combined with temporal keywords (last, latest, past, previous, recent, most recent). When a recency cap is detected, `capPerConcept()` limits the number of records per concept to the specified count. Since records are sorted most-recent-first, the first N per concept group are the most recent. Records without repeated measurements (conditions, allergies) are treated as unique groups and always kept — the recency cap only limits repeated measurements like vitals and lab results.
 
+**Concept grouping.** After filtering and recency capping, retrieved records are reordered by `groupByConcept()` so that records of the same concept appear together. For example, interleaved records like [BP, Weight, BP, Temp, Weight] become [BP, BP, Weight, Weight, Temp]. This helps small LLMs process multi-concept queries by reducing the need to mentally sort interleaved records — the model can process all blood pressure readings together, then all weights, rather than jumping between concepts. Groups appear in the order their first record is encountered, preserving recency ordering at the group level.
+
+**Concept synonym deduplication.** `PatientChartSerializer` uses `ConceptNameUtil.stripSynonyms()` to remove parenthesized synonym suffixes from concept names before constructing the LLM prompt. For example, `"WEIGHT (KG) — MEASURED"` and `"Weight (kg)"` are recognized as the same concept. This prevents the LLM from treating synonym variants as different clinical findings.
+
 **Configurable embedding model parameters.** The embedding model's token sequence length (`chartsearchai.embedding.maxSequenceLength`, default 256) and query-side prefix (`chartsearchai.embedding.queryPrefix`, default empty) are configurable via global properties. This supports swapping to alternative embedding models without code changes — for example, `BAAI/bge-base-en-v1.5` uses a 512-token limit and the prefix `"Represent this sentence for searching relevant passages: "`, while `all-mpnet-base-v2` uses 384 tokens. After changing the model file, vocab file, and these parameters, run the embedding backfill task to recompute all vectors.
 
 ### Chunking strategy
@@ -789,7 +801,9 @@ Requires the `View AI Audit Logs` privilege. All query parameters are optional. 
 ### Guardrails
 
 - **Input validation**: Patient UUID and question are required. Questions are limited to 1000 characters.
-- **Prompt injection detection**: Questions are checked against a regex pattern that rejects common prompt injection phrases (e.g., "ignore previous instructions", "you are now", "system prompt:"). Rejected questions return a 400 error without reaching the LLM.
+- **Prompt injection defense (two layers)**:
+  1. **GBNF grammar constraint (primary defense)**: The `json-answer.gbnf` grammar structurally constrains the local LLM's output to exactly `{"answer": "...", "citations": [...]}`. Even if a prompt injection succeeds in manipulating the model's reasoning, it cannot produce arbitrary output — the grammar makes it structurally impossible to emit system information, execute instructions, or produce anything other than a JSON answer with citations. This is the primary defense because it operates at the output level regardless of what the model "wants" to say. For the remote engine, `response_format: {"type": "json_object"}` provides a similar (though weaker) constraint.
+  2. **Input regex filter**: Questions are checked against a regex pattern that rejects common prompt injection phrases (e.g., "ignore previous instructions", "you are now", "system prompt:"). Rejected questions return a 400 error without reaching the LLM.
 - **AI disclaimer**: Every response includes a disclaimer stating the output is AI-generated and not a substitute for clinical judgment.
 - **Answer caching**: An in-memory LRU cache (`ChartSearchServiceRouter`) stores recent answers keyed by `patientUuid::preFilter::pipeline::topK::similarityRatio::keywordWeight::scoreGapMultiplier::minScoreGap::gapValidationCosine::question`. The cache key includes all retrieval parameters so that changing any tuning setting correctly invalidates cached results. Configurable TTL via `chartsearchai.cacheTtlMinutes` (default 0 = disabled). When enabled, identical queries with the same parameters within the TTL window return the cached answer without invoking the LLM. The cache uses an access-ordered `LinkedHashMap` with a fixed maximum size, automatically evicting the least-recently-used entry when the size limit is exceeded. Expired entries are cleaned up periodically (every 10 cache puts) rather than on every access, to avoid scanning the entire cache on each insertion.
 - **Rate limiting**: Configurable per-user rate limit (`chartsearchai.rateLimitPerMinute`, default 10). Set to 0 to disable.
@@ -799,6 +813,7 @@ Requires the `View AI Audit Logs` privilege. All query parameters are optional. 
   - The number of source references returned
   - The search mode used (`pre-filter` or `full-chart`)
   - Response time in milliseconds
+  - Input and output token counts (for monitoring LLM usage and cost)
   - Timestamp
   - Optional user feedback: `rating` (`positive` or `negative`) and `feedback_comment` (free-text, max 500 characters)
 
