@@ -904,7 +904,9 @@ Add an Elasticsearch hybrid search pipeline as a third retrieval option (`charts
 
 ### Context
 
-The Lucene pipeline (Decision 13) provides keyword search without external dependencies but misses semantic matches. The embedding pipeline (Decision 3) captures semantic similarity but misses exact keyword matches. The Elasticsearch pipeline (Decision 14) solves this with hybrid RRF search, but requires a running Elasticsearch cluster — a dependency many OpenMRS deployments do not have. There was no option for hybrid search quality without external services.
+Each existing retrieval pipeline has a blind spot. The Lucene pipeline (Decision 13) provides fast keyword search with no external dependencies, but misses semantic matches — "any cancer?" returns nothing when the patient has Kaposi sarcoma records because no record contains the literal word "cancer." The embedding pipeline (Decision 3) captures these semantic relationships, but misses exact keyword matches — a search for a specific drug name may rank semantically similar but wrong medications higher than an exact match. The Elasticsearch pipeline (Decision 14) solves both problems with hybrid RRF search, but requires a running ES 8.14+ cluster — a dependency that many OpenMRS deployments do not have, especially in low-resource settings where the platform runs with only MySQL.
+
+This left deployments without Elasticsearch forced to choose between keyword-only or semantic-only retrieval, each with known failure modes that the other would catch.
 
 ### Decision
 
