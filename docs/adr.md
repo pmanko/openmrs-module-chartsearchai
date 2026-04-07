@@ -391,7 +391,7 @@ Examples:
 
 ### Medical imaging data (X-rays, scans, etc.)
 
-The recommended Llama 3.3 8B model is text-only. Multimodal variants that can interpret images directly (Llama 3.2 11B and 90B) are too large for CPU inference in low-resource settings.
+The recommended MedGemma 4B model is text-only. Multimodal variants that can interpret images directly (e.g. Llama 3.2 11B and 90B) are too large for CPU inference in low-resource settings.
 
 #### Current approach: rely on text reports
 
@@ -456,7 +456,7 @@ The current architecture (Decisions 3–9) uses a two-model pipeline: an embeddi
 However, if two conditions are met, this complexity can be eliminated entirely:
 
 1. **The full patient chart fits within the LLM's context window.** A patient with 2000 records, each serialized to ~15 tokens by the `ClinicalTextSerializer`, produces ~30K tokens. Models like Mistral 7B (32K context) and Llama 3.2 3B (128K context) can accommodate this.
-2. **A local LLM is available with acceptable latency.** Quantized models (3B–14B parameters) can run on CPU via [java-llama.cpp](https://github.com/kherud/java-llama.cpp), which provides Java JNI bindings to llama.cpp and is available on Maven (`de.kherud:llama`). The recommended 8B model requires ~10GB RAM and produces ~8–12 tokens/sec on CPU. This keeps the module self-contained with no external service dependency.
+2. **A local LLM is available with acceptable latency.** Quantized models (3B–14B parameters) can run on CPU via [java-llama.cpp](https://github.com/kherud/java-llama.cpp), which provides Java JNI bindings to llama.cpp and is available on Maven (`de.kherud:llama`). The recommended 4B model requires ~6–8GB RAM and produces ~10–20 tokens/sec on CPU. This keeps the module self-contained with no external service dependency.
 
 ### Simplified architecture
 
@@ -584,18 +584,15 @@ These models are from US/EU organizations (Meta and Mistral AI respectively), ha
 - **Mistral 7B** has strong reasoning but at 7B parameters it is noticeably slower on CPU (~10–15 tok/s) and requires ~8GB RAM. Superseded by Llama 3.3 8B which offers better quality at a similar resource cost.
 - **Qwen 2.5 7B/14B** (Alibaba) offers strong instruction following and large context windows. However, Qwen is developed by a Chinese company subject to China's data laws — while GGUF models run locally with no data leaving the machine, US healthcare organizations may face compliance or perception concerns. Consider Llama or Mistral alternatives first.
 - **Gemma 2 9B Instruct** (Google) has excellent reasoning and instruction following at 9B parameters, but its 8K context window limits it to ~500 records without embedding pre-filtering. Requires ~10GB RAM.
-- **MedGemma 4B** (Google) is a medical-domain model built on the Gemma 3 architecture, fine-tuned on clinical text, biomedical literature, medical Q&A, and synthetic EHR data. At 4B parameters it is the smallest medical-specialist model in the MedGemma family. With Q4_K_M quantization it is ~2.5GB on disk and requires ~6–8GB total RAM — comparable to Llama 3.2 3B in resource cost but with medical-domain fine-tuning. CPU inference is ~10–20 tok/s, fast enough for interactive use. It has a 128K token context window and uses the `gemma` chat template already supported by the module. Licensed under the [Health AI Developer Foundations Terms of Use](https://developers.google.com/health-ai-developer-foundations/terms), which is more restrictive than Llama's community license — review the terms before deploying. GGUF quantizations are available from [unsloth/medgemma-4b-it-GGUF](https://huggingface.co/unsloth/medgemma-4b-it-GGUF). A good choice for low-resource deployments where medical-domain accuracy matters more than general instruction following, though it has not been validated for clinical use (the license requires validation before clinical deployment).
 - **MedGemma 27B Text** (Google) is a medical-domain model built on the Gemma 3 architecture, fine-tuned on clinical and biomedical text. At 27B parameters it offers strong medical text comprehension and a 128K token context window. With Q4_K_M quantization it is ~16.5GB on disk and requires ~20–24GB total RAM. CPU inference is very slow (~1–2 tok/s), making it impractical for point-of-care use without a GPU (16–24GB VRAM recommended, where it can reach ~10–20+ tok/s). It uses the `gemma` chat template already supported by the module. Licensed under the [Health AI Developer Foundations Terms of Use](https://developers.google.com/health-ai-developer-foundations/terms), which is more restrictive than Llama's community license — review the terms before deploying. GGUF quantizations are available from [unsloth/medgemma-27b-text-it-GGUF](https://huggingface.co/unsloth/medgemma-27b-text-it-GGUF). Best suited for GPU-equipped deployments where medical-domain accuracy is the top priority.
 
 All models run via java-llama.cpp with Q4_K_M quantization in GGUF format.
 
 ### Licensing
 
-Llama 3.3 8B is free for both research and commercial use under the [Llama 3.2 Community License](https://www.llama.com/llama3_2/license/). No fees or royalties apply. The license permits use, modification, and distribution.
+MedGemma 4B is licensed under the [Health AI Developer Foundations Terms of Use](https://developers.google.com/health-ai-developer-foundations/terms). This is more restrictive than typical open-source licenses — it requires validation before clinical deployment and review of terms before distributing. The license requires the following attribution: *"MedGemma is licensed under the Health AI Developer Foundations License, Copyright (C) Google LLC. All Rights Reserved."*
 
-The model is not technically "open source" by the [Open Source Initiative's definition](https://opensource.org/blog/metas-llama-license-is-still-not-open-source) — Meta's license includes restrictions that do not meet OSI criteria. However, for practical purposes the only meaningful restriction is that products with over 700 million monthly active users require a separate license from Meta, which is not a concern for OpenMRS.
-
-The license requires the following attribution to be included in all distributed copies: *"Llama 3.3 is licensed under the Llama 3.2 Community License, Copyright (C) Meta Platforms, Inc. All Rights Reserved."*
+The alternative Llama models (3.2 3B, 3.3 8B) are free for both research and commercial use under the [Llama 3.2 Community License](https://www.llama.com/llama3_2/license/). The only meaningful restriction is that products with over 700 million monthly active users require a separate license from Meta, which is not a concern for OpenMRS. The license requires the following attribution: *"Llama 3.3 is licensed under the Llama 3.2 Community License, Copyright (C) Meta Platforms, Inc. All Rights Reserved."*
 
 ### Deployment and memory requirements
 
@@ -618,11 +615,11 @@ Different GGUF models require different prompt formats. The `chartsearchai.llm.c
 
 | Preset | Format |
 |--------|--------|
-| `llama3` (default) | `<\|begin_of_text\|><\|start_header_id\|>system<\|end_header_id\|>...` |
+| `llama3` | `<\|begin_of_text\|><\|start_header_id\|>system<\|end_header_id\|>...` |
 | `mistral` | `[INST] {system}\n\n{user} [/INST]` |
 | `phi3` | `<\|system\|>\n{system}<\|end\|>\n<\|user\|>\n{user}<\|end\|>\n<\|assistant\|>\n` |
 | `chatml` | `<\|im_start\|>system\n{system}<\|im_end\|>\n<\|im_start\|>user\n...` |
-| `gemma` | `<start_of_turn>user\n{system}\n\n{user}<end_of_turn>\n<start_of_turn>model\n` |
+| `gemma` (default) | `<start_of_turn>user\n{system}\n\n{user}<end_of_turn>\n<start_of_turn>model\n` |
 
 The property also accepts `auto`, which delegates prompt formatting to the model's built-in GGUF chat template via llama.cpp's `setUseChatTemplate(true)`. This is useful for models whose GGUF file includes a correct chat template — no manual preset selection or custom template needed. If the global property is cleared (empty/null), the code falls back to `auto`.
 
