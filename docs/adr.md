@@ -574,7 +574,7 @@ MedGemma 4B is the default recommendation. Built on the Gemma 3 architecture and
 | **Llama 3.3 8B** | ~10GB total | `llama3` | Significantly better general reasoning and instruction following than 4B. Recommended when 10GB RAM is available. Requires changing model path and chat template to `llama3`. |
 | **Mistral Nemo 12B** | ~12GB total | `mistral` | Best sub-15B option for clinical Q&A. Strong medical text comprehension and 128K context window. Requires changing model path and chat template to `mistral`. |
 
-These models are from US/EU organizations (Meta and Mistral AI respectively), have strong performance on medical benchmarks, and use chat templates already supported by the module. Switching requires only two global property changes (`modelFilePath` and `chatTemplate`) — no code changes or module rebuild.
+These models are from US/EU organizations (Meta and Mistral AI), have strong performance on medical benchmarks, and use chat templates already supported by the module. Switching requires only two global property changes (`modelFilePath` and `chatTemplate`) — no code changes or module rebuild.
 
 ### Other alternatives
 

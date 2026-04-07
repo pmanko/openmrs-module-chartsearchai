@@ -59,7 +59,7 @@ Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<op
 | Model | RAM Needed | Chat Template | Download |
 |-------|-----------|---------------|----------|
 | Llama 3.2 3B | ~6GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) |
-| **MedGemma 4B** *(default)* | ~5GB total | `gemma` | [GGUF](https://huggingface.co/unsloth/medgemma-4b-it-GGUF) |
+| **MedGemma 4B** *(default)* | ~6–8GB total | `gemma` | [GGUF](https://huggingface.co/unsloth/medgemma-4b-it-GGUF) |
 | Llama 3.3 8B | ~10GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF) |
 | Mistral Nemo 12B | ~12GB total | `mistral` | [GGUF](https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF) |
 
