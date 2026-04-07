@@ -20,8 +20,9 @@ This document captures the architectural decisions made for the Chart Search AI 
 - [Decision 12: Concurrency model](#decision-12-concurrency-model)
 - [Decision 13: Lucene BM25 as an alternative retrieval pipeline](#decision-13-lucene-bm25-as-an-alternative-retrieval-pipeline)
 - [Decision 14: Elasticsearch hybrid search pipeline with RRF](#decision-14-elasticsearch-hybrid-search-pipeline-with-rrf)
-- [Decision 15: LangChain / LangChain4j not adopted](#decision-15-langchain--langchain4j-not-adopted)
-- [Decision 16: Remote LLM backend support](#decision-16-remote-llm-backend-support)
+- [Decision 15: In-process hybrid pipeline](#decision-15-in-process-hybrid-pipeline-lucene-bm25--embedding-knn-with-rrf)
+- [Decision 16: LangChain / LangChain4j not adopted](#decision-16-langchain--langchain4j-not-adopted)
+- [Decision 17: Remote LLM backend support](#decision-17-remote-llm-backend-support)
 - [Known limitations](#known-limitations)
 - [Planned future work](#planned-future-work)
 
@@ -887,7 +888,7 @@ Add an Elasticsearch hybrid search pipeline as a third retrieval option (`charts
    - A `knn` retriever running approximate nearest neighbor search on the `embedding` field (handles semantic matches)
    - RRF fuses the rankings: a document that appears in both rankings scores higher than one in only one
 
-3. **No custom scoring code** — all scoring, ranking, and fusion is delegated to Elasticsearch. The module's custom gap detection, keyword weighting, z-score gating, and coherence filtering are not needed — RRF replaces all of that with a single, well-tested algorithm.
+3. **Post-retrieval filter pipeline** — Elasticsearch RRF handles scoring and fusion, but its kNN sub-retriever always returns up to `maxResults` documents even when most are semantically irrelevant. To address this, `LlmInferenceService.filterEsResults()` applies a post-retrieval filter pipeline to the RRF results: gap detection (large score drops between consecutive results), keyword scoring (exact query-term overlap), z-score gating (statistical outlier removal), and coherence filtering (topic-outlier removal via pairwise embedding similarity). This reuses the same filter logic as the embedding pipeline but applies it *after* Elasticsearch ranking rather than *instead of* it.
 
 4. **Graceful fallback** — if Elasticsearch is not available (not configured or unreachable), the pipeline falls back to the embedding pipeline at query time. This makes it safe to set `pipeline=elasticsearch` even in environments where ES may be temporarily unavailable.
 
@@ -899,7 +900,34 @@ Add an Elasticsearch hybrid search pipeline as a third retrieval option (`charts
 
 **Why `provided` scope for the ES REST client?** The `elasticsearch-rest-client` JAR is already on the classpath via `hibernate-search-backend-elasticsearch`. Using `provided` scope avoids bundling a duplicate in the `.omod` and prevents version conflicts.
 
-## Decision 15: LangChain / LangChain4j not adopted
+## Decision 15: In-process hybrid pipeline (Lucene BM25 + embedding kNN with RRF)
+
+### Context
+
+The Lucene pipeline (Decision 13) provides keyword search without external dependencies but misses semantic matches. The embedding pipeline (Decision 3) captures semantic similarity but misses exact keyword matches. The Elasticsearch pipeline (Decision 14) solves this with hybrid RRF search, but requires a running Elasticsearch cluster — a dependency many OpenMRS deployments do not have. There was no option for hybrid search quality without external services.
+
+### Decision
+
+Add an in-process hybrid retrieval pipeline (`chartsearchai.retrieval.pipeline=hybrid`) implemented in `HybridRetriever`. This pipeline combines the existing Lucene BM25 index with the existing embedding kNN index using Reciprocal Rank Fusion, all running in-process with no external dependencies.
+
+1. **Dual indexing** — `ensureIndexed()` ensures both the Lucene index (for BM25) and embedding index (for kNN) exist for the patient, creating either on demand if missing.
+
+2. **RRF fusion** — both Lucene and embedding indexes are queried with a window size of 100 results each. The `fuseRRF()` method merges the two ranked lists using the same RRF formula as the Elasticsearch pipeline: `score = Σ 1/(k + rank_i)` with `k=60`. Documents appearing in both rankings score higher than those in only one.
+
+3. **kNN fallback when BM25 returns nothing** — when the Lucene index has no keyword matches (e.g., a purely semantic query like "any cancer?"), the pipeline falls back to kNN-only results with additional quality gates:
+   - **Z-score gating**: computes the similarity distribution across all patient embeddings and sets a dynamic floor at `mean + 2.5σ` (or the absolute minimum of 0.25, whichever is lower). This adapts to each patient's embedding distribution rather than using a fixed threshold.
+   - **Adaptive fallback**: if z-score gating is too aggressive (fewer than `ADAPTIVE_MIN_RECORDS` survive), falls back to the absolute similarity floor.
+   - **Coherence filtering**: removes topic outliers by computing pairwise embedding similarity among surviving results and dropping any result whose mean similarity to the others is below the group's threshold.
+
+4. **Same retrieval interface** — the pipeline returns a `Set<String>` of resource keys (`type:id`), the same format as all other pipelines. The downstream LLM inference code does not need to know which pipeline produced the results.
+
+**Why not just use the Elasticsearch pipeline?** The Elasticsearch pipeline requires a running ES 8.14+ cluster. Many OpenMRS deployments — especially in low-resource settings — run only the core platform with MySQL. The hybrid pipeline provides the same search quality (BM25 + kNN + RRF) using only in-process components (Lucene + ONNX embeddings + Java RRF implementation).
+
+**Why RRF instead of a weighted linear combination?** Same reasoning as Decision 14: RRF is rank-based, not score-based, so it avoids the calibration problem of normalizing BM25 scores (unbounded) against cosine similarity scores (0–1).
+
+**Trade-off vs. Elasticsearch pipeline**: The in-process kNN search is exact (brute-force cosine similarity over all patient embeddings), not approximate. This is fine for typical patient chart sizes (hundreds to low thousands of records) but would not scale to corpus-wide search. The Elasticsearch pipeline uses approximate kNN via HNSW, which scales better for large indexes.
+
+## Decision 16: LangChain / LangChain4j not adopted
 
 ### Context
 
@@ -925,9 +953,9 @@ Do not adopt LangChain or LangChain4j. The module's purpose-built pipeline alrea
 
 **Why not LangChain4j?** Removes the language mismatch, but the module's custom retrieval logic (z-score gating for absent-data detection, adaptive gap detection, type-aware auto-expansion, GBNF constrained decoding) has no equivalent in LangChain4j's standard retrievers. Adopting LangChain4j would mean either losing these features or bypassing its retrieval abstractions entirely and using it only as a thin LLM client wrapper — not worth the dependency. The one feature LangChain4j would simplify — swapping cloud LLM providers via its `ChatLanguageModel` interface — can be achieved more simply by adding a provider interface to the existing `LlmProvider` if that need arises.
 
-**When to revisit:** If the module needs agent/tool-use patterns for multi-step reasoning, a framework like LangChain4j may become worthwhile. Remote LLM backend support was added without LangChain4j (see [Decision 16](#decision-16-remote-llm-backend-support)). Until then, the purpose-built pipeline is simpler to deploy, easier to debug, has fewer dependencies, and gives full control over clinical-domain-specific scoring.
+**When to revisit:** If the module needs agent/tool-use patterns for multi-step reasoning, a framework like LangChain4j may become worthwhile. Remote LLM backend support was added without LangChain4j (see [Decision 17](#decision-17-remote-llm-backend-support)). Until then, the purpose-built pipeline is simpler to deploy, easier to debug, has fewer dependencies, and gives full control over clinical-domain-specific scoring.
 
-## Decision 16: Remote LLM backend support
+## Decision 17: Remote LLM backend support
 
 ### Context
 
