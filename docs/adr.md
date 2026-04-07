@@ -564,7 +564,7 @@ See the [Evaluated models](../README.md#evaluated-models) section in the README 
 
 ### Recommended model: MedGemma 4B
 
-MedGemma 4B is the default recommendation. Built on the Gemma 3 architecture and fine-tuned on clinical text, biomedical literature, medical Q&A, and synthetic EHR data, it is the smallest medical-specialist model in the MedGemma family. Its 128K token context window can hold approximately 6,000 serialized patient records (~15 tokens each), which comfortably accommodates even the largest patient charts. At 4B parameters with Q4_K_M quantization, it is ~2.5GB on disk and requires ~6–8GB total RAM. CPU inference is ~10–20 tok/s, fast enough for interactive use. Licensed under the [Health AI Developer Foundations Terms of Use](https://developers.google.com/health-ai-developer-foundations/terms) — requires validation before clinical deployment.
+MedGemma 4B is the default recommendation. Built on the Gemma 3 architecture and fine-tuned on clinical text, biomedical literature, medical Q&A, and synthetic EHR data, it is the smallest medical-specialist model in the MedGemma family. Its 128K token context window can hold approximately 6,000 serialized patient records (~15 tokens each), which comfortably accommodates even the largest patient charts. At 4B parameters with Q4_K_M quantization, it is ~2.5GB on disk and requires ~6–8GB total RAM. CPU inference is ~10–20 tok/s, fast enough for interactive use. GGUF quantizations are available from [unsloth/medgemma-4b-it-GGUF](https://huggingface.co/unsloth/medgemma-4b-it-GGUF). Licensed under the [Health AI Developer Foundations Terms of Use](https://developers.google.com/health-ai-developer-foundations/terms) — requires validation before clinical deployment.
 
 ### Alternative models
 
