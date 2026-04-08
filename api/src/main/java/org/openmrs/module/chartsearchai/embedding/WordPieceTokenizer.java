@@ -156,22 +156,7 @@ public class WordPieceTokenizer {
 	public TokenizedInput tokenize(String text) {
 		List<Integer> tokenIds = new ArrayList<Integer>();
 		tokenIds.add(clsTokenId);
-
-		String normalized = text.toLowerCase().trim();
-		// Insert spaces around punctuation so it becomes a separate token
-		normalized = PUNCTUATION.matcher(normalized).replaceAll(" $1 ");
-		String[] words = WHITESPACE.split(normalized);
-
-		for (String word : words) {
-			if (word.isEmpty()) {
-				continue;
-			}
-			tokenizeWord(word, tokenIds);
-			// Reserve space for [SEP] token
-			if (tokenIds.size() >= maxSequenceLength - 1) {
-				break;
-			}
-		}
+		tokenIds.addAll(tokenizeToIds(text));
 
 		// Truncate to leave room for [SEP]
 		if (tokenIds.size() > maxSequenceLength - 1) {
