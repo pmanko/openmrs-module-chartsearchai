@@ -23,6 +23,7 @@ This document captures the architectural decisions made for the Chart Search AI 
 - [Decision 15: In-process hybrid pipeline (Lucene BM25 + embedding kNN with RRF)](#decision-15-in-process-hybrid-pipeline-lucene-bm25--embedding-knn-with-rrf)
 - [Decision 16: LangChain / LangChain4j not adopted](#decision-16-langchain--langchain4j-not-adopted)
 - [Decision 17: Remote LLM backend support](#decision-17-remote-llm-backend-support)
+- [Decision 18: Cross-encoder reranking stage](#decision-18-cross-encoder-reranking-stage)
 - [Known limitations](#known-limitations)
 - [Planned future work](#planned-future-work)
 
@@ -1071,6 +1072,106 @@ The remote engine applies only to the generative LLM, not to the embedding model
 
 For deployments that cannot host even the 90MB ONNX file, the Lucene pipeline (`chartsearchai.retrieval.pipeline=lucene`) provides a zero-model-download alternative with BM25 text search.
 
+## Decision 18: Cross-encoder reranking stage
+
+### Problem
+
+The bi-encoder retrieval pipeline (all-MiniLM-L6-v2) has a fundamental limitation: it encodes the query and each document independently, then compares their vectors via cosine similarity. This means the model cannot learn query-document relevance jointly — it can only measure how close a document's embedding is to the query's embedding in the shared vector space.
+
+This causes two concrete problems:
+
+**1. Template similarity inflates scores for unrelated records.** Medical records with the same template structure ("Condition: X. Clinical status: ACTIVE. Verification: CONFIRMED.") produce similar embeddings regardless of whether X is relevant to the query. For example, when a clinician asks "does she have any blood problems?", the embedding model scores Condition: Hypertension (maxCos to blood-related core = 0.66) higher than Obs: White Blood Cells (maxCos = 0.58) on inter-record cosine, even though WBC is blood-related and Hypertension is not. This happens because condition records share structural tokens ("Condition", "Clinical status", "ACTIVE") that dominate the embedding.
+
+**2. Incidental keyword matches are semantically indistinguishable from genuine matches.** For the same "blood problems" query, "Arterial blood oxygen saturation (SpO2)" and "Systolic blood pressure" contain the keyword "blood" and score 0.35-0.36 semantically — nearly identical to genuinely relevant records like Haemoglobin (0.37). The bi-encoder cannot distinguish "blood" as a measurement medium (SpO2, BP) from "blood" as the clinical subject (anaemia, haemoglobin).
+
+### Analysis: Why no bi-encoder metric can solve this
+
+We exhaustively evaluated every available signal from the bi-encoder to find a data-derived threshold that separates relevant from irrelevant records. All failed:
+
+| Metric | WBC (relevant) | Hypertension (irrelevant) | Can discriminate? |
+|---|---|---|---|
+| Max cosine to semantic core | 0.5782 | 0.6602 | No — HTN scores higher |
+| Avg cosine to semantic core | 0.4294 | 0.4837 | No — HTN scores higher |
+| Min cosine to semantic core | 0.3539 | 0.3586 | No — HTN scores higher |
+| Semantic score (query cosine) | 0.4631 | 0.3543 | Yes — only discriminating signal |
+
+Every inter-record cosine metric (max, avg, min to the semantic core) scores Hypertension *higher* than WBC because the embedding model conflates record-type similarity (condition-to-condition) with content similarity (blood-related-to-blood-related). The only signal that works is the semantic score (direct query-document cosine), where WBC (0.46) significantly outscores Hypertension (0.35).
+
+This means the current pipeline must rely on a hand-tuned constant (`SEMANTIC_CORE_SCORE_RATIO = 0.80`) that defines a minimum semantic score as a fraction of the semantic core's lowest score. This constant has a tight valid range: for the test dataset where it was calibrated, values between 0.767 and 0.804 work — a margin of only 0.037. There is no way to derive this threshold from the data itself using bi-encoder embeddings alone, because the same fundamental limitation (independent encoding) prevents any adaptive approach from distinguishing template similarity from content similarity.
+
+### Decision
+
+Add a cross-encoder reranking stage between embedding retrieval and LLM inference.
+
+A cross-encoder processes the query and document **jointly** through a single transformer pass, producing a direct relevance score. Unlike a bi-encoder, it sees both texts together and can learn that "blood" in "blood pressure" is a measurement context while "blood" in "blood problems" is a clinical subject. This is the industry-standard solution to bi-encoder limitations in RAG pipelines.
+
+### How it works
+
+```
+Stage 1: Bi-encoder retrieval (existing)
+  Query → embed → cosine similarity against all patient records
+  → top-K candidates (e.g. 50-100 records)
+
+Stage 2: Cross-encoder reranking (new)
+  For each candidate: score = cross_encoder(query, candidate_text)
+  → reorder by cross-encoder score
+  → apply threshold or top-N cutoff
+  → final candidate set (e.g. 5-15 records)
+
+Stage 3: LLM generation (existing)
+  System prompt + final candidates → LLM → answer with citations
+```
+
+The cross-encoder is computationally expensive (one forward pass per query-document pair), which is why it cannot replace the bi-encoder for initial retrieval over hundreds or thousands of records. But it is practical for reranking the top-K candidates (typically 10-100 documents), where it runs in milliseconds per pair on CPU.
+
+### Why this solves both problems
+
+1. **Template similarity**: The cross-encoder sees "does she have any blood problems?" alongside "Condition: Hypertension. Clinical status: ACTIVE." in a single pass. It learns that Hypertension is not a blood problem despite sharing the Condition template with Anaemia. A bi-encoder cannot do this because it never sees the query and document together.
+
+2. **Incidental keyword matches**: The cross-encoder sees "blood" in context. "Arterial blood oxygen saturation" is about oxygen measurement; "Haemoglobin" is about blood composition. The joint encoding captures this distinction.
+
+### What it replaces
+
+The cross-encoder reranking stage can eventually replace the hand-tuned heuristics in the partial keyword match path:
+
+- `SEMANTIC_CORE_SCORE_RATIO` (0.80) — the tight-margin constant that motivated this decision
+- `SEMANTIC_CORE_MIN_COSINE` (0.55) — inter-record cosine threshold that fails for template-similar records
+- Keyword rescue logic — the cross-encoder scores keyword-matched records directly
+- Coherence gap detection — the cross-encoder provides a direct relevance signal, eliminating the need for indirect coherence-based filtering
+
+These heuristics were necessary because the bi-encoder provides no direct relevance signal. The cross-encoder provides exactly that signal.
+
+### Candidate models
+
+| Model | Parameters | Size (ONNX) | Intended use |
+|---|---|---|---|
+| cross-encoder/ms-marco-MiniLM-L-6-v2 | 22M | ~85MB | General passage reranking, widely used baseline |
+| BAAI/bge-reranker-v2-m3 | 568M | ~2.2GB | Multilingual, higher accuracy, larger footprint |
+| cross-encoder/ms-marco-MiniLM-L-12-v2 | 33M | ~130MB | Slightly more accurate than L-6, still small |
+
+The initial implementation should use **ms-marco-MiniLM-L-6-v2**: it is small enough to run on any hardware that already runs OpenMRS + the embedding model, ONNX-compatible (same runtime as the existing embedding model), and well-established in production RAG systems.
+
+### Integration approach
+
+The cross-encoder follows the same pattern as the existing embedding model:
+
+- **ONNX Runtime** inference (already a dependency)
+- **Global property** for model file path (`chartsearchai.reranker.modelFilePath`)
+- **Optional stage** — if no reranker model is configured, the pipeline falls back to the existing heuristic filtering (no regression for deployments that don't download the reranker model)
+- **Applies to all retrieval pipelines** (embedding, Lucene, Elasticsearch, hybrid) since it operates on the candidate set after retrieval
+
+### Trade-offs
+
+| Aspect | Without cross-encoder (current) | With cross-encoder |
+|---|---|---|
+| Model footprint | 90MB (embedding only) | 175MB (+85MB reranker) |
+| Retrieval latency | ~50ms (cosine + heuristics) | ~150ms (+100ms for reranking 50 candidates) |
+| Relevance accuracy | Good for exact matches, fragile for ambiguous queries | Robust for ambiguous keyword and template overlap |
+| Maintenance burden | Hand-tuned constants with tight margins | Learned relevance signal, fewer magic numbers |
+| Deployment complexity | One model file | Two model files |
+
+The 85MB footprint increase is modest — comparable to the existing embedding model. The ~100ms latency increase for reranking is negligible compared to the 2-30 second LLM inference time that follows.
+
 ## Known limitations
 
 - **Counting questions**: LLMs are unreliable at precise counting tasks (e.g., "how many weight records in the last 10 years?"). The model may undercount or overcount even when all relevant records are provided. Larger, more capable models perform better at counting but are still not perfectly reliable. This is a fundamental limitation of LLM inference, not a retrieval issue. Questions that require exact counts are better suited to structured queries.
@@ -1078,7 +1179,7 @@ For deployments that cannot host even the 90MB ONNX file, the Lucene pipeline (`
 ## Planned future work
 
 - **Incremental embedding indexing**: The `EncounterService` AOP hook already uses an incremental strategy (indexes only new/changed encounters), but other data types (`ObsService`, `ConditionService`, etc.) still use `indexPatient()` which deletes all embeddings for a patient and recomputes from scratch. A fully incremental approach would track which record maps to which embedding row across all data types and only add, update, or delete the specific embeddings affected. This matters for patients with large charts where AOP hooks fire frequently.
-- **Reranking**: A cross-encoder reranking step between embedding retrieval and LLM inference could improve relevance. Currently deferred because: individual records are short (embedding similarity works well), the LLM itself reasons over all 10 retrieved records (acting as an implicit reranker), and adding another model increases RAM usage, latency, and concurrency bottlenecks. Worth revisiting if real-world usage reveals relevance gaps, if top-K is increased significantly (50+), or if patient charts grow very large with thousands of records.
+- **Cross-encoder reranking**: Implement the reranking stage described in Decision 18. The bi-encoder's inability to distinguish template similarity from content similarity (and incidental keyword matches from genuine ones) has been empirically demonstrated — no bi-encoder metric can solve the problem. The cross-encoder (ms-marco-MiniLM-L-6-v2, 85MB ONNX) processes query + document jointly, providing a direct relevance signal that replaces the hand-tuned heuristics (`SEMANTIC_CORE_SCORE_RATIO`, `SEMANTIC_CORE_MIN_COSINE`, keyword rescue, coherence gap detection). Implementation: load ONNX model via the existing ONNX Runtime dependency, add `CrossEncoderReranker` class, integrate between `findSimilar()` candidate retrieval and the LLM prompt assembly.
 - **Concept graph traversal**: Complement embedding search with OpenMRS concept relationship traversal to improve retrieval for queries involving related concepts (e.g., finding NSAID allergies when asking about ibuprofen).
 - **Pre-computed summaries**: Cache LLM-generated summaries for common query patterns (e.g., "current medications", "active problems") to reduce inference latency for frequently asked questions.
 - **Agent/tool-use pattern**: Enable multi-step reasoning where the LLM can request additional data or perform follow-up queries. Deferred until local models with reliable tool-use capabilities are available.
