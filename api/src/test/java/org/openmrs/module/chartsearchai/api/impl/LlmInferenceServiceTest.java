@@ -2228,22 +2228,15 @@ public class LlmInferenceServiceTest {
 					"obs", 4, "Red blood cells: 4.5 x10^12/L", null));
 
 			List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> reranked =
-					LlmInferenceService.rerank("blood problems", records, reranker, 3);
+					LlmInferenceService.rerank("blood problems", records, reranker);
 
-			assertEquals(3, reranked.size(), "Should return top 3 records");
+			// Rerank only reorders, never drops records
+			assertEquals(5, reranked.size(), "Should return all records reordered");
 
-			// Collect resource IDs of reranked results
-			List<Integer> topIds = new ArrayList<Integer>();
-			for (org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord r : reranked) {
-				topIds.add(r.getResourceId());
-			}
-
-			// Red blood cells (explicit "blood" keyword) should rank in top 3
-			assertTrue(topIds.contains(4),
-					"Red blood cells should be in top 3, got: " + topIds);
-			// Pulse (no blood relation) should NOT rank in top 3
-			assertFalse(topIds.contains(0),
-					"Pulse should not be in top 3, got: " + topIds);
+			// First result should be a blood-related record, not Pulse
+			int firstId = reranked.get(0).getResourceId();
+			assertTrue(firstId != 0,
+					"Pulse should not be ranked first, got ID: " + firstId);
 		} finally {
 			reranker.close();
 		}

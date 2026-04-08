@@ -545,14 +545,13 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	private List<SerializedRecord> rerankAndFilter(String question, List<SerializedRecord> records) {
-		int topN = getTopK();
-		List<SerializedRecord> reranked = rerank(question, records, crossEncoderReranker, topN);
-		log.debug("Cross-encoder reranked {} records to {}", records.size(), reranked.size());
+		List<SerializedRecord> reranked = rerank(question, records, crossEncoderReranker);
+		log.debug("Cross-encoder reranked {} records", reranked.size());
 		return reranked;
 	}
 
 	static List<SerializedRecord> rerank(String query, List<SerializedRecord> records,
-			OnnxCrossEncoderReranker reranker, int topN) {
+			OnnxCrossEncoderReranker reranker) {
 		List<double[]> scored = new ArrayList<double[]>();
 		for (int i = 0; i < records.size(); i++) {
 			SerializedRecord record = records.get(i);
@@ -568,9 +567,8 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		});
 
-		int limit = Math.min(topN, scored.size());
-		List<SerializedRecord> result = new ArrayList<SerializedRecord>(limit);
-		for (int i = 0; i < limit; i++) {
+		List<SerializedRecord> result = new ArrayList<SerializedRecord>(scored.size());
+		for (int i = 0; i < scored.size(); i++) {
 			result.add(records.get((int) scored.get(i)[0]));
 		}
 		return result;
