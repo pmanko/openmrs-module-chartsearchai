@@ -202,6 +202,24 @@ Question: What lab orders were placed?
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.reranker.modelFilePath</property>
+		<defaultValue></defaultValue>
+		<description>Relative path, including the filename, within the OpenMRS application data directory to the ONNX cross-encoder reranker model file. When configured, a cross-encoder reranking stage is added after embedding retrieval to improve result quality by scoring (query, document) pairs jointly. Leave empty to disable reranking (default). Example: chartsearchai/cross-encoder-model.onnx. Path traversal (e.g. "..") is not allowed.</description>
+	</globalProperty>
+
+	<globalProperty>
+		<property>chartsearchai.reranker.vocabFilePath</property>
+		<defaultValue></defaultValue>
+		<description>Relative path, including the filename, within the OpenMRS application data directory to the WordPiece vocabulary file for the cross-encoder reranker model. Required when chartsearchai.reranker.modelFilePath is configured. Example: chartsearchai/cross-encoder-vocab.txt. Path traversal (e.g. "..") is not allowed.</description>
+	</globalProperty>
+
+	<globalProperty>
+		<property>chartsearchai.reranker.maxSequenceLength</property>
+		<defaultValue>512</defaultValue>
+		<description>Maximum WordPiece token sequence length for cross-encoder reranker input. The query and document are concatenated as a sentence pair; the document is truncated if the total exceeds this limit. Must be between 32 and 8192. Default: 512.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.embedding.modelFilePath</property>
 		<defaultValue>chartsearchai/model.onnx</defaultValue>
 		<description>Relative path, including the filename, within the OpenMRS application data directory to the ONNX embedding model file. Required when embedding pre-filtering is enabled (chartsearchai.embedding.preFilter is true, the default). Example: chartsearchai/all-MiniLM-L6-v2.onnx (resolves to &lt;application-data-directory&gt;/chartsearchai/all-MiniLM-L6-v2.onnx). Download the model.onnx file from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 and rename it. Path traversal (e.g. "..") is not allowed.</description>
