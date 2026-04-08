@@ -931,6 +931,8 @@ public class LlmInferenceService implements ChartSearchService {
 
 		// Keyword refinement: when gap detection returns a broad set but
 		// keyword matches identify a specific subset, prefer those records.
+		// Save pre-refinement candidates for semantic core discovery.
+		List<ScoredEmbedding> preRefinementCandidates = candidates;
 		boolean refinementActivated = false;
 		if (config.keywordWeight > 0) {
 			List<ScoredEmbedding> refined = refineByKeywords(candidates, queryTermCount);
@@ -940,6 +942,8 @@ public class LlmInferenceService implements ChartSearchService {
 
 		log.debug("Pipeline: adaptiveCutoff={}, afterRefinement={}, refinementActivated={}",
 				adaptiveCutoff, candidates.size(), refinementActivated);
+
+		boolean partialKwValidated = false;
 
 		// Post-processing with two paths:
 		//
@@ -953,17 +957,171 @@ public class LlmInferenceService implements ChartSearchService {
 			double kwMin = Double.MAX_VALUE;
 			double kwMax = 0;
 			for (ScoredEmbedding se : candidates) {
-				if (se.keywordScore < kwMin) {
-					kwMin = se.keywordScore;
-				}
-				if (se.keywordScore > kwMax) {
-					kwMax = se.keywordScore;
+				if (se.keywordScore > 0) {
+					if (se.keywordScore < kwMin) {
+						kwMin = se.keywordScore;
+					}
+					if (se.keywordScore > kwMax) {
+						kwMax = se.keywordScore;
+					}
 				}
 			}
+			if (kwMin == Double.MAX_VALUE) {
+				kwMin = kwMax;
+			}
 			boolean uniformKeywords = (kwMax - kwMin) < 0.01;
-			log.debug("Pipeline refinement: kwMin={}, kwMax={}, uniform={}",
-					String.format("%.4f", kwMin), String.format("%.4f", kwMax), uniformKeywords);
-			if (!uniformKeywords) {
+			// Partial keyword match: not all query terms appear in any
+			// record. The keyword signal is weak — "blood" in "blood
+			// pressure" is incidental, not evidence of relevance to
+			// "blood problems".
+			double bonusThresh = queryTermCount == 0 ? 1.0
+					: (double) Math.min(2, queryTermCount) / queryTermCount;
+			boolean partialKeywordMatch = uniformKeywords
+					&& kwMax < bonusThresh
+					&& queryTermCount <= 2;
+			log.debug("Pipeline refinement: kwMin={}, kwMax={}, uniform={}, "
+					+ "partialKw={}", String.format("%.4f", kwMin),
+					 String.format("%.4f", kwMax), uniformKeywords,
+					 partialKeywordMatch);
+			if (partialKeywordMatch) {
+				// Semantic core approach: find non-keyword records with
+				// high semantic scores — these represent what the query
+				// actually means without keyword bias. Then validate
+				// keyword matches against this core.
+				List<ScoredEmbedding> nonKeyword =
+						new ArrayList<ScoredEmbedding>();
+				for (ScoredEmbedding se : preRefinementCandidates) {
+					if (se.keywordScore == 0) {
+						nonKeyword.add(se);
+					}
+				}
+				Collections.sort(nonKeyword,
+						new java.util.Comparator<ScoredEmbedding>() {
+					@Override
+					public int compare(ScoredEmbedding a,
+							ScoredEmbedding b) {
+						return Double.compare(b.semanticScore,
+								a.semanticScore);
+					}
+				});
+
+				// Gap detection on non-keyword records to find the
+				// semantic core — the cluster of records genuinely
+				// relevant to the query by meaning alone.
+				List<ScoredEmbedding> semanticCore =
+						new ArrayList<ScoredEmbedding>();
+				if (nonKeyword.size() >= ChartSearchAiConstants
+						.ADAPTIVE_MIN_RECORDS) {
+					double maxSemNk = nonKeyword.get(0).semanticScore;
+					double nkMinGap = Math.max(
+							maxSemNk * ChartSearchAiConstants
+									.REFINEMENT_ADAPTIVE_GAP_RATIO,
+							ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
+					int coreCutoff = findAdaptiveCutoff(nonKeyword,
+							nonKeyword.size(),
+							ChartSearchAiConstants
+									.ABSOLUTE_SIMILARITY_FLOOR,
+							config.scoreGapMultiplier, nkMinGap);
+					for (int i = 0; i < coreCutoff; i++) {
+						semanticCore.add(nonKeyword.get(i));
+					}
+
+					log.debug("Semantic core: {} non-keyword"
+							+ " records, primary gap at {},"
+							+ " core size {}",
+							nonKeyword.size(), coreCutoff,
+							semanticCore.size());
+				}
+
+				if (!semanticCore.isEmpty()) {
+					// Expand: find records cosine-coherent with the
+					// core AND semantically close to the query.
+					// Cosine alone admits template-similar noise
+					// (e.g. "Condition: Hypertension" matching
+					// "Condition: Anaemia" via shared template).
+					// The score floor filters this: semantic score
+					// (query cosine) is the only signal where
+					// genuinely relevant records consistently
+					// outscore template-similar noise.
+					double coreMinSem = semanticCore.get(
+							semanticCore.size() - 1)
+							.semanticScore;
+					double scoreFloor = coreMinSem
+							* ChartSearchAiConstants
+									.SEMANTIC_CORE_SCORE_RATIO;
+					List<ScoredEmbedding> expanded =
+							new ArrayList<ScoredEmbedding>(
+									semanticCore);
+					Set<Integer> expandedIds =
+							new java.util.HashSet<Integer>();
+					for (ScoredEmbedding se : semanticCore) {
+						expandedIds.add(
+								se.embedding.getResourceId());
+					}
+					for (ScoredEmbedding se
+							: preRefinementCandidates) {
+						if (expandedIds.contains(
+								se.embedding.getResourceId())) {
+							continue;
+						}
+						if (se.semanticScore < scoreFloor) {
+							continue;
+						}
+						float[] vec = se.embedding
+								.getEmbeddingVector();
+						double maxCos = 0;
+						for (ScoredEmbedding core
+								: semanticCore) {
+							double cos = cosineSimilarity(vec,
+									core.embedding
+											.getEmbeddingVector());
+							if (cos > maxCos) {
+								maxCos = cos;
+							}
+						}
+						if (maxCos >= ChartSearchAiConstants
+								.SEMANTIC_CORE_MIN_COSINE) {
+							expanded.add(se);
+							expandedIds.add(
+									se.embedding.getResourceId());
+						}
+					}
+					candidates = expanded;
+					log.debug("Semantic core expansion:"
+							+ " core={}, floor={}, result={}",
+							semanticCore.size(),
+							String.format("%.4f", scoreFloor),
+							candidates.size());
+					partialKwValidated = true;
+				} else {
+					// No semantic core found — fall back to the
+					// semantic ratio floor on keyword matches.
+					double maxSemanticKw = 0;
+					for (ScoredEmbedding se : candidates) {
+						if (se.semanticScore > maxSemanticKw) {
+							maxSemanticKw = se.semanticScore;
+						}
+					}
+					double semFloor = maxSemanticKw
+							* ChartSearchAiConstants
+									.REFINEMENT_SEMANTIC_RATIO;
+					List<ScoredEmbedding> filtered =
+							new ArrayList<ScoredEmbedding>();
+					for (ScoredEmbedding se : candidates) {
+						if (se.semanticScore >= semFloor) {
+							filtered.add(se);
+						}
+					}
+					if (filtered.size() >= ChartSearchAiConstants
+							.ADAPTIVE_MIN_RECORDS) {
+						log.debug("Partial-kw semantic floor: "
+								+ "{} -> {} (floor={})",
+								candidates.size(), filtered.size(),
+								String.format("%.4f", semFloor));
+						candidates = filtered;
+					}
+				}
+			} else if (!uniformKeywords) {
 				double maxSemanticRefined = 0;
 				for (ScoredEmbedding se : candidates) {
 					if (se.semanticScore > maxSemanticRefined) {
@@ -1107,9 +1265,15 @@ public class LlmInferenceService implements ChartSearchService {
 		// because with spread scores the minority candidate may be the
 		// only correct result (e.g. Syphilitic Cirrhosis at 83% of top
 		// for an STD query — a genuine hit that shouldn't be removed).
-		if (candidates.size() >= 4) {
+		// Skip when the partial-keyword semantic core path already
+		// curated the candidate set — candidates were selected from
+		// the semantic core and validated keyword reps. Coherence
+		// filtering would incorrectly remove minority record types
+		// (e.g. hemoglobin lab tests when haemorrhagic disease
+		// condition/diagnosis form a tighter pair).
+		if (!partialKwValidated && candidates.size() >= 4) {
 			candidates = filterByCoherence(candidates);
-		} else if (candidates.size() == 3) {
+		} else if (!partialKwValidated && candidates.size() == 3) {
 			double topSemantic = candidates.get(0).semanticScore;
 			for (ScoredEmbedding se : candidates) {
 				if (se.semanticScore > topSemantic) {
@@ -1163,7 +1327,8 @@ public class LlmInferenceService implements ChartSearchService {
 				log.debug("Phase 2: candidatesHaveKeywords={}, candidates={}: [{}]",
 						candidatesHaveKeywords, candidates.size(), sb);
 			}
-			if (!candidatesHaveKeywords && !candidates.isEmpty()) {
+			if (!partialKwValidated && !candidatesHaveKeywords
+					&& !candidates.isEmpty()) {
 				if (candidates.size() >= 2) {
 					candidates = filterByMeanCoherence(candidates, config);
 				}

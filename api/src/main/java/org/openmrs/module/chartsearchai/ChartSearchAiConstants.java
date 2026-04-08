@@ -130,6 +130,26 @@ public class ChartSearchAiConstants {
 	 * matches (e.g. Blood Oxygen matching "blood"). */
 	public static final double REFINEMENT_SEMANTIC_RATIO = 0.70;
 
+	/** Minimum cosine similarity between a keyword-matched record and
+	 * the semantic core (non-keyword records found by gap detection)
+	 * for the keyword match to be considered topically relevant.
+	 * Keyword reps below this threshold are incidental matches —
+	 * e.g. SpO2 matching "blood" in "blood oxygen saturation" when
+	 * the query is about blood problems. Value of 0.55 sits between
+	 * same-topic cross-type pairs (~0.65-0.80) and cross-topic pairs
+	 * (~0.40-0.50). */
+	public static final double SEMANTIC_CORE_MIN_COSINE = 0.55;
+
+	/** Fraction of the semantic core's minimum score used as the
+	 * relevance floor for expansion candidates. Semantic score
+	 * (query cosine) is the only signal where genuinely relevant
+	 * records consistently outscore template-similar noise — all
+	 * inter-record cosine metrics (max, avg, min to core) fail
+	 * because the embedding model conflates record-type similarity
+	 * with content similarity. Value of 0.80 means expansion
+	 * candidates must be within 20% of the core's relevance level. */
+	public static final double SEMANTIC_CORE_SCORE_RATIO = 0.80;
+
 	/** Gap multiplier for inter-candidate coherence outlier detection.
 	 * Moderate sensitivity — only removes clear topic outliers. */
 	public static final double COHERENCE_GAP_MULTIPLIER = 2.0;

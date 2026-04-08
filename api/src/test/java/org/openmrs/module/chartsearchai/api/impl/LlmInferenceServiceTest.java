@@ -42,6 +42,9 @@ public class LlmInferenceServiceTest {
 	private static final String[] THIRD_PATIENT_DATASET =
 			TestDatasetHelper.THIRD_PATIENT_DATASET;
 
+	private static final String[] FOURTH_PATIENT_DATASET =
+			TestDatasetHelper.FOURTH_PATIENT_DATASET;
+
 	@Test
 	public void extractCitedReferences_shouldExtractReferencesFromCitations() {
 		List<RecordMapping> mappings = Arrays.asList(
@@ -2044,6 +2047,72 @@ public class LlmInferenceServiceTest {
 				"Should include Self-Induced Abortion condition, got: " + result);
 		assertTrue(result.contains(138),
 				"Should include Self-Induced Abortion diagnosis, got: " + result);
+	}
+
+	@Test
+	public void integration_bloodProblemQuery_shouldReturnAnaemiaAndHematologyRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"does she have any blood problem?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K,
+				THIRD_PATIENT_DATASET);
+
+		// Blood-related records: hematology tests, blood cell counts,
+		// and blood conditions — includes both keyword matches (records
+		// containing "blood") and semantic rescues (records about blood
+		// that use different vocabulary like Haemoglobin, Anaemia).
+		// [  1] Haemoglobin 15.8 g/dL (HIGH) = index 0
+		// [ 92] Complete Blood Count order = index 91
+		// [ 94] Anaemia condition = index 93
+		// [ 95] Anaemia diagnosis = index 94
+		// [104] Haemoglobin 11.2 g/dL (LOW) = index 103
+		// [105] White blood cells = index 104
+		// [106] Platelet count = index 105
+		// [107] Hematocrit = index 106
+		// [109] Red blood cells (LOW) = index 108
+		assertTrue(result.contains(0),
+				"Should include Haemoglobin (HIGH), got: " + result);
+		assertTrue(result.contains(91),
+				"Should include Complete Blood Count order, got: " + result);
+		assertTrue(result.contains(93),
+				"Should include Anaemia condition, got: " + result);
+		assertTrue(result.contains(94),
+				"Should include Anaemia diagnosis, got: " + result);
+		assertTrue(result.contains(103),
+				"Should include Haemoglobin (LOW), got: " + result);
+		assertTrue(result.contains(104),
+				"Should include White blood cells, got: " + result);
+		assertTrue(result.contains(105),
+				"Should include Platelet count, got: " + result);
+		assertTrue(result.contains(106),
+				"Should include Hematocrit, got: " + result);
+		assertTrue(result.contains(108),
+				"Should include Red blood cells (LOW), got: " + result);
+	}
+
+	@Test
+	public void integration_bloodProblemQuery_fourthDataset_shouldReturnBloodRelatedRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"does she have any blood problem?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K,
+				FOURTH_PATIENT_DATASET);
+
+		// Blood-related records rescued via vocabulary-gap rescue
+		// (no "blood" keyword, but high semantic similarity):
+		// [  1] Haemoglobin: 15.8 g/dL (HIGH) = index 0
+		// [ 19] Condition: Haemorrhagic disease of newborn = index 18
+		// [ 22] Diagnosis: Haemorrhagic disease of newborn = index 21
+		assertTrue(result.contains(0),
+				"Should include Haemoglobin (HIGH), got: " + result);
+		assertTrue(result.contains(18),
+				"Should include Haemorrhagic disease condition, got: " + result);
+		assertTrue(result.contains(21),
+				"Should include Haemorrhagic disease diagnosis, got: " + result);
 	}
 
 }
