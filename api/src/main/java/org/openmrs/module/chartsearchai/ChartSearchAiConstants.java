@@ -223,6 +223,14 @@ public class ChartSearchAiConstants {
 	 * above the mean of all patient scores to be considered relevant. */
 	public static final double KNN_FALLBACK_Z_SCORE = 2.5;
 
+	public static final String GP_RERANKER_MODEL_FILE_PATH = "chartsearchai.reranker.modelFilePath";
+
+	public static final String GP_RERANKER_VOCAB_FILE_PATH = "chartsearchai.reranker.vocabFilePath";
+
+	public static final String GP_RERANKER_MAX_SEQUENCE_LENGTH = "chartsearchai.reranker.maxSequenceLength";
+
+	public static final int DEFAULT_RERANKER_MAX_SEQUENCE_LENGTH = 512;
+
 	public static final String GP_AUDIT_LOG_RETENTION_DAYS = "chartsearchai.auditLogRetentionDays";
 
 	public static final int DEFAULT_AUDIT_LOG_RETENTION_DAYS = 90;

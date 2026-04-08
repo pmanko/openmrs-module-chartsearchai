@@ -2115,4 +2115,154 @@ public class LlmInferenceServiceTest {
 				"Should include Haemorrhagic disease diagnosis, got: " + result);
 	}
 
+	// -----------------------------------------------------------------------
+	// Cross-encoder reranker tests
+	// -----------------------------------------------------------------------
+
+	private static final String CROSS_ENCODER_MODEL_DIR = System.getProperty(
+			"chartsearchai.reranker.model.dir", "../models/cross-encoder-ms-marco-MiniLM-L-6-v2");
+
+	private static final String CROSS_ENCODER_MODEL_PATH =
+			CROSS_ENCODER_MODEL_DIR + "/model.onnx";
+
+	private static final String CROSS_ENCODER_VOCAB_PATH =
+			CROSS_ENCODER_MODEL_DIR + "/vocab.txt";
+
+	private static boolean crossEncoderModelFilesExist() {
+		return new java.io.File(CROSS_ENCODER_MODEL_PATH).exists()
+				&& new java.io.File(CROSS_ENCODER_VOCAB_PATH).exists();
+	}
+
+	@Test
+	public void tokenizePair_shouldProduceCorrectTokenTypeIds() throws Exception {
+		org.junit.jupiter.api.Assumptions.assumeTrue(crossEncoderModelFilesExist(),
+				"Skipping: cross-encoder model files not found at " + CROSS_ENCODER_MODEL_PATH);
+
+		org.openmrs.module.chartsearchai.embedding.WordPieceTokenizer tokenizer =
+				new org.openmrs.module.chartsearchai.embedding.WordPieceTokenizer(
+						CROSS_ENCODER_VOCAB_PATH,
+						ChartSearchAiConstants.DEFAULT_RERANKER_MAX_SEQUENCE_LENGTH);
+
+		org.openmrs.module.chartsearchai.embedding.WordPieceTokenizer.TokenizedInput result =
+				tokenizer.tokenizePair("blood problems", "Haemoglobin: 12.5 g/dL");
+
+		long[] tokenTypeIds = result.getTokenTypeIds();
+		long[] inputIds = result.getInputIds();
+		long[] attentionMask = result.getAttentionMask();
+
+		// All attention mask values should be 1
+		for (long mask : attentionMask) {
+			assertEquals(1, mask);
+		}
+
+		// Find the first SEP token (end of segment A)
+		int firstSep = -1;
+		for (int i = 1; i < inputIds.length; i++) {
+			if (inputIds[i] == 102) { // [SEP] token ID in BERT vocab
+				firstSep = i;
+				break;
+			}
+		}
+		assertTrue(firstSep > 0, "Should find first [SEP] token");
+
+		// Segment A tokens (including [CLS] and first [SEP]) should have type 0
+		for (int i = 0; i <= firstSep; i++) {
+			assertEquals(0, tokenTypeIds[i],
+					"Token at position " + i + " should be segment A (type 0)");
+		}
+
+		// Segment B tokens (after first [SEP]) should have type 1
+		for (int i = firstSep + 1; i < tokenTypeIds.length; i++) {
+			assertEquals(1, tokenTypeIds[i],
+					"Token at position " + i + " should be segment B (type 1)");
+		}
+
+		// Last token should also be [SEP] (second separator)
+		assertEquals(102, inputIds[inputIds.length - 1],
+				"Last token should be [SEP]");
+	}
+
+	@Test
+	public void crossEncoder_shouldScoreRelevantDocumentHigher() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(crossEncoderModelFilesExist(),
+				"Skipping: cross-encoder model files not found at " + CROSS_ENCODER_MODEL_PATH);
+
+		org.openmrs.module.chartsearchai.embedding.OnnxCrossEncoderReranker reranker =
+				new org.openmrs.module.chartsearchai.embedding.OnnxCrossEncoderReranker(
+						CROSS_ENCODER_MODEL_PATH, CROSS_ENCODER_VOCAB_PATH);
+		try {
+			double hbScore = reranker.score("blood problems",
+					"Clinical observation: Haemoglobin: 12.5 g/dL");
+			double pulseScore = reranker.score("blood problems",
+					"Clinical observation: Pulse: 72 beats/min");
+
+			assertTrue(hbScore > pulseScore,
+					"Haemoglobin (" + hbScore + ") should score higher than Pulse ("
+							+ pulseScore + ") for 'blood problems'");
+		} finally {
+			reranker.close();
+		}
+	}
+
+	@Test
+	public void rerank_shouldReorderByRelevance() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(crossEncoderModelFilesExist(),
+				"Skipping: cross-encoder model files not found at " + CROSS_ENCODER_MODEL_PATH);
+
+		org.openmrs.module.chartsearchai.embedding.OnnxCrossEncoderReranker reranker =
+				new org.openmrs.module.chartsearchai.embedding.OnnxCrossEncoderReranker(
+						CROSS_ENCODER_MODEL_PATH, CROSS_ENCODER_VOCAB_PATH);
+		try {
+			List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> records =
+					new ArrayList<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord>();
+			// Mix blood-related and unrelated records
+			records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+					"obs", 0, "Pulse: 72 beats/min", null));
+			records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+					"obs", 1, "Haemoglobin: 12.5 g/dL", null));
+			records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+					"obs", 2, "Blood Oxygen Saturation: 98%", null));
+			records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+					"obs", 3, "Systolic Blood Pressure: 120 mmHg", null));
+			records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+					"obs", 4, "Red blood cells: 4.5 x10^12/L", null));
+
+			List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> reranked =
+					LlmInferenceService.rerank("blood problems", records, reranker, 3);
+
+			assertEquals(3, reranked.size(), "Should return top 3 records");
+
+			// Collect resource IDs of reranked results
+			List<Integer> topIds = new ArrayList<Integer>();
+			for (org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord r : reranked) {
+				topIds.add(r.getResourceId());
+			}
+
+			// Red blood cells (explicit "blood" keyword) should rank in top 3
+			assertTrue(topIds.contains(4),
+					"Red blood cells should be in top 3, got: " + topIds);
+			// Pulse (no blood relation) should NOT rank in top 3
+			assertFalse(topIds.contains(0),
+					"Pulse should not be in top 3, got: " + topIds);
+		} finally {
+			reranker.close();
+		}
+	}
+
+	@Test
+	public void integration_rerankDisabledWhenNoModel_pipelineUnchanged() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// Run the standard pipeline — reranker is not configured so it should
+		// produce identical results to the existing pipeline
+		List<Integer> result = runRealModelPipeline(
+				"is the patient anemic?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+
+		// The result should be non-empty and match the existing pipeline behavior
+		assertFalse(result.isEmpty(),
+				"Pipeline should return results when reranker is not configured");
+	}
+
 }

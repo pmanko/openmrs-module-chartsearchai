@@ -40,6 +40,7 @@ import org.openmrs.module.chartsearchai.api.HybridRetriever;
 import org.openmrs.module.chartsearchai.api.LuceneIndexer;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
+import org.openmrs.module.chartsearchai.embedding.OnnxCrossEncoderReranker;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
@@ -87,6 +88,9 @@ public class LlmInferenceService implements ChartSearchService {
 
 	@Autowired
 	private HybridRetriever hybridRetriever;
+
+	@Autowired
+	private OnnxCrossEncoderReranker crossEncoderReranker;
 
 	@Autowired
 	private LlmProvider llmProvider;
@@ -525,6 +529,10 @@ public class LlmInferenceService implements ChartSearchService {
 						isElasticsearchPipeline() ? "Elasticsearch" :
 								isLucenePipeline() ? "Lucene" : "embeddings");
 
+		if (crossEncoderReranker.isAvailable() && !filtered.isEmpty()) {
+			filtered = rerankAndFilter(question, filtered);
+		}
+
 		int recencyCap = extractRecencyCap(question);
 		if (recencyCap > 0) {
 			filtered = capPerConcept(filtered, recencyCap);
@@ -534,6 +542,38 @@ public class LlmInferenceService implements ChartSearchService {
 		filtered = groupByConcept(filtered);
 
 		return chartSerializer.serialize(patient, filtered);
+	}
+
+	private List<SerializedRecord> rerankAndFilter(String question, List<SerializedRecord> records) {
+		int topN = getTopK();
+		List<SerializedRecord> reranked = rerank(question, records, crossEncoderReranker, topN);
+		log.debug("Cross-encoder reranked {} records to {}", records.size(), reranked.size());
+		return reranked;
+	}
+
+	static List<SerializedRecord> rerank(String query, List<SerializedRecord> records,
+			OnnxCrossEncoderReranker reranker, int topN) {
+		List<double[]> scored = new ArrayList<double[]>();
+		for (int i = 0; i < records.size(); i++) {
+			SerializedRecord record = records.get(i);
+			double score = reranker.score(query,
+					ChartSearchAiUtils.buildPrefixedText(record.getResourceType(), record.getText()));
+			scored.add(new double[] { i, score });
+		}
+
+		Collections.sort(scored, new Comparator<double[]>() {
+			@Override
+			public int compare(double[] a, double[] b) {
+				return Double.compare(b[1], a[1]); // descending
+			}
+		});
+
+		int limit = Math.min(topN, scored.size());
+		List<SerializedRecord> result = new ArrayList<SerializedRecord>(limit);
+		for (int i = 0; i < limit; i++) {
+			result.add(records.get((int) scored.get(i)[0]));
+		}
+		return result;
 	}
 
 	boolean isHybridPipeline() {

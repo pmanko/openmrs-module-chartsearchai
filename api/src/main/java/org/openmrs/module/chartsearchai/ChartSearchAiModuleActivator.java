@@ -17,6 +17,7 @@ import org.openmrs.module.chartsearchai.api.AuditLogPurgeTask;
 import org.openmrs.module.chartsearchai.api.EmbeddingIndexTask;
 import org.openmrs.module.chartsearchai.api.ElasticsearchIndexer;
 import org.openmrs.module.chartsearchai.api.impl.LlmProvider;
+import org.openmrs.module.chartsearchai.embedding.OnnxCrossEncoderReranker;
 import org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider;
 import org.openmrs.scheduler.SchedulerService;
 import org.openmrs.scheduler.TaskDefinition;
@@ -75,6 +76,16 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 			log.warn("Error closing Elasticsearch indexer", e);
 		}
 		try {
+			OnnxCrossEncoderReranker reranker = Context.getRegisteredComponent(
+					"chartSearchAi.crossEncoderReranker", OnnxCrossEncoderReranker.class);
+			if (reranker != null) {
+				reranker.close();
+			}
+		}
+		catch (Exception e) {
+			log.warn("Error closing cross-encoder reranker", e);
+		}
+		try {
 			org.openmrs.module.chartsearchai.api.LuceneIndexer luceneIndexer =
 					Context.getRegisteredComponent("luceneIndexer",
 							org.openmrs.module.chartsearchai.api.LuceneIndexer.class);
@@ -106,6 +117,11 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 			validateModelFile(ChartSearchAiConstants.GP_EMBEDDING_VOCAB_FILE_PATH,
 					"WordPiece vocabulary");
 		}
+
+		validateModelFile(ChartSearchAiConstants.GP_RERANKER_MODEL_FILE_PATH,
+				"cross-encoder reranker");
+		validateModelFile(ChartSearchAiConstants.GP_RERANKER_VOCAB_FILE_PATH,
+				"cross-encoder vocabulary");
 	}
 
 	private void validateModelFile(String globalProperty, String label) {
