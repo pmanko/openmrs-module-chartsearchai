@@ -2143,6 +2143,11 @@ public class LlmInferenceServiceTest {
 						CROSS_ENCODER_VOCAB_PATH,
 						ChartSearchAiConstants.DEFAULT_RERANKER_MAX_SEQUENCE_LENGTH);
 
+		// Discover [SEP] token ID from the vocab (varies by model)
+		org.openmrs.module.chartsearchai.embedding.WordPieceTokenizer.TokenizedInput singleToken =
+				tokenizer.tokenize("test");
+		long sepTokenId = singleToken.getInputIds()[singleToken.getLength() - 1];
+
 		org.openmrs.module.chartsearchai.embedding.WordPieceTokenizer.TokenizedInput result =
 				tokenizer.tokenizePair("blood problems", "Haemoglobin: 12.5 g/dL");
 
@@ -2158,7 +2163,7 @@ public class LlmInferenceServiceTest {
 		// Find the first SEP token (end of segment A)
 		int firstSep = -1;
 		for (int i = 1; i < inputIds.length; i++) {
-			if (inputIds[i] == 102) { // [SEP] token ID in BERT vocab
+			if (inputIds[i] == sepTokenId) {
 				firstSep = i;
 				break;
 			}
@@ -2178,7 +2183,7 @@ public class LlmInferenceServiceTest {
 		}
 
 		// Last token should also be [SEP] (second separator)
-		assertEquals(102, inputIds[inputIds.length - 1],
+		assertEquals(sepTokenId, inputIds[inputIds.length - 1],
 				"Last token should be [SEP]");
 	}
 
