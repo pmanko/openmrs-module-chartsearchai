@@ -11,11 +11,10 @@ For project background, community discussion, and roadmap, see the [wiki project
   - [1. Build](#1-build)
   - [2. Download the LLM model](#2-download-the-llm-model-local-mode-only)
   - [3. Download the embedding model](#3-download-the-embedding-model)
-  - [4. Download the cross-encoder reranker model (optional)](#4-download-the-cross-encoder-reranker-model-optional)
-  - [5. Install](#5-install)
-  - [6. Configure](#6-configure)
-  - [7. Grant privileges](#7-grant-privileges)
-  - [8. Indexing](#8-indexing)
+  - [4. Install](#4-install)
+  - [5. Configure](#5-configure)
+  - [6. Grant privileges](#6-grant-privileges)
+  - [7. Indexing](#7-indexing)
   - [Testing the Elasticsearch pipeline locally](#testing-the-elasticsearch-pipeline-locally)
 - [Query behavior](#query-behavior)
 - [API](#api)
@@ -75,26 +74,11 @@ If embedding pre-filtering is enabled (default), download the all-MiniLM-L6-v2 O
 
 Place them alongside the LLM model (e.g., `<openmrs-application-data-directory>/chartsearchai/`).
 
-### 4. Download the cross-encoder reranker model *(optional)*
-
-To improve retrieval quality, you can enable a cross-encoder reranking stage that rescores (query, document) pairs jointly. This helps distinguish genuine content matches from template-similar false positives (e.g. "Haemoglobin" vs "Blood Pressure" for the query "blood problems"). See [ADR Decision 18](docs/adr.md) for background.
-
-Download the cross-encoder/ms-marco-MiniLM-L-6-v2 model and export to ONNX format:
-
-```
-pip install optimum[onnxruntime] transformers
-optimum-cli export onnx --model cross-encoder/ms-marco-MiniLM-L-6-v2 --task text-classification /path/to/output/
-```
-
-Place `model.onnx` and `vocab.txt` from the output directory into the OpenMRS application data directory (e.g., `<openmrs-application-data-directory>/chartsearchai/reranker/`). Then configure the global properties (see [Cross-encoder reranker](#cross-encoder-reranker-optional) below).
-
-The reranker is opt-in — the module works without it, and existing behavior is unchanged when not configured.
-
-### 5. Install
+### 4. Install
 
 Copy the `.omod` file into the `modules` folder of the OpenMRS application data directory (e.g., `<openmrs-application-data-directory>/modules/`). The module will be loaded on the next OpenMRS startup.
 
-### 6. Configure
+### 5. Configure
 
 Set these global properties in **Admin > Settings**:
 
@@ -151,18 +135,6 @@ These settings apply when `chartsearchai.retrieval.pipeline` is `embedding` (the
 | `chartsearchai.embedding.modelFilePath` | — | Required when using the embedding, hybrid, or elasticsearch pipeline. Relative path to the ONNX model file (all-MiniLM-L6-v2), e.g. `chartsearchai/all-MiniLM-L6-v2.onnx`. Not needed for the Lucene pipeline |
 | `chartsearchai.embedding.vocabFilePath` | — | Required when using the embedding, hybrid, or elasticsearch pipeline. Relative path to the WordPiece `vocab.txt` file, e.g. `chartsearchai/vocab.txt`. Not needed for the Lucene pipeline |
 
-#### Cross-encoder reranker *(optional)*
-
-When configured, a cross-encoder reranking stage runs after retrieval to rescore results by feeding each (query, document) pair jointly through a BERT model. This resolves cases where the bi-encoder ranks structurally similar but semantically different records equally (e.g. "Condition: Hypertension" scoring high for "Condition: Anaemia" because they share structural tokens). The reranker is opt-in — leave the model path empty to disable it.
-
-| Property | Default | Description |
-|----------|---------|-------------|
-| `chartsearchai.reranker.modelFilePath` | *(empty)* | Relative path to the ONNX cross-encoder model file, e.g. `chartsearchai/reranker/model.onnx`. Leave empty to disable reranking |
-| `chartsearchai.reranker.vocabFilePath` | *(empty)* | Relative path to the cross-encoder vocabulary file, e.g. `chartsearchai/reranker/vocab.txt`. Required when model path is set |
-| `chartsearchai.reranker.maxSequenceLength` | `512` | Maximum token sequence length for the cross-encoder input. The query and document are concatenated as a sentence pair; the document is truncated if the total exceeds this limit. Must be between 32 and 8192 |
-
-The reranker uses the existing `chartsearchai.embedding.topK` setting to determine how many records to keep after reranking.
-
 #### LLM tuning
 
 | Property | Default | Description |
@@ -185,14 +157,14 @@ The reranker uses the existing `chartsearchai.embedding.topK` setting to determi
 |----------|---------|-------------|
 | `chartsearchai.auditLogRetentionDays` | `90` | Audit log entries older than this are purged daily. Set to `0` to retain all |
 
-### 7. Grant privileges
+### 6. Grant privileges
 
 | Privilege | Purpose |
 |-----------|---------|
 | **AI Query Patient Data** | Execute chart search queries |
 | **View AI Audit Logs** | Access the audit log endpoint |
 
-### 8. Indexing
+### 7. Indexing
 
 When `chartsearchai.embedding.preFilter` is `true` (default), patient records are automatically indexed on first chart access for whichever retrieval pipeline is active. Subsequent data changes trigger automatic re-indexing via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, program enrollment, medication dispense, and patient merge operations.
 

@@ -40,7 +40,6 @@ import org.openmrs.module.chartsearchai.api.HybridRetriever;
 import org.openmrs.module.chartsearchai.api.LuceneIndexer;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
-import org.openmrs.module.chartsearchai.embedding.OnnxCrossEncoderReranker;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
@@ -88,9 +87,6 @@ public class LlmInferenceService implements ChartSearchService {
 
 	@Autowired
 	private HybridRetriever hybridRetriever;
-
-	@Autowired
-	private OnnxCrossEncoderReranker crossEncoderReranker;
 
 	@Autowired
 	private LlmProvider llmProvider;
@@ -529,10 +525,6 @@ public class LlmInferenceService implements ChartSearchService {
 						isElasticsearchPipeline() ? "Elasticsearch" :
 								isLucenePipeline() ? "Lucene" : "embeddings");
 
-		if (crossEncoderReranker.isAvailable() && !filtered.isEmpty()) {
-			filtered = rerankAndFilter(question, filtered);
-		}
-
 		int recencyCap = extractRecencyCap(question);
 		if (recencyCap > 0) {
 			filtered = capPerConcept(filtered, recencyCap);
@@ -542,36 +534,6 @@ public class LlmInferenceService implements ChartSearchService {
 		filtered = groupByConcept(filtered);
 
 		return chartSerializer.serialize(patient, filtered);
-	}
-
-	private List<SerializedRecord> rerankAndFilter(String question, List<SerializedRecord> records) {
-		List<SerializedRecord> reranked = rerank(question, records, crossEncoderReranker);
-		log.debug("Cross-encoder reranked {} records", reranked.size());
-		return reranked;
-	}
-
-	static List<SerializedRecord> rerank(String query, List<SerializedRecord> records,
-			OnnxCrossEncoderReranker reranker) {
-		List<double[]> scored = new ArrayList<double[]>();
-		for (int i = 0; i < records.size(); i++) {
-			SerializedRecord record = records.get(i);
-			double score = reranker.score(query,
-					ChartSearchAiUtils.buildPrefixedText(record.getResourceType(), record.getText()));
-			scored.add(new double[] { i, score });
-		}
-
-		Collections.sort(scored, new Comparator<double[]>() {
-			@Override
-			public int compare(double[] a, double[] b) {
-				return Double.compare(b[1], a[1]); // descending
-			}
-		});
-
-		List<SerializedRecord> result = new ArrayList<SerializedRecord>(scored.size());
-		for (int i = 0; i < scored.size(); i++) {
-			result.add(records.get((int) scored.get(i)[0]));
-		}
-		return result;
 	}
 
 	boolean isHybridPipeline() {
@@ -958,13 +920,73 @@ public class LlmInferenceService implements ChartSearchService {
 				ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2,
 				maxSemanticScore / 2);
 
+		// Adaptive min gap: scale the floor to the semantic score range so
+		// models with compressed distributions (e.g. MedCPT: 0.60–0.66) can
+		// detect gaps that are large relative to their range but small in
+		// absolute terms. Uses the interquartile range (Q1 to Q3) to resist
+		// outliers at both ends. Capped at the configured minScoreGap so
+		// existing behavior for wide-range models (all-MiniLM) is preserved.
+		double firstPassMinGap = config.minScoreGap;
+		if (scored.size() >= 4) {
+			List<Double> semScores = new ArrayList<Double>(scored.size());
+			for (ScoredEmbedding se : scored) {
+				if (se.semanticScore >= minScore) {
+					semScores.add(se.semanticScore);
+				}
+			}
+			Collections.sort(semScores);
+			if (semScores.size() >= 4) {
+				double q1 = semScores.get(semScores.size() / 4);
+				double q3 = semScores.get(3 * semScores.size() / 4);
+				double iqr = q3 - q1;
+				// Only reduce the min gap when the score distribution is
+				// genuinely compressed (IQR < half the configured min gap).
+				// This preserves exact existing behavior for wide-range
+				// models (all-MiniLM: IQR ~0.10, threshold 0.05) while
+				// enabling gap detection for compressed models (MedCPT:
+				// IQR ~0.02 < 0.05).
+				if (iqr < config.minScoreGap / 2) {
+					firstPassMinGap = iqr
+							* ChartSearchAiConstants.MIN_GAP_RANGE_FRACTION;
+				}
+			}
+		}
+
 		// Gap detection considers ALL records above the floor — no topK cap.
 		int adaptiveCutoff = findAdaptiveCutoff(scored, scored.size(),
-				minScore, config.scoreGapMultiplier, config.minScoreGap);
+				minScore, config.scoreGapMultiplier, firstPassMinGap);
 
-		List<ScoredEmbedding> candidates = new ArrayList<ScoredEmbedding>();
-		for (int i = 0; i < adaptiveCutoff; i++) {
-			candidates.add(scored.get(i));
+		// Build the candidate set from the semantic cluster. The gap was
+		// detected in semantic-score order; include all records whose
+		// semantic score is at or above the cluster boundary. This handles
+		// keyword penalties pushing high-semantic records far down the
+		// combined-score list — taking a combined-score prefix would either
+		// include too many (old max-index) or miss cluster members (count).
+		// Filtering by semantic threshold captures exactly the right records.
+		List<ScoredEmbedding> candidates;
+		if (adaptiveCutoff >= scored.size()) {
+			candidates = new ArrayList<ScoredEmbedding>(scored);
+		} else {
+			// Find the cluster threshold: the Nth-highest semantic score
+			List<Double> semanticDesc = new ArrayList<Double>(scored.size());
+			for (ScoredEmbedding se : scored) {
+				semanticDesc.add(se.semanticScore);
+			}
+			Collections.sort(semanticDesc, Collections.reverseOrder());
+			double clusterThreshold = semanticDesc.get(adaptiveCutoff - 1);
+			candidates = new ArrayList<ScoredEmbedding>();
+			for (ScoredEmbedding se : scored) {
+				if (se.semanticScore >= clusterThreshold) {
+					candidates.add(se);
+				}
+			}
+			// Sort by combined score to maintain the expected ordering
+			Collections.sort(candidates, new Comparator<ScoredEmbedding>() {
+				@Override
+				public int compare(ScoredEmbedding a, ScoredEmbedding b) {
+					return Double.compare(b.score, a.score);
+				}
+			});
 		}
 
 		// Keyword refinement: when gap detection returns a broad set but
@@ -982,6 +1004,7 @@ public class LlmInferenceService implements ChartSearchService {
 				adaptiveCutoff, candidates.size(), refinementActivated);
 
 		boolean partialKwValidated = false;
+		boolean firstPassGapDetected = adaptiveCutoff < scored.size();
 
 		// Post-processing with two paths:
 		//
@@ -1241,13 +1264,6 @@ public class LlmInferenceService implements ChartSearchService {
 					minScore, config.scoreGapMultiplier,
 					ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
 			if (secondCutoff < candidates.size()) {
-				// Validate the gap: if records above and below belong to
-				// the same topic (high cross-boundary cosine), the gap is
-				// intra-topic and should not be used as a cutoff. This
-				// prevents abbreviation queries like "STD" from splitting
-				// same-topic records that the embedding model scored
-				// differently due to text format variations (e.g.
-				// "Diagnosis: HIV Disease" vs "Assessment: HIV Disease").
 				if (isGapCoherent(candidates, secondCutoff,
 						config.gapValidationCosineThreshold)) {
 					log.debug("Second-pass gap at {} is intra-topic, skipping cut",
@@ -1370,7 +1386,20 @@ public class LlmInferenceService implements ChartSearchService {
 				if (candidates.size() >= 2) {
 					candidates = filterByMeanCoherence(candidates, config);
 				}
-				if (!candidates.isEmpty()
+				// Skip the z-score gate when first-pass gap detection found
+				// a tight cluster (< 25% of total records). The gap is
+				// structural evidence that the model distinguishes these
+				// records from the rest. Without this, compressed-distribution
+				// models (e.g. MedCPT, std ≈ 0.03) can never reach the
+				// z-score threshold because even the most relevant records
+				// are < 2.5σ from the mean. The 25% threshold prevents
+				// bypassing when gap detection captures a broad swath of
+				// records (e.g. 33/67 for CD4 on a dataset with no CD4),
+				// which isn't evidence of a genuine cluster.
+				boolean tightClusterDetected = firstPassGapDetected
+						&& adaptiveCutoff < scored.size() / 4;
+				if (!tightClusterDetected
+						&& !candidates.isEmpty()
 						&& scored.size()
 						>= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
 					double sum = 0;
@@ -1384,7 +1413,6 @@ public class LlmInferenceService implements ChartSearchService {
 						sqSum += d * d;
 					}
 					double std = Math.sqrt(sqSum / scored.size());
-
 					if (std > 0) {
 						// For small clusters (≤3 candidates), use
 						// max z-score: each candidate was selected
@@ -1530,25 +1558,7 @@ public class LlmInferenceService implements ChartSearchService {
 			gapSum += gap;
 		}
 
-		// Map the semantic cluster back to the combined-score-sorted input.
-		// The gap was detected in semantic-score order; find the lowest
-		// semantic score in the cluster and include all input records whose
-		// semantic score meets this threshold. This ensures the cutoff index
-		// aligns with scored[0..cutoff-1] rather than using a position from
-		// a differently-sorted list.
-		// Find all items in the combined-score list whose semantic score is
-		// at or above the cluster boundary. We track the highest index that
-		// qualifies so that the returned cutoff is a contiguous prefix
-		// (scored[0..cutoff-1]) containing every cluster member.
-		double clusterThreshold = semanticSorted.get(semanticCutoff - 1);
-		int cutoff = 0;
-		for (int i = 0; i < limit; i++) {
-			if (scored.get(i).semanticScore >= clusterThreshold) {
-				cutoff = i + 1;
-			}
-		}
-
-		return Math.max(cutoff, Math.min(minRecords, aboveFloor));
+		return Math.max(semanticCutoff, Math.min(minRecords, aboveFloor));
 	}
 
 	/**

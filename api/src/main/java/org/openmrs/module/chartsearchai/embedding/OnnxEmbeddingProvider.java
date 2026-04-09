@@ -28,10 +28,9 @@ import org.springframework.stereotype.Component;
 
 /**
  * Embedding provider using ONNX Runtime. Supports any BERT-based sentence embedding
- * model (e.g. all-MiniLM-L6-v2 at 384 dimensions, pubmedbert-base-embeddings at 768).
- * The embedding dimensions are detected automatically from the model output on first use.
- * The ONNX model file path is configured via the {@code chartsearchai.embedding.modelFilePath}
- * global property.
+ * model (e.g. all-MiniLM-L6-v2 at 384 dimensions). The embedding dimensions are
+ * detected automatically from the model output on first use. The ONNX model file path
+ * is configured via the {@code chartsearchai.embedding.modelFilePath} global property.
  */
 @Component("chartSearchAi.embeddingProvider")
 public class OnnxEmbeddingProvider implements EmbeddingProvider {
@@ -76,12 +75,41 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 	@Override
 	public synchronized float[] embed(String text) {
+		try {
+			return runInference(getSession(), getTokenizer(), text);
+		}
+		catch (OrtException e) {
+			throw new RuntimeException("Failed to compute embedding", e);
+		}
+	}
+
+	@Override
+	public int getDimensions() {
+		return detectedDimensions;
+	}
+
+	public synchronized void close() {
+		if (session != null) {
+			log.info("Closing ONNX embedding session");
+			try {
+				session.close();
+			}
+			catch (OrtException e) {
+				log.warn("Error closing ONNX session", e);
+			}
+			session = null;
+			loadedModelPath = null;
+			tokenizer = null;
+			detectedDimensions = -1;
+		}
+		env = null;
+	}
+
+	private float[] runInference(OrtSession ortSession, WordPieceTokenizer wpTokenizer,
+			String text) throws OrtException {
 		Map<String, OnnxTensor> inputs = new HashMap<String, OnnxTensor>();
 		OrtSession.Result result = null;
 		try {
-			OrtSession ortSession = getSession();
-			WordPieceTokenizer wpTokenizer = getTokenizer();
-
 			TokenizedInput tokenized = wpTokenizer.tokenize(text);
 			int seqLen = tokenized.getLength();
 
@@ -89,13 +117,13 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 			long[][] attentionMaskArr = { tokenized.getAttentionMask() };
 			long[][] tokenTypeIdsArr = { tokenized.getTokenTypeIds() };
 
-			inputs.put("input_ids", OnnxTensor.createTensor(env, inputIdsArr));
-			inputs.put("attention_mask", OnnxTensor.createTensor(env, attentionMaskArr));
-			inputs.put("token_type_ids", OnnxTensor.createTensor(env, tokenTypeIdsArr));
+			OrtEnvironment ortEnv = getOrCreateEnv();
+			inputs.put("input_ids", OnnxTensor.createTensor(ortEnv, inputIdsArr));
+			inputs.put("attention_mask", OnnxTensor.createTensor(ortEnv, attentionMaskArr));
+			inputs.put("token_type_ids", OnnxTensor.createTensor(ortEnv, tokenTypeIdsArr));
 
 			result = ortSession.run(inputs);
 
-			// Mean pooling over token embeddings (masked by attention)
 			float[][][] output = (float[][][]) result.get(0).getValue();
 			int modelDimensions = output[0][0].length;
 			if (detectedDimensions == -1) {
@@ -106,6 +134,8 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 						+ modelDimensions + " vs previously detected "
 						+ detectedDimensions + "). Was the model swapped without reloading?");
 			}
+
+			// Mean pooling over attention-masked tokens
 			float[] embedding = new float[modelDimensions];
 			long[] attentionMask = tokenized.getAttentionMask();
 			int tokenCount = 0;
@@ -137,9 +167,6 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 			return embedding;
 		}
-		catch (OrtException e) {
-			throw new RuntimeException("Failed to compute embedding", e);
-		}
 		finally {
 			if (result != null) {
 				try {
@@ -160,26 +187,11 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 		}
 	}
 
-	@Override
-	public int getDimensions() {
-		return detectedDimensions;
-	}
-
-	public synchronized void close() {
-		if (session != null) {
-			log.info("Closing ONNX embedding session");
-			try {
-				session.close();
-			}
-			catch (OrtException e) {
-				log.warn("Error closing ONNX session", e);
-			}
-			session = null;
-			loadedModelPath = null;
-			tokenizer = null;
-			env = null;
-			detectedDimensions = -1;
+	private OrtEnvironment getOrCreateEnv() {
+		if (env == null) {
+			env = OrtEnvironment.getEnvironment();
 		}
+		return env;
 	}
 
 	private synchronized OrtSession getSession() throws OrtException {
@@ -206,8 +218,8 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 		if (session == null) {
 			log.info("Loading ONNX embedding model from {}", modelPath);
-			env = OrtEnvironment.getEnvironment();
-			session = env.createSession(modelPath);
+			OrtEnvironment ortEnv = getOrCreateEnv();
+			session = ortEnv.createSession(modelPath);
 			loadedModelPath = modelPath;
 			log.info("ONNX embedding model loaded successfully");
 		}

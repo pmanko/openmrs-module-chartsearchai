@@ -171,7 +171,7 @@ Top recommendation for this use case. Strongest general retrieval scores on MTEB
 | **`BAAI/bge-base-en-v1.5`** | 768 | BAAI (org) | MIT | Top MTEB retrieval scores, instruction-aware queries | ✅ Drop-in, single encoder |
 | `Alibaba-NLP/gte-base-en-v1.5` | 768 | Alibaba (org) | Apache 2.0 | Very competitive with BGE on benchmarks | ✅ Drop-in, single encoder |
 | `intfloat/e5-base-v2` | 768 | Microsoft (org) | MIT | Query/passage prefix support (`"query: "` / `"passage: "`) | ✅ Drop-in, single encoder |
-| `ncbi/MedCPT-Query-Encoder` | 768 | NCBI/NIH (gov org) | Apache 2.0 | Only medical-specific *retrieval* model; trained on PubMed queries | ⚠️ Dual encoder — needs separate query and document models, requires code changes |
+| ~~`ncbi/MedCPT-Query-Encoder`~~ | 768 | NCBI/NIH (gov org) | Apache 2.0 | Medical-specific retrieval model; trained on PubMed queries | ❌ **Evaluated and rejected** — compressed score distributions (IQR ~0.04 vs ~0.10 for all-MiniLM) defeated adaptive filtering, returning the entire dataset for queries like "blood problems". See [ADR Decision 18](adr.md#decision-18-cross-encoder-reranking-stage-superseded) |
 | `nomic-ai/nomic-embed-text-v1.5` | 768 | Nomic AI (org) | Apache 2.0 | Matryoshka dimensions (variable size), long context | ✅ Drop-in, single encoder |
 | `jinaai/jina-embeddings-v2-base-en` | 768 | Jina AI (org) | Apache 2.0 | 8K token context window | ✅ Drop-in, single encoder |
 | `NeuML/pubmedbert-base-embeddings` | 768 | NeuML (individual) | Apache 2.0 | PubMed-trained sentence embeddings | ✅ Drop-in; previously tested (ADR) with first-sentence truncation and rejected — re-test with full text |
@@ -205,15 +205,11 @@ Set `chartsearchai.embedding.queryPrefix` appropriately for each model:
 - E5: `"query: "`
 - Others: leave empty
 
-### Future: Add a Cross-Encoder Re-Ranking Stage
+### ~~Future: Add a Cross-Encoder Re-Ranking Stage~~ (Superseded)
 
-**Change:** After the initial cosine similarity retrieval returns the top-K candidates, run a cross-encoder model that scores (query, record) pairs jointly. Re-rank by cross-encoder score and apply the threshold on those scores instead.
+**Status:** Implemented, benchmarked, and removed.
 
-**Why:** Cross-encoders are dramatically more accurate than bi-encoders for fine-grained relevance scoring. They consider the full interaction between query and document tokens, catching relationships that independent embedding cannot.
-
-**Implementation:** Load a small cross-encoder ONNX model (e.g., `cross-encoder/ms-marco-MiniLM-L-6-v2`, ~90MB). After retrieving the top-20 by cosine similarity, re-score each with the cross-encoder and return the top results.
-
-**Risk:** Adds ~50-200ms per query for re-scoring 20 candidates. Requires a second ONNX model. May be overkill if fixes #1-#4 resolve the issue.
+The cross-encoder (ms-marco-MiniLM-L-6-v2, 85MB ONNX) was benchmarked across 7 queries on a 160-record patient chart. It added no retrieval value: it only reordered records within already-correct result sets (which has no effect since the LLM sees all candidates), and in one case ("blood pressure trend") actively hurt results by truncating 20 BP readings to 10 via its topN cutoff. The 85MB model footprint, ~100ms per-query latency, and deployment complexity were not justified. See [ADR Decision 18](adr.md#decision-18-cross-encoder-reranking-stage-superseded) for the full benchmark table.
 
 ### Future: Multi-Vector Embedding per Record
 
@@ -254,4 +250,4 @@ Improvements **#1 through #6** have been implemented and are in production. Key 
 - **Conditions and diagnoses decoupled.** Mapping both to the same classifier target caused them to compete for topK slots. Each is now an independent type.
 - **Auto-expand for category queries.** Type-matched records in category queries are not subject to topK. The user explicitly asked for "any/all" of a type — capping results defeats the purpose.
 
-The remaining future improvements (clinical-domain embedding model, cross-encoder re-ranking, multi-vector embedding, LLM-assisted query expansion) are more invasive and should only be pursued if the current tier doesn't sufficiently improve quality.
+The remaining future improvements (multi-vector embedding, LLM-assisted query expansion) are more invasive and should only be pursued if the current tier doesn't sufficiently improve quality. Note: the clinical-domain embedding model avenue was explored with MedCPT and rejected — see the candidate model table above for details.

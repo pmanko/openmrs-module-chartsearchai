@@ -23,7 +23,7 @@ This document captures the architectural decisions made for the Chart Search AI 
 - [Decision 15: In-process hybrid pipeline (Lucene BM25 + embedding kNN with RRF)](#decision-15-in-process-hybrid-pipeline-lucene-bm25--embedding-knn-with-rrf)
 - [Decision 16: LangChain / LangChain4j not adopted](#decision-16-langchain--langchain4j-not-adopted)
 - [Decision 17: Remote LLM backend support](#decision-17-remote-llm-backend-support)
-- [Decision 18: Cross-encoder reranking stage](#decision-18-cross-encoder-reranking-stage)
+- [Decision 18: Cross-encoder reranking stage (superseded)](#decision-18-cross-encoder-reranking-stage-superseded)
 - [Known limitations](#known-limitations)
 - [Planned future work](#planned-future-work)
 
@@ -1072,9 +1072,11 @@ The remote engine applies only to the generative LLM, not to the embedding model
 
 For deployments that cannot host even the 90MB ONNX file, the Lucene pipeline (`chartsearchai.retrieval.pipeline=lucene`) provides a zero-model-download alternative with BM25 text search.
 
-## Decision 18: Cross-encoder reranking stage
+## Decision 18: Cross-encoder reranking stage (superseded)
 
-### Problem
+**Status: Superseded.** Implemented, benchmarked, and removed. See [Why it was removed](#why-it-was-removed) below.
+
+### Problem (historical)
 
 The bi-encoder retrieval pipeline (all-MiniLM-L6-v2) has a fundamental limitation: it encodes the query and each document independently, then compares their vectors via cosine similarity. This means the model cannot learn query-document relevance jointly — it can only measure how close a document's embedding is to the query's embedding in the shared vector space.
 
@@ -1172,6 +1174,48 @@ The cross-encoder follows the same pattern as the existing embedding model:
 
 The 85MB footprint increase is modest — comparable to the existing embedding model. The ~100ms latency increase for reranking is negligible compared to the 2-30 second LLM inference time that follows.
 
+### Why it was removed
+
+The cross-encoder was implemented (ms-marco-MiniLM-L-6-v2, 85MB ONNX) and benchmarked across 7 queries using a 160-record patient dataset. The benchmark compared four configurations: all-MiniLM bi-encoder alone, all-MiniLM + reranker, MedCPT bi-encoder alone, MedCPT + reranker.
+
+**Finding: the reranker added no retrieval value.**
+
+1. **No new relevant records surfaced.** The reranker can only reorder what the bi-encoder already retrieved — it never found records the bi-encoder missed.
+
+2. **Reordering was inconsequential.** For most queries, the reranker shuffled order within an already-correct result set. The LLM sees all candidate records regardless of order, so reordering has no effect on answer quality.
+
+3. **Active harm in one case.** For "blood pressure trend", the bi-encoder correctly retrieved 20 BP readings. The reranker's topN truncation cut this to 10, discarding half the clinically relevant data.
+
+| Query | Bi-encoder results | + Reranker results | Reranker effect |
+|---|---|---|---|
+| "blood problems" | 7 relevant | Same 7, reordered | No change |
+| "is the patient anemic?" | 3 relevant | Same 3, reordered | No change |
+| "kidney function" | 2 relevant | Same 2, reordered | No change |
+| "does she have diabetes?" | 3 relevant | Same 3, reordered | No change |
+| "any infections?" | 4 relevant | Same 4, reordered | No change |
+| "blood pressure trend" | 20 BP readings | 10 BP readings | **Worse** — truncated |
+| "what medications is she on?" | 5 medications | Same 5, reordered | No change |
+
+The cross-encoder was removed because it added 85MB of model footprint, ~100ms of per-query latency, and deployment complexity (a second model to download and configure) for zero retrieval improvement. The all-MiniLM-L6-v2 bi-encoder with adaptive filtering (IQR-based gap detection, semantic threshold filtering, z-score gating) handles the original motivating problems without a second model.
+
+### MedCPT asymmetric bi-encoder (also evaluated and removed)
+
+MedCPT (ncbi/MedCPT-Query-Encoder + ncbi/MedCPT-Article-Encoder) was also implemented as an alternative to all-MiniLM-L6-v2. MedCPT is an asymmetric bi-encoder trained on 18M PubMed query-article pairs, using separate encoders for queries and documents, CLS pooling, and 768-dimensional vectors.
+
+**Finding: MedCPT produced dramatically worse results than all-MiniLM due to compressed score distributions that defeated adaptive filtering.**
+
+MedCPT's scores cluster in a narrow range (IQR ~0.04) compared to all-MiniLM's wider spread (IQR ~0.10). This makes it impossible for the gap detector to distinguish relevant from irrelevant records — the gaps between them are smaller than the noise floor.
+
+| Query | Dataset | all-MiniLM | MedCPT |
+|---|---|---|---|
+| "any blood problems?" | 1st (153 records) | 3 results, all Anemia diagnoses | 39 results, 34 noise (BP, SpO2) |
+| "any blood problems?" | 4th (160 records) | 4 results (Haemoglobin, Haemorrhagic disease) | **160 results — entire dataset returned** |
+| "Is she enrolled in any programs?" | 1st (153 records) | 1 result (PMTCT — correct) | 10 results, 9 noise |
+
+MedCPT's theoretical advantage — medical synonym understanding (e.g. "blood problems" → Haemoglobin) — never materialized in practice because the compressed scores caused the pipeline to return everything, drowning relevant records in noise. all-MiniLM consistently returned small, precise result sets.
+
+The asymmetric bi-encoder support (separate query/article encoders, CLS pooling, query encoder global properties) was removed to simplify the codebase. The module uses all-MiniLM-L6-v2 with mean pooling as its sole embedding model.
+
 ## Known limitations
 
 - **Counting questions**: LLMs are unreliable at precise counting tasks (e.g., "how many weight records in the last 10 years?"). The model may undercount or overcount even when all relevant records are provided. Larger, more capable models perform better at counting but are still not perfectly reliable. This is a fundamental limitation of LLM inference, not a retrieval issue. Questions that require exact counts are better suited to structured queries.
@@ -1179,7 +1223,6 @@ The 85MB footprint increase is modest — comparable to the existing embedding m
 ## Planned future work
 
 - **Incremental embedding indexing**: The `EncounterService` AOP hook already uses an incremental strategy (indexes only new/changed encounters), but other data types (`ObsService`, `ConditionService`, etc.) still use `indexPatient()` which deletes all embeddings for a patient and recomputes from scratch. A fully incremental approach would track which record maps to which embedding row across all data types and only add, update, or delete the specific embeddings affected. This matters for patients with large charts where AOP hooks fire frequently.
-- **Cross-encoder reranking**: Implement the reranking stage described in Decision 18. The bi-encoder's inability to distinguish template similarity from content similarity (and incidental keyword matches from genuine ones) has been empirically demonstrated — no bi-encoder metric can solve the problem. The cross-encoder (ms-marco-MiniLM-L-6-v2, 85MB ONNX) processes query + document jointly, providing a direct relevance signal that replaces the hand-tuned heuristics (`SEMANTIC_CORE_SCORE_RATIO`, `SEMANTIC_CORE_MIN_COSINE`, keyword rescue, coherence gap detection). Implementation: load ONNX model via the existing ONNX Runtime dependency, add `CrossEncoderReranker` class, integrate between `findSimilar()` candidate retrieval and the LLM prompt assembly.
 - **Concept graph traversal**: Complement embedding search with OpenMRS concept relationship traversal to improve retrieval for queries involving related concepts (e.g., finding NSAID allergies when asking about ibuprofen).
 - **Pre-computed summaries**: Cache LLM-generated summaries for common query patterns (e.g., "current medications", "active problems") to reduce inference latency for frequently asked questions.
 - **Agent/tool-use pattern**: Enable multi-step reasoning where the LLM can request additional data or perform follow-up queries. Deferred until local models with reliable tool-use capabilities are available.

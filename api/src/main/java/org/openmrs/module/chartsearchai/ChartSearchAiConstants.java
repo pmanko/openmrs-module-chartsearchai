@@ -95,6 +95,12 @@ public class ChartSearchAiConstants {
 	 */
 	public static final double DEFAULT_MIN_SCORE_GAP = 0.10;
 
+	/** Fraction of the IQR used as the adaptive minimum gap for the
+	 * first-pass gap detector when the score distribution is compressed
+	 * (IQR &lt; minScoreGap / 2). Value of 0.30 means a gap must be at
+	 * least 30% of the IQR to trigger. */
+	public static final double MIN_GAP_RANGE_FRACTION = 0.30;
+
 	/** Absolute coherence floor below which a candidate is a true outlier.
 	 * If a candidate flagged for removal by the coherence gap detector has
 	 * average pairwise coherence at or above this value, the cut is
@@ -222,14 +228,6 @@ public class ChartSearchAiConstants {
 	 * keyword matches, kNN results must score this many standard deviations
 	 * above the mean of all patient scores to be considered relevant. */
 	public static final double KNN_FALLBACK_Z_SCORE = 2.5;
-
-	public static final String GP_RERANKER_MODEL_FILE_PATH = "chartsearchai.reranker.modelFilePath";
-
-	public static final String GP_RERANKER_VOCAB_FILE_PATH = "chartsearchai.reranker.vocabFilePath";
-
-	public static final String GP_RERANKER_MAX_SEQUENCE_LENGTH = "chartsearchai.reranker.maxSequenceLength";
-
-	public static final int DEFAULT_RERANKER_MAX_SEQUENCE_LENGTH = 512;
 
 	public static final String GP_AUDIT_LOG_RETENTION_DAYS = "chartsearchai.auditLogRetentionDays";
 

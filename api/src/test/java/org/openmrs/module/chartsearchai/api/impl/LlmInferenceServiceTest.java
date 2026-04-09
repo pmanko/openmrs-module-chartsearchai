@@ -2115,152 +2115,59 @@ public class LlmInferenceServiceTest {
 				"Should include Haemorrhagic disease diagnosis, got: " + result);
 	}
 
-	// -----------------------------------------------------------------------
-	// Cross-encoder reranker tests
-	// -----------------------------------------------------------------------
-
-	private static final String CROSS_ENCODER_MODEL_DIR = System.getProperty(
-			"chartsearchai.reranker.model.dir", "../models/cross-encoder-ms-marco-MiniLM-L-6-v2");
-
-	private static final String CROSS_ENCODER_MODEL_PATH =
-			CROSS_ENCODER_MODEL_DIR + "/model.onnx";
-
-	private static final String CROSS_ENCODER_VOCAB_PATH =
-			CROSS_ENCODER_MODEL_DIR + "/vocab.txt";
-
-	private static boolean crossEncoderModelFilesExist() {
-		return new java.io.File(CROSS_ENCODER_MODEL_PATH).exists()
-				&& new java.io.File(CROSS_ENCODER_VOCAB_PATH).exists();
-	}
-
 	@Test
-	public void tokenizePair_shouldProduceCorrectTokenTypeIds() throws Exception {
-		org.junit.jupiter.api.Assumptions.assumeTrue(crossEncoderModelFilesExist(),
-				"Skipping: cross-encoder model files not found at " + CROSS_ENCODER_MODEL_PATH);
+	public void minilm_multiQuery_diagnosticDump() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: all-MiniLM model files not found at " + MODEL_PATH);
 
-		org.openmrs.module.chartsearchai.embedding.WordPieceTokenizer tokenizer =
-				new org.openmrs.module.chartsearchai.embedding.WordPieceTokenizer(
-						CROSS_ENCODER_VOCAB_PATH,
-						ChartSearchAiConstants.DEFAULT_RERANKER_MAX_SEQUENCE_LENGTH);
-
-		// Discover [SEP] token ID from the vocab (varies by model)
-		org.openmrs.module.chartsearchai.embedding.WordPieceTokenizer.TokenizedInput singleToken =
-				tokenizer.tokenize("test");
-		long sepTokenId = singleToken.getInputIds()[singleToken.getLength() - 1];
-
-		org.openmrs.module.chartsearchai.embedding.WordPieceTokenizer.TokenizedInput result =
-				tokenizer.tokenizePair("blood problems", "Haemoglobin: 12.5 g/dL");
-
-		long[] tokenTypeIds = result.getTokenTypeIds();
-		long[] inputIds = result.getInputIds();
-		long[] attentionMask = result.getAttentionMask();
-
-		// All attention mask values should be 1
-		for (long mask : attentionMask) {
-			assertEquals(1, mask);
-		}
-
-		// Find the first SEP token (end of segment A)
-		int firstSep = -1;
-		for (int i = 1; i < inputIds.length; i++) {
-			if (inputIds[i] == sepTokenId) {
-				firstSep = i;
-				break;
-			}
-		}
-		assertTrue(firstSep > 0, "Should find first [SEP] token");
-
-		// Segment A tokens (including [CLS] and first [SEP]) should have type 0
-		for (int i = 0; i <= firstSep; i++) {
-			assertEquals(0, tokenTypeIds[i],
-					"Token at position " + i + " should be segment A (type 0)");
-		}
-
-		// Segment B tokens (after first [SEP]) should have type 1
-		for (int i = firstSep + 1; i < tokenTypeIds.length; i++) {
-			assertEquals(1, tokenTypeIds[i],
-					"Token at position " + i + " should be segment B (type 1)");
-		}
-
-		// Last token should also be [SEP] (second separator)
-		assertEquals(sepTokenId, inputIds[inputIds.length - 1],
-				"Last token should be [SEP]");
-	}
-
-	@Test
-	public void crossEncoder_shouldScoreRelevantDocumentHigher() {
-		org.junit.jupiter.api.Assumptions.assumeTrue(crossEncoderModelFilesExist(),
-				"Skipping: cross-encoder model files not found at " + CROSS_ENCODER_MODEL_PATH);
-
-		org.openmrs.module.chartsearchai.embedding.OnnxCrossEncoderReranker reranker =
-				new org.openmrs.module.chartsearchai.embedding.OnnxCrossEncoderReranker(
-						CROSS_ENCODER_MODEL_PATH, CROSS_ENCODER_VOCAB_PATH);
-		try {
-			double hbScore = reranker.score("blood problems",
-					"Clinical observation: Haemoglobin: 12.5 g/dL");
-			double pulseScore = reranker.score("blood problems",
-					"Clinical observation: Pulse: 72 beats/min");
-
-			assertTrue(hbScore > pulseScore,
-					"Haemoglobin (" + hbScore + ") should score higher than Pulse ("
-							+ pulseScore + ") for 'blood problems'");
-		} finally {
-			reranker.close();
-		}
-	}
-
-	@Test
-	public void rerank_shouldReorderByRelevance() {
-		org.junit.jupiter.api.Assumptions.assumeTrue(crossEncoderModelFilesExist(),
-				"Skipping: cross-encoder model files not found at " + CROSS_ENCODER_MODEL_PATH);
-
-		org.openmrs.module.chartsearchai.embedding.OnnxCrossEncoderReranker reranker =
-				new org.openmrs.module.chartsearchai.embedding.OnnxCrossEncoderReranker(
-						CROSS_ENCODER_MODEL_PATH, CROSS_ENCODER_VOCAB_PATH);
+		org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider minilm =
+				new org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider(
+						MODEL_PATH, VOCAB_PATH);
 		try {
 			List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> records =
 					new ArrayList<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord>();
-			// Mix blood-related and unrelated records
-			records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
-					"obs", 0, "Pulse: 72 beats/min", null));
-			records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
-					"obs", 1, "Haemoglobin: 12.5 g/dL", null));
-			records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
-					"obs", 2, "Blood Oxygen Saturation: 98%", null));
-			records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
-					"obs", 3, "Systolic Blood Pressure: 120 mmHg", null));
-			records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
-					"obs", 4, "Red blood cells: 4.5 x10^12/L", null));
+			for (int i = 0; i < THIRD_PATIENT_DATASET.length; i++) {
+				String resourceType = TestDatasetHelper.inferResourceType(THIRD_PATIENT_DATASET[i]);
+				String textContent = TestDatasetHelper.stripDatasetPrefixAndDate(THIRD_PATIENT_DATASET[i]);
+				records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
+						resourceType, i, textContent, null));
+			}
+			List<ChartEmbedding> allEmbeddings =
+					org.openmrs.module.chartsearchai.api.EmbeddingIndexer.buildEmbeddings(
+							records, minilm);
 
-			List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> reranked =
-					LlmInferenceService.rerank("blood problems", records, reranker);
-
-			// Rerank only reorders, never drops records
-			assertEquals(5, reranked.size(), "Should return all records reordered");
-
-			// First result should be a blood-related record, not Pulse
-			int firstId = reranked.get(0).getResourceId();
-			assertTrue(firstId != 0,
-					"Pulse should not be ranked first, got ID: " + firstId);
-		} finally {
-			reranker.close();
-		}
-	}
-
-	@Test
-	public void integration_rerankDisabledWhenNoModel_pipelineUnchanged() {
-		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
-				"Skipping: ONNX model files not found at " + MODEL_PATH);
-
-		// Run the standard pipeline — reranker is not configured so it should
-		// produce identical results to the existing pipeline
-		List<Integer> result = runRealModelPipeline(
+			String[] queries = {
+				"what are the vitals?",
+				"does she have diabetes?",
+				"kidney function",
 				"is the patient anemic?",
-				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
+				"what medications is she on?",
+				"blood pressure trend",
+				"any infections?",
+				"liver problems",
+				"heart conditions",
+				"blood problems"
+			};
 
-		// The result should be non-empty and match the existing pipeline behavior
-		assertFalse(result.isEmpty(),
-				"Pipeline should return results when reranker is not configured");
+			for (String query : queries) {
+				List<ChartEmbedding> results = LlmInferenceService.findSimilar(
+						allEmbeddings, minilm, query,
+						ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K,
+						ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
+						LlmInferenceService.PipelineConfig.defaults());
+
+				System.out.println("\n=== \"" + query + "\" ===  (" + results.size() + " results)");
+				for (int i = 0; i < results.size(); i++) {
+					ChartEmbedding ce = results.get(i);
+					String record = THIRD_PATIENT_DATASET[ce.getResourceId()];
+					if (record.length() > 90) record = record.substring(0, 90) + "...";
+					System.out.printf("  [%3d] %s%n", ce.getResourceId(), record);
+				}
+			}
+		} finally {
+			minilm.close();
+		}
+		assertTrue(true);
 	}
 
 }
