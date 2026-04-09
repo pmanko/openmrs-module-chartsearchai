@@ -33,6 +33,7 @@ import java.util.regex.Pattern;
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
+import org.openmrs.module.chartsearchai.util.ConceptNameUtil;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.api.EmbeddingIndexer;
 import org.openmrs.module.chartsearchai.api.ElasticsearchIndexer;
@@ -753,8 +754,14 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 			embeddings[validCount] = ce;
 			semanticScores[validCount] = cosineSimilarity(queryVector, vector);
+			// Strip synonym parentheticals before keyword scoring so
+			// that "(syn. Hemoglobin performed on blood)" doesn't cause
+			// "blood" to match Haemoglobin records. Synonyms stay in the
+			// embedding for semantic matching — only keyword scoring uses
+			// the stripped text.
 			String keywordText = ChartSearchAiUtils.buildPrefixedText(
-					ce.getResourceType(), ce.getTextContent());
+					ce.getResourceType(),
+					ConceptNameUtil.stripSynonyms(ce.getTextContent()));
 			keywordScores[validCount] = computeKeywordScore(queryTerms, keywordText);
 			validCount++;
 		}
@@ -976,7 +983,19 @@ public class LlmInferenceService implements ChartSearchService {
 			double clusterThreshold = semanticDesc.get(adaptiveCutoff - 1);
 			candidates = new ArrayList<ScoredEmbedding>();
 			for (ScoredEmbedding se : scored) {
-				if (se.semanticScore >= clusterThreshold) {
+				// Two independent inclusion signals:
+				// 1. Semantic cluster: embedding similarity at or above the
+				//    gap-detected boundary.
+				// 2. Full keyword match: the record literally contains all
+				//    query terms (kwScore >= bonusThreshold). The embedding
+				//    model may assign low similarity to obscure medical
+				//    terminology (e.g. "Enteroviral vesicular stomatitis"
+				//    for a "conditions?" query) but the keyword match is
+				//    conclusive evidence the record belongs to the queried
+				//    category.
+				if (se.semanticScore >= clusterThreshold
+						|| (config.keywordWeight > 0
+								&& se.keywordScore >= bonusThreshold)) {
 					candidates.add(se);
 				}
 			}
@@ -1071,6 +1090,7 @@ public class LlmInferenceService implements ChartSearchService {
 				// relevant to the query by meaning alone.
 				List<ScoredEmbedding> semanticCore =
 						new ArrayList<ScoredEmbedding>();
+				boolean coreFallbackUsed = false;
 				if (nonKeyword.size() >= ChartSearchAiConstants
 						.ADAPTIVE_MIN_RECORDS) {
 					double maxSemNk = nonKeyword.get(0).semanticScore;
@@ -1083,6 +1103,122 @@ public class LlmInferenceService implements ChartSearchService {
 							ChartSearchAiConstants
 									.ABSOLUTE_SIMILARITY_FLOOR,
 							config.scoreGapMultiplier, nkMinGap);
+
+					// Gap-weighted Welch's t²: find the split
+					// that maximizes gap × t². The gap factor
+					// ensures we cut at actual spacing jumps
+					// (not tight pairs). The t² factor ensures
+					// the two classes (core vs tail) are well-
+					// separated relative to their internal
+					// spread. Uses the Bessel correction
+					// (sample variance, n−1) which naturally
+					// penalizes small classes and requires
+					// n ≥ 2 per class — no arbitrary thresholds
+					// needed for tiny datasets. The optimal
+					// split is fully determined by the score
+					// distribution.
+					int fisherCut = nonKeyword.size();
+					double totalSumF = 0;
+					double totalSumSqF = 0;
+					for (ScoredEmbedding se : nonKeyword) {
+						totalSumF += se.semanticScore;
+						totalSumSqF += se.semanticScore
+								* se.semanticScore;
+					}
+					int nF = nonKeyword.size();
+					double leftSumF = 0;
+					double leftSumSqF = 0;
+					double rightSumF = totalSumF;
+					double rightSumSqF = totalSumSqF;
+					double maxGF = 0;
+					for (int i = 1; i < nF; i++) {
+						double s = nonKeyword.get(i - 1)
+								.semanticScore;
+						leftSumF += s;
+						leftSumSqF += s * s;
+						rightSumF -= s;
+						rightSumSqF -= s * s;
+						if (i < ChartSearchAiConstants
+								.ADAPTIVE_MIN_RECORDS) {
+							continue;
+						}
+						int nR = nF - i;
+						// Welch's t² requires n ≥ 2 per
+						// class for sample variance to be
+						// defined. This also prevents
+						// arbitrary cuts that leave a
+						// single record in the tail.
+						if (nR < 2) {
+							break;
+						}
+						double lm = leftSumF / i;
+						double rm = rightSumF / nR;
+						// Population variance (σ²)
+						double lv = leftSumSqF / i
+								- lm * lm;
+						double rv = rightSumSqF / nR
+								- rm * rm;
+						// Bessel correction: sample
+						// variance / n = σ² / (n−1).
+						// This doubles the denominator
+						// contribution for n=2, naturally
+						// penalizing small classes.
+						double den = lv / (i - 1)
+								+ rv / (nR - 1) + 1e-12;
+						double diff = lm - rm;
+						double t2 = diff * diff / den;
+						double bGap = nonKeyword.get(i - 1)
+								.semanticScore
+								- nonKeyword.get(i)
+										.semanticScore;
+						double gf = bGap * t2;
+						if (gf > maxGF) {
+							maxGF = gf;
+							fisherCut = i;
+						}
+					}
+					log.debug("Fisher cluster cut at {}"
+							+ " (score={})", fisherCut,
+							String.format("%.2f", maxGF));
+					// Use the tighter of primary gap detection
+					// and Fisher cluster detection, but only
+					// if the boundary gap is a local increase
+					// in spacing (larger than the within-
+					// cluster gap immediately above it). This
+					// prevents Fisher from cutting at the
+					// start of smooth exponential decays where
+					// gaps decrease monotonically — there is
+					// no cluster boundary in such
+					// distributions, just the natural shape of
+					// the score falloff.
+					if (fisherCut < coreCutoff) {
+						double bGapF = nonKeyword
+								.get(fisherCut - 1)
+								.semanticScore
+								- nonKeyword.get(fisherCut)
+										.semanticScore;
+						double prevGapF = nonKeyword
+								.get(fisherCut - 2)
+								.semanticScore
+								- nonKeyword
+										.get(fisherCut - 1)
+										.semanticScore;
+						if (bGapF > prevGapF) {
+							coreFallbackUsed = true;
+							coreCutoff = fisherCut;
+						} else {
+							log.debug("Fisher cut at {} "
+									+ "suppressed: boundary"
+									+ " gap {}"
+									+ " <= prev gap {}",
+									fisherCut,
+									String.format("%.4f",
+											bGapF),
+									String.format("%.4f",
+											prevGapF));
+						}
+					}
+
 					for (int i = 0; i < coreCutoff; i++) {
 						semanticCore.add(nonKeyword.get(i));
 					}
@@ -1104,12 +1240,24 @@ public class LlmInferenceService implements ChartSearchService {
 					// (query cosine) is the only signal where
 					// genuinely relevant records consistently
 					// outscore template-similar noise.
+					// When the core was tightened by min-gap
+					// cluster detection, use coreMin/coreMax
+					// as the expansion ratio so the floor
+					// scales with the detected cluster width.
 					double coreMinSem = semanticCore.get(
 							semanticCore.size() - 1)
 							.semanticScore;
-					double scoreFloor = coreMinSem
-							* ChartSearchAiConstants
+					double coreMaxSem = semanticCore.get(0)
+							.semanticScore;
+					double expansionRatio = coreFallbackUsed
+							? (coreMaxSem > 0
+									? coreMinSem / coreMaxSem
+									: ChartSearchAiConstants
+											.SEMANTIC_CORE_SCORE_RATIO)
+							: ChartSearchAiConstants
 									.SEMANTIC_CORE_SCORE_RATIO;
+					double scoreFloor = coreMinSem
+							* expansionRatio;
 					List<ScoredEmbedding> expanded =
 							new ArrayList<ScoredEmbedding>(
 									semanticCore);
@@ -1325,9 +1473,30 @@ public class LlmInferenceService implements ChartSearchService {
 		// filtering would incorrectly remove minority record types
 		// (e.g. hemoglobin lab tests when haemorrhagic disease
 		// condition/diagnosis form a tighter pair).
-		if (!partialKwValidated && candidates.size() >= 4) {
+		// Also skip when every candidate matches ALL query terms
+		// (kwScore >= 1.0). Full keyword match is conclusive
+		// evidence that the record belongs to the queried category
+		// — e.g. "any conditions?" returns all records containing
+		// "condition". The coherence filter measures embedding
+		// similarity, which penalizes unusual medical terminology
+		// (e.g. "Enteroviral vesicular stomatitis") despite the
+		// keyword confirming it IS a condition. Partial keyword
+		// matches (kwScore < 1.0) still need coherence filtering
+		// because the matched term may be incidental (e.g.
+		// "disease" in "Chronic disease management" for an STD
+		// query).
+		boolean allFullKeywordMatch = true;
+		for (ScoredEmbedding se : candidates) {
+			if (se.keywordScore < 1.0) {
+				allFullKeywordMatch = false;
+				break;
+			}
+		}
+		if (!partialKwValidated && !allFullKeywordMatch
+				&& candidates.size() >= 4) {
 			candidates = filterByCoherence(candidates);
-		} else if (!partialKwValidated && candidates.size() == 3) {
+		} else if (!partialKwValidated && !allFullKeywordMatch
+				&& candidates.size() == 3) {
 			double topSemantic = candidates.get(0).semanticScore;
 			for (ScoredEmbedding se : candidates) {
 				if (se.semanticScore > topSemantic) {
@@ -1635,12 +1804,15 @@ public class LlmInferenceService implements ChartSearchService {
 			List<ScoredEmbedding> candidates, String[] queryTerms,
 			double kwMax) {
 		// Collect query terms covered by the higher-keyword tier.
+		// Strip synonyms so "(syn. ...)" text doesn't inflate term
+		// coverage — matches findSimilar keyword scoring behavior.
 		Set<String> coveredTerms = new HashSet<String>();
 		for (ScoredEmbedding se : candidates) {
 			if (se.keywordScore >= kwMax - 0.01) {
 				String text = ChartSearchAiUtils.buildPrefixedText(
 						se.embedding.getResourceType(),
-						se.embedding.getTextContent());
+						ConceptNameUtil.stripSynonyms(
+								se.embedding.getTextContent()));
 				String lower = text.toLowerCase();
 				String[] words = lower.split("\\s+");
 				for (String term : queryTerms) {
@@ -1660,7 +1832,8 @@ public class LlmInferenceService implements ChartSearchService {
 			} else {
 				String text = ChartSearchAiUtils.buildPrefixedText(
 						se.embedding.getResourceType(),
-						se.embedding.getTextContent());
+						ConceptNameUtil.stripSynonyms(
+								se.embedding.getTextContent()));
 				String lower = text.toLowerCase();
 				String[] words = lower.split("\\s+");
 				boolean addsNewCoverage = false;

@@ -156,6 +156,7 @@ public class ChartSearchAiConstants {
 	 * candidates must be within 20% of the core's relevance level. */
 	public static final double SEMANTIC_CORE_SCORE_RATIO = 0.80;
 
+
 	/** Gap multiplier for inter-candidate coherence outlier detection.
 	 * Moderate sensitivity — only removes clear topic outliers. */
 	public static final double COHERENCE_GAP_MULTIPLIER = 2.0;

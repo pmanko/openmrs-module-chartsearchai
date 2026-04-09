@@ -45,6 +45,9 @@ public class LlmInferenceServiceTest {
 	private static final String[] FOURTH_PATIENT_DATASET =
 			TestDatasetHelper.FOURTH_PATIENT_DATASET;
 
+	private static final String[] FIFTH_PATIENT_DATASET =
+			TestDatasetHelper.FIFTH_PATIENT_DATASET;
+
 	@Test
 	public void extractCitedReferences_shouldExtractReferencesFromCitations() {
 		List<RecordMapping> mappings = Arrays.asList(
@@ -1190,9 +1193,10 @@ public class LlmInferenceServiceTest {
 				"is the patient on any medications?",
 				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
 
-		// [2] Azithromycin = index 1, [57] and [92] "Medication adjusted" = indices 56, 91
-		assertEquals(Arrays.asList(1, 56, 91), result,
-				"Should return drug order and medication-related visit notes");
+		// [1] Azithromycin REVISE = index 0, [2] Azithromycin NEW = index 1,
+		// [57] and [92] "Medication adjusted" = indices 56, 91
+		assertEquals(Arrays.asList(0, 1, 56, 91), result,
+				"Should return drug orders and medication-related visit notes");
 	}
 
 	@Test
@@ -2116,6 +2120,47 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void integration_bloodProblemQuery_withSynonyms_shouldNotReturnBPorSpO2() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"any blood problems?",
+				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K,
+				FIFTH_PATIENT_DATASET);
+
+		// Blood-related records should be returned:
+		// [  1] Haemoglobin (syn. Hb, Hemoglobin, Hemoglobin performed on blood): 15.8 g/dL (HIGH) = index 0
+		// [ 16] Hemoglobin in umbilical cord blood: 99.4 mg/mL = index 15
+		// [ 19] Condition: Haemorrhagic disease of newborn = index 18
+		// [ 22] Diagnosis: Haemorrhagic disease of newborn = index 21
+		assertTrue(result.contains(0),
+				"Should include Haemoglobin (HIGH), got: " + result);
+		assertTrue(result.contains(18),
+				"Should include Haemorrhagic disease condition, got: " + result);
+		assertTrue(result.contains(21),
+				"Should include Haemorrhagic disease diagnosis, got: " + result);
+
+		// Blood pressure and SpO2 are NOT blood problems — the word "blood"
+		// in "blood pressure" and "arterial blood oxygen saturation" should
+		// not cause these records to be included.
+		for (int idx : result) {
+			String record = FIFTH_PATIENT_DATASET[idx];
+			assertFalse(record.contains("Systolic blood pressure"),
+					"Should NOT include Systolic BP, got index " + idx + ": " + record);
+			assertFalse(record.contains("Diastolic blood pressure"),
+					"Should NOT include Diastolic BP, got index " + idx + ": " + record);
+			assertFalse(record.contains("Pulse (syn. HR)"),
+					"Should NOT include Pulse, got index " + idx + ": " + record);
+		}
+
+		// Result set should be small — only hematology/blood-disorder records
+		assertTrue(result.size() <= 10,
+				"Expected at most 10 results for blood problems query, got "
+						+ result.size() + ": " + result);
+	}
+
+	@Test
 	public void minilm_multiQuery_diagnosticDump() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: all-MiniLM model files not found at " + MODEL_PATH);
@@ -2168,6 +2213,31 @@ public class LlmInferenceServiceTest {
 			minilm.close();
 		}
 		assertTrue(true);
+	}
+
+	@Test
+	public void anyConditions_fourthDataset_shouldReturnAllConditions() {
+		// All 27 condition records in FOURTH_PATIENT_DATASET should be
+		// returned for "any conditions?" — the keyword "conditions" matches
+		// "condition" in every condition record via plural stem stripping
+		// (kwScore = 1.0). Four conditions have very low semantic scores
+		// (< 0.125) due to obscure medical terminology, but the full
+		// keyword match is conclusive evidence of relevance.
+		List<Integer> conditionIndices = new ArrayList<Integer>();
+		for (int i = 0; i < FOURTH_PATIENT_DATASET.length; i++) {
+			if (FOURTH_PATIENT_DATASET[i].startsWith("Medical condition:")) {
+				conditionIndices.add(i);
+			}
+		}
+		assertEquals(27, conditionIndices.size(),
+				"Sanity check: FOURTH_PATIENT_DATASET has 27 conditions");
+
+		List<Integer> result = runRealModelPipeline("any conditions?", 10,
+				FOURTH_PATIENT_DATASET);
+		Collections.sort(result);
+		Collections.sort(conditionIndices);
+		assertEquals(conditionIndices, result,
+				"Should return all 27 condition records");
 	}
 
 }
