@@ -2249,4 +2249,34 @@ public class LlmInferenceServiceTest {
 				"Should return the ESAVI condition (150) and diagnosis (151)");
 	}
 
+	@Test
+	public void heartRates_fourthDataset_shouldReturnOnlyPulseRecords() {
+		// Both phrasings of "heart rate" should return Pulse records, not
+		// Respiratory rate — the embedding model correctly ranks Pulse
+		// higher semantically. The longer query previously failed because
+		// "rate/rates" keyword-matched Respiratory rate text, and keyword
+		// refinement dropped Pulse records.
+		List<Integer> pulseIndices = new ArrayList<Integer>();
+		for (int i = 0; i < FOURTH_PATIENT_DATASET.length; i++) {
+			if (FOURTH_PATIENT_DATASET[i].contains("Pulse:")
+					&& !FOURTH_PATIENT_DATASET[i].contains("pulse oximeter")) {
+				pulseIndices.add(i);
+			}
+		}
+
+		for (String query : new String[] {
+				"what is the latest heart rate?",
+				"what are the most recent two heart rates?"}) {
+			List<Integer> result = runRealModelPipeline(query, 10, FOURTH_PATIENT_DATASET);
+			for (int idx : result) {
+				assertTrue(FOURTH_PATIENT_DATASET[idx].contains("Pulse:")
+								&& !FOURTH_PATIENT_DATASET[idx].contains("pulse oximeter"),
+						"Query '" + query + "' returned non-Pulse record at index " + idx
+								+ ": " + FOURTH_PATIENT_DATASET[idx]);
+			}
+			assertTrue(result.size() >= 10,
+					"Query '" + query + "' should return at least 10 Pulse records, got " + result.size());
+		}
+	}
+
 }

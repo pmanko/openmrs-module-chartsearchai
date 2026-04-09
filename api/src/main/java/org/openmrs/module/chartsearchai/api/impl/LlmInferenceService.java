@@ -1056,9 +1056,35 @@ public class LlmInferenceService implements ChartSearchService {
 			// "blood problems".
 			double bonusThresh = queryTermCount == 0 ? 1.0
 					: (double) Math.min(2, queryTermCount) / queryTermCount;
+			// Semantic dominance: non-keyword records have higher
+			// semantic scores than keyword-matched records, indicating
+			// the keyword matches are likely false positives — e.g.
+			// "rate" matching "Respiratory rate" when the query means
+			// "heart rate" (= Pulse). When true, the semantic core
+			// path should run AND skip expansion to prevent template-
+			// similar false positives from re-entering via cosine.
+			boolean semanticDominance = false;
+			if (uniformKeywords && kwMax < bonusThresh
+					&& queryTermCount > 0) {
+				double refMinKw = 1.0 / queryTermCount;
+				double maxKwSem = 0;
+				double maxNonKwSem = 0;
+				for (ScoredEmbedding se : preRefinementCandidates) {
+					if (se.keywordScore >= refMinKw) {
+						if (se.semanticScore > maxKwSem) {
+							maxKwSem = se.semanticScore;
+						}
+					} else {
+						if (se.semanticScore > maxNonKwSem) {
+							maxNonKwSem = se.semanticScore;
+						}
+					}
+				}
+				semanticDominance = maxNonKwSem > maxKwSem;
+			}
 			boolean partialKeywordMatch = uniformKeywords
 					&& kwMax < bonusThresh
-					&& queryTermCount <= 2;
+					&& (queryTermCount <= 2 || semanticDominance);
 			log.debug("Pipeline refinement: kwMin={}, kwMax={}, uniform={}, "
 					+ "partialKw={}", String.format("%.4f", kwMin),
 					 String.format("%.4f", kwMax), uniformKeywords,
@@ -1267,32 +1293,43 @@ public class LlmInferenceService implements ChartSearchService {
 						expandedIds.add(
 								se.embedding.getResourceId());
 					}
-					for (ScoredEmbedding se
-							: preRefinementCandidates) {
-						if (expandedIds.contains(
-								se.embedding.getResourceId())) {
-							continue;
-						}
-						if (se.semanticScore < scoreFloor) {
-							continue;
-						}
-						float[] vec = se.embedding
-								.getEmbeddingVector();
-						double maxCos = 0;
-						for (ScoredEmbedding core
-								: semanticCore) {
-							double cos = cosineSimilarity(vec,
-									core.embedding
-											.getEmbeddingVector());
-							if (cos > maxCos) {
-								maxCos = cos;
+					// When semantic dominance triggered this
+					// path, the core IS the answer — expansion
+					// would only add template-similar noise (e.g.
+					// BP records for a "heart rate" query). Skip
+					// expansion entirely; the core already
+					// contains the correct records.
+					if (!semanticDominance) {
+						for (ScoredEmbedding se
+								: preRefinementCandidates) {
+							if (expandedIds.contains(
+									se.embedding
+											.getResourceId())) {
+								continue;
 							}
-						}
-						if (maxCos >= ChartSearchAiConstants
-								.SEMANTIC_CORE_MIN_COSINE) {
-							expanded.add(se);
-							expandedIds.add(
-									se.embedding.getResourceId());
+							if (se.semanticScore < scoreFloor) {
+								continue;
+							}
+							float[] vec = se.embedding
+									.getEmbeddingVector();
+							double maxCos = 0;
+							for (ScoredEmbedding core
+									: semanticCore) {
+								double cos = cosineSimilarity(
+										vec,
+										core.embedding
+												.getEmbeddingVector());
+								if (cos > maxCos) {
+									maxCos = cos;
+								}
+							}
+							if (maxCos >= ChartSearchAiConstants
+									.SEMANTIC_CORE_MIN_COSINE) {
+								expanded.add(se);
+								expandedIds.add(
+										se.embedding
+												.getResourceId());
+							}
 						}
 					}
 					candidates = expanded;
@@ -1771,16 +1808,58 @@ public class LlmInferenceService implements ChartSearchService {
 		double minKwScore = 1.0 / queryTermCount;
 
 		List<ScoredEmbedding> keywordMatched = new ArrayList<ScoredEmbedding>();
+		double kwMinScore = Double.MAX_VALUE;
 		for (ScoredEmbedding se : candidates) {
 			if (se.keywordScore >= minKwScore) {
 				keywordMatched.add(se);
+				if (se.keywordScore < kwMinScore) {
+					kwMinScore = se.keywordScore;
+				}
 			}
 		}
 		int minRecords = ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS;
 		if (keywordMatched.size() >= minRecords && keywordMatched.size() < candidates.size()) {
-			log.debug("Keyword refinement: keeping {} of {} (minKwScore={})",
-					keywordMatched.size(), candidates.size(), String.format("%.3f", minKwScore));
-			return keywordMatched;
+			// Rescue non-keyword records that the semantic model ranks
+			// above the WEAKEST keyword tier. In multi-concept queries
+			// (e.g. "heart rate and blood pressure"), different keyword
+			// tiers match different concepts: BP matches "blood"+
+			// "pressure" (strong), Resp matches "rate" (weak). The
+			// weakest tier is most likely to be false positives.
+			// Non-keyword records that outscore these weak matches
+			// semantically are likely the correct interpretation of
+			// an unmatched concept (e.g. Pulse for "heart rate").
+			double maxMinTierSemantic = 0;
+			for (ScoredEmbedding se : keywordMatched) {
+				if (se.keywordScore <= kwMinScore + 0.01
+						&& se.semanticScore > maxMinTierSemantic) {
+					maxMinTierSemantic = se.semanticScore;
+				}
+			}
+			List<ScoredEmbedding> refined =
+					new ArrayList<ScoredEmbedding>(keywordMatched);
+			int rescued = 0;
+			for (ScoredEmbedding se : candidates) {
+				if (se.keywordScore < minKwScore
+						&& se.semanticScore > maxMinTierSemantic) {
+					refined.add(se);
+					rescued++;
+				}
+			}
+			if (rescued > 0) {
+				log.debug("Keyword refinement: keeping {} of {} "
+						+ "(minKwScore={}, rescued {} semantic-"
+						+ "dominant non-keyword records, "
+						+ "minTierSem={})",
+						refined.size(), candidates.size(),
+						String.format("%.3f", minKwScore), rescued,
+						String.format("%.4f", maxMinTierSemantic));
+			} else {
+				log.debug("Keyword refinement: keeping {} of {} "
+						+ "(minKwScore={})",
+						keywordMatched.size(), candidates.size(),
+						String.format("%.3f", minKwScore));
+			}
+			return refined;
 		}
 		return candidates;
 	}
@@ -1823,11 +1902,35 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
+		// Semantic floor for zero-keyword rescued records: if a record
+		// has no keyword match at all but was rescued by refineByKeywords
+		// for its high semantic score, it represents a concept the
+		// keyword vocabulary can't capture (e.g. Pulse for "heart rate").
+		// Keep it if its semantic score is within REFINEMENT_SEMANTIC_RATIO
+		// of the best candidate.
+		double maxSemantic = 0;
+		for (ScoredEmbedding se : candidates) {
+			if (se.semanticScore > maxSemantic) {
+				maxSemantic = se.semanticScore;
+			}
+		}
+		double semanticFloor = maxSemantic
+				* ChartSearchAiConstants.REFINEMENT_SEMANTIC_RATIO;
+
 		// Keep lower-tier records only if they match a term the higher
-		// tier doesn't cover.
+		// tier doesn't cover, OR have zero keyword match but high
+		// semantic relevance (rescued synonym/concept mismatch).
 		List<ScoredEmbedding> filtered = new ArrayList<ScoredEmbedding>();
 		for (ScoredEmbedding se : candidates) {
 			if (se.keywordScore >= kwMax - 0.01) {
+				filtered.add(se);
+			} else if (se.keywordScore == 0
+					&& se.semanticScore >= semanticFloor) {
+				// Zero-keyword record with strong semantic signal —
+				// the embedding model says this is relevant but no
+				// query term appears in the text. This happens when
+				// a clinical concept uses different terminology
+				// (e.g. "Pulse" for "heart rate").
 				filtered.add(se);
 			} else {
 				String text = ChartSearchAiUtils.buildPrefixedText(
