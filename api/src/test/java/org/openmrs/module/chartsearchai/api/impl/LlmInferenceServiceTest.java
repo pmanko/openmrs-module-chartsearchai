@@ -2240,4 +2240,13 @@ public class LlmInferenceServiceTest {
 				"Should return all 27 condition records");
 	}
 
+	@Test
+	public void everBeenImmunized_fourthDataset_shouldReturnVaccinationRecords() {
+		List<Integer> result = runRealModelPipeline(
+				"ever been immunized?", 10, FOURTH_PATIENT_DATASET);
+		Collections.sort(result);
+		assertEquals(Arrays.asList(150, 151), result,
+				"Should return the ESAVI condition (150) and diagnosis (151)");
+	}
+
 }
