@@ -2932,6 +2932,288 @@ public class LlmInferenceServiceTest {
 		assertTrue(true);
 	}
 
+	// ---- Long sentence queries ----
+
+	@Test
+	public void longSentence_bloodPressureAndWeightReadings_shouldReturnAllBpRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"I need to know the patient's most recent blood pressure and weight readings",
+				100);
+		assertEquals(24, result.size(),
+				"Should return 24 blood pressure records");
+		for (int idx : result) {
+			assertTrue(
+					FULL_PATIENT_DATASET[idx].contains("Blood Pressure")
+							|| FULL_PATIENT_DATASET[idx].contains("blood pressure"),
+					"Record [" + idx + "] should be a blood pressure record: "
+							+ FULL_PATIENT_DATASET[idx]);
+		}
+	}
+
+	@Test
+	public void longSentence_sexuallyTransmittedInfections_shouldIncludeHiv() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"has this patient ever been diagnosed with any sexually transmitted infections",
+				100);
+		assertEquals(11, result.size());
+		// Should include HIV Disease records
+		boolean hasHiv = false;
+		for (int idx : result) {
+			if (FULL_PATIENT_DATASET[idx].contains("HIV Disease")) {
+				hasHiv = true;
+				break;
+			}
+		}
+		assertTrue(hasHiv, "STI query should find HIV Disease records");
+		// Verify all results are diagnoses/conditions/infections
+		for (int idx : result) {
+			String rec = FULL_PATIENT_DATASET[idx];
+			assertTrue(
+					rec.contains("Diagnosis") || rec.contains("diagnosis")
+							|| rec.contains("Infection") || rec.contains("infection")
+							|| rec.contains("HIV"),
+					"Record [" + idx + "] should be infection/diagnosis related: " + rec);
+		}
+	}
+
+	@Test
+	public void longSentence_respiratoryAndOxygen_shouldReturnRespiratoryAndSpO2() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"can you tell me about the patient's respiratory symptoms and oxygen levels",
+				100);
+		assertEquals(25, result.size());
+		boolean hasRespiratory = false;
+		boolean hasSpO2 = false;
+		for (int idx : result) {
+			String rec = FULL_PATIENT_DATASET[idx];
+			if (rec.contains("Respiratory Rate")) hasRespiratory = true;
+			if (rec.contains("Blood Oxygen Saturation")) hasSpO2 = true;
+		}
+		assertTrue(hasRespiratory, "Should include Respiratory Rate records");
+		assertTrue(hasSpO2, "Should include Blood Oxygen Saturation records");
+		for (int idx : result) {
+			String rec = FULL_PATIENT_DATASET[idx];
+			assertTrue(
+					rec.contains("Respiratory Rate")
+							|| rec.contains("Blood Oxygen Saturation"),
+					"Record [" + idx + "] should be respiratory or SpO2: " + rec);
+		}
+	}
+
+	@Test
+	public void longSentence_medicationHistory_shouldReturnMedicationRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"I want to review the patient's complete medication history including dosages",
+				100);
+		assertEquals(2, result.size());
+		for (int idx : result) {
+			assertTrue(FULL_PATIENT_DATASET[idx].startsWith("Medication prescription:"),
+					"Record [" + idx + "] should be a medication: "
+							+ FULL_PATIENT_DATASET[idx]);
+		}
+	}
+
+	@Test
+	public void longSentence_bloodPressureReadings_thirdDataset_shouldReturnAllBp() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"I need to know the patient's most recent blood pressure and weight readings",
+				100, THIRD_PATIENT_DATASET);
+		assertEquals(20, result.size(),
+				"Should return 20 blood pressure records from THIRD dataset");
+		for (int idx : result) {
+			assertTrue(
+					THIRD_PATIENT_DATASET[idx].contains("blood pressure"),
+					"Record [" + idx + "] should be a blood pressure record: "
+							+ THIRD_PATIENT_DATASET[idx]);
+		}
+	}
+
+	@Test
+	public void longSentence_medicationHistory_thirdDataset_shouldReturnAllMeds() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"I want to review the patient's complete medication history including dosages",
+				100, THIRD_PATIENT_DATASET);
+		assertEquals(9, result.size());
+		for (int idx : result) {
+			assertTrue(
+					THIRD_PATIENT_DATASET[idx].startsWith("Medication prescription:"),
+					"Record [" + idx + "] should be a medication: "
+							+ THIRD_PATIENT_DATASET[idx]);
+		}
+	}
+
+	@Test
+	public void longSentence_chronicConditions_fourthDataset_shouldFindChronicGingivitis() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"what chronic conditions has this patient been diagnosed with over the years",
+				100, FOURTH_PATIENT_DATASET);
+		assertEquals(Arrays.asList(122, 125), result,
+				"Should return Chronic gingivitis condition and diagnosis");
+	}
+
+	@Test
+	public void longSentence_respiratorySymptoms_fourthDataset_shouldReturnRespiratoryRate() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"can you tell me about the patient's respiratory symptoms and oxygen levels",
+				100, FOURTH_PATIENT_DATASET);
+		assertEquals(11, result.size());
+		for (int idx : result) {
+			assertTrue(
+					FOURTH_PATIENT_DATASET[idx].contains("Respiratory rate"),
+					"Record [" + idx + "] should be respiratory: "
+							+ FOURTH_PATIENT_DATASET[idx]);
+		}
+	}
+
+	// ---- Temporal queries ----
+
+	@Test
+	public void temporal_recentTemperatureReadings_shouldReturnAllTemperature() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"recent temperature readings", 100);
+		assertEquals(9, result.size());
+		for (int idx : result) {
+			assertTrue(FULL_PATIENT_DATASET[idx].contains("Temperature"),
+					"Record [" + idx + "] should be temperature: "
+							+ FULL_PATIENT_DATASET[idx]);
+		}
+	}
+
+	@Test
+	public void temporal_recentTemperatureReadings_thirdDataset_shouldReturnAllTemperature() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"recent temperature readings", 100, THIRD_PATIENT_DATASET);
+		assertEquals(10, result.size());
+		for (int idx : result) {
+			assertTrue(THIRD_PATIENT_DATASET[idx].contains("Temperature"),
+					"Record [" + idx + "] should be temperature: "
+							+ THIRD_PATIENT_DATASET[idx]);
+		}
+	}
+
+	// ---- Under-tested record types ----
+
+	@Test
+	public void allergies_fourthDataset_shouldReturnConditionAndDiagnosisRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"does the patient have any allergies", 100, FOURTH_PATIENT_DATASET);
+		assertEquals(Arrays.asList(64, 150, 151), result);
+		assertTrue(FOURTH_PATIENT_DATASET[64].contains("Rash"),
+				"Record 64 should be the Rash condition");
+		assertTrue(FOURTH_PATIENT_DATASET[150].contains("vaccination"),
+				"Record 150 should be vaccination event condition");
+	}
+
+	@Test
+	public void allergies_fifthDataset_shouldMatchFourthDataset() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"does the patient have any allergies", 100, FIFTH_PATIENT_DATASET);
+		// FIFTH dataset has same records as FOURTH for these indices
+		assertEquals(Arrays.asList(64, 150, 151), result);
+	}
+
+	@Test
+	public void testsOrdered_thirdDataset_shouldReturnLabAndTestRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"what tests have been ordered for this patient", 100,
+				THIRD_PATIENT_DATASET);
+		assertEquals(Arrays.asList(0, 91), result);
+		assertTrue(THIRD_PATIENT_DATASET[0].contains("Haemoglobin"),
+				"Record 0 should be Haemoglobin test");
+		assertTrue(THIRD_PATIENT_DATASET[91].contains("Lab order"),
+				"Record 91 should be CBC lab order");
+	}
+
+	@Test
+	public void testsOrdered_fourthDataset_shouldReturnTestRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"what tests have been ordered for this patient", 100,
+				FOURTH_PATIENT_DATASET);
+		assertEquals(Arrays.asList(0, 15, 88), result);
+	}
+
+	@Test
+	public void testsOrdered_fifthDataset_shouldReturnTestRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"what tests have been ordered for this patient", 100,
+				FIFTH_PATIENT_DATASET);
+		assertEquals(Arrays.asList(0, 14, 15, 88), result);
+	}
+
+	// ---- Negative / limitation tests for empty results ----
+
+	@Test
+	public void negative_latestVitalSigns_shouldReturnEmpty() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "latest vital signs" is too generic for the embedding model to
+		// find specific records — documents limitation of current model.
+		List<Integer> result = runRealModelPipeline(
+				"latest vital signs", 100);
+		assertTrue(result.isEmpty(),
+				"Generic 'latest vital signs' returns no results — known model limitation");
+	}
+
+	@Test
+	public void negative_patientDeniesChestPain_shouldReturnEmpty() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// Negation queries ("denies chest pain") are not handled by the
+		// embedding model — it treats "chest pain" as the semantic core.
+		// With no chest pain records in the dataset, nothing surfaces.
+		List<Integer> result = runRealModelPipeline(
+				"patient denies chest pain", 100);
+		assertTrue(result.isEmpty(),
+				"Negation query on absent topic returns no results — known limitation");
+	}
+
 	@Test
 	public void anyConditions_fourthDataset_shouldReturnAllConditions() {
 		// All 27 condition records in FOURTH_PATIENT_DATASET should be
