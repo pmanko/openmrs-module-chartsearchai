@@ -2462,6 +2462,234 @@ public class LlmInferenceServiceTest {
 				"Should return Haemoglobin via Hb synonym");
 	}
 
+	// ---- Multi-concept queries ----
+
+	@Test
+	public void realModel_hivAndCd4Query_shouldReturnHivRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// Multi-concept query: "HIV status and CD4 count". The model
+		// finds all HIV records but not CD4 — the HIV signal dominates.
+		// This is a known limitation of single-vector embedding: the
+		// query vector is a blend of both concepts, and the stronger
+		// concept wins.
+		List<Integer> result = runRealModelPipeline(
+				"HIV status and CD4 count", 100);
+
+		assertEquals(Arrays.asList(39, 40, 68, 69, 71, 110), result,
+				"Should return HIV records (CD4 masked by HIV signal)");
+	}
+
+	@Test
+	public void realModel_allergiesAndMedicationsQuery_shouldReturnBothTypes() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// Cross-type query spanning allergies and medications.
+		List<Integer> result = runRealModelPipeline(
+				"allergies and current medications", 100);
+
+		// [0,1] Azithromycin drug orders, [53] Fomepizole allergy,
+		// [56,91] encounter notes: "Medication adjusted"
+		assertEquals(Arrays.asList(0, 1, 53, 56, 91), result,
+				"Should return drug orders, allergy, and medication-"
+						+ "related encounter notes");
+	}
+
+	@Test
+	public void realModel_tbTreatmentHistoryQuery_shouldMatchSimpleTbQuery() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// Adding "treatment history" to "TB" should still find the
+		// same Tuberculosis records — the clinical qualifier doesn't
+		// narrow or shift the results.
+		List<Integer> result = runRealModelPipeline(
+				"TB treatment history", 100);
+
+		assertEquals(Arrays.asList(7, 12, 52, 134, 135), result,
+				"Should return same TB records as simple 'TB' query");
+	}
+
+	// ---- Clinical reasoning queries ----
+
+	@Test
+	public void realModel_nutritionalStatusQuery_shouldReturnWeightRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "nutritional status" → Weight measurements. The model
+		// maps the abstract concept to the most relevant vital sign.
+		List<Integer> result = runRealModelPipeline(
+				"nutritional status", 100);
+
+		assertEquals(Arrays.asList(18, 26, 33, 63, 77, 101, 114),
+				result,
+				"Should return all Weight records");
+	}
+
+	@Test
+	public void realModel_treatedForQuery_thirdDataset_shouldReturnAllConditions() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "what is the patient being treated for?" → all active
+		// medical conditions. The model selects condition records
+		// over diagnoses or drug orders.
+		List<Integer> result = runRealModelPipeline(
+				"what is the patient being treated for?", 100,
+				THIRD_PATIENT_DATASET);
+
+		// 7 conditions: IBD, Hypertension, Malaria, CKD, Anaemia,
+		// Pneumonia, Diabetes, Asthma (inactive)
+		assertEquals(Arrays.asList(23, 34, 73, 93, 118, 129, 156),
+				result,
+				"Should return all medical condition records");
+	}
+
+	@Test
+	public void realModel_infectionSignsQuery_shouldReturnSkinInfection() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// Complex clinical query with two concepts: infection and
+		// inflammation. The model finds Skin Infection records.
+		List<Integer> result = runRealModelPipeline(
+				"signs of infection or inflammation", 100);
+
+		assertEquals(Arrays.asList(61, 122), result,
+				"Should return Skin Infection diagnosis and assessment");
+	}
+
+	@Test
+	public void realModel_pregnancyQuery_thirdDataset_shouldReturnAbortionRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"pregnancy-related concerns", 100,
+				THIRD_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(136, 138), result,
+				"Should return Self-Induced Abortion records");
+	}
+
+	@Test
+	public void realModel_pregnancyQuery_fourthDataset_shouldReturnAbortionRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// Same query on a different dataset — should find the same
+		// type of records, demonstrating cross-dataset consistency.
+		List<Integer> result = runRealModelPipeline(
+				"pregnancy-related concerns", 100,
+				FOURTH_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(136, 138), result,
+				"Should return Self-Induced Abortion records");
+	}
+
+	// ---- Specific clinical queries ----
+
+	@Test
+	public void realModel_opportunisticInfectionsQuery_shouldReturnHivRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "opportunistic infections in HIV" — the HIV signal
+		// dominates, returning the same HIV records. The model
+		// can't separate the qualifier "opportunistic" to find
+		// TB or Kaposi sarcoma as opportunistic infections.
+		List<Integer> result = runRealModelPipeline(
+				"opportunistic infections in HIV", 100);
+
+		assertEquals(Arrays.asList(39, 40, 68, 69, 71, 110), result,
+				"Should return HIV records (opportunistic qualifier"
+						+ " does not change retrieval)");
+	}
+
+	@Test
+	public void realModel_bowelDiseaseQuery_thirdDataset_shouldReturnIbdRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"bowel disease", 100, THIRD_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(23, 24), result,
+				"Should return Inflammatory bowel disease records");
+	}
+
+	@Test
+	public void realModel_azithromycinQuery_shouldReturnDrugOrders() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"azithromycin", 100);
+
+		assertEquals(Arrays.asList(0, 1), result,
+				"Should return both Azithromycin drug orders");
+	}
+
+	@Test
+	public void realModel_musculoskeletalQuery_shouldReturnInjuryRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// Broad clinical category query that spans multiple
+		// conditions: musculoskeletal disorder, crushing injury,
+		// achilles tendon, and fracture.
+		List<Integer> result = runRealModelPipeline(
+				"musculoskeletal injuries", 100,
+				FOURTH_PATIENT_DATASET);
+
+		// [34,36] CVA (debatable but model includes it),
+		// [76,78] Intraoperative musculoskeletal disorder,
+		// [92] Crushing injury, [93] Achilles tendon,
+		// [97] Achilles tendon diagnosis, [107,109] Fracture
+		assertEquals(Arrays.asList(34, 36, 76, 78, 92, 93, 97,
+				107, 109), result,
+				"Should return musculoskeletal conditions and injuries");
+	}
+
+	// ---- Clinical reasoning limitations (negative tests) ----
+
+	@Test
+	public void realModel_immunocompromisedQuery_shouldReturnEmpty() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "is the patient immunocompromised?" requires clinical
+		// reasoning (HIV + low CD4 = immunocompromised). The
+		// embedding model can't make this inference — it returns
+		// empty because no single record's text matches the concept.
+		List<Integer> result = runRealModelPipeline(
+				"is the patient immunocompromised?", 100);
+
+		assertTrue(result.isEmpty(),
+				"Should return empty — requires clinical reasoning"
+						+ " the embedding model cannot perform");
+	}
+
+	@Test
+	public void realModel_cardiovascularRiskQuery_shouldReturnEmpty() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "cardiovascular risk factors" is an abstract clinical
+		// concept. The patient has Hypertension and Diabetes
+		// (risk factors), but the model can't aggregate them under
+		// this umbrella concept.
+		List<Integer> result = runRealModelPipeline(
+				"cardiovascular risk factors", 100);
+
+		assertTrue(result.isEmpty(),
+				"Should return empty — abstract concept beyond"
+						+ " embedding model's capability");
+	}
+
 	@Test
 	public void minilm_multiQuery_diagnosticDump() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
