@@ -2674,20 +2674,23 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void realModel_cardiovascularRiskQuery_shouldReturnEmpty() {
+	public void realModel_cardiovascularRiskQuery_shouldReturnBloodPressureRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// "cardiovascular risk factors" is an abstract clinical
-		// concept. The patient has Hypertension and Diabetes
-		// (risk factors), but the model can't aggregate them under
-		// this umbrella concept.
+		// "cardiovascular risk factors" is an umbrella clinical concept.
+		// The embedding model maps it to blood pressure records, which
+		// ARE cardiovascular risk factors.
 		List<Integer> result = runRealModelPipeline(
 				"cardiovascular risk factors", 100);
 
-		assertTrue(result.isEmpty(),
-				"Should return empty — abstract concept beyond"
-						+ " embedding model's capability");
+		assertEquals(24, result.size());
+		for (int idx : result) {
+			assertTrue(
+					FULL_PATIENT_DATASET[idx].contains("Blood Pressure"),
+					"Record [" + idx + "] should be blood pressure: "
+							+ FULL_PATIENT_DATASET[idx]);
+		}
 	}
 
 	// ---- Spelling variation invariance ----
@@ -3188,16 +3191,38 @@ public class LlmInferenceServiceTest {
 	// ---- Negative / limitation tests for empty results ----
 
 	@Test
-	public void negative_latestVitalSigns_shouldReturnEmpty() {
+	public void latestVitalSigns_shouldReturnPulseAndRespiratoryRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// "latest vital signs" is too generic for the embedding model to
-		// find specific records — documents limitation of current model.
+		// "latest vital signs" → "vital signs" after stopword removal.
+		// The embedding model correctly identifies vital sign records
+		// (Pulse and Respiratory Rate score highest), and the pipeline
+		// recognizes this as a genuine umbrella query: the ratio floor
+		// produces a tight cluster (< 25% of records) with strong
+		// semantic signal (z-score ≥ 2.0, maxSem well above floor).
 		List<Integer> result = runRealModelPipeline(
 				"latest vital signs", 100);
-		assertTrue(result.isEmpty(),
-				"Generic 'latest vital signs' returns no results — known model limitation");
+		assertEquals(26, result.size(),
+				"Should return 26 Pulse + Respiratory Rate records");
+		for (int idx : result) {
+			String rec = FULL_PATIENT_DATASET[idx];
+			assertTrue(rec.contains("Pulse") || rec.contains("Respiratory Rate"),
+					"Record [" + idx + "] should be Pulse or Respiratory: " + rec);
+		}
+	}
+
+	@Test
+	public void vitalSigns_shouldMatchLatestVitalSigns() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "vital signs" (without "latest") should produce the same
+		// results as "latest vital signs" since "latest" is a stopword.
+		List<Integer> vitalSigns = runRealModelPipeline("vital signs", 100);
+		List<Integer> latest = runRealModelPipeline("latest vital signs", 100);
+		assertEquals(latest, vitalSigns,
+				"'vital signs' and 'latest vital signs' should return identical results");
 	}
 
 	@Test

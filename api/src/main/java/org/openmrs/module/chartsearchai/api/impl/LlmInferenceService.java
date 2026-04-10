@@ -912,16 +912,20 @@ public class LlmInferenceService implements ChartSearchService {
 		// Stricter gate when too few records match any query keyword:
 		// check whether the top semantic score is a statistical outlier
 		// (z-score ≥ threshold) rather than part of the noise floor.
+		// Captured for reuse by the cluster z-score gate: when the
+		// initial z-score is strong AND the ratio floor produces a
+		// tight cluster, the cluster gate is skipped (see below).
+		double initialZScore = -1;
 		if (queryTermCount > 0
 				&& scored.size() >= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
 			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
-				double zScore = computeSemanticZScore(scored, maxSemanticScore);
-				if (zScore < ChartSearchAiConstants.ZERO_KEYWORD_MIN_Z_SCORE) {
+				initialZScore = computeSemanticZScore(scored, maxSemanticScore);
+				if (initialZScore < ChartSearchAiConstants.ZERO_KEYWORD_MIN_Z_SCORE) {
 					log.debug("Only {} keyword match(es) and top semantic "
 							+ "z-score {} is below threshold {}, "
 							+ "returning empty (maxSem={})",
 							keywordMatchCount,
-							String.format("%.2f", zScore),
+							String.format("%.2f", initialZScore),
 							ChartSearchAiConstants.ZERO_KEYWORD_MIN_Z_SCORE,
 							String.format("%.4f", maxSemanticScore));
 					return Collections.emptyList();
@@ -1033,6 +1037,16 @@ public class LlmInferenceService implements ChartSearchService {
 
 		boolean partialKwValidated = false;
 		boolean firstPassGapDetected = adaptiveCutoff < scored.size();
+		// Set in the non-refinement path after the ratio floor filters
+		// candidates. Used by the cluster z-score gate: when the ratio
+		// floor alone produces a tight set (< 25% of total), it is
+		// structural evidence of a genuine semantic cluster — analogous
+		// to gap detection. Without this, umbrella queries like
+		// "vital signs" (which map to Pulse, Respiratory Rate, etc.
+		// but share no keywords with any record) are incorrectly
+		// rejected because the smooth score distribution prevents
+		// gap detection from firing.
+		int ratioFloorCandidateCount = -1;
 
 		// Post-processing with two paths:
 		//
@@ -1599,6 +1613,7 @@ public class LlmInferenceService implements ChartSearchService {
 				}
 			}
 			candidates = strict;
+			ratioFloorCandidateCount = candidates.size();
 			// When every surviving candidate has keyword matches, the
 			// combination of gap detection + ratio floor already identified
 			// the relevant cluster. TopK would arbitrarily truncate
@@ -1730,7 +1745,17 @@ public class LlmInferenceService implements ChartSearchService {
 				// despite being below the absolute floor.
 				boolean tightClusterDetected = belowFloorRescued
 						|| (firstPassGapDetected
-								&& adaptiveCutoff < scored.size() / 4);
+								&& adaptiveCutoff < scored.size() / 4)
+						|| (ratioFloorCandidateCount >= 0
+								&& ratioFloorCandidateCount
+								< scored.size() / 4
+								&& initialZScore
+								>= ChartSearchAiConstants
+										.FLOOR_RESCUE_MIN_Z_SCORE
+								&& maxSemanticScore
+								>= ChartSearchAiConstants
+										.ABSOLUTE_SIMILARITY_FLOOR
+										+ config.minScoreGap);
 				if (!tightClusterDetected
 						&& !candidates.isEmpty()
 						&& scored.size()
