@@ -2114,6 +2114,354 @@ public class LlmInferenceServiceTest {
 				"Should return only blood-related records, not BP or SpO2");
 	}
 
+	// ---- Colloquial → Clinical mapping tests ----
+
+	@Test
+	public void realModel_feverQuery_shouldReturnEncounterNotesWithFever() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "fever" is colloquial; the model links it to encounter notes
+		// that mention "fever and body aches" rather than Temperature
+		// readings (which use the clinical term "Temperature").
+		List<Integer> result = runRealModelPipeline("fever", 100);
+
+		// [70] Encounter note: "Presenting with fever and body aches"
+		// [119] Encounter note: "Presenting with fever and body aches"
+		assertEquals(Arrays.asList(70, 119), result,
+				"Should return encounter notes mentioning fever");
+	}
+
+	@Test
+	public void realModel_breathingProblemsQuery_shouldReturnRespiratoryRateRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"breathing problems", 100);
+
+		// Should return all Respiratory Rate records — "breathing
+		// problems" maps semantically to respiratory measurements.
+		assertEquals(Arrays.asList(15, 28, 32, 44, 65, 80, 84, 98,
+				104, 109, 117, 125, 133, 136, 152), result,
+				"Should return all Respiratory Rate records");
+	}
+
+	@Test
+	public void realModel_liverProblemsQuery_shouldReturnCirrhosisRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "liver problems" → Syphilitic Cirrhosis (cirrhosis is a
+		// liver disease). Tests colloquial → clinical mapping.
+		List<Integer> result = runRealModelPipeline(
+				"liver problems", 100, SECOND_PATIENT_DATASET);
+
+		// [17] Syphilitic Cirrhosis condition, [19] Syphilitic
+		// Cirrhosis diagnosis
+		assertEquals(Arrays.asList(17, 19), result,
+				"Should return Syphilitic Cirrhosis records");
+	}
+
+	@Test
+	public void realModel_hairLossQuery_shouldReturnAlopeciaRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "hair loss" → Scarring Alopecia (alopecia = hair loss)
+		List<Integer> result = runRealModelPipeline(
+				"hair loss", 100, SECOND_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(2, 4), result,
+				"Should return Scarring Alopecia records");
+	}
+
+	@Test
+	public void realModel_tiredQuery_shouldReturnChronicFatigueRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "is the patient tired?" → Chronic fatigue
+		List<Integer> result = runRealModelPipeline(
+				"is the patient tired?", 100, SECOND_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(56, 58), result,
+				"Should return Chronic fatigue condition and diagnosis");
+	}
+
+	@Test
+	public void realModel_kidneyProblemsQuery_shouldReturnUtiRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "kidney problems" maps to Urinary Tract Infection —
+		// kidneys are part of the urinary system.
+		List<Integer> result = runRealModelPipeline(
+				"kidney problems", 100);
+
+		assertEquals(Arrays.asList(51, 90, 118), result,
+				"Should return UTI records (kidney → urinary system)");
+	}
+
+	@Test
+	public void realModel_bloodSugarQuery_shouldReturnGlucoseReadings() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "blood sugar" → Serum glucose readings
+		List<Integer> result = runRealModelPipeline(
+				"blood sugar", 100, THIRD_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(19, 49, 69, 88, 114), result,
+				"Should return all Serum glucose readings");
+	}
+
+	// ---- Abbreviation tests ----
+
+	@Test
+	public void realModel_tbAbbreviationQuery_shouldReturnTuberculosisRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "TB" abbreviation → Tuberculosis condition + diagnoses
+		List<Integer> result = runRealModelPipeline("TB", 100);
+
+		// [7] TB condition, [12] Primary Diagnosis: Tuberculosis,
+		// [52] Diagnosis: Tuberculosis, [134,135] Primary Diagnosis:
+		// Tuberculosis
+		assertEquals(Arrays.asList(7, 12, 52, 134, 135), result,
+				"Should return all Tuberculosis records");
+	}
+
+	// ---- Direct condition match tests on under-tested datasets ----
+
+	@Test
+	public void realModel_diabetesQuery_shouldReturnDiabetesMellitusRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline("diabetes", 100);
+
+		// [49] Primary Diagnosis: Diabetes Mellitus, [67] Diagnosis:
+		// Diabetes Mellitus, [146] Diagnosis: Diabetes Mellitus
+		assertEquals(Arrays.asList(49, 67, 146), result,
+				"Should return all Diabetes Mellitus records");
+	}
+
+	@Test
+	public void realModel_headacheQuery_shouldReturnSingleRecord() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline("headache", 100);
+
+		assertEquals(Arrays.asList(99), result,
+				"Should return the single Headache assessment");
+	}
+
+	@Test
+	public void realModel_strokeQuery_secondDataset_shouldReturnStrokeRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"stroke", 100, SECOND_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(1, 3), result,
+				"Should return Nonparalytic stroke condition and diagnosis");
+	}
+
+	@Test
+	public void realModel_depressionQuery_shouldReturnDepressiveEpisodeRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"depression", 100, SECOND_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(31, 34), result,
+				"Should return Mild depressive episode records");
+	}
+
+	@Test
+	public void realModel_cardiovascularQuery_shouldReturnAtherosclerosisRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"cardiovascular disease", 100, SECOND_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(29, 32), result,
+				"Should return Atherosclerosis records");
+	}
+
+	@Test
+	public void realModel_cholesterolQuery_secondDataset_shouldReturnLabRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"cholesterol", 100, SECOND_PATIENT_DATASET);
+
+		// [13] HDL cholesterol lab result, [14] HDL cholesterol lab order
+		assertEquals(Arrays.asList(13, 14), result,
+				"Should return HDL cholesterol observation and lab order");
+	}
+
+	@Test
+	public void realModel_kidneyFunctionQuery_thirdDataset_shouldReturnCkdRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"kidney function", 100, THIRD_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(73, 74), result,
+				"Should return Chronic kidney disease records");
+	}
+
+	@Test
+	public void realModel_anemiaQuery_thirdDataset_shouldReturnAnaemiaRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"anemia", 100, THIRD_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(93, 94), result,
+				"Should return Anaemia condition and diagnosis");
+	}
+
+	@Test
+	public void realModel_substanceAbuseQuery_fourthDataset_shouldReturnAddictionRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"substance abuse", 100, FOURTH_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(121, 124), result,
+				"Should return Substance Addiction condition and diagnosis");
+	}
+
+	@Test
+	public void realModel_strokeQuery_fourthDataset_shouldReturnCvaRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "stroke" → Cerebrovascular Accident (clinical synonym)
+		List<Integer> result = runRealModelPipeline(
+				"stroke", 100, FOURTH_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(34, 36), result,
+				"Should return Cerebrovascular Accident records");
+	}
+
+	@Test
+	public void realModel_cancerQuery_fourthDataset_shouldReturnTumorRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"cancer", 100, FOURTH_PATIENT_DATASET);
+
+		// [63] Malignant tumor of base of tongue condition,
+		// [65] Malignant tumor diagnosis
+		assertEquals(Arrays.asList(63, 65), result,
+				"Should return Malignant tumor records");
+	}
+
+	@Test
+	public void realModel_dentalProblemsQuery_shouldReturnToothRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"dental problems", 100, FOURTH_PATIENT_DATASET);
+
+		// [49,53] Partial absence of teeth, [91,95] Failure of
+		// exfoliation of primary tooth
+		assertEquals(Arrays.asList(49, 53, 91, 95), result,
+				"Should return tooth-related condition and diagnosis records");
+	}
+
+	@Test
+	public void realModel_fractureQuery_fourthDataset_shouldReturnFractureRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// Unlike FULL dataset (no fracture records → empty), FOURTH
+		// dataset has Nonunion of fracture.
+		List<Integer> result = runRealModelPipeline(
+				"fracture", 100, FOURTH_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(107, 109), result,
+				"Should return Nonunion of fracture records");
+	}
+
+	@Test
+	public void realModel_mentalHealthQuery_shouldReturnPsychiatricRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"mental health", 100, FOURTH_PATIENT_DATASET);
+
+		// [19,22] Psychosis, [47,51] Mental/behavioral disorder,
+		// [77] Self-accusation, [121] Substance Addiction
+		assertEquals(Arrays.asList(19, 22, 47, 51, 77, 121), result,
+				"Should return psychiatric and behavioral health records");
+	}
+
+	// ---- Multi-type infection query ----
+
+	@Test
+	public void realModel_infectionsQuery_shouldReturnUtiAndSkinInfection() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"any infections?", 100);
+
+		// [51] UTI diagnosis, [61] Skin Infection diagnosis,
+		// [90,118] UTI assessments, [122] Skin Infection assessment
+		assertEquals(Arrays.asList(51, 61, 90, 118, 122), result,
+				"Should return UTI and Skin Infection records");
+	}
+
+	// ---- Negative test ----
+
+	@Test
+	public void realModel_cholesterolQuery_fullDataset_shouldReturnEmpty() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// FULL dataset has no cholesterol records
+		List<Integer> result = runRealModelPipeline("cholesterol", 100);
+
+		assertTrue(result.isEmpty(),
+				"Should return empty — no cholesterol records in dataset");
+	}
+
+	// ---- Synonym matching test ----
+
+	@Test
+	public void realModel_hbQuery_fifthDataset_shouldReturnHaemoglobinViaSynonym() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "Hb" is a synonym for Haemoglobin. The FIFTH dataset has
+		// synonym annotations (e.g. "Haemoglobin (syn. Hb,
+		// Hemoglobin)"). On the FULL dataset, "HB results" returns
+		// empty because there are no synonyms. Here it should find
+		// the Haemoglobin record via the synonym keyword match.
+		List<Integer> result = runRealModelPipeline(
+				"Hb results", 100, FIFTH_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(0), result,
+				"Should return Haemoglobin via Hb synonym");
+	}
+
 	@Test
 	public void minilm_multiQuery_diagnosticDump() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
