@@ -2690,6 +2690,193 @@ public class LlmInferenceServiceTest {
 						+ " embedding model's capability");
 	}
 
+	// ---- Spelling variation invariance ----
+
+	@Test
+	public void realModel_anaemiaVsAnemia_shouldReturnIdenticalResults() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// British "anaemia" and American "anemia" should both find
+		// the same Anaemia condition and diagnosis records.
+		List<Integer> british = runRealModelPipeline(
+				"anaemia", 100, THIRD_PATIENT_DATASET);
+		List<Integer> american = runRealModelPipeline(
+				"anemia", 100, THIRD_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(93, 94), british,
+				"British spelling should find Anaemia records");
+		assertEquals(british, american,
+				"American and British spellings should return"
+						+ " identical results");
+	}
+
+	// ---- Query phrasing invariance ----
+
+	@Test
+	public void realModel_diabetesPhrasingVariations_shouldReturnIdenticalResults() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// Three different phrasings of the same clinical concept
+		// should all return the same Diabetes Mellitus records.
+		List<Integer> expected = Arrays.asList(49, 67, 146);
+
+		for (String query : new String[] {
+				"does the patient have diabetes?",
+				"diabetic",
+				"diabetes mellitus"}) {
+			List<Integer> result = runRealModelPipeline(query, 100);
+			assertEquals(expected, result,
+					"Query '" + query + "' should return all"
+							+ " Diabetes Mellitus records");
+		}
+	}
+
+	@Test
+	public void realModel_oxygenSaturationPhrasingVariations_shouldReturnIdenticalResults() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "oxygen saturation" and "blood oxygen levels" should both
+		// return the same Blood Oxygen Saturation records.
+		List<Integer> expected = Arrays.asList(34, 45, 59, 79, 83,
+				103, 108, 116, 145, 151);
+
+		for (String query : new String[] {
+				"oxygen saturation",
+				"blood oxygen levels"}) {
+			List<Integer> result = runRealModelPipeline(query, 100);
+			assertEquals(expected, result,
+					"Query '" + query + "' should return all"
+							+ " Blood Oxygen Saturation records");
+		}
+	}
+
+	@Test
+	public void realModel_immunizationPhrasingVariations_shouldReturnIdenticalResults() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "vaccination history" and "immunization" should both find
+		// the same immunization record.
+		List<Integer> expected = Arrays.asList(3);
+
+		for (String query : new String[] {
+				"vaccination history",
+				"immunization"}) {
+			List<Integer> result = runRealModelPipeline(query, 100);
+			assertEquals(expected, result,
+					"Query '" + query + "' should return the"
+							+ " Immunization history record");
+		}
+	}
+
+	// ---- Program enrollment queries ----
+
+	@Test
+	public void realModel_programEnrollmentQuery_shouldReturnPmtctAcrossDatasets() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// Program enrollment records exist in FULL [2], THIRD [148],
+		// and FOURTH [148] datasets. The same query should find them.
+		String query = "is the patient enrolled in any programs?";
+
+		assertEquals(Arrays.asList(2),
+				runRealModelPipeline(query, 100),
+				"FULL dataset: should return PMTCT program");
+		assertEquals(Arrays.asList(148),
+				runRealModelPipeline(query, 100,
+						THIRD_PATIENT_DATASET),
+				"THIRD dataset: should return PMTCT program");
+		assertEquals(Arrays.asList(148),
+				runRealModelPipeline(query, 100,
+						FOURTH_PATIENT_DATASET),
+				"FOURTH dataset: should return PMTCT program");
+	}
+
+	// ---- Vital sign specific queries ----
+
+	@Test
+	public void realModel_pulseRateQuery_shouldReturnAllPulseRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"pulse rate", 100);
+
+		assertEquals(Arrays.asList(16, 24, 43, 60, 75, 82, 95,
+				100, 112, 130, 149), result,
+				"Should return all Pulse records");
+	}
+
+	@Test
+	public void realModel_oxygenSaturationQuery_secondDataset_shouldReturnSpO2Records() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"oxygen saturation", 100, SECOND_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(9, 24, 39, 50, 63), result,
+				"Should return all SpO2 records");
+	}
+
+	// ---- Medication order queries ----
+
+	@Test
+	public void realModel_medicationsQuery_thirdDataset_shouldReturnAllDrugOrders() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "what medications is the patient on?" should find all 9
+		// Azithromycin drug orders across different visits.
+		List<Integer> expected = Arrays.asList(22, 33, 52, 53,
+				72, 92, 117, 128, 146);
+
+		List<Integer> result = runRealModelPipeline(
+				"what medications is the patient on?", 100,
+				THIRD_PATIENT_DATASET);
+
+		assertEquals(expected, result,
+				"Should return all 9 Azithromycin drug orders");
+
+		// Direct drug name query should return the same set.
+		List<Integer> byName = runRealModelPipeline(
+				"azithromycin", 100, THIRD_PATIENT_DATASET);
+
+		assertEquals(expected, byName,
+				"Direct drug name should match 'what medications'"
+						+ " query results");
+	}
+
+	// ---- Under-tested record types ----
+
+	@Test
+	public void realModel_wastingQuery_fourthDataset_shouldReturnWastingSyndrome() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"wasting", 100, FOURTH_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(17, 20), result,
+				"Should return Wasting syndrome condition and diagnosis");
+	}
+
+	@Test
+	public void realModel_skinRashQuery_fourthDataset_shouldReturnRashRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"skin rash", 100, FOURTH_PATIENT_DATASET);
+
+		assertEquals(Arrays.asList(64, 66), result,
+				"Should return Rash condition and diagnosis");
+	}
+
 	@Test
 	public void minilm_multiQuery_diagnosticDump() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
