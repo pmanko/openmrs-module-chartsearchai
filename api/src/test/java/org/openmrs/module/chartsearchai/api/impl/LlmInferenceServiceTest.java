@@ -996,8 +996,11 @@ public class LlmInferenceServiceTest {
 
 		// Run the pipeline to get the 40 matching record indices
 		List<Integer> pipelineResult = runRealModelPipeline(question, 10);
-		assertTrue(pipelineResult.size() > 7,
-				"Pipeline should return more than 7 records before cap");
+		assertEquals(Arrays.asList(17, 18, 22, 23, 25, 26, 31, 33, 36, 38,
+				47, 48, 58, 63, 64, 73, 74, 76, 77, 81,
+				93, 94, 96, 101, 102, 107, 111, 113, 114, 126,
+				128, 129, 131, 137, 138, 143, 144, 147, 148, 150),
+				pipelineResult, "Pipeline should return all 40 BP + weight + temp records");
 
 		// Build SerializedRecords from the pipeline result (sorted most-recent-first).
 		// In production, records come sorted by date from PatientRecordLoader.
@@ -1099,8 +1102,8 @@ public class LlmInferenceServiceTest {
 		List<Integer> result = runRealModelPipeline("any history of cancer?",
 				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
 
-		assertEquals(2, result.size(),
-				"'any history of cancer?' should return exactly 2 records");
+		assertEquals(Arrays.asList(11, 88), result,
+				"'any history of cancer?' should return exactly 2 Kaposi sarcoma records");
 	}
 
 	@Test
@@ -1365,13 +1368,9 @@ public class LlmInferenceServiceTest {
 		List<Integer> result = runRealModelPipeline(
 				"does the patient have cancer?", 10);
 
-		assertFalse(result.isEmpty(),
-				"Z-score gate should pass — cancer query has a genuine "
-				+ "semantic outlier (Kaposi sarcoma)");
-		// Records 11 and 88 are "Diagnosis — Kaposi sarcoma oral" (0-indexed)
-		assertTrue(result.contains(11) || result.contains(88),
-				"Should include at least one Kaposi sarcoma record (11 or 88), "
-				+ "got: " + result);
+		assertEquals(Arrays.asList(11, 88), result,
+				"Z-score gate should pass — cancer query should return "
+				+ "both Kaposi sarcoma records");
 	}
 
 	@Test
@@ -1398,16 +1397,10 @@ public class LlmInferenceServiceTest {
 		List<Integer> result = runRealModelPipeline(
 				"any episodes?", 10, SECOND_PATIENT_DATASET);
 
-		// Pipeline returns 0-indexed values. Records at 1-indexed positions
-		// 32 and 35 are 0-indexed 31 and 34:
-		// [31] Medical condition: Condition: Mild depressive episode. Status: ACTIVE
-		// [34] Clinical diagnosis: Diagnosis: Mild depressive episode. Certainty: CONFIRMED
-		// Keyword rescue (plural stem "episodes" → "episode") bypasses the
-		// semantic floor gate when enough keyword matches exist.
-		assertTrue(result.contains(31),
-				"Should include condition record for Mild depressive episode, got: " + result);
-		assertTrue(result.contains(34),
-				"Should include diagnosis record for Mild depressive episode, got: " + result);
+		// [31] Medical condition: Mild depressive episode
+		// [34] Clinical diagnosis: Mild depressive episode
+		assertEquals(Arrays.asList(31, 34), result,
+				"Should return both Mild depressive episode records");
 	}
 
 	@Test
@@ -1419,14 +1412,10 @@ public class LlmInferenceServiceTest {
 				"has this patient had a sexually transmitted disease?", 10,
 				SECOND_PATIENT_DATASET);
 
-		// [19] Clinical diagnosis: Diagnosis: Syphilitic Cirrhosis. Certainty: CONFIRMED
-		// Syphilis is an STD; syphilitic cirrhosis is a complication of syphilis.
-		// No keyword matches (query terms "sexually", "transmitted", "disease"
-		// don't appear in record text) — purely semantic retrieval.
-		// Record 17 (Syphilitic Cirrhosis condition, sem=0.33) is at the ratio
-		// floor boundary (0.42*0.80=0.34) so may or may not be included.
-		assertTrue(result.contains(19),
-				"Should include Syphilitic Cirrhosis diagnosis, got: " + result);
+		// [19] Syphilitic Cirrhosis diagnosis, [44] Granuloma condition,
+		// [45] Granuloma diagnosis — purely semantic retrieval
+		assertEquals(Arrays.asList(19, 44, 45), result,
+				"Should return Syphilitic Cirrhosis and Granuloma records");
 	}
 
 	@Test
@@ -1498,27 +1487,9 @@ public class LlmInferenceServiceTest {
 		List<Integer> result = runRealModelPipeline(
 				"blood pressure and pulse", 10, SECOND_PATIENT_DATASET);
 
-		// Systolic BP: 0-based 6, 21, 36, 47, 60
-		// Diastolic BP: 0-based 7, 22, 37, 48, 61
-		// Pulse: 0-based 8, 23, 38, 49, 62
-		for (int bpIdx : new int[]{ 6, 7, 21, 22, 36, 37, 47, 48, 60, 61 }) {
-			assertTrue(result.contains(bpIdx),
-					"Should include BP record at index " + bpIdx
-					+ ", got: " + result);
-		}
-		for (int pulseIdx : new int[]{ 8, 23, 38, 49, 62 }) {
-			assertTrue(result.contains(pulseIdx),
-					"Should include pulse record at index " + pulseIdx
-					+ ", got: " + result);
-		}
-
-		// SpO2: 0-based 9, 24, 39, 50, 63 — matches "blood" only,
-		// which is already covered by BP → false positive
-		for (int spo2Idx : new int[]{ 9, 24, 39, 50, 63 }) {
-			assertFalse(result.contains(spo2Idx),
-					"Should NOT include SpO2 record at index " + spo2Idx
-					+ " — 'blood' is already covered by BP, got: " + result);
-		}
+		// All 5 Systolic BP + 5 Diastolic BP + 5 Pulse, no SpO2
+		assertEquals(Arrays.asList(6, 7, 8, 21, 22, 23, 36, 37, 38, 47, 48, 49, 60, 61, 62),
+				result, "Should return all BP and Pulse records, no SpO2");
 	}
 
 	@Test
@@ -1831,7 +1802,7 @@ public class LlmInferenceServiceTest {
 		List<Integer> result = runRealModelPipeline(
 				"does the patient have cancer?", 1, FULL_PATIENT_DATASET);
 
-		assertEquals(1, result.size(),
+		assertEquals(Arrays.asList(11), result,
 				"With no keyword matches, topK=1 should cap to 1 record");
 	}
 
@@ -1910,12 +1881,10 @@ public class LlmInferenceServiceTest {
 				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K,
 				SECOND_PATIENT_DATASET, noKeywordConfig);
 
-		assertEquals(10, withKeywords.size(),
+		assertEquals(Arrays.asList(1, 2, 16, 17, 29, 30, 31, 44, 55, 56), withKeywords,
 				"With default keywordWeight, should return all 10 conditions");
 		assertEquals(Arrays.asList(1, 31), withoutKeywords,
 				"With keywordWeight=0, only top semantic matches survive");
-		assertTrue(withoutKeywords.size() < withKeywords.size(),
-				"Disabling keywords should return fewer records");
 	}
 
 	@Test
@@ -1963,10 +1932,8 @@ public class LlmInferenceServiceTest {
 		List<Integer> result = runRealModelPipeline("any conditions?", 5,
 				SECOND_PATIENT_DATASET);
 
-		assertTrue(result.size() > 5,
-				"Keyword refinement should bypass topK=5, got " + result.size());
 		assertEquals(Arrays.asList(1, 2, 16, 17, 29, 30, 31, 44, 55, 56), result,
-				"Should return all 10 condition records from second dataset");
+				"Keyword refinement should bypass topK=5 and return all 10 conditions");
 	}
 
 	@Test
@@ -2000,10 +1967,10 @@ public class LlmInferenceServiceTest {
 		List<Integer> cappedResult = runRealModelPipeline("is the patient anemic?",
 				1, FULL_PATIENT_DATASET);
 
-		assertTrue(fullResult.size() > 1,
-				"Full result should have multiple anemia records");
-		assertTrue(cappedResult.size() < fullResult.size(),
-				"TopK=1 should exclude marginal records, got " + cappedResult);
+		assertEquals(Arrays.asList(29, 55, 72), fullResult,
+				"Full result should return all 3 anemia records");
+		assertEquals(Arrays.asList(72), cappedResult,
+				"TopK=1 should cap to the highest-scoring anemia record");
 	}
 
 	@Test
@@ -2031,8 +1998,8 @@ public class LlmInferenceServiceTest {
 		List<Integer> result = runRealModelPipeline("any conditions?", 3,
 				SECOND_PATIENT_DATASET);
 
-		assertTrue(result.size() > 3,
-				"Keyword refinement should allow exceeding topK=3, got " + result.size());
+		assertEquals(Arrays.asList(1, 2, 16, 17, 29, 30, 31, 44, 55, 56), result,
+				"Keyword refinement should return all 10 conditions, exceeding topK=3");
 	}
 
 	@Test
@@ -2047,10 +2014,8 @@ public class LlmInferenceServiceTest {
 
 		// [137] Self-Induced Abortion condition = index 136
 		// [139] Self-Induced Abortion diagnosis = index 138
-		assertTrue(result.contains(136),
-				"Should include Self-Induced Abortion condition, got: " + result);
-		assertTrue(result.contains(138),
-				"Should include Self-Induced Abortion diagnosis, got: " + result);
+		assertEquals(Arrays.asList(136, 138), result,
+				"Should return both Self-Induced Abortion records");
 	}
 
 	@Test
@@ -2063,37 +2028,8 @@ public class LlmInferenceServiceTest {
 				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K,
 				THIRD_PATIENT_DATASET);
 
-		// Blood-related records: hematology tests, blood cell counts,
-		// and blood conditions — includes both keyword matches (records
-		// containing "blood") and semantic rescues (records about blood
-		// that use different vocabulary like Haemoglobin, Anaemia).
-		// [  1] Haemoglobin 15.8 g/dL (HIGH) = index 0
-		// [ 92] Complete Blood Count order = index 91
-		// [ 94] Anaemia condition = index 93
-		// [ 95] Anaemia diagnosis = index 94
-		// [104] Haemoglobin 11.2 g/dL (LOW) = index 103
-		// [105] White blood cells = index 104
-		// [106] Platelet count = index 105
-		// [107] Hematocrit = index 106
-		// [109] Red blood cells (LOW) = index 108
-		assertTrue(result.contains(0),
-				"Should include Haemoglobin (HIGH), got: " + result);
-		assertTrue(result.contains(91),
-				"Should include Complete Blood Count order, got: " + result);
-		assertTrue(result.contains(93),
-				"Should include Anaemia condition, got: " + result);
-		assertTrue(result.contains(94),
-				"Should include Anaemia diagnosis, got: " + result);
-		assertTrue(result.contains(103),
-				"Should include Haemoglobin (LOW), got: " + result);
-		assertTrue(result.contains(104),
-				"Should include White blood cells, got: " + result);
-		assertTrue(result.contains(105),
-				"Should include Platelet count, got: " + result);
-		assertTrue(result.contains(106),
-				"Should include Hematocrit, got: " + result);
-		assertTrue(result.contains(108),
-				"Should include Red blood cells (LOW), got: " + result);
+		assertEquals(Arrays.asList(0, 91, 93, 94, 103, 104, 105, 106, 108), result,
+				"Should return Haemoglobin, CBC order, Anaemia, and blood cell records");
 	}
 
 	@Test
@@ -2106,17 +2042,10 @@ public class LlmInferenceServiceTest {
 				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K,
 				FOURTH_PATIENT_DATASET);
 
-		// Blood-related records rescued via vocabulary-gap rescue
-		// (no "blood" keyword, but high semantic similarity):
-		// [  1] Haemoglobin: 15.8 g/dL (HIGH) = index 0
-		// [ 19] Condition: Haemorrhagic disease of newborn = index 18
-		// [ 22] Diagnosis: Haemorrhagic disease of newborn = index 21
-		assertTrue(result.contains(0),
-				"Should include Haemoglobin (HIGH), got: " + result);
-		assertTrue(result.contains(18),
-				"Should include Haemorrhagic disease condition, got: " + result);
-		assertTrue(result.contains(21),
-				"Should include Haemorrhagic disease diagnosis, got: " + result);
+		// [0] Haemoglobin, [15] Hemoglobin in umbilical cord blood,
+		// [18] Haemorrhagic disease condition, [21] Haemorrhagic disease diagnosis
+		assertEquals(Arrays.asList(0, 15, 18, 21), result,
+				"Should return Haemoglobin, cord blood, and Haemorrhagic disease records");
 	}
 
 	@Test
@@ -2129,35 +2058,11 @@ public class LlmInferenceServiceTest {
 				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K,
 				FIFTH_PATIENT_DATASET);
 
-		// Blood-related records should be returned:
-		// [  1] Haemoglobin (syn. Hb, Hemoglobin, Hemoglobin performed on blood): 15.8 g/dL (HIGH) = index 0
-		// [ 16] Hemoglobin in umbilical cord blood: 99.4 mg/mL = index 15
-		// [ 19] Condition: Haemorrhagic disease of newborn = index 18
-		// [ 22] Diagnosis: Haemorrhagic disease of newborn = index 21
-		assertTrue(result.contains(0),
-				"Should include Haemoglobin (HIGH), got: " + result);
-		assertTrue(result.contains(18),
-				"Should include Haemorrhagic disease condition, got: " + result);
-		assertTrue(result.contains(21),
-				"Should include Haemorrhagic disease diagnosis, got: " + result);
-
-		// Blood pressure and SpO2 are NOT blood problems — the word "blood"
-		// in "blood pressure" and "arterial blood oxygen saturation" should
-		// not cause these records to be included.
-		for (int idx : result) {
-			String record = FIFTH_PATIENT_DATASET[idx];
-			assertFalse(record.contains("Systolic blood pressure"),
-					"Should NOT include Systolic BP, got index " + idx + ": " + record);
-			assertFalse(record.contains("Diastolic blood pressure"),
-					"Should NOT include Diastolic BP, got index " + idx + ": " + record);
-			assertFalse(record.contains("Pulse (syn. HR)"),
-					"Should NOT include Pulse, got index " + idx + ": " + record);
-		}
-
-		// Result set should be small — only hematology/blood-disorder records
-		assertTrue(result.size() <= 10,
-				"Expected at most 10 results for blood problems query, got "
-						+ result.size() + ": " + result);
+		// [0] Haemoglobin, [18] Haemorrhagic disease condition,
+		// [21] Haemorrhagic disease diagnosis
+		// Must NOT include BP, SpO2, or Pulse records
+		assertEquals(Arrays.asList(0, 18, 21), result,
+				"Should return only blood-related records, not BP or SpO2");
 	}
 
 	@Test
