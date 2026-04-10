@@ -1419,6 +1419,55 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void realModel_stdQuery_fourthDataset_shouldNotReturnUnrelatedDiseases() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// The plural "diseases" stems to "disease" which matches every
+		// condition/diagnosis record via keyword matching. The semantic
+		// ratio floor should filter out unrelated diseases (Hookworm,
+		// Haemorrhagic disease) that matched on the generic term alone.
+		List<Integer> result = runRealModelPipeline(
+				"any sexually transmitted diseases?", 100,
+				FOURTH_PATIENT_DATASET);
+
+		// [2] Zika virus disease condition (Zika can be sexually transmitted),
+		// [108] HIV condition, [110] HIV diagnosis
+		// Gonococcal arthritis [137, 139] is missed — sem=0.22/0.18,
+		// kw=0.00. The embedding model (all-MiniLM-L6-v2) can't link
+		// "sexually transmitted" to "gonococcal" — no shared tokens and
+		// no medical domain knowledge. MedCPT would handle this.
+		assertEquals(Arrays.asList(2, 108, 110), result,
+				"Should return HIV and Zika, not Hookworm or Haemorrhagic disease");
+	}
+
+	@Test
+	public void realModel_genericKeywordQuery_shouldBeCappedByTopK() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// 2-term queries where one term is very generic ("disease",
+		// "condition") match almost all condition/diagnosis records.
+		// The semantic core may be broad for such queries. Verify
+		// that topK caps the result set to a reasonable size.
+		int topK = ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K;
+
+		List<Integer> diseaseProblem = runRealModelPipeline(
+				"disease problem", topK,
+				FOURTH_PATIENT_DATASET);
+		assertTrue(diseaseProblem.size() <= topK,
+				"Generic 'disease problem' should be capped by topK="
+						+ topK + " but got " + diseaseProblem.size());
+
+		List<Integer> diseaseTreatment = runRealModelPipeline(
+				"disease treatment", topK,
+				THIRD_PATIENT_DATASET);
+		assertTrue(diseaseTreatment.size() <= topK,
+				"Generic 'disease treatment' should be capped by topK="
+						+ topK + " but got " + diseaseTreatment.size());
+	}
+
+	@Test
 	public void realModel_cd4Query_secondDataset_shouldReturnEmpty() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);

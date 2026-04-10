@@ -1073,11 +1073,11 @@ public class LlmInferenceService implements ChartSearchService {
 			// path should run AND skip expansion to prevent template-
 			// similar false positives from re-entering via cosine.
 			boolean semanticDominance = false;
+			double maxKwSem = 0;
+			double maxNonKwSem = 0;
 			if (uniformKeywords && kwMax < bonusThresh
 					&& queryTermCount > 0) {
 				double refMinKw = 1.0 / queryTermCount;
-				double maxKwSem = 0;
-				double maxNonKwSem = 0;
 				for (ScoredEmbedding se : preRefinementCandidates) {
 					if (se.keywordScore >= refMinKw) {
 						if (se.semanticScore > maxKwSem) {
@@ -1092,19 +1092,22 @@ public class LlmInferenceService implements ChartSearchService {
 				semanticDominance = maxNonKwSem > maxKwSem;
 			}
 			boolean partialKeywordMatch = uniformKeywords
-					&& kwMax < bonusThresh
-					&& (queryTermCount <= 2 || semanticDominance);
+					&& kwMax < bonusThresh;
 			log.debug("Pipeline refinement: kwMin={}, kwMax={}, uniform={}, "
-					+ "partialKw={}", String.format("%.4f", kwMin),
+					+ "partialKw={}, semDom={}",
+					 String.format("%.4f", kwMin),
 					 String.format("%.4f", kwMax), uniformKeywords,
-					 partialKeywordMatch);
+					 partialKeywordMatch, semanticDominance);
 			if (partialKeywordMatch) {
-				// Semantic core approach: find non-keyword records with
-				// high semantic scores — these represent what the query
-				// actually means without keyword bias. Then validate
-				// keyword matches against this core.
-				List<ScoredEmbedding> nonKeyword =
-						new ArrayList<ScoredEmbedding>();
+			  // Always compute the semantic core from non-keyword
+			  // records. Gap detection tells us whether there is
+			  // genuine structure (a cluster boundary separating
+			  // relevant non-kw records from noise) vs a uniform
+			  // distribution (no cluster = core is unreliable).
+			  // This data-driven check replaces the former hardcoded
+			  // kwMax >= 0.5 threshold.
+			  List<ScoredEmbedding> nonKeyword =
+					  new ArrayList<ScoredEmbedding>();
 				for (ScoredEmbedding se : preRefinementCandidates) {
 					if (se.keywordScore == 0) {
 						nonKeyword.add(se);
@@ -1126,6 +1129,7 @@ public class LlmInferenceService implements ChartSearchService {
 				List<ScoredEmbedding> semanticCore =
 						new ArrayList<ScoredEmbedding>();
 				boolean coreFallbackUsed = false;
+				int coreCutoff = nonKeyword.size();
 				if (nonKeyword.size() >= ChartSearchAiConstants
 						.ADAPTIVE_MIN_RECORDS) {
 					double maxSemNk = nonKeyword.get(0).semanticScore;
@@ -1133,7 +1137,7 @@ public class LlmInferenceService implements ChartSearchService {
 							maxSemNk * ChartSearchAiConstants
 									.REFINEMENT_ADAPTIVE_GAP_RATIO,
 							ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
-					int coreCutoff = findAdaptiveCutoff(nonKeyword,
+					coreCutoff = findAdaptiveCutoff(nonKeyword,
 							nonKeyword.size(),
 							ChartSearchAiConstants
 									.ABSOLUTE_SIMILARITY_FLOOR,
@@ -1265,6 +1269,60 @@ public class LlmInferenceService implements ChartSearchService {
 							semanticCore.size());
 				}
 
+				// Core has structure when gap detection found a
+				// boundary (coreCutoff < total non-kw count),
+				// meaning the top cluster is a genuine semantic
+				// group — not just the entire non-kw distribution.
+				boolean coreHasStructure = !semanticCore.isEmpty()
+						&& coreCutoff < nonKeyword.size();
+
+				// The core is useful when (a) gap detection found
+				// structure AND (b) the core is topically related
+				// to the keyword-matched records. Topical
+				// relatedness = max cosine between the core's top
+				// record and ANY keyword record. Using max (not
+				// top-1) is robust to sort order. Threshold is
+				// SEMANTIC_CORE_MIN_COSINE (0.55) — the same
+				// constant the expansion step uses. Empirically:
+				// blood problem: Anaemia ↔ kw max=0.62-0.68
+				// (same blood topic, passes); STD: Temperature ↔
+				// kw max=0.47-0.50 (unrelated, fails).
+				boolean coreRelevant = false;
+				if (coreHasStructure && !semanticCore.isEmpty()
+						&& !candidates.isEmpty()) {
+					// Check if the core's top record is topically
+					// related to ANY keyword-matched record. Using
+					// the max cosine is robust to which kw record
+					// happens to sort first.
+					float[] coreVec = semanticCore.get(0)
+							.embedding.getEmbeddingVector();
+					double maxCoreKwCosine = 0;
+					for (ScoredEmbedding se : candidates) {
+						double cos = cosineSimilarity(coreVec,
+								se.embedding
+										.getEmbeddingVector());
+						if (cos > maxCoreKwCosine) {
+							maxCoreKwCosine = cos;
+						}
+					}
+					coreRelevant = maxCoreKwCosine
+							>= ChartSearchAiConstants
+									.SEMANTIC_CORE_MIN_COSINE;
+					log.debug("Core topical check: maxCos={}"
+							+ " vs threshold={}, relevant={}",
+							String.format("%.4f",
+									maxCoreKwCosine),
+							ChartSearchAiConstants
+									.SEMANTIC_CORE_MIN_COSINE,
+							coreRelevant);
+				}
+				log.debug("Core validation: structure={}, "
+						+ "relevant={}, cutoff={}/{}, semDom={}",
+						coreHasStructure, coreRelevant,
+						coreCutoff, nonKeyword.size(),
+						semanticDominance);
+
+				if (semanticDominance || coreRelevant) {
 				if (!semanticCore.isEmpty()) {
 					// Expand: find records cosine-coherent with the
 					// core AND semantically close to the query.
@@ -1347,6 +1405,29 @@ public class LlmInferenceService implements ChartSearchService {
 							semanticCore.size(),
 							String.format("%.4f", scoreFloor),
 							candidates.size());
+					// Cap: generic keywords (e.g. "disease")
+					// produce broad cores or over-expansion.
+					// Apply topK as a safety cap, same as the
+					// non-refinement path, unless every
+					// candidate has keyword support.
+					if (candidates.size() > topK) {
+						boolean allExpHaveKw = true;
+						for (ScoredEmbedding se : candidates) {
+							if (se.keywordScore == 0) {
+								allExpHaveKw = false;
+								break;
+							}
+						}
+						if (!allExpHaveKw) {
+							candidates =
+									new ArrayList<ScoredEmbedding>(
+											candidates.subList(
+													0, topK));
+							log.debug("Semantic core topK cap:"
+									+ " {} -> {}", expanded.size(),
+									topK);
+						}
+					}
 					partialKwValidated = true;
 				} else {
 					// No semantic core found — fall back to the
@@ -1376,6 +1457,38 @@ public class LlmInferenceService implements ChartSearchService {
 						candidates = filtered;
 					}
 				}
+				} else {
+				// No core structure found — fall back to the
+				// semantic ratio floor on keyword matches.
+				// When gap detection finds no boundary in the
+				// non-keyword distribution, the "core" is the
+				// entire non-kw set (noise, not a cluster).
+				// Apply a ratio floor to the keyword-matched
+				// candidates instead.
+				double maxSemanticKw = 0;
+				for (ScoredEmbedding se : candidates) {
+					if (se.semanticScore > maxSemanticKw) {
+						maxSemanticKw = se.semanticScore;
+					}
+				}
+				double semFloor = maxSemanticKw
+						* config.similarityRatio;
+				List<ScoredEmbedding> filtered =
+						new ArrayList<ScoredEmbedding>();
+				for (ScoredEmbedding se : candidates) {
+					if (se.semanticScore >= semFloor) {
+						filtered.add(se);
+					}
+				}
+				if (filtered.size() >= ChartSearchAiConstants
+						.ADAPTIVE_MIN_RECORDS) {
+					log.debug("Low-coverage kw semantic floor:"
+							+ " {} -> {} (floor={})",
+							candidates.size(), filtered.size(),
+							String.format("%.4f", semFloor));
+					candidates = filtered;
+				}
+			  }
 			} else if (!uniformKeywords) {
 				double maxSemanticRefined = 0;
 				for (ScoredEmbedding se : candidates) {
