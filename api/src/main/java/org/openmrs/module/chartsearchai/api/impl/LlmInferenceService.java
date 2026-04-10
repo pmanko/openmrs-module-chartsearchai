@@ -729,7 +729,9 @@ public class LlmInferenceService implements ChartSearchService {
 	 *        {@link EmbeddingIndexer#indexPatient})
 	 * @param provider embedding provider for query vectorization
 	 * @param question the natural language question
-	 * @param topK maximum records to return
+	 * @param topK target result count — applied only when some candidates
+	 *        lack keyword matches; bypassed when every candidate has a
+	 *        keyword match
 	 * @param queryPrefix prefix prepended to the query before embedding
 	 * @param config pipeline tuning parameters
 	 * @return filtered list of relevant embeddings, or null if empty
@@ -798,7 +800,10 @@ public class LlmInferenceService implements ChartSearchService {
 	 * @param embeddings the chart embeddings (parallel to score arrays)
 	 * @param queryTerms query terms after stopword removal (null-safe:
 	 *        when null, the keyword-tier subset check is skipped)
-	 * @param topK maximum records to return (safety cap)
+	 * @param topK target result count — applied only when some candidates
+	 *        lack keyword matches; bypassed when every candidate has a
+	 *        keyword match (gap detection + ratio floor already identified
+	 *        the relevant cluster in that case)
 	 * @param config pipeline tuning parameters
 	 * @return filtered list of relevant embeddings, or empty list
 	 */
