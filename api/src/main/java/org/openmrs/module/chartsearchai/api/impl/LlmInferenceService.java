@@ -865,23 +865,42 @@ public class LlmInferenceService implements ChartSearchService {
 			return Collections.emptyList();
 		}
 
-		// Floor gate: if neither the best semantic score nor the best
-		// combined score reaches the floor, there is no relevance signal.
-		double floorScore = Math.max(maxSemanticScore, maxBaseScore);
-		if (floorScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
-			log.debug("Top score {} (semantic={}, combined={}) is below "
-					+ "absolute floor {}, returning empty",
-					String.format("%.4f", floorScore),
-					String.format("%.4f", maxSemanticScore),
-					String.format("%.4f", maxBaseScore),
-					ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR);
-			return Collections.emptyList();
-		}
-
 		int keywordMatchCount = 0;
 		for (ScoredEmbedding se : scored) {
 			if (se.keywordScore > 0) {
 				keywordMatchCount++;
+			}
+		}
+
+		// Floor gate: if neither the best semantic score nor the best
+		// combined score reaches the floor, check whether the z-score
+		// indicates genuine signal despite low absolute scores. This
+		// rescues colloquial queries (e.g. "how hot is the patient?"
+		// → Temperature) where the embedding model correctly ranks
+		// the right records first but cosine similarity is inherently
+		// low due to vocabulary mismatch.
+		boolean belowFloorRescued = false;
+		double floorScore = Math.max(maxSemanticScore, maxBaseScore);
+		if (floorScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
+			if (queryTermCount > 0
+					&& scored.size() >= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE
+					&& keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
+				double zScore = computeSemanticZScore(scored, maxSemanticScore);
+				belowFloorRescued = zScore >= ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE;
+				log.debug("Floor gate z-score rescue: zScore={}, "
+						+ "threshold={}, rescued={}",
+						String.format("%.2f", zScore),
+						ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
+						belowFloorRescued);
+			}
+			if (!belowFloorRescued) {
+				log.debug("Top score {} (semantic={}, combined={}) is below "
+						+ "absolute floor {}, returning empty",
+						String.format("%.4f", floorScore),
+						String.format("%.4f", maxSemanticScore),
+						String.format("%.4f", maxBaseScore),
+						ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR);
+				return Collections.emptyList();
 			}
 		}
 
@@ -891,30 +910,15 @@ public class LlmInferenceService implements ChartSearchService {
 		if (queryTermCount > 0
 				&& scored.size() >= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
 			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
-				double sumSem = 0;
-				for (ScoredEmbedding se : scored) {
-					sumSem += se.semanticScore;
-				}
-				double meanSem = sumSem / scored.size();
-				double sumSqDiff = 0;
-				for (ScoredEmbedding se : scored) {
-					double diff = se.semanticScore - meanSem;
-					sumSqDiff += diff * diff;
-				}
-				double stddev = Math.sqrt(sumSqDiff / scored.size());
-				double zScore = stddev == 0 ? 0
-						: (maxSemanticScore - meanSem) / stddev;
+				double zScore = computeSemanticZScore(scored, maxSemanticScore);
 				if (zScore < ChartSearchAiConstants.ZERO_KEYWORD_MIN_Z_SCORE) {
 					log.debug("Only {} keyword match(es) and top semantic "
 							+ "z-score {} is below threshold {}, "
-							+ "returning empty (maxSem={}, mean={}, "
-							+ "stddev={})",
+							+ "returning empty (maxSem={})",
 							keywordMatchCount,
 							String.format("%.2f", zScore),
 							ChartSearchAiConstants.ZERO_KEYWORD_MIN_Z_SCORE,
-							String.format("%.4f", maxSemanticScore),
-							String.format("%.4f", meanSem),
-							String.format("%.4f", stddev));
+							String.format("%.4f", maxSemanticScore));
 					return Collections.emptyList();
 				}
 			}
@@ -1602,8 +1606,13 @@ public class LlmInferenceService implements ChartSearchService {
 				// bypassing when gap detection captures a broad swath of
 				// records (e.g. 33/67 for CD4 on a dataset with no CD4),
 				// which isn't evidence of a genuine cluster.
-				boolean tightClusterDetected = firstPassGapDetected
-						&& adaptiveCutoff < scored.size() / 4;
+				// The z-score gate is redundant when the floor gate
+				// already validated signal via z-score rescue — the
+				// top score was proven to be a statistical outlier
+				// despite being below the absolute floor.
+				boolean tightClusterDetected = belowFloorRescued
+						|| (firstPassGapDetected
+								&& adaptiveCutoff < scored.size() / 4);
 				if (!tightClusterDetected
 						&& !candidates.isEmpty()
 						&& scored.size()
@@ -2578,5 +2587,26 @@ public class LlmInferenceService implements ChartSearchService {
 		Collections.sort(references, Comparator.comparing(RecordReference::getDate,
 				Comparator.nullsLast(Comparator.reverseOrder())));
 		return references;
+	}
+
+	/**
+	 * Computes the z-score of the top semantic score relative to the full
+	 * score distribution. A high z-score means the best match is a
+	 * statistical outlier — genuine signal rather than noise floor.
+	 */
+	private static double computeSemanticZScore(List<ScoredEmbedding> scored,
+			double maxSemanticScore) {
+		double sumSem = 0;
+		for (ScoredEmbedding se : scored) {
+			sumSem += se.semanticScore;
+		}
+		double meanSem = sumSem / scored.size();
+		double sumSqDiff = 0;
+		for (ScoredEmbedding se : scored) {
+			double diff = se.semanticScore - meanSem;
+			sumSqDiff += diff * diff;
+		}
+		double stddev = Math.sqrt(sumSqDiff / scored.size());
+		return stddev == 0 ? 0 : (maxSemanticScore - meanSem) / stddev;
 	}
 }

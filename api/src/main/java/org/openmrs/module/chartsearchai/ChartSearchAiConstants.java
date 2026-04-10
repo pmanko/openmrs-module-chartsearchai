@@ -79,6 +79,20 @@ public class ChartSearchAiConstants {
 	 * threshold while the cluster as a whole is noise. */
 	public static final double ZERO_KEYWORD_CLUSTER_MIN_Z = 2.5;
 
+	/** Minimum z-score for the floor gate rescue. When the top semantic
+	 * score is below {@link #ABSOLUTE_SIMILARITY_FLOOR}, this higher
+	 * threshold determines whether the query has genuine signal despite
+	 * low absolute scores. Stricter than {@link #ZERO_KEYWORD_MIN_Z_SCORE}
+	 * (1.5) because overriding a hard floor requires stronger evidence,
+	 * but less strict than {@link #ZERO_KEYWORD_CLUSTER_MIN_Z} (2.5)
+	 * because below-floor scores are inherently compressed — colloquial
+	 * queries like "how hot" have lower cosine similarity to clinical
+	 * terms like "Temperature", reducing z-scores. Value of 2.0
+	 * separates genuine vocabulary-mismatch queries (e.g. "hot" →
+	 * Temperature, z≈2.25) from irrelevant queries (e.g. "fracture"
+	 * on a fracture-free dataset, z≈1.90). */
+	public static final double FLOOR_RESCUE_MIN_Z_SCORE = 2.0;
+
 	/** Minimum number of records required for the z-score gate to
 	 * activate. Below this threshold, the score distribution has too
 	 * few data points for the z-score to be statistically meaningful. */

@@ -2250,6 +2250,28 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void howHot_fourthDataset_shouldReturnOnlyTemperatureRecords() {
+		// "how hot is the patient?" is colloquial for body temperature.
+		// After stopword removal the embedding input is just "hot", which
+		// has low cosine similarity to "Temperature" (~0.21, below the
+		// absolute floor of 0.25). The z-score floor rescue detects that
+		// Temperature records are statistical outliers in the distribution
+		// and lets them through.
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"how hot is the patient?", 10, FOURTH_PATIENT_DATASET);
+		for (int idx : result) {
+			assertTrue(FOURTH_PATIENT_DATASET[idx].contains("Temperature"),
+					"Returned non-Temperature record at index " + idx
+							+ ": " + FOURTH_PATIENT_DATASET[idx]);
+		}
+		assertTrue(result.size() >= 10,
+				"Should return at least 10 Temperature records, got " + result.size());
+	}
+
+	@Test
 	public void heartRates_fourthDataset_shouldReturnOnlyPulseRecords() {
 		// Both phrasings of "heart rate" should return Pulse records, not
 		// Respiratory rate — the embedding model correctly ranks Pulse
