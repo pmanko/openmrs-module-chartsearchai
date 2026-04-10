@@ -2162,15 +2162,13 @@ public class LlmInferenceServiceTest {
 		// absolute floor of 0.25). The z-score floor rescue detects that
 		// Temperature records are statistical outliers in the distribution
 		// and lets them through.
-		// 11 Temperature records exist (indices 6,23,37,54,67,80,98,111,
-		// 126,140,152); topK=10 drops the lowest-scoring one (152).
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
 		List<Integer> result = runRealModelPipeline(
-				"how hot is the patient?", 10, FOURTH_PATIENT_DATASET);
-		assertEquals(Arrays.asList(6, 23, 37, 54, 67, 80, 98, 111, 126, 140), result,
-				"Should return 10 of 11 Temperature records (topK=10 drops index 152)");
+				"how hot is the patient?", 100, FOURTH_PATIENT_DATASET);
+		assertEquals(Arrays.asList(6, 23, 37, 54, 67, 80, 98, 111, 126, 140, 152),
+				result, "Should return all 11 Temperature records");
 	}
 
 	@Test
@@ -2188,18 +2186,13 @@ public class LlmInferenceServiceTest {
 			}
 		}
 
+		List<Integer> expectedPulse = Arrays.asList(9, 26, 40, 57, 70, 83, 101, 114, 129, 143, 155);
 		for (String query : new String[] {
 				"what is the latest heart rate?",
 				"what are the most recent two heart rates?"}) {
-			List<Integer> result = runRealModelPipeline(query, 10, FOURTH_PATIENT_DATASET);
-			for (int idx : result) {
-				assertTrue(FOURTH_PATIENT_DATASET[idx].contains("Pulse:")
-								&& !FOURTH_PATIENT_DATASET[idx].contains("pulse oximeter"),
-						"Query '" + query + "' returned non-Pulse record at index " + idx
-								+ ": " + FOURTH_PATIENT_DATASET[idx]);
-			}
-			assertTrue(result.size() >= 10,
-					"Query '" + query + "' should return at least 10 Pulse records, got " + result.size());
+			List<Integer> result = runRealModelPipeline(query, 100, FOURTH_PATIENT_DATASET);
+			assertEquals(expectedPulse, result,
+					"Query '" + query + "' should return all 11 Pulse records");
 		}
 	}
 
