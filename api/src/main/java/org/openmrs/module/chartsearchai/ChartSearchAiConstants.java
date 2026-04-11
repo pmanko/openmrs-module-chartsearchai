@@ -82,17 +82,32 @@ public class ChartSearchAiConstants {
 	/** Minimum z-score for the floor gate rescue. When the top semantic
 	 * score is below {@link #ABSOLUTE_SIMILARITY_FLOOR}, this threshold
 	 * determines whether the query has genuine signal despite low
-	 * absolute scores. The rescue activates only when the z-score is
-	 * in the range [2.0, {@link #ZERO_KEYWORD_CLUSTER_MIN_Z}): a
-	 * moderate z-score indicates multiple matching records that pull
-	 * the distribution mean up (e.g. "hot" → 11 Temperature records,
-	 * z≈2.25), while a very high z-score (&gt;= 2.5) indicates an
-	 * isolated outlier — a single record type that scores slightly
-	 * higher than the noise floor (e.g. Rash for "TB" on a TB-free
-	 * dataset, z≈2.93). The lower bound of 2.0 separates genuine
-	 * vocabulary-mismatch queries from irrelevant queries (e.g.
-	 * "fracture" on a fracture-free dataset, z≈1.90). */
+	 * absolute scores. After passing this gate, the rescue also
+	 * requires a minimum cluster density (see
+	 * {@link #FLOOR_RESCUE_MIN_CLUSTER_SIZE}). Value of 2.0 separates
+	 * genuine vocabulary-mismatch queries (e.g. "hot" → Temperature,
+	 * z≈2.25) from irrelevant queries (e.g. "fracture" on a
+	 * fracture-free dataset, z≈1.90). */
 	public static final double FLOOR_RESCUE_MIN_Z_SCORE = 2.0;
+
+	/** Fraction of the max semantic score defining the density band for
+	 * the floor rescue cluster check. Records scoring within this band
+	 * of the max are counted to verify a genuine cluster exists. Value
+	 * of 0.05 means records must score ≥ 95% of the max. Vocabulary-
+	 * mismatch queries ("how hot" → 11 Temperature records at 0.203–
+	 * 0.212) produce dense clusters in this band, while false positives
+	 * ("TB" on a TB-free dataset → 2 Pneumonia records) do not. */
+	public static final double FLOOR_RESCUE_DENSITY_BAND = 0.05;
+
+	/** Minimum number of records in the density band for the floor
+	 * rescue to activate. Requires a genuine cluster of similar-scoring
+	 * records, not just 1-3 isolated outliers that coincidentally score
+	 * close together. Value of 4 separates legitimate queries (density
+	 * 8-11+, e.g. Temperature records for "how hot") from false
+	 * positives (density 2-3, e.g. unrelated conditions for "TB" on
+	 * TB-free datasets — even when synonym-enriched records boost one
+	 * extra record into the density band). */
+	public static final int FLOOR_RESCUE_MIN_CLUSTER_SIZE = 4;
 
 	/** Minimum number of records required for the z-score gate to
 	 * activate. Below this threshold, the score distribution has too

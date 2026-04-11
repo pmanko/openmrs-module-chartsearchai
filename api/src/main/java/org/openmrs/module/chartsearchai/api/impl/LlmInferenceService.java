@@ -891,21 +891,38 @@ public class LlmInferenceService implements ChartSearchService {
 					&& scored.size() >= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE
 					&& keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
 				double zScore = computeSemanticZScore(scored, maxSemanticScore);
-				// Rescue only for moderate z-scores (2.0–2.5). A z-score
-				// >= 2.5 indicates the top record is an isolated outlier,
-				// not part of a genuine cluster — e.g. a single Rash
-				// condition scoring 0.21 for a "TB" query on a TB-free
-				// dataset. Vocabulary-mismatch queries ("how hot" →
-				// Temperature, z≈2.25) produce moderate z-scores because
-				// many matching records pull the distribution mean up.
-				belowFloorRescued = zScore >= ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE
-						&& zScore < ChartSearchAiConstants.ZERO_KEYWORD_CLUSTER_MIN_Z;
-				log.debug("Floor gate z-score rescue: zScore={}, "
-						+ "range=[{}, {}), rescued={}",
-						String.format("%.2f", zScore),
-						ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
-						ChartSearchAiConstants.ZERO_KEYWORD_CLUSTER_MIN_Z,
-						belowFloorRescued);
+				if (zScore >= ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE) {
+					// Verify the signal comes from a genuine cluster,
+					// not an isolated outlier. Count records within a
+					// tight band of the max score — vocabulary-mismatch
+					// queries ("how hot" → Temperature) produce many
+					// records at similar scores (11 within 5%), while
+					// false positives ("TB" on a TB-free dataset) only
+					// have 1-2 outlier conditions in that band.
+					double densityFloor = maxSemanticScore
+							* (1 - ChartSearchAiConstants
+									.FLOOR_RESCUE_DENSITY_BAND);
+					int clusterDensity = 0;
+					for (ScoredEmbedding se : scored) {
+						if (se.semanticScore >= densityFloor) {
+							clusterDensity++;
+						}
+					}
+					belowFloorRescued = clusterDensity
+							>= ChartSearchAiConstants
+									.FLOOR_RESCUE_MIN_CLUSTER_SIZE;
+					log.debug("Floor gate z-score rescue: zScore={}, "
+							+ "density={} (band={}, floor={}), "
+							+ "minCluster={}, rescued={}",
+							String.format("%.2f", zScore),
+							clusterDensity,
+							ChartSearchAiConstants
+									.FLOOR_RESCUE_DENSITY_BAND,
+							String.format("%.4f", densityFloor),
+							ChartSearchAiConstants
+									.FLOOR_RESCUE_MIN_CLUSTER_SIZE,
+							belowFloorRescued);
+				}
 			}
 			if (!belowFloorRescued) {
 				log.debug("Top score {} (semantic={}, combined={}) is below "
