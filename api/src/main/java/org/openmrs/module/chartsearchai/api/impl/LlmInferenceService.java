@@ -891,11 +891,20 @@ public class LlmInferenceService implements ChartSearchService {
 					&& scored.size() >= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE
 					&& keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
 				double zScore = computeSemanticZScore(scored, maxSemanticScore);
-				belowFloorRescued = zScore >= ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE;
+				// Rescue only for moderate z-scores (2.0–2.5). A z-score
+				// >= 2.5 indicates the top record is an isolated outlier,
+				// not part of a genuine cluster — e.g. a single Rash
+				// condition scoring 0.21 for a "TB" query on a TB-free
+				// dataset. Vocabulary-mismatch queries ("how hot" →
+				// Temperature, z≈2.25) produce moderate z-scores because
+				// many matching records pull the distribution mean up.
+				belowFloorRescued = zScore >= ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE
+						&& zScore < ChartSearchAiConstants.ZERO_KEYWORD_CLUSTER_MIN_Z;
 				log.debug("Floor gate z-score rescue: zScore={}, "
-						+ "threshold={}, rescued={}",
+						+ "range=[{}, {}), rescued={}",
 						String.format("%.2f", zScore),
 						ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
+						ChartSearchAiConstants.ZERO_KEYWORD_CLUSTER_MIN_Z,
 						belowFloorRescued);
 			}
 			if (!belowFloorRescued) {

@@ -80,17 +80,18 @@ public class ChartSearchAiConstants {
 	public static final double ZERO_KEYWORD_CLUSTER_MIN_Z = 2.5;
 
 	/** Minimum z-score for the floor gate rescue. When the top semantic
-	 * score is below {@link #ABSOLUTE_SIMILARITY_FLOOR}, this higher
-	 * threshold determines whether the query has genuine signal despite
-	 * low absolute scores. Stricter than {@link #ZERO_KEYWORD_MIN_Z_SCORE}
-	 * (1.5) because overriding a hard floor requires stronger evidence,
-	 * but less strict than {@link #ZERO_KEYWORD_CLUSTER_MIN_Z} (2.5)
-	 * because below-floor scores are inherently compressed — colloquial
-	 * queries like "how hot" have lower cosine similarity to clinical
-	 * terms like "Temperature", reducing z-scores. Value of 2.0
-	 * separates genuine vocabulary-mismatch queries (e.g. "hot" →
-	 * Temperature, z≈2.25) from irrelevant queries (e.g. "fracture"
-	 * on a fracture-free dataset, z≈1.90). */
+	 * score is below {@link #ABSOLUTE_SIMILARITY_FLOOR}, this threshold
+	 * determines whether the query has genuine signal despite low
+	 * absolute scores. The rescue activates only when the z-score is
+	 * in the range [2.0, {@link #ZERO_KEYWORD_CLUSTER_MIN_Z}): a
+	 * moderate z-score indicates multiple matching records that pull
+	 * the distribution mean up (e.g. "hot" → 11 Temperature records,
+	 * z≈2.25), while a very high z-score (&gt;= 2.5) indicates an
+	 * isolated outlier — a single record type that scores slightly
+	 * higher than the noise floor (e.g. Rash for "TB" on a TB-free
+	 * dataset, z≈2.93). The lower bound of 2.0 separates genuine
+	 * vocabulary-mismatch queries from irrelevant queries (e.g.
+	 * "fracture" on a fracture-free dataset, z≈1.90). */
 	public static final double FLOOR_RESCUE_MIN_Z_SCORE = 2.0;
 
 	/** Minimum number of records required for the z-score gate to

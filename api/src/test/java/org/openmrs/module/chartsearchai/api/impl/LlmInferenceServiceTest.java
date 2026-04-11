@@ -2975,8 +2975,12 @@ public class LlmInferenceServiceTest {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// SECOND dataset has no drug orders; the pipeline returns a
-		// depressive episode condition as the closest semantic match.
+		// SECOND dataset has no drug orders. The embedding model
+		// (all-MiniLM-L6-v2) finds semantic similarity between
+		// "medications" and "Mild depressive episode" (sem=0.35,
+		// z=3.32) — likely because depression is commonly treated
+		// with medications. This is a model limitation, not a
+		// pipeline bug; MedCPT should resolve it.
 		List<Integer> result = runRealModelPipeline(
 				"what medications is the patient on?", 100,
 				SECOND_PATIENT_DATASET);
@@ -3041,15 +3045,16 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void tb_thirdDataset_shouldReturnPneumoniaRecords() {
+	public void tb_thirdDataset_shouldReturnEmpty() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// THIRD dataset has no TB records; the pipeline returns Pneumonia
-		// records as the closest respiratory infection match.
-		List<Integer> result = runRealModelPipeline("TB", 100,
-				THIRD_PATIENT_DATASET);
-		assertEquals(Arrays.asList(118, 119), result);
+		// THIRD dataset has no TB records — Pneumonia is a different
+		// disease and should not be returned for a TB query.
+		assertTrue(
+				runRealModelPipeline("TB", 100,
+						THIRD_PATIENT_DATASET).isEmpty(),
+				"THIRD dataset has no tuberculosis records");
 	}
 
 	@Test
@@ -3079,12 +3084,17 @@ public class LlmInferenceServiceTest {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// THIRD dataset has no headache records; the pipeline returns
-		// Azithromycin drug orders as the closest semantic match.
+		// THIRD dataset records 52, 53, 128, 146 contain "As needed
+		// (subject to headache)" in the Azithromycin prescription text.
+		// The pipeline correctly returns them via keyword matching on
+		// "headache" — a PRN qualifier for headache IS clinically
+		// relevant to a headache query.
 		List<Integer> result = runRealModelPipeline("headache", 100,
 				THIRD_PATIENT_DATASET);
 		assertEquals(Arrays.asList(52, 53, 128, 146), result);
 	}
+
+
 
 	// ---- FOURTH dataset: remaining cross-dataset coverage ----
 
@@ -3100,16 +3110,16 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void tb_fourthDataset_shouldReturnMixedConditions() {
+	public void tb_fourthDataset_shouldReturnEmpty() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// FOURTH dataset has no TB records; the pipeline returns a mix
-		// of conditions (Wasting, Rash, Self-accusation, vaccine event)
-		// as the closest semantic matches.
-		List<Integer> result = runRealModelPipeline("TB", 100,
-				FOURTH_PATIENT_DATASET);
-		assertEquals(Arrays.asList(20, 64, 66, 77, 79, 151), result);
+		// FOURTH dataset has no TB records — conditions like Wasting,
+		// Rash, Self-accusation, and ESAVI are unrelated to tuberculosis.
+		assertTrue(
+				runRealModelPipeline("TB", 100,
+						FOURTH_PATIENT_DATASET).isEmpty(),
+				"FOURTH dataset has no tuberculosis records");
 	}
 
 	@Test
@@ -3128,8 +3138,11 @@ public class LlmInferenceServiceTest {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// FOURTH dataset has no drug orders for this query; the pipeline
-		// returns substance abuse conditions as the closest semantic match.
+		// FOURTH dataset has no drug orders. The embedding model finds
+		// high semantic similarity (sem=0.34-0.36, z=3.42) between
+		// "medications" and substance abuse conditions (Psychoactive
+		// substance disorder, Cocaine abuse, Substance Addiction).
+		// This is a model limitation — MedCPT should resolve it.
 		List<Integer> result = runRealModelPipeline(
 				"what medications is the patient on?", 100,
 				FOURTH_PATIENT_DATASET);
@@ -3161,16 +3174,16 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void tb_fifthDataset_shouldReturnMixedConditions() {
+	public void tb_fifthDataset_shouldReturnEmpty() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// FIFTH dataset has no TB records; the pipeline returns a mix
-		// of conditions (Rash, Self-accusation, vaccine event) as the
-		// closest semantic matches.
-		List<Integer> result = runRealModelPipeline("TB", 100,
-				FIFTH_PATIENT_DATASET);
-		assertEquals(Arrays.asList(64, 66, 77, 79, 151), result);
+		// FIFTH dataset has no TB records — conditions like Rash,
+		// Self-accusation, and ESAVI are unrelated to tuberculosis.
+		assertTrue(
+				runRealModelPipeline("TB", 100,
+						FIFTH_PATIENT_DATASET).isEmpty(),
+				"FIFTH dataset has no tuberculosis records");
 	}
 
 	@Test
@@ -3189,8 +3202,10 @@ public class LlmInferenceServiceTest {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// FIFTH dataset has no drug orders for this query; the pipeline
-		// returns substance abuse conditions as the closest semantic match.
+		// FIFTH dataset has no drug orders. Same model limitation as
+		// FOURTH — substance abuse conditions score high for
+		// "medications" (sem=0.34-0.36, z=3.48). MedCPT should
+		// resolve this.
 		List<Integer> result = runRealModelPipeline(
 				"what medications is the patient on?", 100,
 				FIFTH_PATIENT_DATASET);
@@ -3581,15 +3596,17 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void tb_secondDataset_shouldReturnSyphiliticCirrhosis() {
+	public void tb_secondDataset_shouldReturnEmpty() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// SECOND dataset has no TB records. "TB" finds Syphilitic
-		// Cirrhosis — a related infectious/chronic disease.
-		List<Integer> result = runRealModelPipeline("TB", 100,
-				SECOND_PATIENT_DATASET);
-		assertEquals(Arrays.asList(17, 19), result);
+		// SECOND dataset has no TB records. Syphilitic Cirrhosis is a
+		// different infectious disease (syphilis, not tuberculosis)
+		// and should not be returned for a "TB" query.
+		assertTrue(
+				runRealModelPipeline("TB", 100,
+						SECOND_PATIENT_DATASET).isEmpty(),
+				"SECOND dataset has no tuberculosis records");
 	}
 
 	@Test
