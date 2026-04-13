@@ -1961,10 +1961,22 @@ public class LlmInferenceService implements ChartSearchService {
 				break;
 			}
 		}
+		// Compound-keyword match detection: when candidates partition the
+		// query into complementary term subsets (union of matched terms
+		// covers every query term, yet no single candidate matches all
+		// terms), the candidate set is a legitimate multi-concept result
+		// — e.g. "HIV and CD4 count" where HIV records match {hiv} and
+		// CD4 records match {cd4, count}. Coherence filtering would drop
+		// the minority cluster as outliers even though keyword evidence
+		// confirms both concepts belong to the queried set.
+		boolean isCompoundKeywordMatch = isCompoundKeywordMatch(
+				candidates, queryTerms);
 		if (!partialKwValidated && !allFullKeywordMatch
+				&& !isCompoundKeywordMatch
 				&& candidates.size() >= 4) {
 			candidates = filterByCoherence(candidates);
 		} else if (!partialKwValidated && !allFullKeywordMatch
+				&& !isCompoundKeywordMatch
 				&& candidates.size() == 3) {
 			double topSemantic = candidates.get(0).semanticScore;
 			for (ScoredEmbedding se : candidates) {
@@ -2514,6 +2526,65 @@ public class LlmInferenceService implements ChartSearchService {
 			return refined;
 		}
 		return candidates;
+	}
+
+	/**
+	 * Detects whether a candidate set is a compound-query match — i.e.
+	 * the union of terms matched across candidates covers every query
+	 * term, yet no single candidate matches all terms. This is the
+	 * structural signature of a multi-concept query like "HIV and CD4
+	 * count" where HIV records match {hiv} and CD4 records match
+	 * {cd4, count}: each concept cluster contributes a complementary
+	 * subset of the query.
+	 *
+	 * <p>Single-concept queries never qualify because their relevant
+	 * records match every query term (single-term queries trivially,
+	 * multi-term queries because all terms describe the same concept).
+	 *
+	 * <p>Used to bypass {@link #filterByCoherence}, which would otherwise
+	 * drop the minority concept cluster as outliers despite keyword
+	 * evidence that those records belong to the queried set.
+	 *
+	 * @param candidates the candidate records
+	 * @param queryTerms the query terms after stopword removal
+	 *        (returns {@code false} if null or empty)
+	 * @return {@code true} if the candidate set collectively covers
+	 *         every query term and no single record does so alone
+	 */
+	static boolean isCompoundKeywordMatch(
+			List<ScoredEmbedding> candidates, String[] queryTerms) {
+		if (queryTerms == null || queryTerms.length < 2) {
+			return false;
+		}
+		Set<String> unionCoverage = new HashSet<String>();
+		boolean anyRecordMatchesAll = false;
+		for (ScoredEmbedding se : candidates) {
+			String text = ChartSearchAiUtils.buildPrefixedText(
+					se.embedding.getResourceType(),
+					ConceptNameUtil.stripSynonyms(
+							se.embedding.getTextContent()))
+					.toLowerCase();
+			String[] words = text.split("\\s+");
+			int matchCount = 0;
+			for (String term : queryTerms) {
+				if (termMatchesText(term, text, words)) {
+					unionCoverage.add(term);
+					matchCount++;
+				}
+			}
+			if (matchCount == queryTerms.length) {
+				anyRecordMatchesAll = true;
+			}
+		}
+		if (anyRecordMatchesAll) {
+			return false;
+		}
+		for (String term : queryTerms) {
+			if (!unionCoverage.contains(term)) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**
