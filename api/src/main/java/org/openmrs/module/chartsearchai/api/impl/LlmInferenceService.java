@@ -974,78 +974,15 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 
 		// Floor gate: if neither the best semantic score nor the best
-		// combined score reaches the floor, check whether the z-score
-		// indicates genuine signal despite low absolute scores. This
-		// rescues colloquial queries (e.g. "how hot is the patient?"
-		// → Temperature) where the embedding model correctly ranks
-		// the right records first but cosine similarity is inherently
-		// low due to vocabulary mismatch.
-		boolean belowFloorRescued = false;
-		double floorScore = Math.max(maxSemanticScore, maxBaseScore);
-		if (floorScore < config.noiseProfile.absoluteSimilarityFloor()) {
-			if (queryTermCount > 0
-					&& hasStatisticalVariance(scored)
-					&& keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
-				double zScore = computeSemanticZScore(scored, maxSemanticScore);
-				double floorRescueZThreshold =
-						floorRescueGumbelThreshold(scored);
-				if (zScore >= floorRescueZThreshold) {
-					// Verify the signal comes from a genuine cluster,
-					// not an isolated outlier. Count records within a
-					// tight band of the max score — vocabulary-mismatch
-					// queries ("how hot" → Temperature) produce many
-					// records at similar scores, while false positives
-					// ("TB" on a TB-free dataset) only have 1-2 outlier
-					// conditions in that band.
-					// Data-derived parameters:
-					// - band width: 1/uniqueConcepts of the max score
-					// - min cluster: average records per concept
-					Set<String> floorConcepts = new HashSet<String>();
-					for (ScoredEmbedding se : scored) {
-						String cn = ConceptNameUtil
-								.extractConceptName(
-										se.embedding
-												.getTextContent());
-						if (cn != null) {
-							floorConcepts.add(cn);
-						}
-					}
-					int nConcepts = Math.max(2,
-							floorConcepts.size());
-					double densityBand = 1.0 / nConcepts;
-					int minCluster = (int) Math.ceil(
-							(double) scored.size() / nConcepts);
-					double densityFloor = maxSemanticScore
-							* (1 - densityBand);
-					int clusterDensity = 0;
-					for (ScoredEmbedding se : scored) {
-						if (se.semanticScore >= densityFloor) {
-							clusterDensity++;
-						}
-					}
-					belowFloorRescued = clusterDensity
-							>= minCluster;
-					log.debug("Floor gate z-score rescue: zScore={}, "
-							+ "density={} (band={}, floor={}), "
-							+ "minCluster={}, rescued={}",
-							String.format("%.2f", zScore),
-							clusterDensity,
-							String.format("%.4f", densityBand),
-							String.format("%.4f", densityFloor),
-							minCluster,
-							belowFloorRescued);
-				}
-			}
-			if (!belowFloorRescued) {
-				log.debug("Top score {} (semantic={}, combined={}) is below "
-						+ "absolute floor {}, returning empty",
-						String.format("%.4f", floorScore),
-						String.format("%.4f", maxSemanticScore),
-						String.format("%.4f", maxBaseScore),
-						config.noiseProfile.absoluteSimilarityFloor());
-				return Collections.emptyList();
-			}
+		// combined score reaches the floor, attempt a z-score + cluster-
+		// density rescue. Returns null to short-circuit with an empty
+		// result, or the belowFloorRescued flag to continue.
+		Boolean floorResult = applyFloorGate(scored, maxSemanticScore,
+				maxBaseScore, queryTermCount, keywordMatchCount, config);
+		if (floorResult == null) {
+			return Collections.emptyList();
 		}
+		boolean belowFloorRescued = floorResult;
 
 		// Slim-margin gate: when the top score is above the absolute
 		// floor but within one minScoreGap of it, and zero keywords
@@ -2429,6 +2366,94 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 
 		return Math.max(semanticCutoff, Math.min(minRecords, aboveFloor));
+	}
+
+	/**
+	 * Floor gate — stage 1 of the filter pipeline.
+	 *
+	 * <p>When the best semantic and combined scores are both below the
+	 * embedding model's absolute similarity floor, the candidate set is
+	 * below the noise boundary. Attempts a z-score + cluster-density
+	 * rescue that recovers vocabulary-mismatch queries (e.g. "how hot
+	 * is the patient?" → Temperature records) where the model correctly
+	 * ranks relevant records first but cosine similarity is inherently
+	 * low.
+	 *
+	 * @return {@code null} if the gate rejects (the caller should return
+	 *         an empty result); otherwise a boxed boolean indicating
+	 *         whether the rescue fired. The caller propagates this as
+	 *         the {@code belowFloorRescued} flag to downstream gates.
+	 */
+	static Boolean applyFloorGate(List<ScoredEmbedding> scored,
+			double maxSemanticScore, double maxBaseScore,
+			int queryTermCount, int keywordMatchCount,
+			PipelineConfig config) {
+		double floorScore = Math.max(maxSemanticScore, maxBaseScore);
+		if (floorScore >= config.noiseProfile.absoluteSimilarityFloor()) {
+			return Boolean.FALSE;
+		}
+		boolean belowFloorRescued = false;
+		if (queryTermCount > 0
+				&& hasStatisticalVariance(scored)
+				&& keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
+			double zScore = computeSemanticZScore(scored, maxSemanticScore);
+			double floorRescueZThreshold =
+					floorRescueGumbelThreshold(scored);
+			if (zScore >= floorRescueZThreshold) {
+				// Verify the signal comes from a genuine cluster,
+				// not an isolated outlier. Count records within a
+				// tight band of the max score — vocabulary-mismatch
+				// queries ("how hot" → Temperature) produce many
+				// records at similar scores, while false positives
+				// ("TB" on a TB-free dataset) only have 1-2 outlier
+				// conditions in that band.
+				// Data-derived parameters:
+				// - band width: 1/uniqueConcepts of the max score
+				// - min cluster: average records per concept
+				Set<String> floorConcepts = new HashSet<String>();
+				for (ScoredEmbedding se : scored) {
+					String cn = ConceptNameUtil
+							.extractConceptName(
+									se.embedding
+											.getTextContent());
+					if (cn != null) {
+						floorConcepts.add(cn);
+					}
+				}
+				int nConcepts = Math.max(2, floorConcepts.size());
+				double densityBand = 1.0 / nConcepts;
+				int minCluster = (int) Math.ceil(
+						(double) scored.size() / nConcepts);
+				double densityFloor = maxSemanticScore
+						* (1 - densityBand);
+				int clusterDensity = 0;
+				for (ScoredEmbedding se : scored) {
+					if (se.semanticScore >= densityFloor) {
+						clusterDensity++;
+					}
+				}
+				belowFloorRescued = clusterDensity >= minCluster;
+				log.debug("Floor gate z-score rescue: zScore={}, "
+						+ "density={} (band={}, floor={}), "
+						+ "minCluster={}, rescued={}",
+						String.format("%.2f", zScore),
+						clusterDensity,
+						String.format("%.4f", densityBand),
+						String.format("%.4f", densityFloor),
+						minCluster,
+						belowFloorRescued);
+			}
+		}
+		if (!belowFloorRescued) {
+			log.debug("Top score {} (semantic={}, combined={}) is below "
+					+ "absolute floor {}, returning empty",
+					String.format("%.4f", floorScore),
+					String.format("%.4f", maxSemanticScore),
+					String.format("%.4f", maxBaseScore),
+					config.noiseProfile.absoluteSimilarityFloor());
+			return null;
+		}
+		return Boolean.TRUE;
 	}
 
 	/**
