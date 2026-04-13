@@ -992,31 +992,17 @@ public class LlmInferenceService implements ChartSearchService {
 			return Collections.emptyList();
 		}
 
-		// Stricter gate when too few records match any query keyword:
-		// check whether the top semantic score is a statistical outlier
-		// (z-score ≥ threshold) rather than part of the noise floor.
-		// Captured for reuse by the cluster z-score gate: when the
-		// initial z-score is strong AND the ratio floor produces a
-		// tight cluster, the cluster gate is skipped (see below).
-		double initialZScore = -1;
-		double initialZThreshold = -1;
-		if (queryTermCount > 0
-				&& hasStatisticalVariance(scored)) {
-			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
-				initialZScore = computeSemanticZScore(scored, maxSemanticScore);
-				initialZThreshold = effectiveGumbelThreshold(scored);
-				if (initialZScore < initialZThreshold) {
-					log.debug("Only {} keyword match(es) and top semantic "
-							+ "z-score {} is below Gumbel threshold {}, "
-							+ "returning empty (maxSem={})",
-							keywordMatchCount,
-							String.format("%.2f", initialZScore),
-							String.format("%.2f", initialZThreshold),
-							String.format("%.4f", maxSemanticScore));
-					return Collections.emptyList();
-				}
-			}
+		// Initial z-score gate: reject when few records have keyword
+		// matches and the top semantic score isn't a statistical outlier.
+		// Returns null to short-circuit, or {zScore, threshold} that are
+		// reused later by the cluster z-score gate.
+		double[] zScoreState = applyInitialZScoreGate(scored,
+				maxSemanticScore, queryTermCount, keywordMatchCount);
+		if (zScoreState == null) {
+			return Collections.emptyList();
 		}
+		double initialZScore = zScoreState[0];
+		double initialZThreshold = zScoreState[1];
 
 		// Permissive floor: gap detection handles the real cutoff based on
 		// score distribution. The floor just excludes near-zero noise so
@@ -2469,6 +2455,52 @@ public class LlmInferenceService implements ChartSearchService {
 			return false;
 		}
 		return true;
+	}
+
+	/**
+	 * Initial z-score gate — stage 3 of the filter pipeline.
+	 *
+	 * <p>When too few records match any query keyword, require the top
+	 * semantic score to be a statistical outlier (z-score ≥ Gumbel
+	 * threshold). If it isn't, the top score is part of the noise floor
+	 * rather than genuine signal.
+	 *
+	 * <p>Captures the z-score and threshold values for reuse by the
+	 * downstream cluster z-score gate — when the initial z-score is
+	 * strong and the ratio floor produces a tight cluster, the cluster
+	 * gate is skipped as redundant.
+	 *
+	 * @return {@code null} if the gate rejects (caller returns empty);
+	 *         otherwise a 2-element array {@code [zScore, threshold]}.
+	 *         Both are {@code -1} when the gate didn't compute them
+	 *         (no query terms, no statistical variance, or enough kw
+	 *         matches to skip).
+	 */
+	static double[] applyInitialZScoreGate(List<ScoredEmbedding> scored,
+			double maxSemanticScore, int queryTermCount,
+			int keywordMatchCount) {
+		double[] result = { -1, -1 };
+		if (queryTermCount <= 0 || !hasStatisticalVariance(scored)) {
+			return result;
+		}
+		if (keywordMatchCount >= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
+			return result;
+		}
+		double zScore = computeSemanticZScore(scored, maxSemanticScore);
+		double threshold = effectiveGumbelThreshold(scored);
+		result[0] = zScore;
+		result[1] = threshold;
+		if (zScore < threshold) {
+			log.debug("Only {} keyword match(es) and top semantic "
+					+ "z-score {} is below Gumbel threshold {}, "
+					+ "returning empty (maxSem={})",
+					keywordMatchCount,
+					String.format("%.2f", zScore),
+					String.format("%.2f", threshold),
+					String.format("%.4f", maxSemanticScore));
+			return null;
+		}
+		return result;
 	}
 
 	/**
