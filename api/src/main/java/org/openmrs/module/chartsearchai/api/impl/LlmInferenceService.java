@@ -1004,113 +1004,14 @@ public class LlmInferenceService implements ChartSearchService {
 		double initialZScore = zScoreState[0];
 		double initialZThreshold = zScoreState[1];
 
-		// Permissive floor: gap detection handles the real cutoff based on
-		// score distribution. The floor just excludes near-zero noise so
-		// the gap detector has a clean signal.
-		double minScore = Math.min(
-				config.noiseProfile.absoluteSimilarityFloor() / 2,
-				maxSemanticScore / 2);
-
-		// Adaptive min gap: scale the floor to the semantic score range so
-		// models with compressed distributions (e.g. MedCPT: 0.60–0.66) can
-		// detect gaps that are large relative to their range but small in
-		// absolute terms. Uses the interquartile range (Q1 to Q3) to resist
-		// outliers at both ends. Capped at the configured minScoreGap so
-		// existing behavior for wide-range models (all-MiniLM) is preserved.
-		double firstPassMinGap = config.minScoreGap;
-		if (scored.size() >= 4) {
-			List<Double> semScores = new ArrayList<Double>(scored.size());
-			for (ScoredEmbedding se : scored) {
-				if (se.semanticScore >= minScore) {
-					semScores.add(se.semanticScore);
-				}
-			}
-			Collections.sort(semScores);
-			if (semScores.size() >= 4) {
-				double q1 = semScores.get(semScores.size() / 4);
-				double q3 = semScores.get(3 * semScores.size() / 4);
-				double iqr = q3 - q1;
-				// Only reduce the min gap when the score distribution is
-				// genuinely compressed (IQR < half the configured min gap).
-				// This preserves exact existing behavior for wide-range
-				// models (all-MiniLM: IQR ~0.10, threshold 0.05) while
-				// enabling gap detection for compressed models (MedCPT:
-				// IQR ~0.02 < 0.05).
-				if (iqr < config.minScoreGap / 2) {
-					// Scale IQR by the concept-to-record ratio.
-					// This fraction naturally adapts: datasets
-					// with many unique concepts relative to total
-					// records have larger between-concept gaps as
-					// a fraction of IQR, so the threshold should
-					// be higher. The ratio typically falls in
-					// 0.15-0.40 — similar to the empirical range
-					// of gap fractions across datasets.
-					Set<String> gapConcepts =
-							new HashSet<String>();
-					for (ScoredEmbedding se : scored) {
-						String cn = ConceptNameUtil
-								.extractConceptName(
-										se.embedding
-												.getTextContent());
-						if (cn != null) {
-							gapConcepts.add(cn);
-						}
-					}
-					double fraction = (double) gapConcepts.size()
-							/ scored.size();
-					firstPassMinGap = iqr * fraction;
-				}
-			}
-		}
-
-		// Gap detection considers ALL records above the floor — no topK cap.
-		int adaptiveCutoff = findAdaptiveCutoff(scored, scored.size(),
-				minScore, config.scoreGapMultiplier, firstPassMinGap);
-
-		// Build the candidate set from the semantic cluster. The gap was
-		// detected in semantic-score order; include all records whose
-		// semantic score is at or above the cluster boundary. This handles
-		// keyword penalties pushing high-semantic records far down the
-		// combined-score list — taking a combined-score prefix would either
-		// include too many (old max-index) or miss cluster members (count).
-		// Filtering by semantic threshold captures exactly the right records.
-		List<ScoredEmbedding> candidates;
-		if (adaptiveCutoff >= scored.size()) {
-			candidates = new ArrayList<ScoredEmbedding>(scored);
-		} else {
-			// Find the cluster threshold: the Nth-highest semantic score
-			List<Double> semanticDesc = new ArrayList<Double>(scored.size());
-			for (ScoredEmbedding se : scored) {
-				semanticDesc.add(se.semanticScore);
-			}
-			Collections.sort(semanticDesc, Collections.reverseOrder());
-			double clusterThreshold = semanticDesc.get(adaptiveCutoff - 1);
-			candidates = new ArrayList<ScoredEmbedding>();
-			for (ScoredEmbedding se : scored) {
-				// Two independent inclusion signals:
-				// 1. Semantic cluster: embedding similarity at or above the
-				//    gap-detected boundary.
-				// 2. Full keyword match: the record literally contains all
-				//    query terms (kwScore >= bonusThreshold). The embedding
-				//    model may assign low similarity to obscure medical
-				//    terminology (e.g. "Enteroviral vesicular stomatitis"
-				//    for a "conditions?" query) but the keyword match is
-				//    conclusive evidence the record belongs to the queried
-				//    category.
-				if (se.semanticScore >= clusterThreshold
-						|| (config.keywordWeight > 0
-								&& se.keywordScore >= bonusThreshold)) {
-					candidates.add(se);
-				}
-			}
-			// Sort by combined score to maintain the expected ordering
-			Collections.sort(candidates, new Comparator<ScoredEmbedding>() {
-				@Override
-				public int compare(ScoredEmbedding a, ScoredEmbedding b) {
-					return Double.compare(b.score, a.score);
-				}
-			});
-		}
+		// Gap detection + candidate building: find the semantic cluster
+		// boundary and build the candidate set (records above the boundary
+		// OR with full keyword match).
+		CandidateBuildResult built = buildCandidates(scored,
+				maxSemanticScore, bonusThreshold, config);
+		double minScore = built.minScore;
+		int adaptiveCutoff = built.adaptiveCutoff;
+		List<ScoredEmbedding> candidates = built.candidates;
 
 		// Keyword refinement: when gap detection returns a broad set but
 		// keyword matches identify a specific subset, prefer those records.
@@ -2501,6 +2402,147 @@ public class LlmInferenceService implements ChartSearchService {
 			return null;
 		}
 		return result;
+	}
+
+	/**
+	 * Output of {@link #buildCandidates}: the candidate list plus the
+	 * scalar outputs ({@code minScore}, {@code adaptiveCutoff}) that
+	 * downstream stages still need.
+	 */
+	static final class CandidateBuildResult {
+		final List<ScoredEmbedding> candidates;
+		final int adaptiveCutoff;
+		final double minScore;
+
+		CandidateBuildResult(List<ScoredEmbedding> candidates,
+				int adaptiveCutoff, double minScore) {
+			this.candidates = candidates;
+			this.adaptiveCutoff = adaptiveCutoff;
+			this.minScore = minScore;
+		}
+	}
+
+	/**
+	 * Gap detection + candidate building — stage 4 of the filter pipeline.
+	 *
+	 * <p>Computes the permissive {@code minScore} floor, an IQR-based
+	 * adaptive {@code minGap} for compressed-distribution models, then
+	 * calls {@link #findAdaptiveCutoff} to locate the semantic cluster
+	 * boundary. Builds the candidate set from records at or above the
+	 * boundary OR with a full keyword match (kwScore ≥ bonusThreshold).
+	 * Sorts candidates by combined score.
+	 */
+	static CandidateBuildResult buildCandidates(
+			List<ScoredEmbedding> scored, double maxSemanticScore,
+			double bonusThreshold, PipelineConfig config) {
+		// Permissive floor: gap detection handles the real cutoff based on
+		// score distribution. The floor just excludes near-zero noise so
+		// the gap detector has a clean signal.
+		double minScore = Math.min(
+				config.noiseProfile.absoluteSimilarityFloor() / 2,
+				maxSemanticScore / 2);
+
+		// Adaptive min gap: scale the floor to the semantic score range so
+		// models with compressed distributions (e.g. MedCPT: 0.60–0.66) can
+		// detect gaps that are large relative to their range but small in
+		// absolute terms. Uses the interquartile range (Q1 to Q3) to resist
+		// outliers at both ends. Capped at the configured minScoreGap so
+		// existing behavior for wide-range models (all-MiniLM) is preserved.
+		double firstPassMinGap = config.minScoreGap;
+		if (scored.size() >= 4) {
+			List<Double> semScores = new ArrayList<Double>(scored.size());
+			for (ScoredEmbedding se : scored) {
+				if (se.semanticScore >= minScore) {
+					semScores.add(se.semanticScore);
+				}
+			}
+			Collections.sort(semScores);
+			if (semScores.size() >= 4) {
+				double q1 = semScores.get(semScores.size() / 4);
+				double q3 = semScores.get(3 * semScores.size() / 4);
+				double iqr = q3 - q1;
+				// Only reduce the min gap when the score distribution is
+				// genuinely compressed (IQR < half the configured min gap).
+				// This preserves exact existing behavior for wide-range
+				// models (all-MiniLM: IQR ~0.10, threshold 0.05) while
+				// enabling gap detection for compressed models (MedCPT:
+				// IQR ~0.02 < 0.05).
+				if (iqr < config.minScoreGap / 2) {
+					// Scale IQR by the concept-to-record ratio.
+					// This fraction naturally adapts: datasets
+					// with many unique concepts relative to total
+					// records have larger between-concept gaps as
+					// a fraction of IQR, so the threshold should
+					// be higher. The ratio typically falls in
+					// 0.15-0.40 — similar to the empirical range
+					// of gap fractions across datasets.
+					Set<String> gapConcepts = new HashSet<String>();
+					for (ScoredEmbedding se : scored) {
+						String cn = ConceptNameUtil
+								.extractConceptName(
+										se.embedding
+												.getTextContent());
+						if (cn != null) {
+							gapConcepts.add(cn);
+						}
+					}
+					double fraction = (double) gapConcepts.size()
+							/ scored.size();
+					firstPassMinGap = iqr * fraction;
+				}
+			}
+		}
+
+		// Gap detection considers ALL records above the floor — no topK cap.
+		int adaptiveCutoff = findAdaptiveCutoff(scored, scored.size(),
+				minScore, config.scoreGapMultiplier, firstPassMinGap);
+
+		// Build the candidate set from the semantic cluster. The gap was
+		// detected in semantic-score order; include all records whose
+		// semantic score is at or above the cluster boundary. This handles
+		// keyword penalties pushing high-semantic records far down the
+		// combined-score list — taking a combined-score prefix would either
+		// include too many (old max-index) or miss cluster members (count).
+		// Filtering by semantic threshold captures exactly the right records.
+		List<ScoredEmbedding> candidates;
+		if (adaptiveCutoff >= scored.size()) {
+			candidates = new ArrayList<ScoredEmbedding>(scored);
+		} else {
+			// Find the cluster threshold: the Nth-highest semantic score
+			List<Double> semanticDesc = new ArrayList<Double>(scored.size());
+			for (ScoredEmbedding se : scored) {
+				semanticDesc.add(se.semanticScore);
+			}
+			Collections.sort(semanticDesc, Collections.reverseOrder());
+			double clusterThreshold = semanticDesc.get(adaptiveCutoff - 1);
+			candidates = new ArrayList<ScoredEmbedding>();
+			for (ScoredEmbedding se : scored) {
+				// Two independent inclusion signals:
+				// 1. Semantic cluster: embedding similarity at or above the
+				//    gap-detected boundary.
+				// 2. Full keyword match: the record literally contains all
+				//    query terms (kwScore >= bonusThreshold). The embedding
+				//    model may assign low similarity to obscure medical
+				//    terminology (e.g. "Enteroviral vesicular stomatitis"
+				//    for a "conditions?" query) but the keyword match is
+				//    conclusive evidence the record belongs to the queried
+				//    category.
+				if (se.semanticScore >= clusterThreshold
+						|| (config.keywordWeight > 0
+								&& se.keywordScore >= bonusThreshold)) {
+					candidates.add(se);
+				}
+			}
+			// Sort by combined score to maintain the expected ordering
+			Collections.sort(candidates, new Comparator<ScoredEmbedding>() {
+				@Override
+				public int compare(ScoredEmbedding a, ScoredEmbedding b) {
+					return Double.compare(b.score, a.score);
+				}
+			});
+		}
+
+		return new CandidateBuildResult(candidates, adaptiveCutoff, minScore);
 	}
 
 	/**
