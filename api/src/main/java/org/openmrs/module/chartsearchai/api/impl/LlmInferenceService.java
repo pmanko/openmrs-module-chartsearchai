@@ -1576,153 +1576,13 @@ public class LlmInferenceService implements ChartSearchService {
 				}
 			}
 		} else {
-			// Sensitive second-pass: same multiplier as the first pass, but
-			// with a much lower absolute floor derived from the score
-			// distribution's std. This detects tight clusters that the
-			// first pass missed because their gaps were below the first-pass
-			// floor.
-			int secondCutoff = findAdaptiveCutoff(candidates, candidates.size(),
-					minScore, config.scoreGapMultiplier,
-					secondPassMinGap(scored));
-			if (secondCutoff < candidates.size()) {
-				if (isGapCoherent(candidates, secondCutoff,
-						config.gapValidationCosineThreshold)) {
-					log.debug("Second-pass gap at {} is intra-topic, skipping cut",
-							secondCutoff);
-				} else {
-					candidates = new ArrayList<ScoredEmbedding>(
-							candidates.subList(0, secondCutoff));
-				}
-			}
-			// Use the lower of maxBaseScore and maxSemanticScore for the
-			// floor. Keyword bonuses inflate combined scores for records
-			// with coincidental term matches (e.g. "pulse" in "pulse
-			// oximeter" inflates SpO2 for "blood pressure and pulse").
-			// Keyword penalties deflate combined scores below semantic
-			// (e.g. "history" in immunization records for "history of
-			// cancer"). Using the min avoids inflation from either side.
-			// The per-record check uses min(combined, semantic) so bonuses
-			// are stripped (checking semantic) and penalties are preserved
-			// (checking combined).
-			double ratioFloor = Math.min(maxBaseScore, maxSemanticScore)
-					* config.similarityRatio;
-			List<ScoredEmbedding> strict = new ArrayList<ScoredEmbedding>();
-			List<ScoredEmbedding> nearMiss =
-					new ArrayList<ScoredEmbedding>();
-			for (ScoredEmbedding se : candidates) {
-				if (Math.min(se.score, se.semanticScore)
-						>= ratioFloor) {
-					strict.add(se);
-				} else {
-					nearMiss.add(se);
-				}
-			}
-			// Capture the strict count before rescue so downstream
-			// gates see only candidates that truly passed the floor.
-			ratioFloorCandidateCount = strict.size();
-			// Concept-pairing rescue: when a record barely misses
-			// the ratio floor but its same-concept partner survived,
-			// the floor is splitting a natural concept pair. Rescue
-			// the near-miss if its gap from the floor is within the
-			// noise resolution (noiseStd / uniqueConcepts).
-			//
-			// Guard: only rescue when the strict set contains at
-			// least one concept with 2+ records. This distinguishes
-			// two floor calibration regimes:
-			// - Within-concept: the floor captured complete concept
-			//   groups (2+ records), so it's at a level where same-
-			//   concept records naturally cluster above it. A
-			//   singleton from another concept whose partner barely
-			//   misses is likely a split pair → rescue justified.
-			// - Inter-concept: every concept has exactly 1 record,
-			//   so the floor is at the inter-concept boundary. Each
-			//   concept's best record passed; partners scored lower
-			//   for a reason → don't second-guess the calibration.
-			if (!strict.isEmpty() && !nearMiss.isEmpty()) {
-				Map<String, Integer> conceptCounts =
-						new HashMap<String, Integer>();
-				Set<String> survivorConcepts =
-						new HashSet<String>();
-				for (ScoredEmbedding se : strict) {
-					String cn = ConceptNameUtil
-							.extractConceptName(
-									se.embedding
-											.getTextContent());
-					if (cn != null) {
-						survivorConcepts.add(cn);
-						Integer count = conceptCounts.get(cn);
-						conceptCounts.put(cn,
-								count == null ? 1 : count + 1);
-					}
-				}
-				boolean withinConceptCalibration = false;
-				for (int count : conceptCounts.values()) {
-					if (count >= 2) {
-						withinConceptCalibration = true;
-						break;
-					}
-				}
-				if (withinConceptCalibration) {
-					Set<String> allConcepts =
-							new HashSet<String>();
-					for (ScoredEmbedding se : scored) {
-						String cn = ConceptNameUtil
-								.extractConceptName(
-										se.embedding
-												.getTextContent());
-						if (cn != null) {
-							allConcepts.add(cn);
-						}
-					}
-					double rescueTolerance =
-							config.noiseProfile.noiseStd
-									/ Math.max(1,
-											allConcepts.size());
-					for (ScoredEmbedding se : nearMiss) {
-						double eff = Math.min(se.score,
-								se.semanticScore);
-						double gap = ratioFloor - eff;
-						if (gap > rescueTolerance) {
-							continue;
-						}
-						String cn = ConceptNameUtil
-								.extractConceptName(
-										se.embedding
-												.getTextContent());
-						if (cn != null
-								&& survivorConcepts
-										.contains(cn)) {
-							strict.add(se);
-							log.debug("Concept-pairing"
-									+ " rescue: [{}]"
-									+ " gap={}, concept={}",
-									se.embedding
-											.getResourceId(),
-									String.format("%.4f",
-											gap),
-									cn);
-						}
-					}
-				}
-			}
-			candidates = strict;
-			// When every surviving candidate has keyword matches, the
-			// combination of gap detection + ratio floor already identified
-			// the relevant cluster. TopK would arbitrarily truncate
-			// legitimate results (e.g. 40 vitals for a multi-concept query
-			// about "BP, weight, and temperature trend"). Only apply topK
-			// when some candidates lack keywords — they may be semantic
-			// false positives that need capping.
-			boolean allHaveKeywords = true;
-			for (ScoredEmbedding se : candidates) {
-				if (se.keywordScore == 0) {
-					allHaveKeywords = false;
-					break;
-				}
-			}
-			if (!allHaveKeywords && candidates.size() > topK) {
-				candidates = candidates.subList(0, topK);
-			}
+			// Non-refinement path: second-pass gap detection, ratio
+			// floor with concept-pairing rescue, and topK safety net.
+			int[] rfccOut = { -1 };
+			candidates = applyNonRefinementPath(candidates, scored,
+					maxSemanticScore, maxBaseScore, minScore, topK,
+					config, rfccOut);
+			ratioFloorCandidateCount = rfccOut[0];
 		}
 
 		// Phase 1: Outlier removal — remove individual candidates that
@@ -2543,6 +2403,161 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 
 		return new CandidateBuildResult(candidates, adaptiveCutoff, minScore);
+	}
+
+	/**
+	 * Non-refinement post-processing path — stage 5b of the filter pipeline.
+	 *
+	 * <p>Runs when {@code refinementActivated} is false (no keyword subset
+	 * was found by {@link #refineByKeywords}). Sequence:
+	 * <ol>
+	 *   <li>Sensitive second-pass gap detection with a lower absolute
+	 *       floor derived from the score distribution's std.</li>
+	 *   <li>Ratio floor: keep records whose min(combined, semantic) is at
+	 *       least {@code similarityRatio} of the top score.</li>
+	 *   <li>Concept-pairing rescue: pull back near-miss records whose
+	 *       same-concept partner survived the ratio floor.</li>
+	 *   <li>TopK cap: only applied when some candidates have kwScore=0,
+	 *       to avoid truncating legitimate multi-concept results.</li>
+	 * </ol>
+	 *
+	 * @param ratioFloorCandidateCountOut receives the strict-floor count
+	 *        (before concept-pairing rescue) — used by the cluster
+	 *        z-score gate downstream.
+	 * @return the post-processed candidate list
+	 */
+	static List<ScoredEmbedding> applyNonRefinementPath(
+			List<ScoredEmbedding> candidates,
+			List<ScoredEmbedding> scored,
+			double maxSemanticScore, double maxBaseScore,
+			double minScore, int topK, PipelineConfig config,
+			int[] ratioFloorCandidateCountOut) {
+		// Sensitive second-pass: same multiplier as the first pass, but
+		// with a much lower absolute floor derived from the score
+		// distribution's std. This detects tight clusters that the
+		// first pass missed because their gaps were below the first-pass
+		// floor.
+		int secondCutoff = findAdaptiveCutoff(candidates, candidates.size(),
+				minScore, config.scoreGapMultiplier,
+				secondPassMinGap(scored));
+		if (secondCutoff < candidates.size()) {
+			if (isGapCoherent(candidates, secondCutoff,
+					config.gapValidationCosineThreshold)) {
+				log.debug("Second-pass gap at {} is intra-topic, skipping cut",
+						secondCutoff);
+			} else {
+				candidates = new ArrayList<ScoredEmbedding>(
+						candidates.subList(0, secondCutoff));
+			}
+		}
+		// Use the lower of maxBaseScore and maxSemanticScore for the
+		// floor. Keyword bonuses inflate combined scores for records
+		// with coincidental term matches (e.g. "pulse" in "pulse
+		// oximeter" inflates SpO2 for "blood pressure and pulse").
+		// Keyword penalties deflate combined scores below semantic
+		// (e.g. "history" in immunization records for "history of
+		// cancer"). Using the min avoids inflation from either side.
+		// The per-record check uses min(combined, semantic) so bonuses
+		// are stripped (checking semantic) and penalties are preserved
+		// (checking combined).
+		double ratioFloor = Math.min(maxBaseScore, maxSemanticScore)
+				* config.similarityRatio;
+		List<ScoredEmbedding> strict = new ArrayList<ScoredEmbedding>();
+		List<ScoredEmbedding> nearMiss = new ArrayList<ScoredEmbedding>();
+		for (ScoredEmbedding se : candidates) {
+			if (Math.min(se.score, se.semanticScore) >= ratioFloor) {
+				strict.add(se);
+			} else {
+				nearMiss.add(se);
+			}
+		}
+		// Capture the strict count before rescue so downstream
+		// gates see only candidates that truly passed the floor.
+		ratioFloorCandidateCountOut[0] = strict.size();
+		// Concept-pairing rescue: when a record barely misses
+		// the ratio floor but its same-concept partner survived,
+		// the floor is splitting a natural concept pair. Rescue
+		// the near-miss if its gap from the floor is within the
+		// noise resolution (noiseStd / uniqueConcepts).
+		//
+		// Guard: only rescue when the strict set contains at
+		// least one concept with 2+ records. This distinguishes
+		// two floor calibration regimes:
+		// - Within-concept: the floor captured complete concept
+		//   groups (2+ records), so it's at a level where same-
+		//   concept records naturally cluster above it. A
+		//   singleton from another concept whose partner barely
+		//   misses is likely a split pair → rescue justified.
+		// - Inter-concept: every concept has exactly 1 record,
+		//   so the floor is at the inter-concept boundary. Each
+		//   concept's best record passed; partners scored lower
+		//   for a reason → don't second-guess the calibration.
+		if (!strict.isEmpty() && !nearMiss.isEmpty()) {
+			Map<String, Integer> conceptCounts = new HashMap<String, Integer>();
+			Set<String> survivorConcepts = new HashSet<String>();
+			for (ScoredEmbedding se : strict) {
+				String cn = ConceptNameUtil
+						.extractConceptName(se.embedding.getTextContent());
+				if (cn != null) {
+					survivorConcepts.add(cn);
+					Integer count = conceptCounts.get(cn);
+					conceptCounts.put(cn, count == null ? 1 : count + 1);
+				}
+			}
+			boolean withinConceptCalibration = false;
+			for (int count : conceptCounts.values()) {
+				if (count >= 2) {
+					withinConceptCalibration = true;
+					break;
+				}
+			}
+			if (withinConceptCalibration) {
+				Set<String> allConcepts = new HashSet<String>();
+				for (ScoredEmbedding se : scored) {
+					String cn = ConceptNameUtil
+							.extractConceptName(se.embedding.getTextContent());
+					if (cn != null) {
+						allConcepts.add(cn);
+					}
+				}
+				double rescueTolerance = config.noiseProfile.noiseStd
+						/ Math.max(1, allConcepts.size());
+				for (ScoredEmbedding se : nearMiss) {
+					double eff = Math.min(se.score, se.semanticScore);
+					double gap = ratioFloor - eff;
+					if (gap > rescueTolerance) {
+						continue;
+					}
+					String cn = ConceptNameUtil
+							.extractConceptName(se.embedding.getTextContent());
+					if (cn != null && survivorConcepts.contains(cn)) {
+						strict.add(se);
+						log.debug("Concept-pairing rescue: [{}] gap={}, concept={}",
+								se.embedding.getResourceId(),
+								String.format("%.4f", gap), cn);
+					}
+				}
+			}
+		}
+		candidates = strict;
+		// When every surviving candidate has keyword matches, the
+		// combination of gap detection + ratio floor already identified
+		// the relevant cluster. TopK would arbitrarily truncate
+		// legitimate results (e.g. 40 vitals for a multi-concept query
+		// about "BP, weight, and temperature trend"). Only apply topK
+		// when some candidates lack keywords — they may be semantic
+		// false positives that need capping.
+		boolean allHaveKeywords = true;
+		for (ScoredEmbedding se : candidates) {
+			if (se.keywordScore == 0) {
+				allHaveKeywords = false;
+				break;
+			}
+		}
+		if (!allHaveKeywords && candidates.size() > topK) {
+			candidates = candidates.subList(0, topK);
+		}
+		return candidates;
 	}
 
 	/**
