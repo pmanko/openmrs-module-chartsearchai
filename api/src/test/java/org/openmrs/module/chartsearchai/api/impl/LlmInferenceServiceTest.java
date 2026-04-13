@@ -1143,7 +1143,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void integration_activeConditionsQuery_shouldReturnOnlyConditionRecords() {
+	public void integration_activeConditionsQuery_shouldReturnTuberculosisAndHypertension() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
@@ -1392,7 +1392,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void realModel_cancerQuery_zScoreGateShouldNotBlock() {
+	public void realModel_cancerQuery_shouldReturnKaposiSarcomaWithZeroKeywordMatches() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
@@ -1408,7 +1408,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void realModel_conditionsQuery_shouldReturnAllConditionRecords() {
+	public void realModel_conditionsQuery_secondDataset_shouldReturnAllConditionRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
@@ -1873,7 +1873,7 @@ public class LlmInferenceServiceTest {
 	// the same pipeline mechanic with real ONNX embeddings.
 
 	@Test
-	public void integration_topKShouldCapResultsWhenNoKeywordMatches() {
+	public void integration_cancerQuery_withTopK1_shouldReturnSingleRecord() {
 		// Replaces: pipeline_genericQuery_shouldCapToTopK
 		// When no records have keyword matches, topK caps the result set.
 		// "cancer" has zero keyword matches in the dataset, so topK applies.
@@ -1888,7 +1888,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void integration_keywordMatchedRecordsShouldBypassTopK() {
+	public void integration_cd4Query_withTopK1_shouldReturnBothCd4Records() {
 		// Replaces: pipeline_incidentalKeywordMatches_shouldNotOverFilter
 		// When records have keyword matches, they bypass topK capping.
 		// CD4 Count records match "CD4"+"count" keywords — both should be
@@ -1905,7 +1905,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void integration_gapDetectionShouldTakePrecedenceOverKeywords() {
+	public void integration_prescriptionsQuery_shouldReturnOnlyDrugOrders() {
 		// Replaces: pipeline_gapDetectionWorks_keywordRefinementShouldNotInterfere
 		// Gap detection finds a clear boundary between the 2 prescription
 		// records and everything else. Keyword refinement should not pull
@@ -1922,7 +1922,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void integration_keywordRefinementShouldWorkWithSmoothScores() {
+	public void integration_listAllAllergiesQuery_shouldReturnAllergyRecords() {
 		// Replaces: pipeline_smoothDistributionNoKeywords_shouldReturnAllAboveFloor
 		// When semantic scores are smooth (no clear gap), keyword refinement
 		// identifies relevant records via keyword discrimination.
@@ -1938,7 +1938,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void integration_keywordWeightZeroShouldDisableRefinement() {
+	public void integration_conditionsQuery_withoutKeywordScoring_shouldReturnFewerRecords() {
 		// Replaces: pipeline_keywordWeightZero_shouldDisableRefinement
 		// With keywordWeight=0, keyword refinement is disabled. On the
 		// second patient dataset, "any conditions?" normally returns all
@@ -1969,7 +1969,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void integration_noMatchingRecordsShouldReturnEmpty() {
+	public void integration_hbResultsQuery_shouldReturnEmptyWhenNoHbRecords() {
 		// Replaces: pipeline_medicationQueryNoDrugOrders_shouldReturnContext
 		// When the patient has no matching records, the pipeline should
 		// return empty — not dump noise into the LLM.
@@ -1986,7 +1986,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void integration_zScoreGateShouldBlockSmoothLowScores() {
+	public void integration_fractureQuery_shouldReturnEmptyWhenNoFractureRecords() {
 		// Replaces: pipeline_noKeywordMatchesSmoothDistribution_shouldReturnEmpty
 		// When no records match the query well (smooth, low semantic scores
 		// and no keyword matches), the z-score gate should block everything
@@ -2002,7 +2002,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void integration_keywordRefinementShouldBypassFloorAndTopK() {
+	public void integration_conditionsQuery_secondDataset_shouldReturnAll10ConditionsEvenWithTopK5() {
 		// Replaces: pipeline_keywordRefinementBypassesStrictFloorAndTopK
 		// All 10 condition records in the second dataset match "condition"
 		// via keyword. Keyword refinement should bypass both the ratio
@@ -2018,7 +2018,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void integration_focusedQueryShouldFilterNoise() {
+	public void integration_cancerQuery_shouldReturnOnlyKaposiSarcomaRecords() {
 		// Replaces: pipeline_focusedQueryStrictFloorFiltersNoise
 		// A focused query should return only records that cluster high
 		// semantically, filtering out noise below the gap or floor.
@@ -2035,7 +2035,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void integration_ratioFloorShouldExcludeMarginalRecords() {
+	public void integration_anemicQuery_withTopK1_shouldReturnSingleRecord() {
 		// Replaces: pipeline_focusedQueryRatioFloorExcludesMarginalRecords
 		// The anemic query returns 3 records with default topK. With topK=1
 		// and no keyword matches on "anemic", topK caps the result —
@@ -2069,7 +2069,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void integration_keywordRefinementCanExceedTopK() {
+	public void integration_conditionsQuery_secondDataset_shouldReturnAll10ConditionsWithTopK3() {
 		// Replaces: pipeline_keywordRefinementCanExceedTopK
 		// All 10 condition records match "condition" keyword. With topK=3,
 		// keyword refinement should keep all 10 — exceeding topK.
@@ -2542,7 +2542,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void realModel_allergiesAndMedicationsQuery_shouldReturnBothTypes() {
+	public void realModel_allergiesAndMedicationsQuery_shouldReturnAllergyAndMedicationRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
@@ -3264,7 +3264,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void headache_thirdDataset_shouldReturnAzithromycinOrders() {
+	public void headache_thirdDataset_shouldReturnPrescriptionsWithHeadachePrnQualifier() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
@@ -3459,7 +3459,7 @@ public class LlmInferenceServiceTest {
 	// ---- Long sentence queries ----
 
 	@Test
-	public void longSentence_bloodPressureAndWeightReadings_shouldReturnAllBpRecords() {
+	public void longSentence_bloodPressureAndWeightReadings_shouldReturnBpAndWeightRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
