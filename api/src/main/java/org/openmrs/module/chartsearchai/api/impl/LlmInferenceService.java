@@ -1072,337 +1072,14 @@ public class LlmInferenceService implements ChartSearchService {
 		// by full-keyword-match and compound-keyword-match bypasses.
 		candidates = applyOutlierRemovalPhase1(candidates, queryTerms,
 				partialKwValidated);
-		// Phase 2: Zero-keyword validation — when no surviving candidate
-		// has keyword support, the result set is purely semantic and
-		// must pass two orthogonal confidence checks. Keywords are
-		// direct evidence of relevance (the record literally contains
-		// the queried term) and bypass this gate entirely.
-		//
-		// The two checks catch complementary noise patterns:
-		//
-		// - Coherence: are the candidates about the same topic? Rejects
-		//   scattered false positives about unrelated topics (e.g.
-		//   Female Infertility + Granuloma Annulare for an HIV query).
-		//
-		// - Z-score: is the model confident? Rejects uniform false
-		//   positives about the same irrelevant topic (e.g. 3 pulse
-		//   readings for a CD4 query) where mutual coherence is high
-		//   but query relevance is low.
-		{
-			boolean candidatesHaveKeywords = false;
-			for (ScoredEmbedding se : candidates) {
-				if (se.keywordScore > 0) {
-					candidatesHaveKeywords = true;
-					break;
-				}
-			}
-			if (log.isDebugEnabled()) {
-				StringBuilder sb = new StringBuilder();
-				for (ScoredEmbedding se : candidates) {
-					if (sb.length() > 0) sb.append(", ");
-					sb.append(se.embedding.getResourceType())
-						.append(':').append(se.embedding.getResourceId())
-						.append(" sem=").append(String.format("%.4f", se.semanticScore))
-						.append(" kw=").append(String.format("%.4f", se.keywordScore));
-				}
-				log.debug("Phase 2: candidatesHaveKeywords={}, candidates={}: [{}]",
-						candidatesHaveKeywords, candidates.size(), sb);
-			}
-			if (!partialKwValidated && !candidatesHaveKeywords
-					&& !candidates.isEmpty()) {
-				if (candidates.size() >= 2) {
-					candidates = filterByMeanCoherence(candidates, config);
-				}
-				// Small-cluster coherence gate: for ≤3 zero-keyword
-				// candidates, apply a stricter coherence threshold
-				// derived from the patient's own embedding statistics.
-				// Legitimate small clusters are same-concept groups
-				// (condition+diagnosis pairs, often with an obs) whose
-				// mutual coherence is close to the intra-concept mean
-				// (0.93+). False positives are cross-topic clusters
-				// (e.g. 3 substance abuse conditions for a "medications"
-				// query) whose coherence (0.48–0.79) falls below the
-				// intra-concept range. The threshold (intraConceptMean −
-				// intraConceptStd) is the lower bound of same-concept
-				// coherence, cleanly separating the two groups.
-				if (candidates.size() == 3) {
-					double intraFloor =
-							config.noiseProfile.intraConceptMean
-							- config.noiseProfile.intraConceptStd;
-					double sumCos = 0;
-					int nPairs = 0;
-					for (int ci = 0; ci < candidates.size(); ci++) {
-						float[] vi = candidates.get(ci).embedding
-								.getEmbeddingVector();
-						if (vi == null) {
-							continue;
-						}
-						for (int cj = ci + 1;
-								cj < candidates.size(); cj++) {
-							float[] vj = candidates.get(cj).embedding
-									.getEmbeddingVector();
-							if (vj == null) {
-								continue;
-							}
-							sumCos += ChartSearchAiUtils
-									.cosineSimilarity(vi, vj);
-							nPairs++;
-						}
-					}
-					if (nPairs > 0) {
-						double mc = sumCos / nPairs;
-						if (mc < intraFloor) {
-							// Check if removing the lowest-
-							// coherence record leaves a same-
-							// concept pair above intraFloor.
-							// Phase 1 n=3 skips coherence
-							// filtering when scores are spread
-							// (ratio < 0.90), so a cross-concept
-							// outlier can survive into Phase 2.
-							// Rather than rejecting everything,
-							// extract the coherent same-concept
-							// pair if one exists.
-							double[] avgCoh = new double[3];
-							for (int ci = 0; ci < 3; ci++) {
-								double s = 0;
-								int cnt = 0;
-								float[] vi = candidates.get(ci)
-										.embedding
-										.getEmbeddingVector();
-								if (vi == null) {
-									continue;
-								}
-								for (int cj = 0; cj < 3; cj++) {
-									if (ci == cj) {
-										continue;
-									}
-									float[] vj = candidates
-											.get(cj).embedding
-											.getEmbeddingVector();
-									if (vj == null) {
-										continue;
-									}
-									s += ChartSearchAiUtils
-											.cosineSimilarity(
-													vi, vj);
-									cnt++;
-								}
-								avgCoh[ci] = cnt > 0
-										? s / cnt : 0;
-							}
-							int worstIdx = 0;
-							for (int ci = 1; ci < 3; ci++) {
-								if (avgCoh[ci]
-										< avgCoh[worstIdx]) {
-									worstIdx = ci;
-								}
-							}
-							int p1 = -1, p2 = -1;
-							for (int ci = 0; ci < 3; ci++) {
-								if (ci != worstIdx) {
-									if (p1 < 0) {
-										p1 = ci;
-									} else {
-										p2 = ci;
-									}
-								}
-							}
-							float[] v1 = candidates.get(p1)
-									.embedding
-									.getEmbeddingVector();
-							float[] v2 = candidates.get(p2)
-									.embedding
-									.getEmbeddingVector();
-							double pairCos = (v1 != null
-									&& v2 != null)
-									? ChartSearchAiUtils
-											.cosineSimilarity(
-													v1, v2)
-									: 0;
-							String cn1 = ConceptNameUtil
-									.extractConceptName(
-											candidates
-													.get(p1)
-													.embedding
-													.getTextContent());
-							String cn2 = ConceptNameUtil
-									.extractConceptName(
-											candidates
-													.get(p2)
-													.embedding
-													.getTextContent());
-							boolean sameConcept =
-									cn1 != null
-									&& cn1.equals(cn2);
-							if (pairCos >= intraFloor
-									&& sameConcept) {
-								List<ScoredEmbedding> pair =
-										new ArrayList<ScoredEmbedding>();
-								pair.add(candidates.get(p1));
-								pair.add(candidates.get(p2));
-								log.debug("Small-cluster gate:"
-										+ " removed outlier"
-										+ " [{}], kept pair"
-										+ " cos={}, concept={}",
-										candidates.get(
-												worstIdx)
-												.embedding
-												.getResourceId(),
-										String.format("%.4f",
-												pairCos),
-										cn1);
-								candidates = pair;
-							} else {
-								log.debug("Small-cluster"
-										+ " coherence gate:"
-										+ " meanCoherence={}"
-										+ " < intraFloor={},"
-										+ " returning empty",
-										String.format("%.4f",
-												mc),
-										String.format("%.4f",
-												intraFloor));
-								candidates = Collections
-										.emptyList();
-							}
-						}
-					}
-				}
-				// Skip the z-score gate when first-pass gap detection found
-				// a tight cluster. The gap is structural evidence that the
-				// model distinguishes these records from the rest. Without
-				// this, compressed-distribution models (e.g. MedCPT,
-				// std ≈ 0.03) can never reach the z-score threshold because
-				// even the most relevant records are < 2.5σ from the mean.
-				// A cluster is "tight" when it captures fewer records than
-				// the number of unique concepts in the dataset — a genuine
-				// query-relevant cluster targets a few concepts, while a
-				// broad swath captures records from many different concepts.
-				// The z-score gate is redundant when the floor gate
-				// already validated signal via z-score rescue — the
-				// top score was proven to be a statistical outlier
-				// despite being below the absolute floor.
-				Set<String> tightCheckConcepts = new HashSet<String>();
-				for (ScoredEmbedding se : scored) {
-					String cn = ConceptNameUtil.extractConceptName(
-							se.embedding.getTextContent());
-					if (cn != null) {
-						tightCheckConcepts.add(cn);
-					}
-				}
-				int tightThreshold = tightCheckConcepts.size();
-				boolean tightClusterDetected = belowFloorRescued
-						|| (firstPassGapDetected
-								&& adaptiveCutoff < tightThreshold)
-						|| (ratioFloorCandidateCount >= 0
-								&& ratioFloorCandidateCount
-								< tightThreshold
-								&& initialZScore
-								>= FLOOR_RESCUE_MIN_Z_SCORE
-								&& maxSemanticScore
-								>= config.noiseProfile.absoluteSimilarityFloor()
-										+ config.minScoreGap);
-				// Single-candidate structural gate: when the
-				// ratio floor itself produced only one candidate
-				// (not a topK cap on a larger set) and there is
-				// no tight-cluster evidence, the candidate is an
-				// isolated noise peak. Legitimate single matches
-				// produce tight clusters because the gap detector
-				// isolates them from the bulk distribution.
-				if (!tightClusterDetected
-						&& candidates.size() == 1
-						&& ratioFloorCandidateCount == 1) {
-					log.debug("Single zero-keyword candidate "
-							+ "with no tight-cluster support "
-							+ "and ratioFloor=1, returning "
-							+ "empty");
-					candidates = Collections.emptyList();
-				}
-				if (!tightClusterDetected
-						&& !candidates.isEmpty()
-						&& hasStatisticalVariance(scored)) {
-					double sum = 0;
-					for (ScoredEmbedding se : scored) {
-						sum += se.semanticScore;
-					}
-					double mean = sum / scored.size();
-					double sqSum = 0;
-					for (ScoredEmbedding se : scored) {
-						double d = se.semanticScore - mean;
-						sqSum += d * d;
-					}
-					double std = Math.sqrt(sqSum / scored.size());
-					if (std > 0) {
-						// For small clusters (≤3 candidates), use
-						// max z-score: each candidate was selected
-						// for a reason and a single strong match IS
-						// the signal. For larger clusters (≥4), use
-						// the median z-score: a single high-scoring
-						// false positive can push the max above
-						// threshold while the cluster as a whole is
-						// noise (e.g. 5 pulse readings for a CD4
-						// query where one outlier hits z=2.79 but
-						// the median is 2.39). This mirrors Phase 1
-						// coherence logic which also treats n≤3
-						// differently from n≥4.
-						double[] zScores =
-								new double[candidates.size()];
-						for (int i = 0; i < candidates.size(); i++) {
-							zScores[i] = (candidates.get(i).semanticScore
-									- mean) / std;
-						}
-						java.util.Arrays.sort(zScores);
-						double zRepresentative = candidates.size() <= 3
-								? zScores[zScores.length - 1]
-								: zScores[zScores.length / 2];
-						// Two-tier Gumbel threshold:
-						// K≤3 (max): Gumbel(uniqueConcepts)
-						//   — strict; rescued by initial gate
-						// K≥4 (median): Gumbel(uniqueConcepts/2)
-						//   — the median scales with the N/2-th
-						//   order statistic, so halve effective N
-						double clusterZThreshold;
-						if (candidates.size() <= 3) {
-							clusterZThreshold =
-									clusterGumbelThreshold(
-											scored);
-						} else {
-							clusterZThreshold =
-									medianGumbelThreshold(
-											scored);
-						}
-						log.debug("Zero-keyword z-score check: "
-								+ "mean={}, std={}, z={} ({}), "
-								+ "threshold={}, candidates={}, scored={}",
-								String.format("%.4f", mean),
-								String.format("%.4f", std),
-								String.format("%.2f", zRepresentative),
-								candidates.size() <= 3 ? "max" : "median",
-								String.format("%.2f", clusterZThreshold),
-								candidates.size(), scored.size());
-						if (zRepresentative < clusterZThreshold) {
-							// For K≤3, the initial gate may
-							// have already validated the signal.
-							// If so, defer to that validation
-							// rather than rejecting here.
-							if (candidates.size() <= 3
-									&& initialZThreshold > 0
-									&& initialZScore
-									>= initialZThreshold) {
-								log.debug("Cluster z-score below "
-										+ "threshold but initial gate "
-										+ "validated signal, keeping");
-							} else {
-								log.debug(
-									"Zero-keyword results rejected");
-								candidates =
-										Collections.emptyList();
-							}
-						}
-					}
-				}
-			}
-		}
+		// Phase 2: Zero-keyword validation — mean coherence, small-
+		// cluster coherence gate, and cluster z-score gate. Bypassed
+		// when any candidate has keyword evidence.
+		candidates = applyZeroKeywordValidationPhase2(candidates,
+				scored, config, partialKwValidated, belowFloorRescued,
+				firstPassGapDetected, adaptiveCutoff,
+				ratioFloorCandidateCount, initialZScore,
+				initialZThreshold, maxSemanticScore);
 
 		List<ChartEmbedding> results = new ArrayList<ChartEmbedding>();
 		for (ScoredEmbedding se : candidates) {
@@ -2209,6 +1886,217 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 			if (topSemantic > 0 && lowestSemantic / topSemantic >= 0.90) {
 				return filterByCoherence(candidates);
+			}
+		}
+		return candidates;
+	}
+
+	/**
+	 * Phase 2 (zero-keyword validation) — stage 7 of the filter pipeline.
+	 *
+	 * <p>When no surviving candidate has keyword support, the result set
+	 * is purely semantic and must pass two orthogonal confidence checks
+	 * (mean coherence and cluster z-score) plus a small-cluster
+	 * coherence gate and a single-candidate structural gate. Candidates
+	 * with any keyword match bypass this phase entirely.
+	 *
+	 * <p>The z-score gate is skipped when tight-cluster evidence already
+	 * validated signal — captured via {@code belowFloorRescued},
+	 * {@code firstPassGapDetected} vs concept count, or the ratio-floor
+	 * tight-cluster signal.
+	 */
+	static List<ScoredEmbedding> applyZeroKeywordValidationPhase2(
+			List<ScoredEmbedding> candidates,
+			List<ScoredEmbedding> scored, PipelineConfig config,
+			boolean partialKwValidated, boolean belowFloorRescued,
+			boolean firstPassGapDetected, int adaptiveCutoff,
+			int ratioFloorCandidateCount, double initialZScore,
+			double initialZThreshold, double maxSemanticScore) {
+		boolean candidatesHaveKeywords = false;
+		for (ScoredEmbedding se : candidates) {
+			if (se.keywordScore > 0) {
+				candidatesHaveKeywords = true;
+				break;
+			}
+		}
+		if (log.isDebugEnabled()) {
+			StringBuilder sb = new StringBuilder();
+			for (ScoredEmbedding se : candidates) {
+				if (sb.length() > 0) sb.append(", ");
+				sb.append(se.embedding.getResourceType())
+					.append(':').append(se.embedding.getResourceId())
+					.append(" sem=").append(String.format("%.4f", se.semanticScore))
+					.append(" kw=").append(String.format("%.4f", se.keywordScore));
+			}
+			log.debug("Phase 2: candidatesHaveKeywords={}, candidates={}: [{}]",
+					candidatesHaveKeywords, candidates.size(), sb);
+		}
+		if (partialKwValidated || candidatesHaveKeywords || candidates.isEmpty()) {
+			return candidates;
+		}
+		if (candidates.size() >= 2) {
+			candidates = filterByMeanCoherence(candidates, config);
+		}
+		// Small-cluster coherence gate: for ≤3 zero-keyword
+		// candidates, apply a stricter coherence threshold derived
+		// from the patient's own embedding statistics.
+		if (candidates.size() == 3) {
+			double intraFloor = config.noiseProfile.intraConceptMean
+					- config.noiseProfile.intraConceptStd;
+			double sumCos = 0;
+			int nPairs = 0;
+			for (int ci = 0; ci < candidates.size(); ci++) {
+				float[] vi = candidates.get(ci).embedding.getEmbeddingVector();
+				if (vi == null) {
+					continue;
+				}
+				for (int cj = ci + 1; cj < candidates.size(); cj++) {
+					float[] vj = candidates.get(cj).embedding.getEmbeddingVector();
+					if (vj == null) {
+						continue;
+					}
+					sumCos += ChartSearchAiUtils.cosineSimilarity(vi, vj);
+					nPairs++;
+				}
+			}
+			if (nPairs > 0) {
+				double mc = sumCos / nPairs;
+				if (mc < intraFloor) {
+					// Extract the coherent same-concept pair if one exists.
+					double[] avgCoh = new double[3];
+					for (int ci = 0; ci < 3; ci++) {
+						double s = 0;
+						int cnt = 0;
+						float[] vi = candidates.get(ci).embedding.getEmbeddingVector();
+						if (vi == null) {
+							continue;
+						}
+						for (int cj = 0; cj < 3; cj++) {
+							if (ci == cj) {
+								continue;
+							}
+							float[] vj = candidates.get(cj).embedding.getEmbeddingVector();
+							if (vj == null) {
+								continue;
+							}
+							s += ChartSearchAiUtils.cosineSimilarity(vi, vj);
+							cnt++;
+						}
+						avgCoh[ci] = cnt > 0 ? s / cnt : 0;
+					}
+					int worstIdx = 0;
+					for (int ci = 1; ci < 3; ci++) {
+						if (avgCoh[ci] < avgCoh[worstIdx]) {
+							worstIdx = ci;
+						}
+					}
+					int p1 = -1, p2 = -1;
+					for (int ci = 0; ci < 3; ci++) {
+						if (ci != worstIdx) {
+							if (p1 < 0) {
+								p1 = ci;
+							} else {
+								p2 = ci;
+							}
+						}
+					}
+					float[] v1 = candidates.get(p1).embedding.getEmbeddingVector();
+					float[] v2 = candidates.get(p2).embedding.getEmbeddingVector();
+					double pairCos = (v1 != null && v2 != null)
+							? ChartSearchAiUtils.cosineSimilarity(v1, v2)
+							: 0;
+					String cn1 = ConceptNameUtil.extractConceptName(
+							candidates.get(p1).embedding.getTextContent());
+					String cn2 = ConceptNameUtil.extractConceptName(
+							candidates.get(p2).embedding.getTextContent());
+					boolean sameConcept = cn1 != null && cn1.equals(cn2);
+					if (pairCos >= intraFloor && sameConcept) {
+						List<ScoredEmbedding> pair = new ArrayList<ScoredEmbedding>();
+						pair.add(candidates.get(p1));
+						pair.add(candidates.get(p2));
+						log.debug("Small-cluster gate: removed outlier [{}], kept pair cos={}, concept={}",
+								candidates.get(worstIdx).embedding.getResourceId(),
+								String.format("%.4f", pairCos), cn1);
+						candidates = pair;
+					} else {
+						log.debug("Small-cluster coherence gate: meanCoherence={} < intraFloor={}, returning empty",
+								String.format("%.4f", mc),
+								String.format("%.4f", intraFloor));
+						candidates = Collections.emptyList();
+					}
+				}
+			}
+		}
+		// Tight-cluster detection: the z-score gate is skipped when
+		// structural signals already confirm the cluster.
+		Set<String> tightCheckConcepts = new HashSet<String>();
+		for (ScoredEmbedding se : scored) {
+			String cn = ConceptNameUtil.extractConceptName(se.embedding.getTextContent());
+			if (cn != null) {
+				tightCheckConcepts.add(cn);
+			}
+		}
+		int tightThreshold = tightCheckConcepts.size();
+		boolean tightClusterDetected = belowFloorRescued
+				|| (firstPassGapDetected && adaptiveCutoff < tightThreshold)
+				|| (ratioFloorCandidateCount >= 0
+						&& ratioFloorCandidateCount < tightThreshold
+						&& initialZScore >= FLOOR_RESCUE_MIN_Z_SCORE
+						&& maxSemanticScore
+						>= config.noiseProfile.absoluteSimilarityFloor()
+								+ config.minScoreGap);
+		// Single-candidate structural gate.
+		if (!tightClusterDetected
+				&& candidates.size() == 1
+				&& ratioFloorCandidateCount == 1) {
+			log.debug("Single zero-keyword candidate with no tight-cluster support and ratioFloor=1, returning empty");
+			candidates = Collections.emptyList();
+		}
+		if (!tightClusterDetected && !candidates.isEmpty()
+				&& hasStatisticalVariance(scored)) {
+			double sum = 0;
+			for (ScoredEmbedding se : scored) {
+				sum += se.semanticScore;
+			}
+			double mean = sum / scored.size();
+			double sqSum = 0;
+			for (ScoredEmbedding se : scored) {
+				double d = se.semanticScore - mean;
+				sqSum += d * d;
+			}
+			double std = Math.sqrt(sqSum / scored.size());
+			if (std > 0) {
+				double[] zScores = new double[candidates.size()];
+				for (int i = 0; i < candidates.size(); i++) {
+					zScores[i] = (candidates.get(i).semanticScore - mean) / std;
+				}
+				java.util.Arrays.sort(zScores);
+				double zRepresentative = candidates.size() <= 3
+						? zScores[zScores.length - 1]
+						: zScores[zScores.length / 2];
+				double clusterZThreshold;
+				if (candidates.size() <= 3) {
+					clusterZThreshold = clusterGumbelThreshold(scored);
+				} else {
+					clusterZThreshold = medianGumbelThreshold(scored);
+				}
+				log.debug("Zero-keyword z-score check: mean={}, std={}, z={} ({}), threshold={}, candidates={}, scored={}",
+						String.format("%.4f", mean),
+						String.format("%.4f", std),
+						String.format("%.2f", zRepresentative),
+						candidates.size() <= 3 ? "max" : "median",
+						String.format("%.2f", clusterZThreshold),
+						candidates.size(), scored.size());
+				if (zRepresentative < clusterZThreshold) {
+					if (candidates.size() <= 3
+							&& initialZThreshold > 0
+							&& initialZScore >= initialZThreshold) {
+						log.debug("Cluster z-score below threshold but initial gate validated signal, keeping");
+					} else {
+						log.debug("Zero-keyword results rejected");
+						candidates = Collections.emptyList();
+					}
+				}
 			}
 		}
 		return candidates;
