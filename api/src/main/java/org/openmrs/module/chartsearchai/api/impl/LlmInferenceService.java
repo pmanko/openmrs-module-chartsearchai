@@ -2157,12 +2157,78 @@ public class LlmInferenceService implements ChartSearchService {
 		// The per-record check uses min(combined, semantic) so bonuses
 		// are stripped (checking semantic) and penalties are preserved
 		// (checking combined).
-		double ratioFloor = Math.min(maxBaseScore, maxSemanticScore)
-				* config.similarityRatio;
+		//
+		// Uniform-keyword exception: when every candidate has the same
+		// keyword score, the penalty/bonus is applied equally, so it
+		// cancels out in relative ranking but makes the absolute floor
+		// artificially tighter (for a uniform penalty) or looser (for
+		// a uniform bonus). Fall back to pure-semantic comparison so
+		// relative ordering among candidates with identical keyword
+		// evidence isn't distorted by the shared adjustment.
+		boolean uniformCandidateKw = true;
+		double firstKw = candidates.isEmpty() ? 0
+				: candidates.get(0).keywordScore;
+		for (ScoredEmbedding se : candidates) {
+			if (Math.abs(se.keywordScore - firstKw) > 1e-9) {
+				uniformCandidateKw = false;
+				break;
+			}
+		}
+		// Uniform-keyword tight-cluster bypass: when every candidate
+		// shares the same (non-zero) keyword score AND their semantic
+		// scores form a tight cluster — quantified by comparing the
+		// candidate set's absolute semantic-score spread to the
+		// patient's own background noise std — the keyword evidence
+		// is uniform across the set and gap detection has already
+		// separated them from the noise. The ratio floor in this
+		// regime would arbitrarily drop the lower-scoring members of
+		// a cohesive same-topic group (e.g. all six "substance abuse"
+		// condition+diagnosis pairs with sem 0.52–0.67 and uniform
+		// kw=0.5). Skip the floor when the spread is tight.
+		//
+		// Threshold derivation: candidate scores are statistically
+		// indistinguishable when their spread sits within 2× the
+		// cross-concept noise std (the standard 95% z-band). This is
+		// data-derived per patient via {@link ModelNoiseProfile} —
+		// patients with diverse concepts get a wider tolerance,
+		// patients with narrow concept distributions get a tighter
+		// one, both tracking the model's own discriminative
+		// resolution rather than a hardcoded fraction.
+		boolean tightUniformCluster = false;
+		if (uniformCandidateKw && firstKw > 0
+				&& candidates.size()
+				>= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
+			double maxSem = 0;
+			double minSem = Double.MAX_VALUE;
+			for (ScoredEmbedding se : candidates) {
+				if (se.semanticScore > maxSem) maxSem = se.semanticScore;
+				if (se.semanticScore < minSem) minSem = se.semanticScore;
+			}
+			double spread = maxSem - minSem;
+			double noiseSpreadBand = 2.0 * config.noiseProfile.noiseStd;
+			if (maxSem > 0 && spread <= noiseSpreadBand) {
+				tightUniformCluster = true;
+				log.debug("Uniform-keyword tight cluster detected: spread={}, noiseBand={}, kw={}, n={} — bypassing ratio floor",
+						String.format("%.4f", spread),
+						String.format("%.4f", noiseSpreadBand),
+						String.format("%.3f", firstKw),
+						candidates.size());
+			}
+		}
+		double ratioFloor = uniformCandidateKw
+				? maxSemanticScore * config.similarityRatio
+				: Math.min(maxBaseScore, maxSemanticScore)
+						* config.similarityRatio;
 		List<ScoredEmbedding> strict = new ArrayList<ScoredEmbedding>();
 		List<ScoredEmbedding> nearMiss = new ArrayList<ScoredEmbedding>();
 		for (ScoredEmbedding se : candidates) {
-			if (Math.min(se.score, se.semanticScore) >= ratioFloor) {
+			if (tightUniformCluster) {
+				strict.add(se);
+				continue;
+			}
+			double check = uniformCandidateKw ? se.semanticScore
+					: Math.min(se.score, se.semanticScore);
+			if (check >= ratioFloor) {
 				strict.add(se);
 			} else {
 				nearMiss.add(se);
