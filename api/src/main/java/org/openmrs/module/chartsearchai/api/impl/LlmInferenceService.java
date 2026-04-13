@@ -2406,6 +2406,336 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
+	 * Refinement post-processing path — stage 5a of the filter pipeline.
+	 *
+	 * <p>Runs when {@code refinementActivated} is true (keyword refinement
+	 * identified a relevant subset). Computes uniform-keyword and
+	 * semantic-dominance signals, then branches into the partial-keyword
+	 * semantic-core path or the non-uniform second-pass gap detection path.
+	 *
+	 * @param partialKwValidatedOut set to {@code true} when the semantic
+	 *        core expansion path fired — used downstream to skip
+	 *        coherence filtering that would double-filter the core.
+	 * @return the refined candidate list
+	 */
+	static List<ScoredEmbedding> applyRefinementPath(
+			List<ScoredEmbedding> candidates,
+			List<ScoredEmbedding> preRefinementCandidates,
+			List<ScoredEmbedding> scored,
+			String[] queryTerms, int queryTermCount,
+			double bonusThreshold, double minScore, int topK,
+			PipelineConfig config, boolean[] partialKwValidatedOut) {
+		double kwMin = Double.MAX_VALUE;
+		double kwMax = 0;
+		for (ScoredEmbedding se : candidates) {
+			if (se.keywordScore > 0) {
+				if (se.keywordScore < kwMin) {
+					kwMin = se.keywordScore;
+				}
+				if (se.keywordScore > kwMax) {
+					kwMax = se.keywordScore;
+				}
+			}
+		}
+		if (kwMin == Double.MAX_VALUE) {
+			kwMin = kwMax;
+		}
+		boolean uniformKeywords = (kwMax - kwMin) < 0.01;
+		boolean semanticDominance = false;
+		double maxKwSem = 0;
+		double maxNonKwSem = 0;
+		if (uniformKeywords && kwMax < bonusThreshold
+				&& queryTermCount > 0) {
+			double refMinKw = 1.0 / queryTermCount;
+			for (ScoredEmbedding se : preRefinementCandidates) {
+				if (se.keywordScore >= refMinKw) {
+					if (se.semanticScore > maxKwSem) {
+						maxKwSem = se.semanticScore;
+					}
+				} else {
+					if (se.semanticScore > maxNonKwSem) {
+						maxNonKwSem = se.semanticScore;
+					}
+				}
+			}
+			semanticDominance = maxNonKwSem > maxKwSem;
+		}
+		boolean partialKeywordMatch = uniformKeywords
+				&& kwMax < bonusThreshold;
+		log.debug("Pipeline refinement: kwMin={}, kwMax={}, uniform={}, partialKw={}, semDom={}",
+				String.format("%.4f", kwMin),
+				String.format("%.4f", kwMax), uniformKeywords,
+				partialKeywordMatch, semanticDominance);
+		if (partialKeywordMatch) {
+			List<ScoredEmbedding> nonKeyword = new ArrayList<ScoredEmbedding>();
+			for (ScoredEmbedding se : preRefinementCandidates) {
+				if (se.keywordScore == 0) {
+					nonKeyword.add(se);
+				}
+			}
+			Collections.sort(nonKeyword,
+					new java.util.Comparator<ScoredEmbedding>() {
+				@Override
+				public int compare(ScoredEmbedding a, ScoredEmbedding b) {
+					return Double.compare(b.semanticScore, a.semanticScore);
+				}
+			});
+			List<ScoredEmbedding> semanticCore = new ArrayList<ScoredEmbedding>();
+			boolean coreFallbackUsed = false;
+			int coreCutoff = nonKeyword.size();
+			if (nonKeyword.size() >= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
+				double maxSemNk = nonKeyword.get(0).semanticScore;
+				double nkMinGap = Math.max(
+						maxSemNk * refinementAdaptiveGapRatio(scored),
+						secondPassMinGap(scored));
+				coreCutoff = findAdaptiveCutoff(nonKeyword, nonKeyword.size(),
+						config.noiseProfile.absoluteSimilarityFloor(),
+						config.scoreGapMultiplier, nkMinGap);
+				int fisherCut = nonKeyword.size();
+				double totalSumF = 0;
+				double totalSumSqF = 0;
+				for (ScoredEmbedding se : nonKeyword) {
+					totalSumF += se.semanticScore;
+					totalSumSqF += se.semanticScore * se.semanticScore;
+				}
+				int nF = nonKeyword.size();
+				double leftSumF = 0;
+				double leftSumSqF = 0;
+				double rightSumF = totalSumF;
+				double rightSumSqF = totalSumSqF;
+				double maxGF = 0;
+				for (int i = 1; i < nF; i++) {
+					double s = nonKeyword.get(i - 1).semanticScore;
+					leftSumF += s;
+					leftSumSqF += s * s;
+					rightSumF -= s;
+					rightSumSqF -= s * s;
+					if (i < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
+						continue;
+					}
+					int nR = nF - i;
+					if (nR < 2) {
+						break;
+					}
+					double lm = leftSumF / i;
+					double rm = rightSumF / nR;
+					double lv = leftSumSqF / i - lm * lm;
+					double rv = rightSumSqF / nR - rm * rm;
+					double den = lv / (i - 1) + rv / (nR - 1) + 1e-12;
+					double diff = lm - rm;
+					double t2 = diff * diff / den;
+					double bGap = nonKeyword.get(i - 1).semanticScore
+							- nonKeyword.get(i).semanticScore;
+					double gf = bGap * t2;
+					if (gf > maxGF) {
+						maxGF = gf;
+						fisherCut = i;
+					}
+				}
+				log.debug("Fisher cluster cut at {} (score={})",
+						fisherCut, String.format("%.2f", maxGF));
+				if (fisherCut < coreCutoff) {
+					double bGapF = nonKeyword.get(fisherCut - 1).semanticScore
+							- nonKeyword.get(fisherCut).semanticScore;
+					double prevGapF = nonKeyword.get(fisherCut - 2).semanticScore
+							- nonKeyword.get(fisherCut - 1).semanticScore;
+					if (bGapF > prevGapF) {
+						coreFallbackUsed = true;
+						coreCutoff = fisherCut;
+					} else {
+						log.debug("Fisher cut at {} suppressed: boundary gap {} <= prev gap {}",
+								fisherCut,
+								String.format("%.4f", bGapF),
+								String.format("%.4f", prevGapF));
+					}
+				}
+				for (int i = 0; i < coreCutoff; i++) {
+					semanticCore.add(nonKeyword.get(i));
+				}
+				log.debug("Semantic core: {} non-keyword records, primary gap at {}, core size {}",
+						nonKeyword.size(), coreCutoff, semanticCore.size());
+			}
+			boolean coreHasStructure = !semanticCore.isEmpty()
+					&& coreCutoff < nonKeyword.size();
+			boolean coreRelevant = false;
+			if (coreHasStructure && !semanticCore.isEmpty()
+					&& !candidates.isEmpty()) {
+				float[] coreVec = semanticCore.get(0).embedding.getEmbeddingVector();
+				double maxCoreKwCosine = 0;
+				for (ScoredEmbedding se : candidates) {
+					double cos = cosineSimilarity(coreVec,
+							se.embedding.getEmbeddingVector());
+					if (cos > maxCoreKwCosine) {
+						maxCoreKwCosine = cos;
+					}
+				}
+				coreRelevant = maxCoreKwCosine
+						>= ChartSearchAiConstants.SEMANTIC_CORE_MIN_COSINE;
+				log.debug("Core topical check: maxCos={} vs threshold={}, relevant={}",
+						String.format("%.4f", maxCoreKwCosine),
+						ChartSearchAiConstants.SEMANTIC_CORE_MIN_COSINE,
+						coreRelevant);
+			}
+			log.debug("Core validation: structure={}, relevant={}, cutoff={}/{}, semDom={}",
+					coreHasStructure, coreRelevant,
+					coreCutoff, nonKeyword.size(), semanticDominance);
+			if (semanticDominance || coreRelevant) {
+				if (!semanticCore.isEmpty()) {
+					double coreMinSem = semanticCore.get(
+							semanticCore.size() - 1).semanticScore;
+					double coreMaxSem = semanticCore.get(0).semanticScore;
+					double expansionRatio = coreFallbackUsed
+							? (coreMaxSem > 0
+									? coreMinSem / coreMaxSem
+									: ChartSearchAiConstants.SEMANTIC_CORE_SCORE_RATIO)
+							: ChartSearchAiConstants.SEMANTIC_CORE_SCORE_RATIO;
+					double scoreFloor = coreMinSem * expansionRatio;
+					List<ScoredEmbedding> expanded =
+							new ArrayList<ScoredEmbedding>(semanticCore);
+					Set<Integer> expandedIds = new java.util.HashSet<Integer>();
+					for (ScoredEmbedding se : semanticCore) {
+						expandedIds.add(se.embedding.getResourceId());
+					}
+					if (!semanticDominance) {
+						for (ScoredEmbedding se : preRefinementCandidates) {
+							if (expandedIds.contains(se.embedding.getResourceId())) {
+								continue;
+							}
+							if (se.semanticScore < scoreFloor) {
+								continue;
+							}
+							float[] vec = se.embedding.getEmbeddingVector();
+							double maxCos = 0;
+							for (ScoredEmbedding core : semanticCore) {
+								double cos = cosineSimilarity(vec,
+										core.embedding.getEmbeddingVector());
+								if (cos > maxCos) {
+									maxCos = cos;
+								}
+							}
+							if (maxCos >= ChartSearchAiConstants.SEMANTIC_CORE_MIN_COSINE) {
+								expanded.add(se);
+								expandedIds.add(se.embedding.getResourceId());
+							}
+						}
+					}
+					candidates = expanded;
+					log.debug("Semantic core expansion: core={}, floor={}, result={}",
+							semanticCore.size(),
+							String.format("%.4f", scoreFloor),
+							candidates.size());
+					if (candidates.size() > topK) {
+						boolean allExpHaveKw = true;
+						for (ScoredEmbedding se : candidates) {
+							if (se.keywordScore == 0) {
+								allExpHaveKw = false;
+								break;
+							}
+						}
+						if (!allExpHaveKw) {
+							candidates = new ArrayList<ScoredEmbedding>(
+									candidates.subList(0, topK));
+							log.debug("Semantic core topK cap: {} -> {}",
+									expanded.size(), topK);
+						}
+					}
+					partialKwValidatedOut[0] = true;
+				} else {
+					double maxSemanticKw = 0;
+					for (ScoredEmbedding se : candidates) {
+						if (se.semanticScore > maxSemanticKw) {
+							maxSemanticKw = se.semanticScore;
+						}
+					}
+					double semFloor = maxSemanticKw
+							* refinementSemanticRatio(candidates);
+					List<ScoredEmbedding> filtered = new ArrayList<ScoredEmbedding>();
+					for (ScoredEmbedding se : candidates) {
+						if (se.semanticScore >= semFloor) {
+							filtered.add(se);
+						}
+					}
+					if (filtered.size() >= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
+						log.debug("Partial-kw semantic floor: {} -> {} (floor={})",
+								candidates.size(), filtered.size(),
+								String.format("%.4f", semFloor));
+						candidates = filtered;
+					}
+				}
+			} else {
+				double maxSemanticKw = 0;
+				for (ScoredEmbedding se : candidates) {
+					if (se.semanticScore > maxSemanticKw) {
+						maxSemanticKw = se.semanticScore;
+					}
+				}
+				double semFloor = maxSemanticKw * config.similarityRatio;
+				List<ScoredEmbedding> filtered = new ArrayList<ScoredEmbedding>();
+				for (ScoredEmbedding se : candidates) {
+					if (se.semanticScore >= semFloor) {
+						filtered.add(se);
+					}
+				}
+				if (filtered.size() >= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
+					log.debug("Low-coverage kw semantic floor: {} -> {} (floor={})",
+							candidates.size(), filtered.size(),
+							String.format("%.4f", semFloor));
+					candidates = filtered;
+				}
+			}
+		} else if (!uniformKeywords) {
+			double maxSemanticRefined = 0;
+			for (ScoredEmbedding se : candidates) {
+				if (se.semanticScore > maxSemanticRefined) {
+					maxSemanticRefined = se.semanticScore;
+				}
+			}
+			double adaptiveMinGap = Math.max(
+					maxSemanticRefined * refinementAdaptiveGapRatio(scored),
+					secondPassMinGap(scored));
+			int refinedCutoff = findAdaptiveCutoff(candidates,
+					candidates.size(), minScore,
+					config.scoreGapMultiplier, adaptiveMinGap);
+			if (refinedCutoff < candidates.size()) {
+				if (isGapCoherent(candidates, refinedCutoff,
+						config.gapValidationCosineThreshold)) {
+					double semanticFloor = maxSemanticRefined
+							* refinementSemanticRatio(candidates);
+					List<ScoredEmbedding> floored = new ArrayList<ScoredEmbedding>();
+					for (ScoredEmbedding se : candidates) {
+						if (se.semanticScore >= semanticFloor) {
+							floored.add(se);
+						}
+					}
+					log.debug("Refinement gap is intra-topic, using semantic floor {} instead: {} -> {}",
+							String.format("%.4f", semanticFloor),
+							candidates.size(), floored.size());
+					candidates = floored;
+				} else if (queryTerms != null) {
+					List<ScoredEmbedding> rescued =
+							filterRedundantKeywordTier(candidates,
+									queryTerms, kwMax);
+					if (rescued.size() >= refinedCutoff) {
+						log.debug("Refinement gap at {} is a concept boundary: rescued {} records with new coverage",
+								refinedCutoff, rescued.size() - refinedCutoff);
+						candidates = rescued;
+					} else {
+						candidates = new ArrayList<ScoredEmbedding>(
+								candidates.subList(0, refinedCutoff));
+					}
+				} else {
+					candidates = new ArrayList<ScoredEmbedding>(
+							candidates.subList(0, refinedCutoff));
+				}
+			} else if (queryTerms != null) {
+				candidates = filterRedundantKeywordTier(
+						candidates, queryTerms, kwMax);
+			}
+		}
+		return candidates;
+	}
+
+	/**
 	 * Non-refinement post-processing path — stage 5b of the filter pipeline.
 	 *
 	 * <p>Runs when {@code refinementActivated} is false (no keyword subset
