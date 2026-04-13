@@ -2534,6 +2534,25 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void realModel_latestWeightQuery_shouldReturnWeightRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"what is the latest weight?", 100);
+
+		// All Weight records in FULL dataset
+		assertEquals(Arrays.asList(18, 26, 33, 63, 77, 101, 114),
+				result,
+				"Should return all Weight records");
+		for (int idx : result) {
+			assertTrue(FULL_PATIENT_DATASET[idx].contains("Weight"),
+					"Record [" + idx + "] should be Weight: "
+							+ FULL_PATIENT_DATASET[idx]);
+		}
+	}
+
+	@Test
 	public void realModel_treatedForQuery_thirdDataset_shouldReturnAllConditions() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
