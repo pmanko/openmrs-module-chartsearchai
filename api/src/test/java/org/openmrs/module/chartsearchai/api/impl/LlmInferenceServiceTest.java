@@ -2541,15 +2541,10 @@ public class LlmInferenceServiceTest {
 		List<Integer> result = runRealModelPipeline(
 				"what is the latest weight?", 100);
 
-		// All Weight records in FULL dataset
-		assertEquals(Arrays.asList(18, 26, 33, 63, 77, 101, 114),
-				result,
-				"Should return all Weight records");
-		for (int idx : result) {
-			assertTrue(FULL_PATIENT_DATASET[idx].contains("Weight"),
-					"Record [" + idx + "] should be Weight: "
-							+ FULL_PATIENT_DATASET[idx]);
-		}
+		// Clinically, "latest weight" means the most recent
+		// measurement: index 18 (2025-10-30, 94.0 kg).
+		assertEquals(Arrays.asList(18), result,
+				"Should return only the most recent Weight record");
 	}
 
 	@Test
