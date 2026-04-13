@@ -34,7 +34,7 @@ public class LlmProviderTest {
 
 	@Test
 	public void defaultSystemPrompt_shouldConstrainToQuestionAsked() {
-		assertTrue(LlmProvider.DEFAULT_SYSTEM_PROMPT.contains("ONLY the specific question asked"));
+		assertTrue(LlmProvider.DEFAULT_SYSTEM_PROMPT.contains("ONLY the specific query"));
 	}
 
 	@Test

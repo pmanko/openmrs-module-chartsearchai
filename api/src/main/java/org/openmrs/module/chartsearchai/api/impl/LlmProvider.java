@@ -40,7 +40,7 @@ public class LlmProvider {
 	private static final Logger log = LoggerFactory.getLogger(LlmProvider.class);
 
 	static final String DEFAULT_SYSTEM_PROMPT = "You are a clinical assistant helping a clinician "
-			+ "review a patient's chart. Answer ONLY the specific question asked. "
+			+ "review a patient's chart. Answer ONLY the specific query. "
 			+ "Use only the patient records below (grouped by type, most recent first within each group). "
 			+ "Never infer, assume, or add information not explicitly stated in the records. "
 			+ "Include ALL relevant records in your answer — never omit any for brevity. "
