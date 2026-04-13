@@ -984,39 +984,12 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 		boolean belowFloorRescued = floorResult;
 
-		// Slim-margin gate: when the top score is above the absolute
-		// floor but within one minScoreGap of it, and zero keywords
-		// match, verify there is at least a pair of records above the
-		// floor. A single record just above the floor (e.g. Rash
-		// at 0.29 for "any allergies?" with floor 0.26) is likely a
-		// coincidental near-miss in embedding space, not genuine
-		// signal. A real match produces at least 2 records above the
-		// floor (e.g. condition + diagnosis for the same concept).
-		if (!belowFloorRescued
-				&& keywordMatchCount == 0
-				&& queryTermCount > 0
-				&& maxSemanticScore
-				< config.noiseProfile.absoluteSimilarityFloor()
-						+ config.minScoreGap) {
-			double smFloor =
-					config.noiseProfile.absoluteSimilarityFloor();
-			int aboveFloorCount = 0;
-			for (ScoredEmbedding se : scored) {
-				if (se.semanticScore >= smFloor) {
-					aboveFloorCount++;
-				}
-			}
-			if (aboveFloorCount < 2) {
-				log.debug("Slim-margin gate: maxSem={} is within "
-						+ "{} of floor {}, zero keywords, and only "
-						+ "{} record(s) above floor — returning "
-						+ "empty",
-						String.format("%.4f", maxSemanticScore),
-						config.minScoreGap,
-						String.format("%.4f", smFloor),
-						aboveFloorCount);
-				return Collections.emptyList();
-			}
+		// Slim-margin gate: reject suspicious single-record clusters
+		// just above the noise floor with zero keyword matches.
+		if (!applySlimMarginGate(scored, maxSemanticScore,
+				queryTermCount, keywordMatchCount, belowFloorRescued,
+				config)) {
+			return Collections.emptyList();
 		}
 
 		// Stricter gate when too few records match any query keyword:
@@ -2454,6 +2427,48 @@ public class LlmInferenceService implements ChartSearchService {
 			return null;
 		}
 		return Boolean.TRUE;
+	}
+
+	/**
+	 * Slim-margin gate — stage 2 of the filter pipeline.
+	 *
+	 * <p>When the top semantic score is above the absolute floor but
+	 * within one {@code minScoreGap} of it, with zero keyword matches,
+	 * require at least 2 records above the floor. A single record just
+	 * above the floor (e.g. Rash at 0.29 for "any allergies?" with
+	 * floor 0.26) is likely a coincidental near-miss, not genuine signal.
+	 *
+	 * @return {@code true} to continue, {@code false} to short-circuit
+	 *         with an empty result
+	 */
+	static boolean applySlimMarginGate(List<ScoredEmbedding> scored,
+			double maxSemanticScore, int queryTermCount,
+			int keywordMatchCount, boolean belowFloorRescued,
+			PipelineConfig config) {
+		if (belowFloorRescued || keywordMatchCount != 0 || queryTermCount <= 0) {
+			return true;
+		}
+		double smFloor = config.noiseProfile.absoluteSimilarityFloor();
+		if (maxSemanticScore >= smFloor + config.minScoreGap) {
+			return true;
+		}
+		int aboveFloorCount = 0;
+		for (ScoredEmbedding se : scored) {
+			if (se.semanticScore >= smFloor) {
+				aboveFloorCount++;
+			}
+		}
+		if (aboveFloorCount < 2) {
+			log.debug("Slim-margin gate: maxSem={} is within "
+					+ "{} of floor {}, zero keywords, and only "
+					+ "{} record(s) above floor — returning empty",
+					String.format("%.4f", maxSemanticScore),
+					config.minScoreGap,
+					String.format("%.4f", smFloor),
+					aboveFloorCount);
+			return false;
+		}
+		return true;
 	}
 
 	/**
