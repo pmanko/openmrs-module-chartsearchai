@@ -2459,7 +2459,7 @@ public class LlmInferenceServiceTest {
 	// ---- Multi-type infection query ----
 
 	@Test
-	public void realModel_infectionsQuery_shouldReturnAllInfectionRecords() {
+	public void realModel_infectionsQuery_shouldReturnInfectionRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
@@ -2637,7 +2637,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void realModel_treatedForQuery_thirdDataset_shouldReturnActiveConditions() {
+	public void realModel_treatedForQuery_thirdDataset_shouldReturnChronicDiseaseConditions() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
@@ -2714,7 +2714,7 @@ public class LlmInferenceServiceTest {
 	// ---- Specific clinical queries ----
 
 	@Test
-	public void realModel_opportunisticInfectionsQuery_shouldReturnHivRecords() {
+	public void realModel_opportunisticInfectionsQuery_shouldReturnHivTbAndKaposiSarcomaRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
@@ -3511,7 +3511,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void longSentence_sexuallyTransmittedInfections_shouldReturnHivOnly() {
+	public void longSentence_sexuallyTransmittedInfections_shouldReturnHivRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
