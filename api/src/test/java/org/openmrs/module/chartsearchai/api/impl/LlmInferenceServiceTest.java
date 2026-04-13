@@ -3157,14 +3157,39 @@ public class LlmInferenceServiceTest {
 	// ---- FOURTH dataset: remaining cross-dataset coverage ----
 
 	@Test
-	public void vitalSigns_fourthDataset_shouldReturnEmpty() {
+	public void vitalSigns_fourthDataset_shouldReturnAllVitalSigns() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		assertTrue(
-				runRealModelPipeline("vital signs", 100,
-						FOURTH_PATIENT_DATASET).isEmpty(),
-				"FOURTH dataset umbrella vital signs query returns empty");
+		// FOURTH dataset has Temperature, BP, Pulse, SpO2, RR records
+		// across multiple encounters — asserting against the data, not
+		// against the pipeline's prior behaviour. Mirrors the SECOND,
+		// THIRD, and FIFTH dataset assertions for the same query.
+		List<Integer> result = runRealModelPipeline("vital signs", 100,
+				FOURTH_PATIENT_DATASET);
+		assertFalse(result.isEmpty(),
+				"FOURTH dataset contains vital signs");
+		boolean hasTemp = false, hasBP = false, hasPulse = false;
+		boolean hasRR = false, hasSpO2 = false;
+		for (int idx : result) {
+			String rec = FOURTH_PATIENT_DATASET[idx];
+			assertTrue(
+					rec.contains("Temperature") || rec.contains("blood pressure")
+							|| rec.contains("Pulse")
+							|| rec.contains("Respiratory rate")
+							|| rec.contains("oxygen saturation"),
+					"Record [" + idx + "] should be a vital sign: " + rec);
+			if (rec.contains("Temperature")) hasTemp = true;
+			if (rec.contains("blood pressure")) hasBP = true;
+			if (rec.contains("Pulse")) hasPulse = true;
+			if (rec.contains("Respiratory rate")) hasRR = true;
+			if (rec.contains("oxygen saturation")) hasSpO2 = true;
+		}
+		assertTrue(hasTemp, "Should include Temperature records");
+		assertTrue(hasBP, "Should include Blood Pressure records");
+		assertTrue(hasPulse, "Should include Pulse records");
+		assertTrue(hasRR, "Should include Respiratory Rate records");
+		assertTrue(hasSpO2, "Should include SpO2 records");
 	}
 
 	@Test
@@ -3411,21 +3436,36 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void longSentence_bloodPressureReadings_thirdDataset_shouldReturnAllBp() {
+	public void longSentence_bloodPressureAndWeightReadings_thirdDataset_shouldReturnBpAndWeight() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
+		// THIRD dataset contains both blood pressure AND weight records,
+		// and the query explicitly asks for both. Asserting against the
+		// data + query, not against the pipeline's prior behaviour.
+		// Mirrors longSentence_bloodPressureAndWeightReadings_shouldReturnAllBpRecords
+		// for the FULL dataset.
 		List<Integer> result = runRealModelPipeline(
 				"I need to know the patient's most recent blood pressure and weight readings",
 				100, THIRD_PATIENT_DATASET);
-		assertEquals(20, result.size(),
-				"Should return 20 blood pressure records from THIRD dataset");
 		for (int idx : result) {
 			assertTrue(
-					THIRD_PATIENT_DATASET[idx].contains("blood pressure"),
-					"Record [" + idx + "] should be a blood pressure record: "
+					THIRD_PATIENT_DATASET[idx].contains("blood pressure")
+							|| THIRD_PATIENT_DATASET[idx].contains("Weight"),
+					"Record [" + idx + "] should be BP or Weight: "
 							+ THIRD_PATIENT_DATASET[idx]);
 		}
+		boolean hasBP = false, hasWeight = false;
+		for (int idx : result) {
+			if (THIRD_PATIENT_DATASET[idx].contains("blood pressure")) {
+				hasBP = true;
+			}
+			if (THIRD_PATIENT_DATASET[idx].contains("Weight")) {
+				hasWeight = true;
+			}
+		}
+		assertTrue(hasBP, "Should include Blood Pressure records");
+		assertTrue(hasWeight, "Should include Weight records");
 	}
 
 	@Test
