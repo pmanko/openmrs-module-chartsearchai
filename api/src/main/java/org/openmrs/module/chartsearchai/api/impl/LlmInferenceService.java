@@ -1652,6 +1652,21 @@ public class LlmInferenceService implements ChartSearchService {
 				}
 				log.debug("Semantic core: {} non-keyword records, primary gap at {}, core size {}",
 						nonKeyword.size(), coreCutoff, semanticCore.size());
+				// Coherence-outlier concept pruning: when the core
+				// contains ≥3 distinct concepts (each with ≥2 members,
+				// i.e. condition+diagnosis pairs), gap detection may
+				// have admitted a topical neighbour that the embedding
+				// model placed inside the cluster but whose connection
+				// to the rest is no stronger than typical cross-concept
+				// noise. Drop any concept whose mean inter-concept
+				// cosine to non-pair core members is at or below the
+				// patient's own noiseMean (e.g. CVA inside a
+				// "musculoskeletal injuries" core that's otherwise
+				// Nonunion + Achilles + Crushing injury). Generic —
+				// uses only the patient's pairwise embedding
+				// statistics, no concept-name knowledge.
+				semanticCore = pruneCoherenceOutlierConcepts(
+						semanticCore, config.noiseProfile);
 			}
 			boolean coreHasStructure = !semanticCore.isEmpty()
 					&& coreCutoff < nonKeyword.size();
@@ -1715,6 +1730,42 @@ public class LlmInferenceService implements ChartSearchService {
 								expanded.add(se);
 								expandedIds.add(se.embedding.getResourceId());
 							}
+						}
+					}
+					// Concept-pair rescue for keyword-matched anchors:
+					// when a kw-matched record from the refinement input
+					// shares its concept name with a record already in
+					// expanded, the only reason it got dropped is the
+					// cosine-to-core boundary cutting through a
+					// same-concept pair (e.g. Crushing-injury condition
+					// survived expansion at cos≈0.56 but its diagnosis
+					// sibling failed at cos 0.5494). Restore the missing
+					// partner — its keyword evidence is identical and
+					// its embedding is by construction near the
+					// survivor's, so the cluster is more coherent with
+					// it included than split.
+					Set<String> expandedConcepts = new HashSet<String>();
+					for (ScoredEmbedding se : expanded) {
+						String cn = ConceptNameUtil.extractConceptName(
+								se.embedding.getTextContent());
+						if (cn != null) {
+							expandedConcepts.add(cn);
+						}
+					}
+					for (ScoredEmbedding se : candidates) {
+						if (expandedIds.contains(se.embedding.getResourceId())) {
+							continue;
+						}
+						if (se.keywordScore <= 0) {
+							continue;
+						}
+						String cn = ConceptNameUtil.extractConceptName(
+								se.embedding.getTextContent());
+						if (cn != null && expandedConcepts.contains(cn)) {
+							expanded.add(se);
+							expandedIds.add(se.embedding.getResourceId());
+							log.debug("Concept-pair rescue: re-added kw-matched [{}] (concept={})",
+									se.embedding.getResourceId(), cn);
 						}
 					}
 					candidates = expanded;
@@ -2494,6 +2545,136 @@ public class LlmInferenceService implements ChartSearchService {
 	 * @return filtered candidates, or the original list if filtering
 	 *         would produce fewer than {@code ADAPTIVE_MIN_RECORDS}
 	 */
+	/**
+	 * Removes concept-pair outliers from a semantic core by comparing
+	 * each concept's average inter-concept cosine to the patient's
+	 * cross-concept noise baseline. A concept whose mean cosine to
+	 * non-pair core members is at or below {@code noiseProfile.noiseMean}
+	 * is, by construction, statistically indistinguishable from a
+	 * random unrelated pair — gap detection let it into the cluster
+	 * because its similarity to the query happened to fall in the
+	 * cluster's score range, but its embedding is no closer to the
+	 * other cluster members than chance. Drop it as a topical
+	 * neighbour rather than a true cluster member.
+	 *
+	 * <p>The cutoff is {@code noiseProfile.noiseMean} — entirely
+	 * data-derived from the patient's own cross-concept pairwise
+	 * statistics. No σ multipliers, no calibrated thresholds, no
+	 * concept-name knowledge.
+	 *
+	 * <p>Only fires when there are ≥ 3 distinct concepts in the core
+	 * and ≥ 2 of them have ≥ 2 members (otherwise there's no
+	 * meaningful concept-pair structure to analyse).
+	 */
+	static List<ScoredEmbedding> pruneCoherenceOutlierConcepts(
+			List<ScoredEmbedding> core,
+			org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile noiseProfile) {
+		if (core.size() < 4) {
+			return core;
+		}
+		// Group core members by concept name.
+		Map<String, List<ScoredEmbedding>> byConcept =
+				new java.util.LinkedHashMap<String, List<ScoredEmbedding>>();
+		for (ScoredEmbedding se : core) {
+			String cn = ConceptNameUtil.extractConceptName(
+					se.embedding.getTextContent());
+			if (cn == null) {
+				cn = "__unnamed_" + se.embedding.getResourceId();
+			}
+			List<ScoredEmbedding> list = byConcept.get(cn);
+			if (list == null) {
+				list = new ArrayList<ScoredEmbedding>();
+				byConcept.put(cn, list);
+			}
+			list.add(se);
+		}
+		if (byConcept.size() < 3) {
+			return core;
+		}
+		int multiMember = 0;
+		for (List<ScoredEmbedding> g : byConcept.values()) {
+			if (g.size() >= 2) {
+				multiMember++;
+			}
+		}
+		if (multiMember < 2) {
+			return core;
+		}
+		// For each concept group, compute average pairwise cosine
+		// from each of its members to every core member NOT in the
+		// same concept group.
+		Map<String, Double> conceptInterAvg =
+				new java.util.LinkedHashMap<String, Double>();
+		for (Map.Entry<String, List<ScoredEmbedding>> e : byConcept.entrySet()) {
+			String concept = e.getKey();
+			List<ScoredEmbedding> group = e.getValue();
+			double sum = 0;
+			int count = 0;
+			for (ScoredEmbedding member : group) {
+				float[] mv = member.embedding.getEmbeddingVector();
+				if (mv == null) {
+					continue;
+				}
+				for (ScoredEmbedding other : core) {
+					String ocn = ConceptNameUtil.extractConceptName(
+							other.embedding.getTextContent());
+					if (ocn != null && ocn.equals(concept)) {
+						continue;
+					}
+					float[] ov = other.embedding.getEmbeddingVector();
+					if (ov == null) {
+						continue;
+					}
+					sum += cosineSimilarity(mv, ov);
+					count++;
+				}
+			}
+			if (count > 0) {
+				conceptInterAvg.put(concept, sum / count);
+			}
+		}
+		if (conceptInterAvg.size() < 3) {
+			return core;
+		}
+		// Drop concepts whose inter-concept cosine to the rest of the
+		// core sits at or below the patient's noise baseline — they're
+		// statistically indistinguishable from random unrelated pairs.
+		double cutoff = noiseProfile.noiseMean;
+		Set<String> drop = new HashSet<String>();
+		for (Map.Entry<String, Double> e : conceptInterAvg.entrySet()) {
+			if (e.getValue() <= cutoff) {
+				drop.add(e.getKey());
+			}
+		}
+		if (drop.isEmpty()) {
+			return core;
+		}
+		// Don't prune if it would leave too few members.
+		int kept = 0;
+		for (ScoredEmbedding se : core) {
+			String cn = ConceptNameUtil.extractConceptName(
+					se.embedding.getTextContent());
+			if (cn == null || !drop.contains(cn)) {
+				kept++;
+			}
+		}
+		if (kept < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
+			return core;
+		}
+		List<ScoredEmbedding> pruned = new ArrayList<ScoredEmbedding>();
+		for (ScoredEmbedding se : core) {
+			String cn = ConceptNameUtil.extractConceptName(
+					se.embedding.getTextContent());
+			if (cn == null || !drop.contains(cn)) {
+				pruned.add(se);
+			}
+		}
+		log.debug("Coherence-outlier concept pruning: dropped {} concepts ({}), kept {} of {} core members (cutoff=noiseMean={})",
+				drop.size(), drop, pruned.size(), core.size(),
+				String.format("%.4f", cutoff));
+		return pruned;
+	}
+
 	static List<ScoredEmbedding> filterRedundantKeywordTier(
 			List<ScoredEmbedding> candidates, String[] queryTerms,
 			double kwMax) {
