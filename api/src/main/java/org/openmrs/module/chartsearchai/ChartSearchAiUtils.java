@@ -11,7 +11,6 @@ package org.openmrs.module.chartsearchai;
 
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS;
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.COHERENCE_ADAPTIVE_GAP_RATIO;
-import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.COHERENCE_GAP_MULTIPLIER;
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.COHERENCE_REFERENCE_N;
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.COHERENCE_SAME_TOPIC_FLOOR;
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.PIPELINE_HYBRID;
@@ -248,6 +247,16 @@ public class ChartSearchAiUtils {
 
 		// Gap detection
 		double maxCoherence = coherence[sortedIdx[0]];
+
+		// Gap multiplier: Gumbel extreme value theory — the
+		// coherence filter has n*(n-1)/2 pairwise comparisons
+		// feeding each average. Using sqrt(2*ln(nPairs)) as the
+		// gap multiplier means we only trigger on gaps that would
+		// be extreme across that many comparisons.
+		double nPairs = n * (n - 1.0) / 2.0;
+		double gapMultiplier = Math.sqrt(
+				2.0 * Math.log(Math.max(2.0, nPairs)));
+
 		double minCoherence = coherence[sortedIdx[n - 1]];
 		double coherenceRange = maxCoherence - minCoherence;
 		int refPairs = COHERENCE_REFERENCE_N - 1;
@@ -264,7 +273,7 @@ public class ChartSearchAiUtils {
 			double gap = coherence[sortedIdx[i - 1]] - coherence[sortedIdx[i]];
 			if (i >= ADAPTIVE_MIN_RECORDS && i >= 2) {
 				double avgGap = gapSum / (i - 1);
-				if (gap > avgGap * COHERENCE_GAP_MULTIPLIER
+				if (gap > avgGap * gapMultiplier
 						&& gap > coherenceMinGap) {
 					keepCount = i;
 					break;

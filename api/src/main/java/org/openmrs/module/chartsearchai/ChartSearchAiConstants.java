@@ -55,59 +55,12 @@ public class ChartSearchAiConstants {
 
 	public static final double ABSOLUTE_SIMILARITY_FLOOR = 0.25;
 
-	/** Minimum z-score (standard deviations above mean) required for the
-	 * top semantic score when fewer than {@link #ADAPTIVE_MIN_RECORDS}
-	 * records match any query keyword. Without keyword corroboration, the
-	 * top semantic score must be a statistical outlier — not just part of
-	 * the noise floor. A z-score of 1.5 means the best match is in the
-	 * top ~6.7% of the score distribution, indicating genuine semantic
-	 * affinity rather than the embedding model grouping similar record
-	 * types together (e.g. all pulse records scoring ~0.26 for "CD4
-	 * count"). This threshold automatically adapts to any embedding
-	 * model and dataset size since it is relative to the score
-	 * distribution. */
-	public static final double ZERO_KEYWORD_MIN_Z_SCORE = 1.5;
-
-	/** Minimum z-score for zero-keyword candidates. After gap
-	 * detection and coherence filtering, surviving zero-keyword
-	 * candidates may be noise — records about an irrelevant topic
-	 * (e.g. pulse readings for a CD4 query) that scored slightly
-	 * above the dataset baseline. For small clusters (≤3
-	 * candidates) the max z-score is checked; for larger clusters
-	 * (≥4) the median z-score is used. This prevents a single
-	 * high-scoring false positive from pushing the max above
-	 * threshold while the cluster as a whole is noise. */
-	public static final double ZERO_KEYWORD_CLUSTER_MIN_Z = 2.5;
-
-	/** Minimum z-score for the floor gate rescue. When the top semantic
-	 * score is below {@link #ABSOLUTE_SIMILARITY_FLOOR}, this threshold
-	 * determines whether the query has genuine signal despite low
-	 * absolute scores. After passing this gate, the rescue also
-	 * requires a minimum cluster density (see
-	 * {@link #FLOOR_RESCUE_MIN_CLUSTER_SIZE}). Value of 2.0 separates
-	 * genuine vocabulary-mismatch queries (e.g. "hot" → Temperature,
-	 * z≈2.25) from irrelevant queries (e.g. "fracture" on a
-	 * fracture-free dataset, z≈1.90). */
+	/** Minimum z-score for the tight-cluster bypass of the zero-keyword
+	 * z-score gate. When the ratio floor produces a small cluster AND
+	 * the initial z-score exceeds this threshold AND the max semantic
+	 * score is comfortably above the absolute floor, the cluster is
+	 * considered validated and the z-score gate is bypassed. */
 	public static final double FLOOR_RESCUE_MIN_Z_SCORE = 2.0;
-
-	/** Fraction of the max semantic score defining the density band for
-	 * the floor rescue cluster check. Records scoring within this band
-	 * of the max are counted to verify a genuine cluster exists. Value
-	 * of 0.05 means records must score ≥ 95% of the max. Vocabulary-
-	 * mismatch queries ("how hot" → 11 Temperature records at 0.203–
-	 * 0.212) produce dense clusters in this band, while false positives
-	 * ("TB" on a TB-free dataset → 2 Pneumonia records) do not. */
-	public static final double FLOOR_RESCUE_DENSITY_BAND = 0.05;
-
-	/** Minimum number of records in the density band for the floor
-	 * rescue to activate. Requires a genuine cluster of similar-scoring
-	 * records, not just 1-3 isolated outliers that coincidentally score
-	 * close together. Value of 4 separates legitimate queries (density
-	 * 8-11+, e.g. Temperature records for "how hot") from false
-	 * positives (density 2-3, e.g. unrelated conditions for "TB" on
-	 * TB-free datasets — even when synonym-enriched records boost one
-	 * extra record into the density band). */
-	public static final int FLOOR_RESCUE_MIN_CLUSTER_SIZE = 4;
 
 	/** Minimum number of records required for the z-score gate to
 	 * activate. Below this threshold, the score distribution has too
@@ -125,12 +78,6 @@ public class ChartSearchAiConstants {
 	 */
 	public static final double DEFAULT_MIN_SCORE_GAP = 0.10;
 
-	/** Fraction of the IQR used as the adaptive minimum gap for the
-	 * first-pass gap detector when the score distribution is compressed
-	 * (IQR &lt; minScoreGap / 2). Value of 0.30 means a gap must be at
-	 * least 30% of the IQR to trigger. */
-	public static final double MIN_GAP_RANGE_FRACTION = 0.30;
-
 	/** Absolute coherence floor below which a candidate is a true outlier.
 	 * If a candidate flagged for removal by the coherence gap detector has
 	 * average pairwise coherence at or above this value, the cut is
@@ -142,29 +89,6 @@ public class ChartSearchAiConstants {
 	 * cross-topic outliers have coherence ~0.49-. Value of 0.70 sits
 	 * well between these ranges. */
 	public static final double COHERENCE_SAME_TOPIC_FLOOR = 0.70;
-
-	/** Minimum gap for the second-pass gap detection. The second pass
-	 * reuses the primary gap multiplier ({@link #DEFAULT_SCORE_GAP_MULTIPLIER})
-	 * but with a much lower absolute floor than the first pass
-	 * ({@link #DEFAULT_MIN_SCORE_GAP}). This is what makes it "sensitive":
-	 * both passes require the same relative anomaly (2.5× the running
-	 * average), but the second pass can detect gaps as small as 0.01
-	 * whereas the first pass ignores anything below 0.10. */
-	public static final double SECOND_PASS_MIN_GAP = 0.01;
-
-	/** Fraction of max semantic score used as the adaptive minimum gap in
-	 * the refinement path's second-pass gap detection. Scales the threshold
-	 * with the score range of the current query. */
-	public static final double REFINEMENT_ADAPTIVE_GAP_RATIO = 0.10;
-
-	/** Minimum fraction of the top semantic score that a keyword-matched
-	 * record must have to be considered genuinely relevant when the
-	 * refinement path's gap detection finds an intra-topic gap (validated
-	 * by cross-boundary cosine). This separates records that are
-	 * semantically close to the query intent (e.g. Weight for a "blood
-	 * pressure, weight, and temperature" query) from coincidental keyword
-	 * matches (e.g. Blood Oxygen matching "blood"). */
-	public static final double REFINEMENT_SEMANTIC_RATIO = 0.70;
 
 	/** Minimum cosine similarity between a keyword-matched record and
 	 * the semantic core (non-keyword records found by gap detection)
@@ -186,10 +110,6 @@ public class ChartSearchAiConstants {
 	 * candidates must be within 20% of the core's relevance level. */
 	public static final double SEMANTIC_CORE_SCORE_RATIO = 0.80;
 
-
-	/** Gap multiplier for inter-candidate coherence outlier detection.
-	 * Moderate sensitivity — only removes clear topic outliers. */
-	public static final double COHERENCE_GAP_MULTIPLIER = 2.0;
 
 	/** Fraction of max coherence used as the adaptive minimum gap for
 	 * coherence outlier detection. */

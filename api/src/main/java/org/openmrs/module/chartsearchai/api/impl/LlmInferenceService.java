@@ -30,6 +30,8 @@ import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE;
+
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
@@ -41,6 +43,7 @@ import org.openmrs.module.chartsearchai.api.HybridRetriever;
 import org.openmrs.module.chartsearchai.api.LuceneIndexer;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
+import org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
@@ -707,7 +710,8 @@ public class LlmInferenceService implements ChartSearchService {
 
 		PipelineConfig config = new PipelineConfig(
 				getKeywordWeight(), getScoreGapMultiplier(), getMinScoreGap(),
-				getGapValidationCosineThreshold(), getSimilarityRatio());
+				getGapValidationCosineThreshold(), getSimilarityRatio(),
+				ModelNoiseProfile.conservativeDefault());
 
 		try {
 			return findSimilar(allEmbeddings, embeddingProvider, question, topK,
@@ -773,8 +777,26 @@ public class LlmInferenceService implements ChartSearchService {
 			keywordScores = java.util.Arrays.copyOf(keywordScores, validCount);
 		}
 
-		return filterPipeline(semanticScores, keywordScores, embeddings,
-				queryTerms, topK, config);
+		// Compute noise profile from the patient's embeddings so all
+		// pipeline thresholds adapt to this embedding model's geometry.
+		ModelNoiseProfile noiseProfile =
+				ModelNoiseProfile.compute(embeddings);
+		log.debug("NoiseProfile: Q1={} median={} mean={} P95={} "
+				+ "intraMean={} floor={}",
+				String.format("%.4f", noiseProfile.noiseQ1),
+				String.format("%.4f", noiseProfile.noiseMedian),
+				String.format("%.4f", noiseProfile.noiseMean),
+				String.format("%.4f", noiseProfile.noiseP95),
+				String.format("%.4f", noiseProfile.intraConceptMean),
+				String.format("%.4f", noiseProfile.absoluteSimilarityFloor()));
+		PipelineConfig profiledConfig = new PipelineConfig(
+				config.keywordWeight, config.scoreGapMultiplier,
+				config.minScoreGap,
+				config.gapValidationCosineThreshold,
+				config.similarityRatio, noiseProfile);
+
+			return filterPipeline(semanticScores, keywordScores, embeddings,
+				queryTerms, topK, profiledConfig);
 	}
 
 	/**
@@ -886,22 +908,41 @@ public class LlmInferenceService implements ChartSearchService {
 		// low due to vocabulary mismatch.
 		boolean belowFloorRescued = false;
 		double floorScore = Math.max(maxSemanticScore, maxBaseScore);
-		if (floorScore < ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR) {
+		if (floorScore < config.noiseProfile.absoluteSimilarityFloor()) {
 			if (queryTermCount > 0
-					&& scored.size() >= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE
+					&& hasStatisticalVariance(scored)
 					&& keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
 				double zScore = computeSemanticZScore(scored, maxSemanticScore);
-				if (zScore >= ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE) {
+				double floorRescueZThreshold =
+						floorRescueGumbelThreshold(scored);
+				if (zScore >= floorRescueZThreshold) {
 					// Verify the signal comes from a genuine cluster,
 					// not an isolated outlier. Count records within a
 					// tight band of the max score — vocabulary-mismatch
 					// queries ("how hot" → Temperature) produce many
-					// records at similar scores (11 within 5%), while
-					// false positives ("TB" on a TB-free dataset) only
-					// have 1-2 outlier conditions in that band.
+					// records at similar scores, while false positives
+					// ("TB" on a TB-free dataset) only have 1-2 outlier
+					// conditions in that band.
+					// Data-derived parameters:
+					// - band width: 1/uniqueConcepts of the max score
+					// - min cluster: average records per concept
+					Set<String> floorConcepts = new HashSet<String>();
+					for (ScoredEmbedding se : scored) {
+						String cn = ConceptNameUtil
+								.extractConceptName(
+										se.embedding
+												.getTextContent());
+						if (cn != null) {
+							floorConcepts.add(cn);
+						}
+					}
+					int nConcepts = Math.max(2,
+							floorConcepts.size());
+					double densityBand = 1.0 / nConcepts;
+					int minCluster = (int) Math.ceil(
+							(double) scored.size() / nConcepts);
 					double densityFloor = maxSemanticScore
-							* (1 - ChartSearchAiConstants
-									.FLOOR_RESCUE_DENSITY_BAND);
+							* (1 - densityBand);
 					int clusterDensity = 0;
 					for (ScoredEmbedding se : scored) {
 						if (se.semanticScore >= densityFloor) {
@@ -909,18 +950,15 @@ public class LlmInferenceService implements ChartSearchService {
 						}
 					}
 					belowFloorRescued = clusterDensity
-							>= ChartSearchAiConstants
-									.FLOOR_RESCUE_MIN_CLUSTER_SIZE;
+							>= minCluster;
 					log.debug("Floor gate z-score rescue: zScore={}, "
 							+ "density={} (band={}, floor={}), "
 							+ "minCluster={}, rescued={}",
 							String.format("%.2f", zScore),
 							clusterDensity,
-							ChartSearchAiConstants
-									.FLOOR_RESCUE_DENSITY_BAND,
+							String.format("%.4f", densityBand),
 							String.format("%.4f", densityFloor),
-							ChartSearchAiConstants
-									.FLOOR_RESCUE_MIN_CLUSTER_SIZE,
+							minCluster,
 							belowFloorRescued);
 				}
 			}
@@ -930,7 +968,42 @@ public class LlmInferenceService implements ChartSearchService {
 						String.format("%.4f", floorScore),
 						String.format("%.4f", maxSemanticScore),
 						String.format("%.4f", maxBaseScore),
-						ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR);
+						config.noiseProfile.absoluteSimilarityFloor());
+				return Collections.emptyList();
+			}
+		}
+
+		// Slim-margin gate: when the top score is above the absolute
+		// floor but within one minScoreGap of it, and zero keywords
+		// match, verify there is at least a pair of records above the
+		// floor. A single record just above the floor (e.g. Rash
+		// at 0.29 for "any allergies?" with floor 0.26) is likely a
+		// coincidental near-miss in embedding space, not genuine
+		// signal. A real match produces at least 2 records above the
+		// floor (e.g. condition + diagnosis for the same concept).
+		if (!belowFloorRescued
+				&& keywordMatchCount == 0
+				&& queryTermCount > 0
+				&& maxSemanticScore
+				< config.noiseProfile.absoluteSimilarityFloor()
+						+ config.minScoreGap) {
+			double smFloor =
+					config.noiseProfile.absoluteSimilarityFloor();
+			int aboveFloorCount = 0;
+			for (ScoredEmbedding se : scored) {
+				if (se.semanticScore >= smFloor) {
+					aboveFloorCount++;
+				}
+			}
+			if (aboveFloorCount < 2) {
+				log.debug("Slim-margin gate: maxSem={} is within "
+						+ "{} of floor {}, zero keywords, and only "
+						+ "{} record(s) above floor — returning "
+						+ "empty",
+						String.format("%.4f", maxSemanticScore),
+						config.minScoreGap,
+						String.format("%.4f", smFloor),
+						aboveFloorCount);
 				return Collections.emptyList();
 			}
 		}
@@ -942,17 +1015,19 @@ public class LlmInferenceService implements ChartSearchService {
 		// initial z-score is strong AND the ratio floor produces a
 		// tight cluster, the cluster gate is skipped (see below).
 		double initialZScore = -1;
+		double initialZThreshold = -1;
 		if (queryTermCount > 0
-				&& scored.size() >= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
+				&& hasStatisticalVariance(scored)) {
 			if (keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
 				initialZScore = computeSemanticZScore(scored, maxSemanticScore);
-				if (initialZScore < ChartSearchAiConstants.ZERO_KEYWORD_MIN_Z_SCORE) {
+				initialZThreshold = effectiveGumbelThreshold(scored);
+				if (initialZScore < initialZThreshold) {
 					log.debug("Only {} keyword match(es) and top semantic "
-							+ "z-score {} is below threshold {}, "
+							+ "z-score {} is below Gumbel threshold {}, "
 							+ "returning empty (maxSem={})",
 							keywordMatchCount,
 							String.format("%.2f", initialZScore),
-							ChartSearchAiConstants.ZERO_KEYWORD_MIN_Z_SCORE,
+							String.format("%.2f", initialZThreshold),
 							String.format("%.4f", maxSemanticScore));
 					return Collections.emptyList();
 				}
@@ -963,7 +1038,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// score distribution. The floor just excludes near-zero noise so
 		// the gap detector has a clean signal.
 		double minScore = Math.min(
-				ChartSearchAiConstants.ABSOLUTE_SIMILARITY_FLOOR / 2,
+				config.noiseProfile.absoluteSimilarityFloor() / 2,
 				maxSemanticScore / 2);
 
 		// Adaptive min gap: scale the floor to the semantic score range so
@@ -992,8 +1067,28 @@ public class LlmInferenceService implements ChartSearchService {
 				// enabling gap detection for compressed models (MedCPT:
 				// IQR ~0.02 < 0.05).
 				if (iqr < config.minScoreGap / 2) {
-					firstPassMinGap = iqr
-							* ChartSearchAiConstants.MIN_GAP_RANGE_FRACTION;
+					// Scale IQR by the concept-to-record ratio.
+					// This fraction naturally adapts: datasets
+					// with many unique concepts relative to total
+					// records have larger between-concept gaps as
+					// a fraction of IQR, so the threshold should
+					// be higher. The ratio typically falls in
+					// 0.15-0.40 — similar to the empirical range
+					// of gap fractions across datasets.
+					Set<String> gapConcepts =
+							new HashSet<String>();
+					for (ScoredEmbedding se : scored) {
+						String cn = ConceptNameUtil
+								.extractConceptName(
+										se.embedding
+												.getTextContent());
+						if (cn != null) {
+							gapConcepts.add(cn);
+						}
+					}
+					double fraction = (double) gapConcepts.size()
+							/ scored.size();
+					firstPassMinGap = iqr * fraction;
 				}
 			}
 		}
@@ -1174,13 +1269,12 @@ public class LlmInferenceService implements ChartSearchService {
 						.ADAPTIVE_MIN_RECORDS) {
 					double maxSemNk = nonKeyword.get(0).semanticScore;
 					double nkMinGap = Math.max(
-							maxSemNk * ChartSearchAiConstants
-									.REFINEMENT_ADAPTIVE_GAP_RATIO,
-							ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
+							maxSemNk * refinementAdaptiveGapRatio(
+									scored),
+							secondPassMinGap(scored));
 					coreCutoff = findAdaptiveCutoff(nonKeyword,
 							nonKeyword.size(),
-							ChartSearchAiConstants
-									.ABSOLUTE_SIMILARITY_FLOOR,
+							config.noiseProfile.absoluteSimilarityFloor(),
 							config.scoreGapMultiplier, nkMinGap);
 
 					// Gap-weighted Welch's t²: find the split
@@ -1382,6 +1476,13 @@ public class LlmInferenceService implements ChartSearchService {
 							.semanticScore;
 					double coreMaxSem = semanticCore.get(0)
 							.semanticScore;
+					// When coreFallback was used (min-gap cluster
+					// detection tightened the core), use the core's
+					// own min/max ratio — it reflects the detected
+					// cluster's actual width. Otherwise, use the
+					// refinement semantic ratio from the broader
+					// candidate set, which naturally scales the
+					// expansion floor with the score distribution.
 					double expansionRatio = coreFallbackUsed
 							? (coreMaxSem > 0
 									? coreMinSem / coreMaxSem
@@ -1479,8 +1580,8 @@ public class LlmInferenceService implements ChartSearchService {
 						}
 					}
 					double semFloor = maxSemanticKw
-							* ChartSearchAiConstants
-									.REFINEMENT_SEMANTIC_RATIO;
+							* refinementSemanticRatio(
+									candidates);
 					List<ScoredEmbedding> filtered =
 							new ArrayList<ScoredEmbedding>();
 					for (ScoredEmbedding se : candidates) {
@@ -1537,8 +1638,9 @@ public class LlmInferenceService implements ChartSearchService {
 					}
 				}
 				double adaptiveMinGap = Math.max(
-						maxSemanticRefined * ChartSearchAiConstants.REFINEMENT_ADAPTIVE_GAP_RATIO,
-						ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
+						maxSemanticRefined * refinementAdaptiveGapRatio(
+								scored),
+						secondPassMinGap(scored));
 				int refinedCutoff = findAdaptiveCutoff(candidates, candidates.size(),
 						minScore, config.scoreGapMultiplier, adaptiveMinGap);
 				if (refinedCutoff < candidates.size()) {
@@ -1552,7 +1654,7 @@ public class LlmInferenceService implements ChartSearchService {
 					if (isGapCoherent(candidates, refinedCutoff,
 							config.gapValidationCosineThreshold)) {
 						double semanticFloor = maxSemanticRefined
-								* ChartSearchAiConstants.REFINEMENT_SEMANTIC_RATIO;
+								* refinementSemanticRatio(candidates);
 						List<ScoredEmbedding> floored = new ArrayList<ScoredEmbedding>();
 						for (ScoredEmbedding se : candidates) {
 							if (se.semanticScore >= semanticFloor) {
@@ -1604,12 +1706,13 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		} else {
 			// Sensitive second-pass: same multiplier as the first pass, but
-			// with a much lower absolute floor (SECOND_PASS_MIN_GAP vs
-			// DEFAULT_MIN_SCORE_GAP). This detects tight clusters that the
-			// first pass missed because their gaps were below the 0.10 floor.
+			// with a much lower absolute floor derived from the score
+			// distribution's std. This detects tight clusters that the
+			// first pass missed because their gaps were below the first-pass
+			// floor.
 			int secondCutoff = findAdaptiveCutoff(candidates, candidates.size(),
 					minScore, config.scoreGapMultiplier,
-					ChartSearchAiConstants.SECOND_PASS_MIN_GAP);
+					secondPassMinGap(scored));
 			if (secondCutoff < candidates.size()) {
 				if (isGapCoherent(candidates, secondCutoff,
 						config.gapValidationCosineThreshold)) {
@@ -1633,13 +1736,105 @@ public class LlmInferenceService implements ChartSearchService {
 			double ratioFloor = Math.min(maxBaseScore, maxSemanticScore)
 					* config.similarityRatio;
 			List<ScoredEmbedding> strict = new ArrayList<ScoredEmbedding>();
+			List<ScoredEmbedding> nearMiss =
+					new ArrayList<ScoredEmbedding>();
 			for (ScoredEmbedding se : candidates) {
-				if (Math.min(se.score, se.semanticScore) >= ratioFloor) {
+				if (Math.min(se.score, se.semanticScore)
+						>= ratioFloor) {
 					strict.add(se);
+				} else {
+					nearMiss.add(se);
+				}
+			}
+			// Capture the strict count before rescue so downstream
+			// gates see only candidates that truly passed the floor.
+			ratioFloorCandidateCount = strict.size();
+			// Concept-pairing rescue: when a record barely misses
+			// the ratio floor but its same-concept partner survived,
+			// the floor is splitting a natural concept pair. Rescue
+			// the near-miss if its gap from the floor is within the
+			// noise resolution (noiseStd / uniqueConcepts).
+			//
+			// Guard: only rescue when the strict set contains at
+			// least one concept with 2+ records. This distinguishes
+			// two floor calibration regimes:
+			// - Within-concept: the floor captured complete concept
+			//   groups (2+ records), so it's at a level where same-
+			//   concept records naturally cluster above it. A
+			//   singleton from another concept whose partner barely
+			//   misses is likely a split pair → rescue justified.
+			// - Inter-concept: every concept has exactly 1 record,
+			//   so the floor is at the inter-concept boundary. Each
+			//   concept's best record passed; partners scored lower
+			//   for a reason → don't second-guess the calibration.
+			if (!strict.isEmpty() && !nearMiss.isEmpty()) {
+				Map<String, Integer> conceptCounts =
+						new HashMap<String, Integer>();
+				Set<String> survivorConcepts =
+						new HashSet<String>();
+				for (ScoredEmbedding se : strict) {
+					String cn = ConceptNameUtil
+							.extractConceptName(
+									se.embedding
+											.getTextContent());
+					if (cn != null) {
+						survivorConcepts.add(cn);
+						Integer count = conceptCounts.get(cn);
+						conceptCounts.put(cn,
+								count == null ? 1 : count + 1);
+					}
+				}
+				boolean withinConceptCalibration = false;
+				for (int count : conceptCounts.values()) {
+					if (count >= 2) {
+						withinConceptCalibration = true;
+						break;
+					}
+				}
+				if (withinConceptCalibration) {
+					Set<String> allConcepts =
+							new HashSet<String>();
+					for (ScoredEmbedding se : scored) {
+						String cn = ConceptNameUtil
+								.extractConceptName(
+										se.embedding
+												.getTextContent());
+						if (cn != null) {
+							allConcepts.add(cn);
+						}
+					}
+					double rescueTolerance =
+							config.noiseProfile.noiseStd
+									/ Math.max(1,
+											allConcepts.size());
+					for (ScoredEmbedding se : nearMiss) {
+						double eff = Math.min(se.score,
+								se.semanticScore);
+						double gap = ratioFloor - eff;
+						if (gap > rescueTolerance) {
+							continue;
+						}
+						String cn = ConceptNameUtil
+								.extractConceptName(
+										se.embedding
+												.getTextContent());
+						if (cn != null
+								&& survivorConcepts
+										.contains(cn)) {
+							strict.add(se);
+							log.debug("Concept-pairing"
+									+ " rescue: [{}]"
+									+ " gap={}, concept={}",
+									se.embedding
+											.getResourceId(),
+									String.format("%.4f",
+											gap),
+									cn);
+						}
+					}
 				}
 			}
 			candidates = strict;
-			ratioFloorCandidateCount = candidates.size();
 			// When every surviving candidate has keyword matches, the
 			// combination of gap detection + ratio floor already identified
 			// the relevant cluster. TopK would arbitrarily truncate
@@ -1713,7 +1908,6 @@ public class LlmInferenceService implements ChartSearchService {
 				candidates = filterByCoherence(candidates);
 			}
 		}
-
 		// Phase 2: Zero-keyword validation — when no surviving candidate
 		// has keyword support, the result set is purely semantic and
 		// must pass two orthogonal confidence checks. Keywords are
@@ -1755,37 +1949,214 @@ public class LlmInferenceService implements ChartSearchService {
 				if (candidates.size() >= 2) {
 					candidates = filterByMeanCoherence(candidates, config);
 				}
+				// Small-cluster coherence gate: for ≤3 zero-keyword
+				// candidates, apply a stricter coherence threshold
+				// derived from the patient's own embedding statistics.
+				// Legitimate small clusters are same-concept groups
+				// (condition+diagnosis pairs, often with an obs) whose
+				// mutual coherence is close to the intra-concept mean
+				// (0.93+). False positives are cross-topic clusters
+				// (e.g. 3 substance abuse conditions for a "medications"
+				// query) whose coherence (0.48–0.79) falls below the
+				// intra-concept range. The threshold (intraConceptMean −
+				// intraConceptStd) is the lower bound of same-concept
+				// coherence, cleanly separating the two groups.
+				if (candidates.size() == 3) {
+					double intraFloor =
+							config.noiseProfile.intraConceptMean
+							- config.noiseProfile.intraConceptStd;
+					double sumCos = 0;
+					int nPairs = 0;
+					for (int ci = 0; ci < candidates.size(); ci++) {
+						float[] vi = candidates.get(ci).embedding
+								.getEmbeddingVector();
+						if (vi == null) {
+							continue;
+						}
+						for (int cj = ci + 1;
+								cj < candidates.size(); cj++) {
+							float[] vj = candidates.get(cj).embedding
+									.getEmbeddingVector();
+							if (vj == null) {
+								continue;
+							}
+							sumCos += ChartSearchAiUtils
+									.cosineSimilarity(vi, vj);
+							nPairs++;
+						}
+					}
+					if (nPairs > 0) {
+						double mc = sumCos / nPairs;
+						if (mc < intraFloor) {
+							// Check if removing the lowest-
+							// coherence record leaves a same-
+							// concept pair above intraFloor.
+							// Phase 1 n=3 skips coherence
+							// filtering when scores are spread
+							// (ratio < 0.90), so a cross-concept
+							// outlier can survive into Phase 2.
+							// Rather than rejecting everything,
+							// extract the coherent same-concept
+							// pair if one exists.
+							double[] avgCoh = new double[3];
+							for (int ci = 0; ci < 3; ci++) {
+								double s = 0;
+								int cnt = 0;
+								float[] vi = candidates.get(ci)
+										.embedding
+										.getEmbeddingVector();
+								if (vi == null) {
+									continue;
+								}
+								for (int cj = 0; cj < 3; cj++) {
+									if (ci == cj) {
+										continue;
+									}
+									float[] vj = candidates
+											.get(cj).embedding
+											.getEmbeddingVector();
+									if (vj == null) {
+										continue;
+									}
+									s += ChartSearchAiUtils
+											.cosineSimilarity(
+													vi, vj);
+									cnt++;
+								}
+								avgCoh[ci] = cnt > 0
+										? s / cnt : 0;
+							}
+							int worstIdx = 0;
+							for (int ci = 1; ci < 3; ci++) {
+								if (avgCoh[ci]
+										< avgCoh[worstIdx]) {
+									worstIdx = ci;
+								}
+							}
+							int p1 = -1, p2 = -1;
+							for (int ci = 0; ci < 3; ci++) {
+								if (ci != worstIdx) {
+									if (p1 < 0) {
+										p1 = ci;
+									} else {
+										p2 = ci;
+									}
+								}
+							}
+							float[] v1 = candidates.get(p1)
+									.embedding
+									.getEmbeddingVector();
+							float[] v2 = candidates.get(p2)
+									.embedding
+									.getEmbeddingVector();
+							double pairCos = (v1 != null
+									&& v2 != null)
+									? ChartSearchAiUtils
+											.cosineSimilarity(
+													v1, v2)
+									: 0;
+							String cn1 = ConceptNameUtil
+									.extractConceptName(
+											candidates
+													.get(p1)
+													.embedding
+													.getTextContent());
+							String cn2 = ConceptNameUtil
+									.extractConceptName(
+											candidates
+													.get(p2)
+													.embedding
+													.getTextContent());
+							boolean sameConcept =
+									cn1 != null
+									&& cn1.equals(cn2);
+							if (pairCos >= intraFloor
+									&& sameConcept) {
+								List<ScoredEmbedding> pair =
+										new ArrayList<ScoredEmbedding>();
+								pair.add(candidates.get(p1));
+								pair.add(candidates.get(p2));
+								log.debug("Small-cluster gate:"
+										+ " removed outlier"
+										+ " [{}], kept pair"
+										+ " cos={}, concept={}",
+										candidates.get(
+												worstIdx)
+												.embedding
+												.getResourceId(),
+										String.format("%.4f",
+												pairCos),
+										cn1);
+								candidates = pair;
+							} else {
+								log.debug("Small-cluster"
+										+ " coherence gate:"
+										+ " meanCoherence={}"
+										+ " < intraFloor={},"
+										+ " returning empty",
+										String.format("%.4f",
+												mc),
+										String.format("%.4f",
+												intraFloor));
+								candidates = Collections
+										.emptyList();
+							}
+						}
+					}
+				}
 				// Skip the z-score gate when first-pass gap detection found
-				// a tight cluster (< 25% of total records). The gap is
-				// structural evidence that the model distinguishes these
-				// records from the rest. Without this, compressed-distribution
-				// models (e.g. MedCPT, std ≈ 0.03) can never reach the
-				// z-score threshold because even the most relevant records
-				// are < 2.5σ from the mean. The 25% threshold prevents
-				// bypassing when gap detection captures a broad swath of
-				// records (e.g. 33/67 for CD4 on a dataset with no CD4),
-				// which isn't evidence of a genuine cluster.
+				// a tight cluster. The gap is structural evidence that the
+				// model distinguishes these records from the rest. Without
+				// this, compressed-distribution models (e.g. MedCPT,
+				// std ≈ 0.03) can never reach the z-score threshold because
+				// even the most relevant records are < 2.5σ from the mean.
+				// A cluster is "tight" when it captures fewer records than
+				// the number of unique concepts in the dataset — a genuine
+				// query-relevant cluster targets a few concepts, while a
+				// broad swath captures records from many different concepts.
 				// The z-score gate is redundant when the floor gate
 				// already validated signal via z-score rescue — the
 				// top score was proven to be a statistical outlier
 				// despite being below the absolute floor.
+				Set<String> tightCheckConcepts = new HashSet<String>();
+				for (ScoredEmbedding se : scored) {
+					String cn = ConceptNameUtil.extractConceptName(
+							se.embedding.getTextContent());
+					if (cn != null) {
+						tightCheckConcepts.add(cn);
+					}
+				}
+				int tightThreshold = tightCheckConcepts.size();
 				boolean tightClusterDetected = belowFloorRescued
 						|| (firstPassGapDetected
-								&& adaptiveCutoff < scored.size() / 4)
+								&& adaptiveCutoff < tightThreshold)
 						|| (ratioFloorCandidateCount >= 0
 								&& ratioFloorCandidateCount
-								< scored.size() / 4
+								< tightThreshold
 								&& initialZScore
-								>= ChartSearchAiConstants
-										.FLOOR_RESCUE_MIN_Z_SCORE
+								>= FLOOR_RESCUE_MIN_Z_SCORE
 								&& maxSemanticScore
-								>= ChartSearchAiConstants
-										.ABSOLUTE_SIMILARITY_FLOOR
+								>= config.noiseProfile.absoluteSimilarityFloor()
 										+ config.minScoreGap);
+				// Single-candidate structural gate: when the
+				// ratio floor itself produced only one candidate
+				// (not a topK cap on a larger set) and there is
+				// no tight-cluster evidence, the candidate is an
+				// isolated noise peak. Legitimate single matches
+				// produce tight clusters because the gap detector
+				// isolates them from the bulk distribution.
+				if (!tightClusterDetected
+						&& candidates.size() == 1
+						&& ratioFloorCandidateCount == 1) {
+					log.debug("Single zero-keyword candidate "
+							+ "with no tight-cluster support "
+							+ "and ratioFloor=1, returning "
+							+ "empty");
+					candidates = Collections.emptyList();
+				}
 				if (!tightClusterDetected
 						&& !candidates.isEmpty()
-						&& scored.size()
-						>= ChartSearchAiConstants.MIN_RECORDS_FOR_Z_SCORE) {
+						&& hasStatisticalVariance(scored)) {
 					double sum = 0;
 					for (ScoredEmbedding se : scored) {
 						sum += se.semanticScore;
@@ -1820,6 +2191,22 @@ public class LlmInferenceService implements ChartSearchService {
 						double zRepresentative = candidates.size() <= 3
 								? zScores[zScores.length - 1]
 								: zScores[zScores.length / 2];
+						// Two-tier Gumbel threshold:
+						// K≤3 (max): Gumbel(uniqueConcepts)
+						//   — strict; rescued by initial gate
+						// K≥4 (median): Gumbel(uniqueConcepts/2)
+						//   — the median scales with the N/2-th
+						//   order statistic, so halve effective N
+						double clusterZThreshold;
+						if (candidates.size() <= 3) {
+							clusterZThreshold =
+									clusterGumbelThreshold(
+											scored);
+						} else {
+							clusterZThreshold =
+									medianGumbelThreshold(
+											scored);
+						}
 						log.debug("Zero-keyword z-score check: "
 								+ "mean={}, std={}, z={} ({}), "
 								+ "threshold={}, candidates={}, scored={}",
@@ -1827,13 +2214,26 @@ public class LlmInferenceService implements ChartSearchService {
 								String.format("%.4f", std),
 								String.format("%.2f", zRepresentative),
 								candidates.size() <= 3 ? "max" : "median",
-								ChartSearchAiConstants
-										.ZERO_KEYWORD_CLUSTER_MIN_Z,
+								String.format("%.2f", clusterZThreshold),
 								candidates.size(), scored.size());
-						if (zRepresentative < ChartSearchAiConstants
-								.ZERO_KEYWORD_CLUSTER_MIN_Z) {
-							log.debug("Zero-keyword results rejected");
-							candidates = Collections.emptyList();
+						if (zRepresentative < clusterZThreshold) {
+							// For K≤3, the initial gate may
+							// have already validated the signal.
+							// If so, defer to that validation
+							// rather than rejecting here.
+							if (candidates.size() <= 3
+									&& initialZThreshold > 0
+									&& initialZScore
+									>= initialZThreshold) {
+								log.debug("Cluster z-score below "
+										+ "threshold but initial gate "
+										+ "validated signal, keeping");
+							} else {
+								log.debug(
+									"Zero-keyword results rejected");
+								candidates =
+										Collections.emptyList();
+							}
 						}
 					}
 				}
@@ -2093,7 +2493,7 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 		double semanticFloor = maxSemantic
-				* ChartSearchAiConstants.REFINEMENT_SEMANTIC_RATIO;
+				* refinementSemanticRatio(candidates);
 
 		// Keep lower-tier records only if they match a term the higher
 		// tier doesn't cover, OR have zero keyword match but high
@@ -2690,15 +3090,26 @@ public class LlmInferenceService implements ChartSearchService {
 		final double minScoreGap;
 		final double gapValidationCosineThreshold;
 		final double similarityRatio;
+		final ModelNoiseProfile noiseProfile;
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
 				double minScoreGap, double gapValidationCosineThreshold,
 				double similarityRatio) {
+			this(keywordWeight, scoreGapMultiplier, minScoreGap,
+					gapValidationCosineThreshold, similarityRatio,
+					ModelNoiseProfile.conservativeDefault());
+		}
+
+		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
+				double minScoreGap, double gapValidationCosineThreshold,
+				double similarityRatio,
+				ModelNoiseProfile noiseProfile) {
 			this.keywordWeight = keywordWeight;
 			this.scoreGapMultiplier = scoreGapMultiplier;
 			this.minScoreGap = minScoreGap;
 			this.gapValidationCosineThreshold = gapValidationCosineThreshold;
 			this.similarityRatio = similarityRatio;
+			this.noiseProfile = noiseProfile;
 		}
 
 		/** Returns a config using all default constant values. */
@@ -2708,7 +3119,8 @@ public class LlmInferenceService implements ChartSearchService {
 					ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
 					ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
 					ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
-					ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO);
+					ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO,
+					ModelNoiseProfile.conservativeDefault());
 		}
 	}
 
@@ -2777,5 +3189,252 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 		double stddev = Math.sqrt(sumSqDiff / scored.size());
 		return stddev == 0 ? 0 : (maxSemanticScore - meanSem) / stddev;
+	}
+
+	/**
+	 * Gumbel extreme value threshold adjusted for correlated observations.
+	 * Semantic scores have two levels of correlation:
+	 * <ol>
+	 *   <li>Records within the same concept produce nearly identical
+	 *       scores (reducing N to uniqueConcepts)</li>
+	 *   <li>Concepts within the same domain (e.g. all medical concepts)
+	 *       share embedding space structure, partially correlating their
+	 *       query cosines (further reducing effectiveN)</li>
+	 * </ol>
+	 * The effective degrees of freedom is estimated as
+	 * ln(uniqueConcepts) — the log captures the second-level
+	 * correlation from domain structure.
+	 */
+	static double effectiveGumbelThreshold(List<ScoredEmbedding> scored) {
+		Set<String> uniqueConcepts = new HashSet<String>();
+		for (ScoredEmbedding se : scored) {
+			String name = ConceptNameUtil.extractConceptName(
+					se.embedding.getTextContent());
+			if (name != null) {
+				uniqueConcepts.add(name);
+			}
+		}
+		double effectiveN = Math.max(2.0,
+				Math.log(Math.max(2, uniqueConcepts.size())));
+		return Math.sqrt(2 * Math.log(effectiveN));
+	}
+
+	/**
+	 * Data-derived Gumbel threshold for the cluster z-score gate
+	 * (Phase 2). Uses the raw unique concept count as effective N —
+	 * after gap detection and coherence filtering isolate a candidate
+	 * cluster, the surviving concepts act more independently than
+	 * in the full score distribution (where intra-domain correlation
+	 * is high). This produces thresholds of ~2.5-2.7 for typical
+	 * datasets (30-45 unique concepts), matching the discrimination
+	 * needed to separate genuine clusters from noise.
+	 */
+	static double clusterGumbelThreshold(List<ScoredEmbedding> scored) {
+		Set<String> uniqueConcepts = new HashSet<String>();
+		for (ScoredEmbedding se : scored) {
+			String name = ConceptNameUtil.extractConceptName(
+					se.embedding.getTextContent());
+			if (name != null) {
+				uniqueConcepts.add(name);
+			}
+		}
+		double effectiveN = Math.max(2.0, uniqueConcepts.size());
+		return Math.sqrt(2 * Math.log(effectiveN));
+	}
+
+	/**
+	 * Data-derived Gumbel threshold for the cluster z-score gate
+	 * when the representative is the MEDIAN (K≥4 candidates). The
+	 * median of K top-scoring records corresponds to the (N/2)-th
+	 * order statistic, so the effective N for the Gumbel formula is
+	 * halved. This produces thresholds of ~2.15-2.50 for typical
+	 * datasets, appropriately more lenient than the max-based
+	 * threshold since the median is naturally lower than the max.
+	 */
+	static double medianGumbelThreshold(List<ScoredEmbedding> scored) {
+		Set<String> uniqueConcepts = new HashSet<String>();
+		for (ScoredEmbedding se : scored) {
+			String name = ConceptNameUtil.extractConceptName(
+					se.embedding.getTextContent());
+			if (name != null) {
+				uniqueConcepts.add(name);
+			}
+		}
+		double effectiveN = Math.max(2.0,
+				uniqueConcepts.size() / 2.0);
+		return Math.sqrt(2 * Math.log(effectiveN));
+	}
+
+	/**
+	 * Data-derived Gumbel threshold for the floor rescue z-score
+	 * gate. Uses uniqueConcepts^(2/3) as effective N — an
+	 * interpolation between the initial gate's heavy-correlation
+	 * model (ln(N)) and the cluster gate's independence model (N).
+	 * The floor rescue operates in an intermediate regime: it checks
+	 * a single score (like the initial gate) but must be stricter
+	 * because it's allowing below-floor results through. A secondary
+	 * cluster density check provides an additional safety net.
+	 * Produces thresholds of ~2.0-2.2 for typical datasets
+	 * (20-45 unique concepts).
+	 */
+	/**
+	 * Computes a data-derived similarity floor from the score
+	 * distribution: mean + std. Scores below this level are not
+	 * even one standard deviation above the dataset mean, indicating
+	 * no distinctive signal for this query. This adapts to any
+	 * embedding model's score range — models with compressed
+	 * distributions (e.g. 0.5-0.7) get higher floors, while models
+	 * with wide distributions (e.g. 0.1-0.5) get lower floors.
+	 */
+	static double floorRescueGumbelThreshold(
+			List<ScoredEmbedding> scored) {
+		Set<String> uniqueConcepts = new HashSet<String>();
+		for (ScoredEmbedding se : scored) {
+			String name = ConceptNameUtil.extractConceptName(
+					se.embedding.getTextContent());
+			if (name != null) {
+				uniqueConcepts.add(name);
+			}
+		}
+		double effectiveN = Math.max(2.0,
+				Math.pow(Math.max(2, uniqueConcepts.size()),
+						2.0 / 3.0));
+		return Math.sqrt(2 * Math.log(effectiveN));
+	}
+
+	/**
+	 * Computes a data-derived minimum gap for the second-pass gap
+	 * detector from the median of consecutive sorted-score gaps.
+	 * The median gap represents the "typical" spacing between
+	 * adjacent scores in this distribution. Using half the median
+	 * gap as the floor ensures we only detect gaps that are
+	 * meaningfully larger than typical spacing, while staying
+	 * sensitive enough for compressed distributions.
+	 */
+	static double secondPassMinGap(List<ScoredEmbedding> scored) {
+		if (scored.size() < 4) {
+			return 0;
+		}
+		List<Double> sortedScores = new ArrayList<Double>(
+				scored.size());
+		for (ScoredEmbedding se : scored) {
+			sortedScores.add(se.semanticScore);
+		}
+		Collections.sort(sortedScores, Collections.reverseOrder());
+		List<Double> gaps = new ArrayList<Double>();
+		for (int i = 1; i < sortedScores.size(); i++) {
+			double gap = sortedScores.get(i - 1)
+					- sortedScores.get(i);
+			if (gap > 0) {
+				gaps.add(gap);
+			}
+		}
+		if (gaps.isEmpty()) {
+			return 0;
+		}
+		Collections.sort(gaps);
+		double medianGap = gaps.get(gaps.size() / 2);
+		return medianGap / 2.0;
+	}
+
+	/**
+	 * Computes a data-derived adaptive gap ratio for the refinement
+	 * path's second-pass gap detection. Uses the standard deviation
+	 * of the top quartile of scores divided by the max score. The
+	 * top quartile captures the region where refinement gaps matter
+	 * — its std measures the natural spread among the highest-scoring
+	 * records. Dividing by max normalizes across score scales.
+	 */
+	static double refinementAdaptiveGapRatio(
+			List<ScoredEmbedding> scored) {
+		if (scored.size() < 4) {
+			return 0.10;
+		}
+		List<Double> sortedScores = new ArrayList<Double>(
+				scored.size());
+		for (ScoredEmbedding se : scored) {
+			sortedScores.add(se.semanticScore);
+		}
+		Collections.sort(sortedScores, Collections.reverseOrder());
+		double max = sortedScores.get(0);
+		if (max <= 0) {
+			return 0.10;
+		}
+		// Top quartile standard deviation
+		int topN = Math.max(4, sortedScores.size() / 4);
+		double sum = 0;
+		for (int i = 0; i < topN; i++) {
+			sum += sortedScores.get(i);
+		}
+		double mean = sum / topN;
+		double sqSum = 0;
+		for (int i = 0; i < topN; i++) {
+			double d = sortedScores.get(i) - mean;
+			sqSum += d * d;
+		}
+		double std = Math.sqrt(sqSum / topN);
+		double ratio = std / max;
+		return Math.max(0.05, Math.min(0.15, ratio));
+	}
+
+	/**
+	 * Computes a data-derived semantic ratio for refinement filtering.
+	 * Returns 1 - CV (coefficient of variation) of the candidate
+	 * scores, clamped to [0.50, 0.90]. When scores are tightly
+	 * clustered (low CV → ratio near 1.0), most candidates are
+	 * relevant. When scores are spread (high CV → ratio near 0.50),
+	 * only the top candidates matter. This replaces the hardcoded
+	 * REFINEMENT_SEMANTIC_RATIO (0.70).
+	 */
+	static double refinementSemanticRatio(
+			List<ScoredEmbedding> candidates) {
+		if (candidates.size() < 2) {
+			return 0.70;
+		}
+		List<Double> scores = new ArrayList<Double>(
+				candidates.size());
+		for (ScoredEmbedding se : candidates) {
+			scores.add(se.semanticScore);
+		}
+		Collections.sort(scores);
+		double max = scores.get(scores.size() - 1);
+		if (max <= 0) {
+			return 0.70;
+		}
+		// Use Q1/max as the semantic ratio. Q1 captures the lower
+		// bound of the "bulk" of the distribution, excluding the
+		// bottom quartile (likely noise). This naturally adapts:
+		// tight sets (all scores similar) → high ratio (strict
+		// floor); wide multi-concept sets → low ratio (permissive).
+		// Clamped to [0.60, 0.90] — records below 60% of the best
+		// score are noise; above 90% is over-strict for any set.
+		double q1 = scores.get(scores.size() / 4);
+		double ratio = q1 / max;
+		return Math.max(0.60, Math.min(0.90, ratio));
+	}
+
+	/**
+	 * Returns true if the score distribution has enough variance for
+	 * z-score statistics to be meaningful. Replaces the hardcoded
+	 * MIN_RECORDS_FOR_Z_SCORE (30) with a data-driven check: the
+	 * standard deviation must be non-trivial (> 1e-6) and there must
+	 * be at least 4 records (minimum for IQR-based statistics).
+	 */
+	private static boolean hasStatisticalVariance(List<ScoredEmbedding> scored) {
+		if (scored.size() < 4) {
+			return false;
+		}
+		double sum = 0;
+		for (ScoredEmbedding se : scored) {
+			sum += se.semanticScore;
+		}
+		double mean = sum / scored.size();
+		double sqSum = 0;
+		for (ScoredEmbedding se : scored) {
+			double d = se.semanticScore - mean;
+			sqSum += d * d;
+		}
+		double std = Math.sqrt(sqSum / scored.size());
+		return std > 1e-6;
 	}
 }

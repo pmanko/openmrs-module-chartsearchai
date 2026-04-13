@@ -80,6 +80,94 @@ public final class ConceptNameUtil {
 	}
 
 	/**
+	 * Extracts the concept name from a record's text content (after prefix
+	 * and date have been stripped). Handles the common serialization formats:
+	 * <ul>
+	 *   <li>Obs: {@code "Type — Concept Name: value"} → {@code "Concept Name"}</li>
+	 *   <li>Condition: {@code "Condition: Name. Status:"} → {@code "Name"}</li>
+	 *   <li>Diagnosis: {@code "Diagnosis: Name. Certainty:"} → {@code "Name"}</li>
+	 *   <li>Drug order: {@code "Drug order: Name. Dose:"} → {@code "Name"}</li>
+	 *   <li>Allergy: {@code "Allergy: Name (type)"} → {@code "Name"}</li>
+	 *   <li>Program: {@code "Program: Name. Enrolled:"} → {@code "Name"}</li>
+	 * </ul>
+	 * Synonym parentheses are stripped before extraction.
+	 *
+	 * @param textContent the record text content (prefix/date already removed)
+	 * @return the concept name, or null if it cannot be extracted
+	 */
+	public static String extractConceptName(String textContent) {
+		if (textContent == null || textContent.isEmpty()) {
+			return null;
+		}
+		String text = stripSynonyms(textContent);
+
+		// Obs pattern: "TYPE — CONCEPT: value" (em-dash U+2014)
+		int dashIdx = text.indexOf(" \u2014 ");
+		if (dashIdx >= 0) {
+			String afterDash = text.substring(dashIdx + 3);
+			int colonIdx = afterDash.indexOf(':');
+			if (colonIdx > 0) {
+				return afterDash.substring(0, colonIdx).trim();
+			}
+		}
+
+		// Condition: "Condition: NAME. Status:" or "Condition: NAME, SEVERITY. Status:"
+		if (text.startsWith("Condition: ")) {
+			String rest = text.substring("Condition: ".length());
+			int dotIdx = rest.indexOf(". ");
+			int commaIdx = rest.indexOf(", ");
+			int endIdx = minPositive(dotIdx, commaIdx);
+			return endIdx > 0 ? rest.substring(0, endIdx).trim() : rest.trim();
+		}
+
+		// Diagnosis: "Diagnosis: NAME. Certainty:"
+		if (text.startsWith("Diagnosis: ")) {
+			String rest = text.substring("Diagnosis: ".length());
+			int dotIdx = rest.indexOf(". ");
+			return dotIdx > 0 ? rest.substring(0, dotIdx).trim() : rest.trim();
+		}
+
+		// Drug order: "Drug order: NAME. Dose:"
+		if (text.startsWith("Drug order: ")) {
+			String rest = text.substring("Drug order: ".length());
+			int dotIdx = rest.indexOf(". ");
+			return dotIdx > 0 ? rest.substring(0, dotIdx).trim() : rest.trim();
+		}
+
+		// Allergy: "Allergy: NAME (type). Severity:"
+		if (text.startsWith("Allergy: ")) {
+			String rest = text.substring("Allergy: ".length());
+			int parenIdx = rest.indexOf(" (");
+			int dotIdx = rest.indexOf(". ");
+			int endIdx = minPositive(parenIdx, dotIdx);
+			return endIdx > 0 ? rest.substring(0, endIdx).trim() : rest.trim();
+		}
+
+		// Program: "Program: NAME. Enrolled:"
+		if (text.startsWith("Program: ")) {
+			String rest = text.substring("Program: ".length());
+			int dotIdx = rest.indexOf(". ");
+			return dotIdx > 0 ? rest.substring(0, dotIdx).trim() : rest.trim();
+		}
+
+		// Lab order: "Lab order: NAME. Urgency:"
+		if (text.startsWith("Lab order: ")) {
+			String rest = text.substring("Lab order: ".length());
+			int dotIdx = rest.indexOf(". ");
+			return dotIdx > 0 ? rest.substring(0, dotIdx).trim() : rest.trim();
+		}
+
+		return null;
+	}
+
+	/** Returns the smaller of two indices, ignoring non-positive values. */
+	private static int minPositive(int a, int b) {
+		if (a <= 0) return b;
+		if (b <= 0) return a;
+		return Math.min(a, b);
+	}
+
+	/**
 	 * Returns just the preferred concept name without synonyms. Useful when concise text
 	 * is needed, such as in allergy reaction and severity fields where synonyms would add
 	 * noise that hurts small-LLM citation accuracy.

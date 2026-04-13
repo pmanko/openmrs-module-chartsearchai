@@ -1,0 +1,229 @@
+/**
+ * This Source Code Form is subject to the terms of the Mozilla Public License,
+ * v. 2.0. If a copy of the MPL was not distributed with this file, You can
+ * obtain one at http://mozilla.org/MPL/2.0/. OpenMRS is also distributed under
+ * the terms of the Healthcare Disclaimer located at http://openmrs.org/license.
+ *
+ * Copyright (C) OpenMRS Inc. OpenMRS is a registered trademark and the OpenMRS
+ * graphic logo is a trademark of OpenMRS Inc.
+ */
+package org.openmrs.module.chartsearchai.embedding;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
+import org.openmrs.module.chartsearchai.model.ChartEmbedding;
+import org.openmrs.module.chartsearchai.util.ConceptNameUtil;
+
+/**
+ * Characterizes an embedding model's noise baseline from a patient's
+ * own embedding matrix. Cross-concept pairwise cosine similarities
+ * define "noise" (what unrelated records look like), while intra-concept
+ * similarities define "signal" (what same-topic records look like).
+ * All pipeline thresholds derive from these two distributions, making
+ * the filtering pipeline fully generic across embedding models.
+ *
+ * <p>Computed once per {@code findSimilar} call from the patient's
+ * embeddings. The cost is O(C²) cosine similarity computations where
+ * C is the number of unique concepts (typically 20-45), negligible
+ * compared to the N ONNX embedding inferences.</p>
+ */
+public final class ModelNoiseProfile {
+
+	/** Minimum cross-concept pairs required for robust statistics. */
+	private static final int MIN_CROSS_PAIRS = 10;
+
+	/** Mean cosine similarity between records of different concepts. */
+	public final double noiseMean;
+
+	/** Standard deviation of cross-concept cosine similarities. */
+	public final double noiseStd;
+
+	/** Median of cross-concept cosine similarities. */
+	public final double noiseMedian;
+
+	/** First quartile of cross-concept cosine similarities. */
+	public final double noiseQ1;
+
+	/** 95th percentile of cross-concept cosine similarities. */
+	public final double noiseP95;
+
+	/** Mean cosine similarity between records of the same concept. */
+	public final double intraConceptMean;
+
+	/** Standard deviation of intra-concept cosine similarities. */
+	public final double intraConceptStd;
+
+	ModelNoiseProfile(double noiseMean, double noiseStd,
+			double noiseMedian, double noiseQ1, double noiseP95,
+			double intraConceptMean, double intraConceptStd) {
+		this.noiseMean = noiseMean;
+		this.noiseStd = noiseStd;
+		this.noiseMedian = noiseMedian;
+		this.noiseQ1 = noiseQ1;
+		this.noiseP95 = noiseP95;
+		this.intraConceptMean = intraConceptMean;
+		this.intraConceptStd = intraConceptStd;
+	}
+
+	/**
+	 * Computes a noise profile from a patient's embeddings. Groups
+	 * records by concept name, then computes cross-concept and
+	 * intra-concept pairwise cosine similarities using one
+	 * representative vector per concept for cross-concept pairs.
+	 *
+	 * @param embeddings the patient's chart embeddings
+	 * @return the noise profile, or a conservative default if the
+	 *         patient has too few distinct concepts
+	 */
+	public static ModelNoiseProfile compute(
+			ChartEmbedding[] embeddings) {
+		// Group by concept name
+		Map<String, List<float[]>> byConcept =
+				new HashMap<String, List<float[]>>();
+		for (ChartEmbedding ce : embeddings) {
+			if (ce.getEmbeddingVector() == null) {
+				continue;
+			}
+			String name = ConceptNameUtil.extractConceptName(
+					ce.getTextContent());
+			if (name == null) {
+				name = ce.getResourceType() + ":" + ce.getResourceId();
+			}
+			List<float[]> vecs = byConcept.get(name);
+			if (vecs == null) {
+				vecs = new ArrayList<float[]>();
+				byConcept.put(name, vecs);
+			}
+			vecs.add(ce.getEmbeddingVector());
+		}
+
+		List<String> concepts = new ArrayList<String>(
+				byConcept.keySet());
+
+		// Cross-concept similarities: one representative per concept.
+		// Using one representative avoids the bias where high-frequency
+		// concepts (e.g., Temperature with 15 records) contribute
+		// disproportionately to the distribution.
+		List<Double> crossSims = new ArrayList<Double>();
+		for (int i = 0; i < concepts.size(); i++) {
+			float[] vi = byConcept.get(concepts.get(i)).get(0);
+			for (int j = i + 1; j < concepts.size(); j++) {
+				float[] vj = byConcept.get(concepts.get(j)).get(0);
+				crossSims.add(ChartSearchAiUtils.cosineSimilarity(
+						vi, vj));
+			}
+		}
+
+		if (crossSims.size() < MIN_CROSS_PAIRS) {
+			return conservativeDefault();
+		}
+
+		// Intra-concept similarities
+		List<Double> intraSims = new ArrayList<Double>();
+		for (List<float[]> vecs : byConcept.values()) {
+			for (int i = 0; i < vecs.size(); i++) {
+				for (int j = i + 1; j < vecs.size(); j++) {
+					intraSims.add(
+							ChartSearchAiUtils.cosineSimilarity(
+									vecs.get(i), vecs.get(j)));
+				}
+			}
+		}
+
+		// Cross-concept statistics
+		double crossSum = 0;
+		for (double s : crossSims) {
+			crossSum += s;
+		}
+		double crossMean = crossSum / crossSims.size();
+		double crossSqSum = 0;
+		for (double s : crossSims) {
+			double d = s - crossMean;
+			crossSqSum += d * d;
+		}
+		double crossStd = Math.sqrt(crossSqSum / crossSims.size());
+		Collections.sort(crossSims);
+		double crossMedian = crossSims.get(crossSims.size() / 2);
+		double crossP95 = crossSims.get(
+				(int) (crossSims.size() * 0.95));
+
+		// Intra-concept statistics
+		double intraMean;
+		double intraStd;
+		if (intraSims.isEmpty()) {
+			// Only one record per concept — use cross-concept stats
+			// shifted up as a reasonable estimate
+			intraMean = crossP95 + 2 * crossStd;
+			intraStd = crossStd;
+		} else {
+			double intraSum = 0;
+			for (double s : intraSims) {
+				intraSum += s;
+			}
+			intraMean = intraSum / intraSims.size();
+			double intraSqSum = 0;
+			for (double s : intraSims) {
+				double d = s - intraMean;
+				intraSqSum += d * d;
+			}
+			intraStd = Math.sqrt(intraSqSum / intraSims.size());
+		}
+
+		double crossQ1 = crossSims.get(crossSims.size() / 4);
+
+		return new ModelNoiseProfile(crossMean, crossStd,
+				crossMedian, crossQ1, crossP95,
+				intraMean, intraStd);
+	}
+
+	/**
+	 * Conservative default for patients with too few concepts.
+	 * Uses wide margins so the pipeline errs on the side of
+	 * including results rather than rejecting them.
+	 */
+	public static ModelNoiseProfile conservativeDefault() {
+		return new ModelNoiseProfile(
+				0.15,  // noiseMean
+				0.08,  // noiseStd
+				0.13,  // noiseMedian
+				0.08,  // noiseQ1
+				0.28,  // noiseP95
+				0.90,  // intraConceptMean
+				0.05); // intraConceptStd
+	}
+
+	/**
+	 * The similarity floor: average of the lower half of cross-concept
+	 * cosine similarities (mean of values below the median). The
+	 * cross-concept distribution is bimodal — truly unrelated pairs
+	 * form a lower mode and related-but-different concept pairs
+	 * (e.g., different vital sign types) form an upper mode. The
+	 * lower-half mean captures the center of the lower mode,
+	 * representing the typical noise similarity between genuinely
+	 * unrelated records. This avoids the inflation from the upper
+	 * mode that affects the overall mean and median.
+	 */
+	public double absoluteSimilarityFloor() {
+		// Skew-corrected half of the noise ceiling (P95).
+		// The 95th percentile is the model's noise ceiling —
+		// the highest cosine that cross-concept (unrelated)
+		// pairs reach. Dividing by (1 + median/mean) gives
+		// P95/2 for symmetric distributions, but pushes the
+		// floor up when mean > median (right-skewed due to
+		// the upper mode of related-but-different concepts).
+		// This correction ensures the floor tracks the model's
+		// effective noise boundary across datasets with
+		// different concept-relatedness profiles.
+		double denom = noiseMean + noiseMedian;
+		if (denom <= 0) {
+			return noiseP95 / 2;
+		}
+		return noiseP95 * noiseMean / denom;
+	}
+
+}
