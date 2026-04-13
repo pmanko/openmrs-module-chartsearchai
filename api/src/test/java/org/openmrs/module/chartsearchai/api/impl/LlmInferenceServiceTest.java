@@ -2524,7 +2524,7 @@ public class LlmInferenceServiceTest {
 	// ---- Multi-concept queries ----
 
 	@Test
-	public void realModel_hivAndCd4Query_shouldReturnHivRecords() {
+	public void realModel_hivAndCd4Query_shouldReturnHivAndCd4Records() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
@@ -3906,7 +3906,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void everBeenImmunized_fourthDataset_shouldReturnVaccinationRecords() {
+	public void everBeenImmunized_fourthDataset_shouldReturnEsaviRecords() {
 		List<Integer> result = runRealModelPipeline(
 				"ever been immunized?", 10, FOURTH_PATIENT_DATASET);
 		Collections.sort(result);
@@ -4286,7 +4286,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void immunization_fourthDataset_shouldReturnVaccinationRecords() {
+	public void immunization_fourthDataset_shouldReturnEsaviRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
@@ -4415,7 +4415,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void immunization_fifthDataset_shouldReturnVaccinationRecords() {
+	public void immunization_fifthDataset_shouldReturnEsaviRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
