@@ -956,13 +956,16 @@ public class LlmInferenceServiceTest {
 				"How have this patient's blood pressure, weight, and temperature "
 				+ "trended across their last 7 visits?", 10);
 
-		// All 40 BP + weight + temperature records (24 BP + 7 weight + 9 temp)
-		// Must NOT include blood oxygen or fetishism records.
+		// "last 7 visits" triggers a recency cap of 7 per concept. The
+		// semantic cluster is BP + weight + temperature (24 + 7 + 9 = 40
+		// records pre-cap). BP is represented as two concepts (systolic
+		// + diastolic), so cap=7 yields 7+7 BP + 7 weight + 7 temp = 28
+		// records. Must NOT include blood oxygen or other false positives.
 		assertEquals(Arrays.asList(17, 18, 22, 23, 25, 26, 31, 33, 36, 38,
 				47, 48, 58, 63, 64, 73, 74, 76, 77, 81,
-				93, 94, 96, 101, 102, 107, 111, 113, 114, 126,
-				128, 129, 131, 137, 138, 143, 144, 147, 148, 150),
-				result, "Should return all 40 BP + weight + temperature records");
+				93, 94, 96, 101, 111, 113, 114, 131),
+				result,
+				"Should return 7 most-recent records per concept for BP (x2) + weight + temperature");
 	}
 
 	@Test
@@ -993,21 +996,23 @@ public class LlmInferenceServiceTest {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// The pipeline returns all 40 BP + weight + temp records.
-		// "last 7 visits" should trigger recency cap, keeping 7 per concept.
+		// "last 7 visits" triggers recency cap, keeping 7 per concept.
 		String question = "How have this patient's blood pressure, weight, and temperature "
 				+ "trended across their last 7 visits?";
 
 		assertEquals(7, LlmInferenceService.extractRecencyCap(question),
 				"Should detect 'last 7' pattern");
 
-		// Run the pipeline to get the 40 matching record indices
+		// Pre-cap semantic cluster is 40 records (24 BP + 7 weight + 9 temp).
+		// BP is two concepts (systolic + diastolic), so cap=7 yields
+		// 7+7 BP + 7 weight + 7 temp = 28 records (the 7 most recent
+		// per concept).
 		List<Integer> pipelineResult = runRealModelPipeline(question, 10);
 		assertEquals(Arrays.asList(17, 18, 22, 23, 25, 26, 31, 33, 36, 38,
 				47, 48, 58, 63, 64, 73, 74, 76, 77, 81,
-				93, 94, 96, 101, 102, 107, 111, 113, 114, 126,
-				128, 129, 131, 137, 138, 143, 144, 147, 148, 150),
-				pipelineResult, "Pipeline should return all 40 BP + weight + temp records");
+				93, 94, 96, 101, 111, 113, 114, 131),
+				pipelineResult,
+				"Pipeline should return the 7 most-recent records per concept");
 
 		// Build SerializedRecords from the pipeline result (sorted most-recent-first).
 		// In production, records come sorted by date from PatientRecordLoader.
@@ -1040,10 +1045,10 @@ public class LlmInferenceServiceTest {
 					+ " records, expected <= 7");
 		}
 
-		// Should have significantly fewer records than the original 40
-		assertTrue(capped.size() < pipelineResult.size(),
-				"Capped result (" + capped.size() + ") should be smaller than "
-				+ "uncapped (" + pipelineResult.size() + ")");
+		// pipelineResult is already cap-7 (applied by findRelevantRecords),
+		// so calling capPerConcept again is a no-op — sizes are equal.
+		assertEquals(capped.size(), pipelineResult.size(),
+				"Re-capping an already-capped result should be a no-op");
 
 		// Verify the expected concepts are present:
 		// Systolic BP, Diastolic BP, Weight, Temperature
@@ -1169,7 +1174,7 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void integration_latestCd4CountQuery_shouldReturnExactlyTwoRecords() {
+	public void integration_latestCd4CountQuery_shouldReturnMostRecentCd4Count() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
@@ -1177,8 +1182,10 @@ public class LlmInferenceServiceTest {
 				"What is the latest CD4 Count?",
 				ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K);
 
-		assertEquals(Arrays.asList(8, 85), result,
-				"Should return only the 2 CD4 Count records");
+		// "the latest" implies a recency cap of 1, so only the most
+		// recent CD4 Count (index 8, 2025-10-30) is returned.
+		assertEquals(Arrays.asList(8), result,
+				"Should return only the most recent CD4 Count record");
 	}
 
 	@Test
@@ -4086,28 +4093,24 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void heartRates_fourthDataset_shouldReturnOnlyPulseRecords() {
+	public void heartRates_fourthDataset_shouldSelectPulseAndApplyRecencyCap() {
 		// Both phrasings of "heart rate" should return Pulse records, not
 		// Respiratory rate — the embedding model correctly ranks Pulse
 		// higher semantically. The longer query previously failed because
 		// "rate/rates" keyword-matched Respiratory rate text, and keyword
 		// refinement dropped Pulse records.
-		List<Integer> pulseIndices = new ArrayList<Integer>();
-		for (int i = 0; i < FOURTH_PATIENT_DATASET.length; i++) {
-			if (FOURTH_PATIENT_DATASET[i].contains("Pulse:")
-					&& !FOURTH_PATIENT_DATASET[i].contains("pulse oximeter")) {
-				pulseIndices.add(i);
-			}
-		}
-
-		List<Integer> expectedPulse = Arrays.asList(9, 26, 40, 57, 70, 83, 101, 114, 129, 143, 155);
-		for (String query : new String[] {
-				"what is the latest heart rate?",
-				"what are the most recent two heart rates?"}) {
-			List<Integer> result = runRealModelPipeline(query, 100, FOURTH_PATIENT_DATASET);
-			assertEquals(expectedPulse, result,
-					"Query '" + query + "' should return all 11 Pulse records");
-		}
+		//
+		// Recency qualifiers apply a cap per concept:
+		// - "the latest heart rate" → cap=1 → only the most recent Pulse
+		// - "the most recent two heart rates" → cap=2 → the two most recent
+		assertEquals(Arrays.asList(9),
+				runRealModelPipeline("what is the latest heart rate?", 100,
+						FOURTH_PATIENT_DATASET),
+				"'the latest heart rate' should return only the most recent Pulse record");
+		assertEquals(Arrays.asList(9, 26),
+				runRealModelPipeline("what are the most recent two heart rates?",
+						100, FOURTH_PATIENT_DATASET),
+				"'the most recent two heart rates' should return the 2 most recent Pulse records");
 	}
 
 }
