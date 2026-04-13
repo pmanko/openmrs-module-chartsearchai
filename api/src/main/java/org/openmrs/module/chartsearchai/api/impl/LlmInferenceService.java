@@ -1068,72 +1068,10 @@ public class LlmInferenceService implements ChartSearchService {
 			ratioFloorCandidateCount = rfccOut[0];
 		}
 
-		// Phase 1: Outlier removal — remove individual candidates that
-		// are topically unrelated to the majority of results. Uses gap
-		// detection on inter-candidate coherence scores.
-		//
-		// At n=3 this is restricted to tight clusters (score ratio ≥ 0.90)
-		// because with spread scores the minority candidate may be the
-		// only correct result (e.g. Syphilitic Cirrhosis at 83% of top
-		// for an STD query — a genuine hit that shouldn't be removed).
-		// Skip when the partial-keyword semantic core path already
-		// curated the candidate set — candidates were selected from
-		// the semantic core and validated keyword reps. Coherence
-		// filtering would incorrectly remove minority record types
-		// (e.g. hemoglobin lab tests when haemorrhagic disease
-		// condition/diagnosis form a tighter pair).
-		// Also skip when every candidate matches ALL query terms
-		// (kwScore >= 1.0). Full keyword match is conclusive
-		// evidence that the record belongs to the queried category
-		// — e.g. "any conditions?" returns all records containing
-		// "condition". The coherence filter measures embedding
-		// similarity, which penalizes unusual medical terminology
-		// (e.g. "Enteroviral vesicular stomatitis") despite the
-		// keyword confirming it IS a condition. Partial keyword
-		// matches (kwScore < 1.0) still need coherence filtering
-		// because the matched term may be incidental (e.g.
-		// "disease" in "Chronic disease management" for an STD
-		// query).
-		boolean allFullKeywordMatch = true;
-		for (ScoredEmbedding se : candidates) {
-			if (se.keywordScore < 1.0) {
-				allFullKeywordMatch = false;
-				break;
-			}
-		}
-		// Compound-keyword match detection: when candidates partition the
-		// query into complementary term subsets (union of matched terms
-		// covers every query term, yet no single candidate matches all
-		// terms), the candidate set is a legitimate multi-concept result
-		// — e.g. "HIV and CD4 count" where HIV records match {hiv} and
-		// CD4 records match {cd4, count}. Coherence filtering would drop
-		// the minority cluster as outliers even though keyword evidence
-		// confirms both concepts belong to the queried set.
-		boolean isCompoundKeywordMatch = isCompoundKeywordMatch(
-				candidates, queryTerms);
-		if (!partialKwValidated && !allFullKeywordMatch
-				&& !isCompoundKeywordMatch
-				&& candidates.size() >= 4) {
-			candidates = filterByCoherence(candidates);
-		} else if (!partialKwValidated && !allFullKeywordMatch
-				&& !isCompoundKeywordMatch
-				&& candidates.size() == 3) {
-			double topSemantic = candidates.get(0).semanticScore;
-			for (ScoredEmbedding se : candidates) {
-				if (se.semanticScore > topSemantic) {
-					topSemantic = se.semanticScore;
-				}
-			}
-			double lowestSemantic = candidates.get(0).semanticScore;
-			for (ScoredEmbedding se : candidates) {
-				if (se.semanticScore < lowestSemantic) {
-					lowestSemantic = se.semanticScore;
-				}
-			}
-			if (topSemantic > 0 && lowestSemantic / topSemantic >= 0.90) {
-				candidates = filterByCoherence(candidates);
-			}
-		}
+		// Phase 1: Outlier removal via coherence gap detection, guarded
+		// by full-keyword-match and compound-keyword-match bypasses.
+		candidates = applyOutlierRemovalPhase1(candidates, queryTerms,
+				partialKwValidated);
 		// Phase 2: Zero-keyword validation — when no surviving candidate
 		// has keyword support, the result set is purely semantic and
 		// must pass two orthogonal confidence checks. Keywords are
@@ -2213,6 +2151,64 @@ public class LlmInferenceService implements ChartSearchService {
 			} else if (queryTerms != null) {
 				candidates = filterRedundantKeywordTier(
 						candidates, queryTerms, kwMax);
+			}
+		}
+		return candidates;
+	}
+
+	/**
+	 * Phase 1 (outlier removal) — stage 6 of the filter pipeline.
+	 *
+	 * <p>Removes individual candidates that are topically unrelated to
+	 * the majority via {@link #filterByCoherence}. Skipped when:
+	 * <ul>
+	 *   <li>The partial-keyword semantic-core path already curated the
+	 *       set (would double-filter).</li>
+	 *   <li>Every candidate matches ALL query terms — keyword evidence
+	 *       is conclusive, coherence is redundant.</li>
+	 *   <li>The set is a compound-keyword match — coherence would drop
+	 *       the minority concept cluster (see
+	 *       {@link #isCompoundKeywordMatch}).</li>
+	 * </ul>
+	 *
+	 * <p>At n=3 coherence filtering only fires when scores are tightly
+	 * clustered (min/max ratio ≥ 0.90); a spread at n=3 means the
+	 * minority candidate may be the only correct result.
+	 */
+	static List<ScoredEmbedding> applyOutlierRemovalPhase1(
+			List<ScoredEmbedding> candidates, String[] queryTerms,
+			boolean partialKwValidated) {
+		boolean allFullKeywordMatch = true;
+		for (ScoredEmbedding se : candidates) {
+			if (se.keywordScore < 1.0) {
+				allFullKeywordMatch = false;
+				break;
+			}
+		}
+		boolean isCompoundKeywordMatch = isCompoundKeywordMatch(
+				candidates, queryTerms);
+		if (!partialKwValidated && !allFullKeywordMatch
+				&& !isCompoundKeywordMatch
+				&& candidates.size() >= 4) {
+			return filterByCoherence(candidates);
+		}
+		if (!partialKwValidated && !allFullKeywordMatch
+				&& !isCompoundKeywordMatch
+				&& candidates.size() == 3) {
+			double topSemantic = candidates.get(0).semanticScore;
+			for (ScoredEmbedding se : candidates) {
+				if (se.semanticScore > topSemantic) {
+					topSemantic = se.semanticScore;
+				}
+			}
+			double lowestSemantic = candidates.get(0).semanticScore;
+			for (ScoredEmbedding se : candidates) {
+				if (se.semanticScore < lowestSemantic) {
+					lowestSemantic = se.semanticScore;
+				}
+			}
+			if (topSemantic > 0 && lowestSemantic / topSemantic >= 0.90) {
+				return filterByCoherence(candidates);
 			}
 		}
 		return candidates;
