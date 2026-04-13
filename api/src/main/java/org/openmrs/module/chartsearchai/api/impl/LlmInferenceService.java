@@ -130,6 +130,14 @@ public class LlmInferenceService implements ChartSearchService {
 			+ "|" + NUMBER_GROUP + "\\s+" + KEYWORD_GROUP,
 			Pattern.CASE_INSENSITIVE);
 
+	/** Matches a definite-article recency phrase without a number, e.g.
+	 *  "the latest weight" or "the most recent BP". The definite article
+	 *  signals that the user expects a single (the most recent) result,
+	 *  unlike bare "latest vital signs" which is a synonym for "recent".
+	 *  Implies a cap of 1. */
+	private static final Pattern BARE_RECENCY_PATTERN = Pattern.compile(
+			"\\bthe\\s+(?:latest|most recent)\\b", Pattern.CASE_INSENSITIVE);
+
 	private static final Map<String, Integer> WORD_NUMBERS;
 
 	static {
@@ -150,8 +158,9 @@ public class LlmInferenceService implements ChartSearchService {
 	/**
 	 * Extracts a numeric recency constraint from the question, e.g. "last 7
 	 * visits" or "latest two weights" returns the number. Supports both
-	 * digits and word numbers (one through ten). Returns 0 if no constraint
-	 * is found.
+	 * digits and word numbers (one through ten). A bare recency keyword
+	 * without a number (e.g. "latest weight", "most recent BP") implies 1.
+	 * Returns 0 if no constraint is found.
 	 *
 	 * @param question the raw user question
 	 * @return the recency cap, or 0 if none detected
@@ -172,6 +181,10 @@ public class LlmInferenceService implements ChartSearchService {
 			catch (NumberFormatException e) {
 				return 0;
 			}
+		}
+		// Bare recency keyword without a number implies cap of 1.
+		if (BARE_RECENCY_PATTERN.matcher(question).find()) {
+			return 1;
 		}
 		return 0;
 	}
@@ -205,6 +218,34 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 		return capped;
+	}
+
+	/**
+	 * Filters {@code allRecords} to those whose resource keys are in
+	 * {@code relevantKeys}, then applies the recency cap derived from
+	 * {@code question}. The input {@code allRecords} list must already be
+	 * sorted most-recent-first so that {@link #capPerConcept} keeps the
+	 * latest record per concept group.
+	 *
+	 * <p>Shared by {@link #filterAndSerialize} (production) and
+	 * {@link #findRelevantRecords} (the composed retrieval entry point used
+	 * by tests), so both paths apply identical filter + cap semantics.
+	 */
+	static List<SerializedRecord> filterAndCap(
+			List<SerializedRecord> allRecords,
+			Set<String> relevantKeys, String question) {
+		List<SerializedRecord> filtered = new ArrayList<SerializedRecord>();
+		for (SerializedRecord record : allRecords) {
+			if (relevantKeys.contains(ChartSearchAiUtils.resourceKey(
+					record.getResourceType(), record.getResourceId()))) {
+				filtered.add(record);
+			}
+		}
+		int recencyCap = extractRecencyCap(question);
+		if (recencyCap > 0) {
+			filtered = capPerConcept(filtered, recencyCap);
+		}
+		return filtered;
 	}
 
 	/**
@@ -516,24 +557,13 @@ public class LlmInferenceService implements ChartSearchService {
 	private PatientChart filterAndSerialize(Patient patient, String question,
 			Set<String> relevantKeys) {
 		List<SerializedRecord> allRecords = recordLoader.loadAll(patient);
-		List<SerializedRecord> filtered = new ArrayList<SerializedRecord>();
-		for (SerializedRecord record : allRecords) {
-			if (relevantKeys.contains(ChartSearchAiUtils.resourceKey(record.getResourceType(), record.getResourceId()))) {
-				filtered.add(record);
-			}
-		}
+		List<SerializedRecord> filtered = filterAndCap(allRecords, relevantKeys, question);
 
 		log.debug("Pre-filtered {} records to {} using {}",
 				allRecords.size(), filtered.size(),
 				isHybridPipeline() ? "Hybrid" :
 						isElasticsearchPipeline() ? "Elasticsearch" :
 								isLucenePipeline() ? "Lucene" : "embeddings");
-
-		int recencyCap = extractRecencyCap(question);
-		if (recencyCap > 0) {
-			filtered = capPerConcept(filtered, recencyCap);
-			log.debug("Recency cap {} applied, {} records remain", recencyCap, filtered.size());
-		}
 
 		filtered = groupByConcept(filtered);
 
@@ -797,6 +827,50 @@ public class LlmInferenceService implements ChartSearchService {
 
 			return filterPipeline(semanticScores, keywordScores, embeddings,
 				queryTerms, topK, profiledConfig);
+	}
+
+	/**
+	 * Composed retrieval pipeline: runs {@link #findSimilar}, then
+	 * {@link #filterAndCap}, then {@link #groupByConcept} — the same
+	 * post-retrieval sequence that production's {@code filterAndSerialize}
+	 * runs before handing records to {@code chartSerializer.serialize}.
+	 *
+	 * <p>This is the canonical entry point for tests: it exercises every
+	 * step of the retrieval pipeline that doesn't require Spring/DAO
+	 * infrastructure, so pipeline-assembly bugs (e.g. forgetting to call
+	 * one of the post-retrieval helpers) can't slip past tests.
+	 *
+	 * @param allEmbeddings the patient's chart embeddings (most-recent-first)
+	 * @param allRecords the patient's serialized records (most-recent-first
+	 *        — used to apply the recency cap in date order)
+	 * @param provider embedding provider for query vectorization
+	 * @param question the natural language question
+	 * @param topK target result count for {@link #findSimilar}
+	 * @param queryPrefix prefix prepended to the query before embedding
+	 * @param config pipeline tuning parameters
+	 * @return filtered, capped, and concept-grouped serialized records,
+	 *         or {@code null} if {@code findSimilar} returned {@code null}
+	 *         (no embeddings)
+	 */
+	static List<SerializedRecord> findRelevantRecords(
+			List<ChartEmbedding> allEmbeddings,
+			List<SerializedRecord> allRecords,
+			EmbeddingProvider provider, String question, int topK,
+			String queryPrefix, PipelineConfig config) {
+		List<ChartEmbedding> similar = findSimilar(allEmbeddings, provider,
+				question, topK, queryPrefix, config);
+		if (similar == null) {
+			return null;
+		}
+		if (similar.isEmpty()) {
+			return Collections.emptyList();
+		}
+		Set<String> relevantKeys = new HashSet<String>();
+		for (ChartEmbedding ce : similar) {
+			relevantKeys.add(ChartSearchAiUtils.resourceKey(
+					ce.getResourceType(), ce.getResourceId()));
+		}
+		return groupByConcept(filterAndCap(allRecords, relevantKeys, question));
 	}
 
 	/**

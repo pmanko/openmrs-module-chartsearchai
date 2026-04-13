@@ -923,15 +923,22 @@ public class LlmInferenceServiceTest {
 					org.openmrs.module.chartsearchai.api.EmbeddingIndexer.buildEmbeddings(
 							records, provider);
 
-			// Query using the exact production query code
-			List<ChartEmbedding> results = LlmInferenceService.findSimilar(
-					allEmbeddings, provider, query, topK,
-					ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
-					config);
+			// Run the full composed retrieval pipeline: findSimilar then
+			// filterAndCap (which applies the recency cap when the question
+			// contains a recency keyword like "the latest"). This mirrors
+			// what production runs end-to-end.
+			List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord>
+					results = LlmInferenceService.findRelevantRecords(
+							allEmbeddings, records, provider, query, topK,
+							ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
+							config);
 
 			List<Integer> indices = new ArrayList<Integer>();
-			for (ChartEmbedding ce : results) {
-				indices.add(ce.getResourceId());
+			if (results != null) {
+				for (org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord r
+						: results) {
+					indices.add(r.getResourceId());
+				}
 			}
 			Collections.sort(indices);
 			return indices;
