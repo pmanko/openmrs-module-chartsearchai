@@ -1412,10 +1412,11 @@ public class LlmInferenceServiceTest {
 				"has this patient had a sexually transmitted disease?", 10,
 				SECOND_PATIENT_DATASET);
 
-		// [19] Syphilitic Cirrhosis diagnosis, [44] Granuloma condition,
-		// [45] Granuloma diagnosis — purely semantic retrieval
-		assertEquals(Arrays.asList(19, 44, 45), result,
-				"Should return Syphilitic Cirrhosis and Granuloma records");
+		// Syphilitic Cirrhosis condition [17] and diagnosis [19] —
+		// syphilis is an STD. Must NOT include Female infertility
+		// or Granuloma annulare (neither is an STD).
+		assertEquals(Arrays.asList(17, 19), result,
+				"Should return only the 2 Syphilitic Cirrhosis records");
 	}
 
 	@Test
@@ -1431,14 +1432,11 @@ public class LlmInferenceServiceTest {
 				"any sexually transmitted diseases?", 100,
 				FOURTH_PATIENT_DATASET);
 
-		// [2] Zika virus disease condition (Zika can be sexually transmitted),
-		// [108] HIV condition, [110] HIV diagnosis
-		// Gonococcal arthritis [137, 139] is missed — sem=0.22/0.18,
-		// kw=0.00. The embedding model (all-MiniLM-L6-v2) can't link
-		// "sexually transmitted" to "gonococcal" — no shared tokens and
-		// no medical domain knowledge. MedCPT would handle this.
-		assertEquals(Arrays.asList(2, 108, 110), result,
-				"Should return HIV and Zika, not Hookworm or Haemorrhagic disease");
+		// [2,4] Zika virus disease (can be sexually transmitted),
+		// [108,110] HIV disease (condition + diagnosis),
+		// [137,139] Gonococcal arthritis (gonorrhea is an STD)
+		assertEquals(Arrays.asList(2, 4, 108, 110, 137, 139), result,
+				"Should return HIV, Zika, and Gonococcal arthritis");
 	}
 
 	@Test
@@ -2340,8 +2338,12 @@ public class LlmInferenceServiceTest {
 		List<Integer> result = runRealModelPipeline(
 				"substance abuse", 100, FOURTH_PATIENT_DATASET);
 
-		assertEquals(Arrays.asList(121, 124), result,
-				"Should return Substance Addiction condition and diagnosis");
+		// [47] Mental/behavioral disorder due to psychoactive substance,
+		// [48] Cocaine abuse, [51] Psychoactive substance diagnosis,
+		// [52] Cocaine abuse diagnosis, [121] Substance Addiction,
+		// [124] Substance Addiction diagnosis
+		assertEquals(Arrays.asList(47, 48, 51, 52, 121, 124), result,
+				"Should return all substance abuse related records");
 	}
 
 	@Test
@@ -2469,16 +2471,17 @@ public class LlmInferenceServiceTest {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// Multi-concept query: "HIV status and CD4 count". The model
-		// finds all HIV records but not CD4 — the HIV signal dominates.
-		// This is a known limitation of single-vector embedding: the
-		// query vector is a blend of both concepts, and the stronger
-		// concept wins.
+		// Multi-concept query: "HIV status and CD4 count" should
+		// return both HIV and CD4 records.
 		List<Integer> result = runRealModelPipeline(
 				"HIV status and CD4 count", 100);
 
-		assertEquals(Arrays.asList(39, 40, 68, 69, 71, 110), result,
-				"Should return HIV records (CD4 masked by HIV signal)");
+		// [8] CD4 Count 988.0, [39,40] HIV diagnosis/assessment,
+		// [68,69,71] HIV records, [85] CD4 Count 1191.0,
+		// [110] HIV diagnosis
+		assertEquals(Arrays.asList(8, 39, 40, 68, 69, 71, 85, 110),
+				result,
+				"Should return both HIV and CD4 count records");
 	}
 
 	@Test
@@ -2490,10 +2493,11 @@ public class LlmInferenceServiceTest {
 		List<Integer> result = runRealModelPipeline(
 				"allergies and current medications", 100);
 
-		// [0,1] Azithromycin drug orders, [53] Fomepizole allergy,
-		// [56,91] encounter notes: "Medication adjusted"
-		assertEquals(Arrays.asList(0, 1, 53, 56, 91), result,
-				"Should return drug orders, allergy, and medication-"
+		// [0,1] Azithromycin drug orders, [4] Beef allergy,
+		// [53] Fomepizole allergy, [56,91] encounter notes:
+		// "Medication adjusted"
+		assertEquals(Arrays.asList(0, 1, 4, 53, 56, 91), result,
+				"Should return drug orders, allergies, and medication-"
 						+ "related encounter notes");
 	}
 
@@ -2597,16 +2601,19 @@ public class LlmInferenceServiceTest {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// "opportunistic infections in HIV" — the HIV signal
-		// dominates, returning the same HIV records. The model
-		// can't separate the qualifier "opportunistic" to find
-		// TB or Kaposi sarcoma as opportunistic infections.
+		// "opportunistic infections in HIV" — should return HIV
+		// records plus TB and Kaposi sarcoma (classic opportunistic
+		// infections in HIV patients).
 		List<Integer> result = runRealModelPipeline(
 				"opportunistic infections in HIV", 100);
 
-		assertEquals(Arrays.asList(39, 40, 68, 69, 71, 110), result,
-				"Should return HIV records (opportunistic qualifier"
-						+ " does not change retrieval)");
+		// [7] TB condition, [11] Kaposi sarcoma, [12] TB assessment,
+		// [39,40] HIV diagnosis/assessment, [52] TB diagnosis,
+		// [68,69,71] HIV records, [89] Kaposi sarcoma,
+		// [110] HIV diagnosis, [134,135] TB assessments
+		assertEquals(Arrays.asList(7, 11, 12, 39, 40, 52, 68, 69,
+				71, 89, 110, 134, 135), result,
+				"Should return HIV, TB, and Kaposi sarcoma records");
 	}
 
 	@Test
@@ -2645,11 +2652,12 @@ public class LlmInferenceServiceTest {
 				"musculoskeletal injuries", 100,
 				FOURTH_PATIENT_DATASET);
 
-		// [34,36] CVA (debatable but model includes it),
 		// [76,78] Intraoperative musculoskeletal disorder,
-		// [92] Crushing injury, [93] Achilles tendon,
-		// [97] Achilles tendon diagnosis, [107,109] Fracture
-		assertEquals(Arrays.asList(34, 36, 76, 78, 92, 93, 97,
+		// [92,96] Crushing injury of thigh (condition + diagnosis),
+		// [93,97] Acquired short achilles tendon (condition + diagnosis),
+		// [107,109] Nonunion of fracture (condition + diagnosis).
+		// CVA [34,36] is neurological, not musculoskeletal.
+		assertEquals(Arrays.asList(76, 78, 92, 93, 96, 97,
 				107, 109), result,
 				"Should return musculoskeletal conditions and injuries");
 	}
@@ -2905,14 +2913,37 @@ public class LlmInferenceServiceTest {
 	// ---- SECOND dataset: remaining cross-dataset coverage ----
 
 	@Test
-	public void vitalSigns_secondDataset_shouldReturnEmpty() {
+	public void vitalSigns_secondDataset_shouldReturnAllVitalSigns() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		assertTrue(
-				runRealModelPipeline("vital signs", 100,
-						SECOND_PATIENT_DATASET).isEmpty(),
-				"SECOND dataset has no umbrella vital signs match");
+		// SECOND dataset has Temperature, BP, Pulse, SpO2, RR
+		// across 5 encounters. All are vital signs.
+		List<Integer> result = runRealModelPipeline("vital signs", 100,
+				SECOND_PATIENT_DATASET);
+		assertFalse(result.isEmpty(),
+				"SECOND dataset contains vital signs");
+		boolean hasTemp = false, hasBP = false, hasPulse = false;
+		boolean hasRR = false, hasSpO2 = false;
+		for (int idx : result) {
+			String rec = SECOND_PATIENT_DATASET[idx];
+			assertTrue(
+					rec.contains("Temperature") || rec.contains("blood pressure")
+							|| rec.contains("Pulse")
+							|| rec.contains("Respiratory rate")
+							|| rec.contains("oxygen saturation"),
+					"Record [" + idx + "] should be a vital sign: " + rec);
+			if (rec.contains("Temperature")) hasTemp = true;
+			if (rec.contains("blood pressure")) hasBP = true;
+			if (rec.contains("Pulse")) hasPulse = true;
+			if (rec.contains("Respiratory rate")) hasRR = true;
+			if (rec.contains("oxygen saturation")) hasSpO2 = true;
+		}
+		assertTrue(hasTemp, "Should include Temperature records");
+		assertTrue(hasBP, "Should include Blood Pressure records");
+		assertTrue(hasPulse, "Should include Pulse records");
+		assertTrue(hasRR, "Should include Respiratory Rate records");
+		assertTrue(hasSpO2, "Should include SpO2 records");
 	}
 
 	@Test
@@ -2971,20 +3002,19 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void medications_secondDataset_shouldReturnDepressiveEpisode() {
+	public void medications_secondDataset_shouldReturnEmptyForPatientWithNoMedications() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// SECOND dataset has no drug orders. The embedding model
-		// (all-MiniLM-L6-v2) finds semantic similarity between
-		// "medications" and "Mild depressive episode" (sem=0.35,
-		// z=3.32) — likely because depression is commonly treated
-		// with medications. This is a model limitation, not a
-		// pipeline bug; MedCPT should resolve it.
+		// SECOND dataset has no drug orders — pipeline should return
+		// empty, not clinically unrelated conditions like depressive
+		// episode or ligament tear.
 		List<Integer> result = runRealModelPipeline(
 				"what medications is the patient on?", 100,
 				SECOND_PATIENT_DATASET);
-		assertEquals(Arrays.asList(31), result);
+		assertTrue(result.isEmpty(),
+				"Patient has no medication records — pipeline should return empty, but got "
+						+ result.size() + " results");
 	}
 
 	@Test
@@ -3134,19 +3164,19 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void medications_fourthDataset_shouldReturnSubstanceAbuseConditions() {
+	public void medications_fourthDataset_shouldReturnEmptyForPatientWithNoMedications() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// FOURTH dataset has no drug orders. The embedding model finds
-		// high semantic similarity (sem=0.34-0.36, z=3.42) between
-		// "medications" and substance abuse conditions (Psychoactive
-		// substance disorder, Cocaine abuse, Substance Addiction).
-		// This is a model limitation — MedCPT should resolve it.
+		// FOURTH dataset has no drug orders — pipeline should return
+		// empty, not clinically unrelated conditions like substance
+		// abuse or behavioral disorders.
 		List<Integer> result = runRealModelPipeline(
 				"what medications is the patient on?", 100,
 				FOURTH_PATIENT_DATASET);
-		assertEquals(Arrays.asList(47, 48, 121), result);
+		assertTrue(result.isEmpty(),
+				"Patient has no medication records — pipeline should return empty, but got "
+						+ result.size() + " results");
 	}
 
 	@Test
@@ -3163,14 +3193,37 @@ public class LlmInferenceServiceTest {
 	// ---- FIFTH dataset: remaining cross-dataset coverage ----
 
 	@Test
-	public void vitalSigns_fifthDataset_shouldReturnEmpty() {
+	public void vitalSigns_fifthDataset_shouldReturnAllVitalSigns() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		assertTrue(
-				runRealModelPipeline("vital signs", 100,
-						FIFTH_PATIENT_DATASET).isEmpty(),
-				"FIFTH dataset umbrella vital signs query returns empty");
+		// FIFTH dataset has Temperature, BP, Pulse, SpO2, RR
+		// (same as FOURTH with synonyms)
+		List<Integer> result = runRealModelPipeline("vital signs", 100,
+				FIFTH_PATIENT_DATASET);
+		assertFalse(result.isEmpty(),
+				"FIFTH dataset contains vital signs");
+		boolean hasTemp = false, hasBP = false, hasPulse = false;
+		boolean hasRR = false, hasSpO2 = false;
+		for (int idx : result) {
+			String rec = FIFTH_PATIENT_DATASET[idx];
+			assertTrue(
+					rec.contains("Temperature") || rec.contains("blood pressure")
+							|| rec.contains("Pulse")
+							|| rec.contains("Respiratory rate")
+							|| rec.contains("oxygen saturation"),
+					"Record [" + idx + "] should be a vital sign: " + rec);
+			if (rec.contains("Temperature")) hasTemp = true;
+			if (rec.contains("blood pressure")) hasBP = true;
+			if (rec.contains("Pulse")) hasPulse = true;
+			if (rec.contains("Respiratory rate")) hasRR = true;
+			if (rec.contains("oxygen saturation")) hasSpO2 = true;
+		}
+		assertTrue(hasTemp, "Should include Temperature records");
+		assertTrue(hasBP, "Should include Blood Pressure records");
+		assertTrue(hasPulse, "Should include Pulse records");
+		assertTrue(hasRR, "Should include Respiratory Rate records");
+		assertTrue(hasSpO2, "Should include SpO2 records");
 	}
 
 	@Test
@@ -3198,18 +3251,19 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void medications_fifthDataset_shouldReturnSubstanceAbuseConditions() {
+	public void medications_fifthDataset_shouldReturnEmptyForPatientWithNoMedications() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// FIFTH dataset has no drug orders. Same model limitation as
-		// FOURTH — substance abuse conditions score high for
-		// "medications" (sem=0.34-0.36, z=3.48). MedCPT should
-		// resolve this.
+		// FIFTH dataset has no drug orders — pipeline should return
+		// empty, not clinically unrelated conditions like substance
+		// abuse or behavioral disorders.
 		List<Integer> result = runRealModelPipeline(
 				"what medications is the patient on?", 100,
 				FIFTH_PATIENT_DATASET);
-		assertEquals(Arrays.asList(47, 48, 121), result);
+		assertTrue(result.isEmpty(),
+				"Patient has no medication records — pipeline should return empty, but got "
+						+ result.size() + " results");
 	}
 
 	@Test
@@ -3233,15 +3287,27 @@ public class LlmInferenceServiceTest {
 		List<Integer> result = runRealModelPipeline(
 				"I need to know the patient's most recent blood pressure and weight readings",
 				100);
-		assertEquals(24, result.size(),
-				"Should return 24 blood pressure records");
+		// Query explicitly asks for "blood pressure and weight"
 		for (int idx : result) {
 			assertTrue(
 					FULL_PATIENT_DATASET[idx].contains("Blood Pressure")
-							|| FULL_PATIENT_DATASET[idx].contains("blood pressure"),
-					"Record [" + idx + "] should be a blood pressure record: "
+							|| FULL_PATIENT_DATASET[idx].contains("blood pressure")
+							|| FULL_PATIENT_DATASET[idx].contains("Weight"),
+					"Record [" + idx + "] should be BP or Weight: "
 							+ FULL_PATIENT_DATASET[idx]);
 		}
+		boolean hasBP = false, hasWeight = false;
+		for (int idx : result) {
+			if (FULL_PATIENT_DATASET[idx].contains("Blood Pressure")
+					|| FULL_PATIENT_DATASET[idx].contains("blood pressure")) {
+				hasBP = true;
+			}
+			if (FULL_PATIENT_DATASET[idx].contains("Weight")) {
+				hasWeight = true;
+			}
+		}
+		assertTrue(hasBP, "Should include Blood Pressure records");
+		assertTrue(hasWeight, "Should include Weight records");
 	}
 
 	@Test
@@ -3371,13 +3437,26 @@ public class LlmInferenceServiceTest {
 		List<Integer> result = runRealModelPipeline(
 				"can you tell me about the patient's respiratory symptoms and oxygen levels",
 				100, FOURTH_PATIENT_DATASET);
-		assertEquals(11, result.size());
+		// Query asks for "respiratory symptoms and oxygen levels"
+		// — should return both Respiratory rate and SpO2 records
 		for (int idx : result) {
 			assertTrue(
-					FOURTH_PATIENT_DATASET[idx].contains("Respiratory rate"),
-					"Record [" + idx + "] should be respiratory: "
+					FOURTH_PATIENT_DATASET[idx].contains("Respiratory rate")
+							|| FOURTH_PATIENT_DATASET[idx].contains("oxygen saturation"),
+					"Record [" + idx + "] should be respiratory or SpO2: "
 							+ FOURTH_PATIENT_DATASET[idx]);
 		}
+		boolean hasRR = false, hasSpO2 = false;
+		for (int idx : result) {
+			if (FOURTH_PATIENT_DATASET[idx].contains("Respiratory rate")) {
+				hasRR = true;
+			}
+			if (FOURTH_PATIENT_DATASET[idx].contains("oxygen saturation")) {
+				hasSpO2 = true;
+			}
+		}
+		assertTrue(hasRR, "Should include Respiratory rate records");
+		assertTrue(hasSpO2, "Should include SpO2 records");
 	}
 
 	// ---- Temporal queries ----
@@ -3415,28 +3494,31 @@ public class LlmInferenceServiceTest {
 	// ---- Under-tested record types ----
 
 	@Test
-	public void allergies_fourthDataset_shouldReturnConditionAndDiagnosisRecords() {
+	public void allergies_fourthDataset_shouldReturnEmptyForPatientWithNoAllergies() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
+		// FOURTH dataset has no allergy records — pipeline should
+		// return empty, not unrelated conditions like Rash or
+		// vaccination events.
 		List<Integer> result = runRealModelPipeline(
 				"does the patient have any allergies", 100, FOURTH_PATIENT_DATASET);
-		assertEquals(Arrays.asList(64, 150, 151), result);
-		assertTrue(FOURTH_PATIENT_DATASET[64].contains("Rash"),
-				"Record 64 should be the Rash condition");
-		assertTrue(FOURTH_PATIENT_DATASET[150].contains("vaccination"),
-				"Record 150 should be vaccination event condition");
+		assertTrue(result.isEmpty(),
+				"Patient has no allergy records — pipeline should return empty, but got "
+						+ result.size() + " results");
 	}
 
 	@Test
-	public void allergies_fifthDataset_shouldMatchFourthDataset() {
+	public void allergies_fifthDataset_shouldReturnEmptyForPatientWithNoAllergies() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
+		// FIFTH dataset has no allergy records — same as FOURTH.
 		List<Integer> result = runRealModelPipeline(
 				"does the patient have any allergies", 100, FIFTH_PATIENT_DATASET);
-		// FIFTH dataset has same records as FOURTH for these indices
-		assertEquals(Arrays.asList(64, 150, 151), result);
+		assertTrue(result.isEmpty(),
+				"Patient has no allergy records — pipeline should return empty, but got "
+						+ result.size() + " results");
 	}
 
 	@Test
@@ -3479,25 +3561,38 @@ public class LlmInferenceServiceTest {
 	// ---- Negative / limitation tests for empty results ----
 
 	@Test
-	public void latestVitalSigns_shouldReturnPulseAndRespiratoryRecords() {
+	public void latestVitalSigns_shouldReturnAllVitalSignRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
 		// "latest vital signs" → "vital signs" after stopword removal.
-		// The embedding model correctly identifies vital sign records
-		// (Pulse and Respiratory Rate score highest), and the pipeline
-		// recognizes this as a genuine umbrella query: the ratio floor
-		// produces a tight cluster (< 25% of records) with strong
-		// semantic signal (z-score ≥ 2.0, maxSem well above floor).
+		// Clinically, vital signs include Temperature, Blood Pressure,
+		// Pulse, Respiratory Rate, and SpO2.
 		List<Integer> result = runRealModelPipeline(
 				"latest vital signs", 100);
-		assertEquals(26, result.size(),
-				"Should return 26 Pulse + Respiratory Rate records");
+		assertFalse(result.isEmpty(),
+				"FULL dataset contains vital signs");
+		boolean hasTemp = false, hasBP = false, hasPulse = false;
+		boolean hasRR = false, hasSpO2 = false;
 		for (int idx : result) {
 			String rec = FULL_PATIENT_DATASET[idx];
-			assertTrue(rec.contains("Pulse") || rec.contains("Respiratory Rate"),
-					"Record [" + idx + "] should be Pulse or Respiratory: " + rec);
+			assertTrue(
+					rec.contains("Temperature") || rec.contains("Blood Pressure")
+							|| rec.contains("Pulse")
+							|| rec.contains("Respiratory Rate")
+							|| rec.contains("Blood Oxygen Saturation"),
+					"Record [" + idx + "] should be a vital sign: " + rec);
+			if (rec.contains("Temperature")) hasTemp = true;
+			if (rec.contains("Blood Pressure")) hasBP = true;
+			if (rec.contains("Pulse")) hasPulse = true;
+			if (rec.contains("Respiratory Rate")) hasRR = true;
+			if (rec.contains("Blood Oxygen Saturation")) hasSpO2 = true;
 		}
+		assertTrue(hasTemp, "Should include Temperature records");
+		assertTrue(hasBP, "Should include Blood Pressure records");
+		assertTrue(hasPulse, "Should include Pulse records");
+		assertTrue(hasRR, "Should include Respiratory Rate records");
+		assertTrue(hasSpO2, "Should include SpO2 records");
 	}
 
 	@Test
@@ -3636,19 +3731,35 @@ public class LlmInferenceServiceTest {
 	// ---- Cross-dataset coverage: THIRD ----
 
 	@Test
-	public void vitalSigns_thirdDataset_shouldReturnPulseSpO2AndRespiratoryRecords() {
+	public void vitalSigns_thirdDataset_shouldReturnAllVitalSigns() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
 		List<Integer> result = runRealModelPipeline("vital signs", 100,
 				THIRD_PATIENT_DATASET);
-		assertEquals(29, result.size());
+		assertFalse(result.isEmpty(),
+				"THIRD dataset contains vital signs");
+		boolean hasTemp = false, hasBP = false, hasPulse = false;
+		boolean hasRR = false, hasSpO2 = false;
 		for (int idx : result) {
 			String rec = THIRD_PATIENT_DATASET[idx];
-			assertTrue(rec.contains("Pulse") || rec.contains("oxygen saturation")
-							|| rec.contains("Respiratory rate"),
-					"Record [" + idx + "] should be Pulse, SpO2, or Respiratory: " + rec);
+			assertTrue(
+					rec.contains("Temperature") || rec.contains("blood pressure")
+							|| rec.contains("Pulse")
+							|| rec.contains("Respiratory rate")
+							|| rec.contains("oxygen saturation"),
+					"Record [" + idx + "] should be a vital sign: " + rec);
+			if (rec.contains("Temperature")) hasTemp = true;
+			if (rec.contains("blood pressure")) hasBP = true;
+			if (rec.contains("Pulse")) hasPulse = true;
+			if (rec.contains("Respiratory rate")) hasRR = true;
+			if (rec.contains("oxygen saturation")) hasSpO2 = true;
 		}
+		assertTrue(hasTemp, "Should include Temperature records");
+		assertTrue(hasBP, "Should include Blood Pressure records");
+		assertTrue(hasPulse, "Should include Pulse records");
+		assertTrue(hasRR, "Should include Respiratory Rate records");
+		assertTrue(hasSpO2, "Should include SpO2 records");
 	}
 
 	@Test
@@ -3723,17 +3834,16 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void allergies_thirdDataset_shouldReturnAsthmaRecords() {
+	public void allergies_thirdDataset_shouldReturnEmptyForPatientWithNoAllergies() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		// THIRD dataset has no allergy records. "allergies" finds
-		// Asthma — a related allergic/immune condition.
+		// THIRD dataset has no allergy records (no "Patient allergy:"
+		// entries). Asthma is a respiratory condition, not an allergy.
 		List<Integer> result = runRealModelPipeline("allergies", 100,
 				THIRD_PATIENT_DATASET);
-		assertEquals(Arrays.asList(156, 157), result);
-		assertTrue(THIRD_PATIENT_DATASET[156].contains("Asthma"),
-				"Record 156 should be Asthma");
+		assertTrue(result.isEmpty(),
+				"THIRD dataset has no allergy records");
 	}
 
 	// ---- Cross-dataset coverage: FOURTH ----
@@ -3779,13 +3889,18 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void anyInfections_fourthDataset_shouldReturnHivRecords() {
+	public void anyInfections_fourthDataset_shouldReturnAllInfectionRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
 		List<Integer> result = runRealModelPipeline("any infections?", 100,
 				FOURTH_PATIENT_DATASET);
-		assertEquals(Arrays.asList(108, 110), result);
+		// [2,4] Zika virus disease, [33,35] Enteroviral stomatitis,
+		// [90,94] Hookworm disease, [108,110] HIV disease,
+		// [137,139] Gonococcal arthritis
+		assertEquals(Arrays.asList(2, 4, 33, 35, 90, 94, 108, 110,
+				137, 139), result,
+				"Should return all infection records");
 	}
 
 	@Test
@@ -3864,23 +3979,31 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void std_fifthDataset_shouldReturnHivRecords() {
+	public void std_fifthDataset_shouldReturnAllStdRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
 		List<Integer> result = runRealModelPipeline("any STD?", 100,
 				FIFTH_PATIENT_DATASET);
-		assertEquals(Arrays.asList(108, 110), result);
+		// [2,4] Zika (sexually transmissible), [108,110] HIV,
+		// [137,139] Gonococcal arthritis (gonorrhea)
+		assertEquals(Arrays.asList(2, 4, 108, 110, 137, 139), result,
+				"Should return HIV, Zika, and Gonococcal arthritis");
 	}
 
 	@Test
-	public void anyInfections_fifthDataset_shouldReturnHivRecords() {
+	public void anyInfections_fifthDataset_shouldReturnAllInfectionRecords() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
 		List<Integer> result = runRealModelPipeline("any infections?", 100,
 				FIFTH_PATIENT_DATASET);
-		assertEquals(Arrays.asList(108, 110), result);
+		// Same infections as FOURTH dataset (with synonyms):
+		// [2,4] Zika, [33,35] Enteroviral stomatitis,
+		// [90,94] Hookworm, [108,110] HIV, [137,139] Gonococcal
+		assertEquals(Arrays.asList(2, 4, 33, 35, 90, 94, 108, 110,
+				137, 139), result,
+				"Should return all infection records");
 	}
 
 	@Test
