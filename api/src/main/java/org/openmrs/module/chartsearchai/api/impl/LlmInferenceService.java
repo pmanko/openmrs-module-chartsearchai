@@ -1068,6 +1068,106 @@ public class LlmInferenceService implements ChartSearchService {
 			ratioFloorCandidateCount = rfccOut[0];
 		}
 
+		// Keyword-dominance rescue: when all post-processed candidates
+		// have keyword matches (kw > 0) and the set is small, the
+		// embedding model's lexical-overlap bias may have inflated
+		// keyword-matching records' semantic scores above topically-
+		// related records that use different vocabulary (e.g.
+		// "Temperature: 37.7" for a "fever" query). Scan the full
+		// scored list for non-keyword records that are (a) above the
+		// ratio floor and (b) individually coherent with the keyword
+		// set above a data-derived threshold: sqrt(noiseMean *
+		// noiseP95) — the geometric mean of the noise center and
+		// ceiling, scaled by keyword confidence. This threshold is
+		// entirely derived from the patient's own cross-concept
+		// embedding statistics.
+		if (candidates.size()
+				<= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS
+				&& !candidates.isEmpty()) {
+			boolean allKw = true;
+			for (ScoredEmbedding se : candidates) {
+				if (se.keywordScore == 0) {
+					allKw = false;
+					break;
+				}
+			}
+			if (allKw) {
+				double kwMaxSem = 0;
+				double kwMaxScore = 0;
+				for (ScoredEmbedding se : candidates) {
+					if (se.semanticScore > kwMaxSem) {
+						kwMaxSem = se.semanticScore;
+					}
+					if (se.keywordScore > kwMaxScore) {
+						kwMaxScore = se.keywordScore;
+					}
+				}
+				double kwConf = queryTermCount > 0
+						? kwMaxScore * queryTermCount
+								/ Math.max(bonusThreshold, 0.01)
+						: 1.0;
+				double perRecordThreshold = Math.sqrt(
+						config.noiseProfile.noiseMean
+						* config.noiseProfile.noiseP95) * kwConf;
+				double mergeFloor = kwMaxSem
+						* config.similarityRatio;
+				Set<Integer> inCandidates = new HashSet<Integer>();
+				for (ScoredEmbedding se : candidates) {
+					inCandidates.add(
+							se.embedding.getResourceId());
+				}
+				List<ScoredEmbedding> rescued =
+						new ArrayList<ScoredEmbedding>();
+				for (ScoredEmbedding se : scored) {
+					if (inCandidates.contains(
+							se.embedding.getResourceId())
+							|| se.keywordScore > 0
+							|| se.semanticScore < mergeFloor) {
+						continue;
+					}
+					float[] vec = se.embedding
+							.getEmbeddingVector();
+					if (vec == null) {
+						continue;
+					}
+					double cosSum = 0;
+					int cnt = 0;
+					for (ScoredEmbedding kw : candidates) {
+						float[] kwVec = kw.embedding
+								.getEmbeddingVector();
+						if (kwVec != null
+								&& kwVec.length == vec.length) {
+							cosSum += ChartSearchAiUtils
+									.cosineSimilarity(
+											vec, kwVec);
+							cnt++;
+						}
+					}
+					if (cnt > 0
+							&& cosSum / cnt
+							>= perRecordThreshold) {
+						rescued.add(se);
+					}
+				}
+				if (!rescued.isEmpty()) {
+					log.debug("Keyword-dominance rescue: merging "
+							+ "{} non-kw records (threshold={}, "
+							+ "kwConf={}) with {} kw records",
+							rescued.size(),
+							String.format("%.4f",
+									perRecordThreshold),
+							String.format("%.2f", kwConf),
+							candidates.size());
+					List<ScoredEmbedding> merged =
+							new ArrayList<ScoredEmbedding>(
+									candidates);
+					merged.addAll(rescued);
+					candidates = merged;
+					partialKwValidated = true;
+				}
+			}
+		}
+
 		// Phase 1: Outlier removal via coherence gap detection, guarded
 		// by full-keyword-match and compound-keyword-match bypasses.
 		candidates = applyOutlierRemovalPhase1(candidates, queryTerms,
