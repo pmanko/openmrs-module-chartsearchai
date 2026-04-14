@@ -1,6 +1,10 @@
 name: Build O3 Standalone with Chart Search AI
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-standalone.yml'
   workflow_dispatch:
     inputs:
       refapp_version:
@@ -33,9 +37,6 @@ on:
         required: false
         default: 'https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt'
         type: string
-
-permissions:
-  contents: write
 
 concurrency:
   group: build-standalone
@@ -224,27 +225,5 @@ jobs:
         with:
           name: openmrs-standalone-chartsearchai
           path: standalone/target/referenceapplication-standalone-${{ inputs.refapp_version }}.zip
-          retention-days: 30
-
-      - name: Update latest standalone download
-        env:
-          GH_TOKEN: ${{ github.token }}
-        working-directory: chartsearchai-backend
-        run: |
-          ZIP_FILE="${GITHUB_WORKSPACE}/standalone/target/referenceapplication-standalone-${{ inputs.refapp_version }}.zip"
-
-          # Delete existing release if present, then recreate
-          gh release delete standalone-latest --cleanup-tag --yes 2>/dev/null || true
-
-          gh release create standalone-latest "$ZIP_FILE#openmrs-standalone-chartsearchai.zip" \
-            --title "Latest Standalone Build" \
-            --notes "Automated O3 standalone build with Chart Search AI pre-installed.
-
-          - **O3 RefApp**: ${{ inputs.refapp_version }}
-          - **OpenMRS Core**: ${{ inputs.openmrs_version }}
-          - **LLM**: MedGemma 1.5 4B Instruct (Q4_K_M)
-          - **Embedding**: all-MiniLM-L6-v2
-
-          > This is an automated build, not a versioned release. It is updated on each successful workflow run." \
-            --latest=false
+          retention-days: 90
 
