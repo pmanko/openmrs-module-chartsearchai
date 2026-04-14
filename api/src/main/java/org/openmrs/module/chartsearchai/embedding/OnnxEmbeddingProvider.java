@@ -115,12 +115,18 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 			long[][] inputIdsArr = { tokenized.getInputIds() };
 			long[][] attentionMaskArr = { tokenized.getAttentionMask() };
-			long[][] tokenTypeIdsArr = { tokenized.getTokenTypeIds() };
 
 			OrtEnvironment ortEnv = getOrCreateEnv();
 			inputs.put("input_ids", OnnxTensor.createTensor(ortEnv, inputIdsArr));
 			inputs.put("attention_mask", OnnxTensor.createTensor(ortEnv, attentionMaskArr));
-			inputs.put("token_type_ids", OnnxTensor.createTensor(ortEnv, tokenTypeIdsArr));
+
+			// Only provide token_type_ids if the model expects it (e.g.
+			// all-MiniLM-L6-v2 requires it, but e5-base-v2 does not).
+			java.util.Set<String> expectedInputs = ortSession.getInputNames();
+			if (expectedInputs.contains("token_type_ids")) {
+				long[][] tokenTypeIdsArr = { tokenized.getTokenTypeIds() };
+				inputs.put("token_type_ids", OnnxTensor.createTensor(ortEnv, tokenTypeIdsArr));
+			}
 
 			result = ortSession.run(inputs);
 
