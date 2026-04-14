@@ -10,7 +10,10 @@ Download the latest O3 standalone build with Chart Search AI pre-installed:
 
 [**Download Standalone ZIP**](https://nightly.link/openmrs/openmrs-module-chartsearchai/workflows/build-standalone/main/openmrs-standalone-chartsearchai.zip)
 
-This build includes the backend module, frontend ESM, and AI model files — ready to run.
+This build includes the backend module, frontend ESM, and the following AI models — ready to run:
+
+- **LLM**: [MedGemma 1.5 4B Instruct (Q4_K_M)](https://huggingface.co/mradermacher/medgemma-1.5-4b-it-GGUF) — 2.5 GB, for answering clinical questions
+- **Embedding**: [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) — ONNX model + vocab, for semantic search over patient records
 
 ## Table of Contents
 
