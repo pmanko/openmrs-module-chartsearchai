@@ -1,16 +1,12 @@
 # Chart Search AI Module
 
+[![Download Standalone](https://img.shields.io/badge/Download-O3_Standalone_with_Chart_Search_AI-blue?style=for-the-badge)](https://github.com/openmrs/openmrs-module-chartsearchai/releases/download/standalone-latest/openmrs-standalone-chartsearchai.zip)
+
 An OpenMRS module that lets clinicians ask natural language questions about a patient's chart and get answers with source citations.
 
 For project background, community discussion, and roadmap, see the [wiki project page](https://openmrs.atlassian.net/wiki/spaces/projects/pages/373325839/Chart+Search+aka+ChartSearchAI).
 
-## Standalone Download
-
-Download the latest O3 standalone build with Chart Search AI pre-installed:
-
-[**Download Standalone ZIP**](https://github.com/openmrs/openmrs-module-chartsearchai/releases/download/standalone-latest/openmrs-standalone-chartsearchai.zip)
-
-This build includes the backend module, frontend ESM, and the following AI models — ready to run:
+The standalone download above includes the backend module, frontend ESM, and the following AI models — ready to run:
 
 - **LLM**: [MedGemma 1.5 4B Instruct (Q4_K_M)](https://huggingface.co/mradermacher/medgemma-1.5-4b-it-GGUF) — 2.5 GB, for answering clinical questions
 - **Embedding**: [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) — ONNX model + vocab, for semantic search over patient records
