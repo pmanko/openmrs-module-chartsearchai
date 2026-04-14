@@ -1255,6 +1255,8 @@ Retain all-MiniLM-L6-v2. Do not upgrade to a larger model.
 
 ### Why the smaller model wins
 
+Despite being smaller (384 vs 768 dims) and older, all-MiniLM-L6-v2 has a particularly good embedding space for medical terminology associations. It is not the highest-ranked model on general benchmarks, but for this specific task — matching clinical queries to patient records — it outperforms the larger alternatives. The reasons:
+
 1. **Ranking, not thresholds.** The failures are not threshold problems — the larger models rank incorrect records above correct ones. No threshold tuning can fix records that are ranked below noise. For example, when e5-base-v2 returns empty results for "STD" (expecting HIV/Zika records), there is no cutoff point that includes the correct records without also including everything else.
 
 2. **Score distribution geometry.** all-MiniLM-L6-v2 produces wider score distributions (IQR ~0.10) that give the adaptive filtering pipeline (ratio floor, z-score gates, keyword rescue, coherence filtering, gap validation) room to separate relevant from irrelevant records. The larger models produce tighter distributions that collapse this signal — the same problem that caused MedCPT to be rejected (see [Decision 18](#decision-18-cross-encoder-reranking-stage-superseded)).
