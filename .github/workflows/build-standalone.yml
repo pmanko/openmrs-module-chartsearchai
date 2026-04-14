@@ -6,12 +6,12 @@ on:
       refapp_version:
         description: 'O3 Reference Application version'
         required: false
-        default: '3.6.0-rc.5'
+        default: '3.7.0-SNAPSHOT'
         type: string
       openmrs_version:
         description: 'OpenMRS Core version'
         required: false
-        default: '2.8.5'
+        default: '2.8.6'
         type: string
       standalone_branch:
         description: 'openmrs-standalone branch to build from'
