@@ -1,6 +1,10 @@
 name: Build O3 Standalone with Chart Search AI
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-standalone.yml'
   workflow_dispatch:
     inputs:
       refapp_version:
@@ -38,6 +42,14 @@ concurrency:
   group: build-standalone
   cancel-in-progress: true
 
+env:
+  REFAPP_VERSION: ${{ inputs.refapp_version || '3.7.0-SNAPSHOT' }}
+  OPENMRS_VERSION: ${{ inputs.openmrs_version || '2.8.6' }}
+  STANDALONE_BRANCH: ${{ inputs.standalone_branch || 'openmrs-emr3' }}
+  GGUF_MODEL_URL: ${{ inputs.gguf_model_url || 'https://huggingface.co/mradermacher/medgemma-1.5-4b-it-GGUF/resolve/main/medgemma-1.5-4b-it.Q4_K_M.gguf' }}
+  ONNX_MODEL_URL: ${{ inputs.onnx_model_url || 'https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx' }}
+  VOCAB_URL: ${{ inputs.vocab_url || 'https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt' }}
+
 jobs:
   build-standalone:
     runs-on: ubuntu-latest
@@ -59,7 +71,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: openmrs/openmrs-standalone
-          ref: ${{ inputs.standalone_branch }}
+          ref: ${{ env.STANDALONE_BRANCH }}
           path: standalone
 
       - name: Set up JDK 21
@@ -100,22 +112,22 @@ jobs:
         run: |
           mkdir -p standalone/target/chartsearchai
 
-          if [ -n "${{ inputs.gguf_model_url }}" ]; then
+          if [ -n "$GGUF_MODEL_URL" ]; then
             echo "Downloading GGUF model..."
-            curl -L -o "standalone/target/chartsearchai/$(basename "${{ inputs.gguf_model_url }}")" \
-              "${{ inputs.gguf_model_url }}"
+            curl -L -o "standalone/target/chartsearchai/$(basename "$GGUF_MODEL_URL")" \
+              "$GGUF_MODEL_URL"
           fi
 
-          if [ -n "${{ inputs.onnx_model_url }}" ]; then
+          if [ -n "$ONNX_MODEL_URL" ]; then
             echo "Downloading ONNX model..."
             curl -L -o standalone/target/chartsearchai/model.onnx \
-              "${{ inputs.onnx_model_url }}"
+              "$ONNX_MODEL_URL"
           fi
 
-          if [ -n "${{ inputs.vocab_url }}" ]; then
+          if [ -n "$VOCAB_URL" ]; then
             echo "Downloading vocab file..."
             curl -L -o standalone/target/chartsearchai/vocab.txt \
-              "${{ inputs.vocab_url }}"
+              "$VOCAB_URL"
           fi
 
           echo "AI model files:"
@@ -126,8 +138,8 @@ jobs:
         working-directory: standalone
         run: |
           # 1. Update OpenMRS Core and RefApp versions in pom.xml
-          sed -i "s|<openmrs.version>.*</openmrs.version>|<openmrs.version>${{ inputs.openmrs_version }}</openmrs.version>|" pom.xml
-          sed -i "s|<refapp.version>.*</refapp.version>|<refapp.version>${{ inputs.refapp_version }}</refapp.version>|" pom.xml
+          sed -i "s|<openmrs.version>.*</openmrs.version>|<openmrs.version>${OPENMRS_VERSION}</openmrs.version>|" pom.xml
+          sed -i "s|<refapp.version>.*</refapp.version>|<refapp.version>${REFAPP_VERSION}</refapp.version>|" pom.xml
 
           # 2. Add chartsearchai omod to the distro properties via pom-step-01.xml
           #    Insert an echo task after the existing replaceregexp tasks
@@ -154,8 +166,8 @@ jobs:
         run: |
           mvn package -Pci -B \
             --settings .github/maven-settings.xml \
-            -Drefapp.version=${{ inputs.refapp_version }} \
-            -Dopenmrs.version=${{ inputs.openmrs_version }}
+            -Drefapp.version=$REFAPP_VERSION \
+            -Dopenmrs.version=$OPENMRS_VERSION
 
       # Integrate the chartsearchai ESM into the assembled frontend
       - name: Integrate chartsearchai frontend module
@@ -192,13 +204,13 @@ jobs:
         run: |
           mvn package -rf :referenceapplication-standalone-zip-stage -Dexec.skip=true -B \
             --settings .github/maven-settings.xml \
-            -Drefapp.version=${{ inputs.refapp_version }} \
-            -Dopenmrs.version=${{ inputs.openmrs_version }}
+            -Drefapp.version=$REFAPP_VERSION \
+            -Dopenmrs.version=$OPENMRS_VERSION
 
       - name: Verify chartsearchai components in zip
         working-directory: standalone
         run: |
-          ZIP_FILE="target/referenceapplication-standalone-${{ inputs.refapp_version }}.zip"
+          ZIP_FILE="target/referenceapplication-standalone-${REFAPP_VERSION}.zip"
           echo "=== Standalone zip ==="
           ls -lh "$ZIP_FILE"
 
@@ -220,6 +232,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: openmrs-standalone-chartsearchai
-          path: standalone/target/referenceapplication-standalone-${{ inputs.refapp_version }}.zip
+          path: standalone/target/referenceapplication-standalone-${{ env.REFAPP_VERSION }}.zip
           retention-days: 90
-

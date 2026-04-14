@@ -1,6 +1,6 @@
 # Chart Search AI Module
 
-[![Download Standalone](https://img.shields.io/badge/Download-O3_Standalone_with_Chart_Search_AI-blue?style=for-the-badge)](https://nightly.link/openmrs/openmrs-module-chartsearchai/workflows/build-standalone/main/openmrs-standalone-chartsearchai.zip)
+[![Download Standalone](https://img.shields.io/badge/Download-O3_Standalone_with_Chart_Search_AI-blue?style=for-the-badge)](https://nightly.link/openmrs/openmrs-module-chartsearchai/workflows/build-standalone.yml/main/openmrs-standalone-chartsearchai.zip)
 
 An OpenMRS module that lets clinicians ask natural language questions about a patient's chart and get answers with source citations.
 
