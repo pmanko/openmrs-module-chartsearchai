@@ -8,7 +8,7 @@ For project background, community discussion, and roadmap, see the [wiki project
 
 Download the latest O3 standalone build with Chart Search AI pre-installed:
 
-[**Download Standalone ZIP**](https://nightly.link/openmrs/openmrs-module-chartsearchai/workflows/build-standalone/main/openmrs-standalone-chartsearchai.zip)
+[**Download Standalone ZIP**](https://github.com/openmrs/openmrs-module-chartsearchai/actions/workflows/build-standalone.yml) — click the latest successful run, then download the `openmrs-standalone-chartsearchai` artifact.
 
 This build includes the backend module, frontend ESM, and the following AI models — ready to run:
 

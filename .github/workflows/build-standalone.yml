@@ -216,9 +216,10 @@ jobs:
           unzip -p "$ZIP_FILE" "*/frontend/routes.registry.json" | \
             python3 -c "import json,sys; d=json.load(sys.stdin); print('@openmrs/esm-chartsearchai-app' in d)"
 
-      - name: Upload standalone zip
+      - name: Upload standalone zip as artifact
         uses: actions/upload-artifact@v4
         with:
           name: openmrs-standalone-chartsearchai
           path: standalone/target/referenceapplication-standalone-${{ inputs.refapp_version }}.zip
           retention-days: 30
+
