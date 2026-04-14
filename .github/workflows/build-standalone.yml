@@ -102,7 +102,10 @@ jobs:
 
           if [ -n "${{ inputs.gguf_model_url }}" ]; then
             echo "Downloading GGUF model..."
-            curl -L -o standalone/target/chartsearchai/$(basename "${{ inputs.gguf_model_url }}") \
+            # Rename to match the filename expected by the chartsearchai module config
+            GGUF_BASENAME=$(basename "${{ inputs.gguf_model_url }}")
+            GGUF_FILENAME=$(echo "$GGUF_BASENAME" | sed 's/\.Q\([0-9]\)/-Q\1/')
+            curl -L -o "standalone/target/chartsearchai/${GGUF_FILENAME}" \
               "${{ inputs.gguf_model_url }}"
           fi
 
