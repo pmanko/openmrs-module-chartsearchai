@@ -6,7 +6,7 @@ on:
       refapp_version:
         description: 'O3 Reference Application version'
         required: false
-        default: '3.6.0'
+        default: '3.6.0-rc.5'
         type: string
       openmrs_version:
         description: 'OpenMRS Core version'
