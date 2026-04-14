@@ -162,9 +162,9 @@ Only sentence embedding models should be considered without additional fine-tuni
 
 #### Candidate Models
 
-**Recommended: `BAAI/bge-base-en-v1.5`** (768 dims, ~440MB)
+**Evaluated and retained: `sentence-transformers/all-MiniLM-L6-v2`** (384 dims, ~90MB)
 
-Top recommendation for this use case. Strongest general retrieval scores on MTEB benchmarks, instruction-aware (supports `"Represent this sentence for searching: "` prefix via the existing `queryPrefix` global property), single-encoder architecture (drop-in compatible with `OnnxEmbeddingProvider`), MIT license, maintained by the Beijing Academy of AI (BAAI). Best balance of retrieval quality, compatibility, and long-term maintenance.
+Three 768-dim alternatives (e5-base-v2, all-mpnet-base-v2, nomic-embed-text-v1.5) were benchmarked in April 2026 and all performed worse on clinical retrieval — see [ADR Decision 19](adr.md#decision-19-retain-all-minilm-l6-v2-as-the-embedding-model) for the full evaluation. The original recommendation for BGE was not tested due to provenance concerns for US-funded deployments.
 
 | Model | Dims | Maintainer | License | Strengths | Compatibility Notes |
 |---|---|---|---|---|---|

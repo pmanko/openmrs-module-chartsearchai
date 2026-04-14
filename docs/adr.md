@@ -1220,6 +1220,54 @@ The asymmetric bi-encoder support (separate query/article encoders, CLS pooling,
 
 - **Counting questions**: LLMs are unreliable at precise counting tasks (e.g., "how many weight records in the last 10 years?"). The model may undercount or overcount even when all relevant records are provided. Larger, more capable models perform better at counting but are still not perfectly reliable. This is a fundamental limitation of LLM inference, not a retrieval issue. Questions that require exact counts are better suited to structured queries.
 
+## Decision 19: Retain all-MiniLM-L6-v2 as the embedding model
+
+**Status: Accepted** (April 2026)
+
+### Problem
+
+all-MiniLM-L6-v2 (384 dims, ~90MB) ranks lower than several newer models on general MTEB retrieval benchmarks. The question was whether upgrading to a larger 768-dim model would improve clinical retrieval quality — and whether provenance matters for US-funded deployments.
+
+### Evaluation
+
+Three 768-dim alternatives were exported to ONNX and benchmarked against the full test suite (782 tests, 259 of which exercise the real ONNX model on clinical queries across five patient datasets):
+
+| Model | Dims | Size | Maintainer | License | Real-model failures (of 259) |
+|---|---|---|---|---|---|
+| **all-MiniLM-L6-v2** | 384 | 90MB | Microsoft/HF | Apache 2.0 | **0** |
+| intfloat/e5-base-v2 | 768 | 436MB | Microsoft | MIT | **88 (34%)** |
+| sentence-transformers/all-mpnet-base-v2 | 768 | 416MB | HF | Apache 2.0 | **6 of 10 hardest** |
+| nomic-ai/nomic-embed-text-v1.5 | 768 | 548MB | Nomic AI | Apache 2.0 | **7 of 10 hardest** |
+
+Key failure patterns for e5-base-v2 (the most thoroughly tested alternative):
+
+- **"STD" → HIV/Zika missed entirely** — the model does not associate the abbreviation with sexually transmitted diseases
+- **"vital signs" → Temperature missing** — the model does not rank Temperature records above the relevance threshold
+- **"tests ordered" → false positives** — returns records for datasets that have no lab test orders
+- **"fever" → Temperature missing** — fails to connect the symptom to the measurement
+
+Adding e5-style `"query: "` / `"passage: "` prefixes was tested and did not improve results (still 10/10 hardest tests failing).
+
+### Decision
+
+Retain all-MiniLM-L6-v2. Do not upgrade to a larger model.
+
+### Why the smaller model wins
+
+1. **Ranking, not thresholds.** The failures are not threshold problems — the larger models rank incorrect records above correct ones. No threshold tuning can fix records that are ranked below noise. For example, when e5-base-v2 returns empty results for "STD" (expecting HIV/Zika records), there is no cutoff point that includes the correct records without also including everything else.
+
+2. **Score distribution geometry.** all-MiniLM-L6-v2 produces wider score distributions (IQR ~0.10) that give the adaptive filtering pipeline (ratio floor, z-score gates, keyword rescue, coherence filtering, gap validation) room to separate relevant from irrelevant records. The larger models produce tighter distributions that collapse this signal — the same problem that caused MedCPT to be rejected (see [Decision 18](#decision-18-cross-encoder-reranking-stage-superseded)).
+
+3. **Co-evolution.** The pipeline's ~10 tuned constants were developed alongside this model's embedding space. The thresholds interact — adjusting one for a new model's geometry breaks others. With 88 failures spanning STDs, vital signs, medications, infections, cancer, mental health, and anemia, finding a single parameter set that satisfies all clinical associations simultaneously is not feasible.
+
+### Provenance
+
+all-MiniLM-L6-v2 is produced by Microsoft / Hugging Face (US/German), Apache 2.0 licensed — safe for US-funded (USAID, PEPFAR, NIH) deployments. BAAI/bge-base-en-v1.5 was the original top recommendation in the embedding improvement plan but was not benchmarked due to its provenance from a Chinese government-funded institution, which may conflict with compliance requirements for some funders.
+
+### Compatibility fix
+
+During this evaluation, `OnnxEmbeddingProvider` was updated to only send `token_type_ids` when the model expects it. all-MiniLM-L6-v2 requires all three inputs (input_ids, attention_mask, token_type_ids), but e5 and nomic models accept only two. The fix is backward-compatible — existing behavior is unchanged for all-MiniLM-L6-v2.
+
 ## Planned future work
 
 - **Incremental embedding indexing**: The `EncounterService` AOP hook already uses an incremental strategy (indexes only new/changed encounters), but other data types (`ObsService`, `ConditionService`, etc.) still use `indexPatient()` which deletes all embeddings for a patient and recomputes from scratch. A fully incremental approach would track which record maps to which embedding row across all data types and only add, update, or delete the specific embeddings affected. This matters for patients with large charts where AOP hooks fire frequently.
