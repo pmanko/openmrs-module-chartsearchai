@@ -188,17 +188,19 @@ Three 768-dim alternatives (e5-base-v2, all-mpnet-base-v2, nomic-embed-text-v1.5
 
 #### How to Evaluate
 
+**Key lesson from the April 2026 evaluation:** General retrieval benchmarks (MTEB) do not predict performance on clinical queries. Models that rank higher on MTEB performed significantly worse on this pipeline's medical terminology associations (e.g. "STD" → HIV/Zika, "vital signs" → Temperature). Always benchmark on your own data — the test suite (`LlmInferenceServiceTest`, 259 real-model tests) is the definitive benchmark. Run it with `-Dchartsearchai.embedding.model.dir=/path/to/model` and count failures. See [ADR Decision 19](adr.md#decision-19-retain-all-minilm-l6-v2-as-the-embedding-model) for details.
+
 Before committing to a model, benchmark 2-3 candidates on representative queries from your deployment:
 
 1. **Prepare a test set:** 10-15 queries spanning category lookups ("any conditions?"), specific concepts ("does the patient have diabetes?"), and cross-type queries ("is diabetes controlled?"). Include expected results for each.
 2. **Export an ONNX model** for each candidate using `optimum` or `sentence-transformers`:
    ```bash
    pip install optimum[exporters] sentence-transformers
-   optimum-cli export onnx --model BAAI/bge-base-en-v1.5 bge-base-onnx/
+   optimum-cli export onnx --model intfloat/e5-base-v2 e5-base-onnx/
    ```
 3. **Swap the model** by replacing `model.onnx`, `tokenizer.json`, and `vocab.txt` in the module's resources.
 4. **Re-index** by running the "Chart Search AI - Embedding Backfill" scheduled task.
-5. **Compare** precision (how many returned results are relevant) and recall (how many relevant results are returned) across models. Pay attention to score separation — a good model should show a clear gap between relevant and irrelevant records.
+5. **Run the test suite** with the new model and compare failures. A model that passes all 259 real-model tests is a genuine upgrade. Also compare score separation — a good model should show a clear gap between relevant and irrelevant records.
 
 Set `chartsearchai.embedding.queryPrefix` appropriately for each model:
 - BGE: `"Represent this sentence for searching relevant passages: "`
