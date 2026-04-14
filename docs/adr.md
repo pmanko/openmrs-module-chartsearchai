@@ -24,6 +24,7 @@ This document captures the architectural decisions made for the Chart Search AI 
 - [Decision 16: LangChain / LangChain4j not adopted](#decision-16-langchain--langchain4j-not-adopted)
 - [Decision 17: Remote LLM backend support](#decision-17-remote-llm-backend-support)
 - [Decision 18: Cross-encoder reranking stage (superseded)](#decision-18-cross-encoder-reranking-stage-superseded)
+- [Decision 19: Retain all-MiniLM-L6-v2 as the embedding model](#decision-19-retain-all-minilm-l6-v2-as-the-embedding-model)
 - [Known limitations](#known-limitations)
 - [Planned future work](#planned-future-work)
 
