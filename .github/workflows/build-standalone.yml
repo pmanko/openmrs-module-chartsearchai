@@ -246,5 +246,5 @@ jobs:
           - **Embedding**: all-MiniLM-L6-v2
 
           > This is an automated build, not a versioned release. It is updated on each successful workflow run." \
-            --prerelease
+            --latest=false
 
