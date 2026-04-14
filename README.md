@@ -4,6 +4,14 @@ An OpenMRS module that lets clinicians ask natural language questions about a pa
 
 For project background, community discussion, and roadmap, see the [wiki project page](https://openmrs.atlassian.net/wiki/spaces/projects/pages/373325839/Chart+Search+aka+ChartSearchAI).
 
+## Standalone Download
+
+Download the latest O3 standalone build with Chart Search AI pre-installed:
+
+[**Download Standalone ZIP**](https://nightly.link/openmrs/openmrs-module-chartsearchai/workflows/build-standalone/main/openmrs-standalone-chartsearchai.zip)
+
+This build includes the backend module, frontend ESM, and AI model files — ready to run.
+
 ## Table of Contents
 
 - [Requirements](#requirements)
