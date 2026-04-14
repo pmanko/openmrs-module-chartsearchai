@@ -1021,6 +1021,54 @@ public class LlmInferenceService implements ChartSearchService {
 		if (config.keywordWeight > 0) {
 			List<ScoredEmbedding> refined = refineByKeywords(candidates, queryTermCount);
 			refinementActivated = refined.size() < candidates.size();
+			// Partial-match semantic floor: when keyword refinement
+			// kept only PARTIAL matches (no record matches all query
+			// terms) AND the best semantic score is below the noise
+			// floor, the keyword overlap is coincidental text — the
+			// embedding model sees no topical relevance. Remove
+			// those records so the non-refinement path's floor gates
+			// can reject them cleanly.
+			if (refinementActivated) {
+				double rMaxSem = 0;
+				double rMaxKw = 0;
+				for (ScoredEmbedding se : refined) {
+					if (se.semanticScore > rMaxSem) {
+						rMaxSem = se.semanticScore;
+					}
+					if (se.keywordScore > rMaxKw) {
+						rMaxKw = se.keywordScore;
+					}
+				}
+				if (rMaxKw < bonusThreshold
+						&& rMaxSem < config.noiseProfile
+								.absoluteSimilarityFloor()) {
+					Set<Integer> badIds =
+							new HashSet<Integer>();
+					for (ScoredEmbedding se : refined) {
+						badIds.add(
+								se.embedding.getResourceId());
+					}
+					List<ScoredEmbedding> cleaned =
+							new ArrayList<ScoredEmbedding>();
+					for (ScoredEmbedding se : candidates) {
+						if (!badIds.contains(
+								se.embedding
+										.getResourceId())) {
+							cleaned.add(se);
+						}
+					}
+					log.debug("Partial-match semantic floor: "
+							+ "removing {} below-floor partial "
+							+ "kw records (maxSem={}, floor={})",
+							badIds.size(),
+							String.format("%.4f", rMaxSem),
+							String.format("%.4f",
+									config.noiseProfile
+											.absoluteSimilarityFloor()));
+					refined = cleaned;
+					refinementActivated = false;
+				}
+			}
 			candidates = refined;
 		}
 
