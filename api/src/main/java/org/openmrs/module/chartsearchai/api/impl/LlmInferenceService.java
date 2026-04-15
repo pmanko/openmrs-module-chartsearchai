@@ -778,6 +778,37 @@ public class LlmInferenceService implements ChartSearchService {
 		String embeddingQuery = buildEmbeddingQuery(normalizedQuery);
 		float[] queryVector = provider.embed(queryPrefix + embeddingQuery);
 
+		// Identify "type indicator" query terms — terms that appear in
+		// any structural embedding prefix (e.g. "medication" matches
+		// "Medication prescription:", "test" matches "Lab or diagnostic
+		// test:", "allergy" matches "Patient allergy:"). For these
+		// terms, only matches in the prefix portion of a record's text
+		// count — body-text matches are demoted as coincidental
+		// narrative mentions (e.g. an encounter note saying "Medication
+		// adjusted" doesn't make it a medication record; "Test —
+		// Haemoglobin" doesn't make it a test order). Content terms
+		// that don't appear in any prefix (e.g. "azithromycin",
+		// "diabetes") still match freely in the body. The prefix
+		// vocabulary is the static set defined by getEmbeddingPrefix —
+		// using the global vocabulary (not just dataset-present
+		// prefixes) ensures consistent behavior across datasets.
+		Set<String> typeIndicatorTerms = new HashSet<String>();
+		if (queryTerms.length > 0) {
+			for (String prefix
+					: ChartSearchAiUtils.getAllEmbeddingPrefixes()) {
+				String lowerPrefix = prefix.toLowerCase();
+				String[] prefixWords = lowerPrefix.split("\\s+");
+				for (String term : queryTerms) {
+					if (typeIndicatorTerms.contains(term)) {
+						continue;
+					}
+					if (termMatchesText(term, lowerPrefix, prefixWords)) {
+						typeIndicatorTerms.add(term);
+					}
+				}
+			}
+		}
+
 		double[] semanticScores = new double[allEmbeddings.size()];
 		double[] keywordScores = new double[allEmbeddings.size()];
 		ChartEmbedding[] embeddings = new ChartEmbedding[allEmbeddings.size()];
@@ -795,10 +826,17 @@ public class LlmInferenceService implements ChartSearchService {
 			// "blood" to match Haemoglobin records. Synonyms stay in the
 			// embedding for semantic matching — only keyword scoring uses
 			// the stripped text.
+			String body = ConceptNameUtil.stripSynonyms(ce.getTextContent());
 			String keywordText = ChartSearchAiUtils.buildPrefixedText(
-					ce.getResourceType(),
-					ConceptNameUtil.stripSynonyms(ce.getTextContent()));
-			keywordScores[validCount] = computeKeywordScore(queryTerms, keywordText);
+					ce.getResourceType(), body);
+			if (typeIndicatorTerms.isEmpty()) {
+				keywordScores[validCount] = computeKeywordScore(
+						queryTerms, keywordText);
+			} else {
+				keywordScores[validCount] = computeKeywordScoreRestricted(
+						queryTerms, keywordText, body,
+						typeIndicatorTerms);
+			}
 			validCount++;
 		}
 		if (validCount < embeddings.length) {
@@ -3087,6 +3125,45 @@ public class LlmInferenceService implements ChartSearchService {
 		for (String term : queryTerms) {
 			if (termMatchesText(term, lowerText, textWords)) {
 				matched++;
+			}
+		}
+		return (double) matched / queryTerms.length;
+	}
+
+	/**
+	 * Variant of {@link #computeKeywordScore} where {@code typeIndicatorTerms}
+	 * may only match in the structural prefix portion of the text
+	 * (i.e. {@code prefixedText} minus {@code body}). Other terms match
+	 * in the full text as usual. This prevents type-indicator words like
+	 * "medication" from matching narrative body text such as "Medication
+	 * adjusted" in encounter notes that aren't medication records.
+	 */
+	static double computeKeywordScoreRestricted(String[] queryTerms,
+			String prefixedText, String body,
+			Set<String> typeIndicatorTerms) {
+		if (queryTerms.length == 0 || prefixedText == null
+				|| prefixedText.isEmpty()) {
+			return 0.0;
+		}
+		String lowerFull = prefixedText.toLowerCase();
+		String[] fullWords = lowerFull.split("\\s+");
+		String prefix = body == null
+				? prefixedText
+				: prefixedText.substring(0,
+						prefixedText.length() - body.length());
+		String lowerPrefix = prefix.toLowerCase();
+		String[] prefixWords = lowerPrefix.split("\\s+");
+		int matched = 0;
+		for (String term : queryTerms) {
+			boolean isTypeIndicator = typeIndicatorTerms.contains(term);
+			if (isTypeIndicator) {
+				if (termMatchesText(term, lowerPrefix, prefixWords)) {
+					matched++;
+				}
+			} else {
+				if (termMatchesText(term, lowerFull, fullWords)) {
+					matched++;
+				}
 			}
 		}
 		return (double) matched / queryTerms.length;

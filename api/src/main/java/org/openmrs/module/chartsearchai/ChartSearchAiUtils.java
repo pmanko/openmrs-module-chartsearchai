@@ -25,6 +25,7 @@ import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.RESOURCE_T
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Set;
 
 import org.openmrs.util.OpenmrsUtil;
 
@@ -95,6 +96,34 @@ public class ChartSearchAiUtils {
 	 */
 	public static String buildPrefixedText(String resourceType, String text) {
 		return getEmbeddingPrefix(resourceType, text) + text;
+	}
+
+	/**
+	 * Returns the complete set of structural embedding prefixes used by
+	 * {@link #getEmbeddingPrefix} across all supported resource types and
+	 * sub-types. Used by keyword scoring to identify "type indicator"
+	 * query terms — words that appear in any structural prefix and so
+	 * should only match the prefix portion of records, not narrative
+	 * body text. The set is the static prefix vocabulary, independent
+	 * of which resource types appear in any particular dataset.
+	 *
+	 * @return set of all possible prefix strings (each ends with ": ")
+	 */
+	public static Set<String> getAllEmbeddingPrefixes() {
+		Set<String> prefixes = new java.util.HashSet<String>();
+		prefixes.add(getEmbeddingPrefix(RESOURCE_TYPE_OBS, ""));
+		prefixes.add(getEmbeddingPrefix(RESOURCE_TYPE_CONDITION, ""));
+		prefixes.add(getEmbeddingPrefix(RESOURCE_TYPE_ALLERGY, ""));
+		prefixes.add(getEmbeddingPrefix(RESOURCE_TYPE_DIAGNOSIS, ""));
+		prefixes.add(getEmbeddingPrefix(RESOURCE_TYPE_PROGRAM, ""));
+		prefixes.add(getEmbeddingPrefix(RESOURCE_TYPE_MEDICATION_DISPENSE, ""));
+		// ORDER has sub-type prefixes triggered by body text — enumerate them.
+		prefixes.add(getEmbeddingPrefix(RESOURCE_TYPE_ORDER, "Drug order:"));
+		prefixes.add(getEmbeddingPrefix(RESOURCE_TYPE_ORDER, "Test order:"));
+		prefixes.add(getEmbeddingPrefix(RESOURCE_TYPE_ORDER, "Referral order:"));
+		prefixes.add(getEmbeddingPrefix(RESOURCE_TYPE_ORDER, ""));
+		prefixes.remove("");
+		return prefixes;
 	}
 
 	/**
