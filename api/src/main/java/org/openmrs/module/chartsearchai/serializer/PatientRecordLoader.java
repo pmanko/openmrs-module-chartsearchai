@@ -28,6 +28,7 @@ import org.openmrs.PatientProgram;
 import org.openmrs.api.context.Context;
 import org.openmrs.parameter.MedicationDispenseCriteria;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -81,7 +82,9 @@ public class PatientRecordLoader {
 			String text = obsSerializer.toText(obs);
 			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_OBS, obs.getObsId(), seenKeys)) {
 				Date date = obs.getObsDatetime() != null ? obs.getObsDatetime() : obs.getDateCreated();
-				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_OBS, obs.getObsId(), text, date));
+				List<String> hints = ChartSearchAiUtils.extractCategoryHints(obs.getConcept());
+				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_OBS,
+						obs.getObsId(), text, date, hints));
 			}
 		}
 
@@ -174,11 +177,20 @@ public class PatientRecordLoader {
 
 		private final Date date;
 
+		private final List<String> categoryHints;
+
 		public SerializedRecord(String resourceType, Integer resourceId, String text, Date date) {
+			this(resourceType, resourceId, text, date, Collections.<String>emptyList());
+		}
+
+		public SerializedRecord(String resourceType, Integer resourceId, String text, Date date,
+				List<String> categoryHints) {
 			this.resourceType = resourceType;
 			this.resourceId = resourceId;
 			this.text = text;
 			this.date = date;
+			this.categoryHints = categoryHints != null
+					? categoryHints : Collections.<String>emptyList();
 		}
 
 		public String getResourceType() {
@@ -195,6 +207,15 @@ public class PatientRecordLoader {
 
 		public Date getDate() {
 			return date;
+		}
+
+		/**
+		 * @return concept-set names (or other category metadata) to inject into
+		 *         the embedding text. Empty when the source concept has no
+		 *         containing sets, or the record type does not support hints.
+		 */
+		public List<String> getCategoryHints() {
+			return categoryHints;
 		}
 	}
 }

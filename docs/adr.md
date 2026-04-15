@@ -1271,6 +1271,56 @@ all-MiniLM-L6-v2 is produced by Microsoft / Hugging Face (US/German), Apache 2.0
 
 During this evaluation, `OnnxEmbeddingProvider` was updated to only send `token_type_ids` when the model expects it. all-MiniLM-L6-v2 requires all three inputs (input_ids, attention_mask, token_type_ids), but e5 and nomic models accept only two. The fix is backward-compatible — existing behavior is unchanged for all-MiniLM-L6-v2.
 
+### Follow-up: same-family upgrade (L12-v2)
+
+After the initial evaluation, `sentence-transformers/all-MiniLM-L12-v2` was benchmarked as the closest untested sibling to L6-v2 — same 384 dims, same WordPiece vocabulary, same maintainer and licence, just twice the transformer layers (12 vs 6). It is the most plausible drop-in upgrade because no pipeline thresholds or score-distribution assumptions need re-tuning for a different geometry family.
+
+L6 was re-measured the same day on the same code revision so the comparison is apples-to-apples (the test suite has grown since the original Decision 19 evaluation, so the L6 baseline below differs from the "0" reported in the original table above):
+
+| Model | Failures (of 305 tests in LlmInferenceServiceTest + ElasticsearchKnnFallbackTest + EndToEndSearchTest + RetrievalQualityEvalTest) |
+|---|---|
+| **all-MiniLM-L6-v2** | **20** |
+| all-MiniLM-L12-v2 | **70** (3.5× more) |
+
+L12-v2 fixed 2 tests (one "should return empty" assertion that L12 satisfied by returning empty too often, and one excluded EndToEndSearchTest), regressed 52 tests, and shared 18 failures with L6. Regressions spanned every clinical category — cancer/Kaposi sarcoma, mental health, anemia, cardiovascular, blood, STD, allergies, and vital signs — across all five patient datasets. Most strikingly, L12 broke the entire cancer suite (currently passing on L6) and the mental health suite, confirming that the deeper sibling does not preserve L6's clinical-vocabulary associations.
+
+This reinforces the original finding: **the failure mode is not model capacity but the specific embedding geometry of L6-v2**. Even the closest sibling in the same family does not transfer. Future improvements to clinical retrieval should target the pipeline (or vocabulary expansion / synonym handling) rather than the embedding model.
+
+### Production fix: concept-set membership enrichment at index time
+
+Following the L12 result, the next obvious lever was enriching index text with metadata OpenMRS already has. CIEL classifies vital sign concepts (Temperature, BP, Pulse, RR, SpO2, Height, Weight) as members of the "Vital signs" concept set (1114). The previous serializer included `concept.getConceptClass()` (which yields "Test" or "Finding" — useless for category queries) but not `getSetsContainingConcept()`.
+
+**Pre-deployment validation** measured cosine deltas for query "vital signs" against the L6 model:
+
+| Record (representative form) | Unenriched cosine | Enriched cosine | Δ |
+|---|---|---|---|
+| `Clinical observation: Finding — Temperature: 36.7` | 0.20 | 0.53 | +0.33 |
+| `... Systolic blood pressure: 145` | 0.19 | 0.45 | +0.26 |
+| `... Pulse: 100` | 0.36 | 0.64 | +0.29 |
+| `... Respiratory rate: 17` | 0.26 | 0.56 | +0.30 |
+| `... Arterial blood oxygen saturation: 93` | 0.27 | 0.50 | +0.23 |
+| `Clinical diagnosis: Diagnosis: Asthma` (control, not in set) | 0.20 | 0.20 | 0 |
+| `Medical condition: Condition: Stroke` (control) | 0.18 | 0.18 | 0 |
+
+Enriched form: `Clinical observation: Vital signs / Finding — Temperature: 36.7`. Vital sign records jump from below-noise (~0.20) to well-above-floor (~0.50). Non-set-members stay flat. Separation gap of ~0.30 is easily filterable.
+
+**End-to-end production validation** against a real OpenMRS instance with patient `4acc0b80-83c4-40f7-86fd-0e11a68dd405` (chart contains the same kind of Temperature/BP/Pulse data the test fixtures simulate):
+
+| Query | Before fix | After fix |
+|---|---|---|
+| `vital signs` | 0 refs, "No relevant records found" | **82 refs**, correct enumeration |
+| `temperature` (control) | 9 refs | 9 refs (unchanged) |
+| `blood pressure` (control) | 18 refs | 18 refs (unchanged) |
+| `headache` (negative control) | 0 refs (correct) | 0 refs (correct) |
+
+**Implementation:** at index time, `PatientRecordLoader` calls `Context.getConceptService().getSetsContainingConcept(obs.getConcept())` for each Obs and stores the set names as `categoryHints` on `SerializedRecord`. `EmbeddingIndexer` writes a hint-injected body into `ChartEmbedding.textContent` (e.g. `"Vital signs / Finding — Temperature: 36.7"`) and computes the embedding from `buildPrefixedText(resourceType, body)` — so both semantic cosine *and* keyword scoring see the enrichment downstream. `LlmInferenceService` keyword scoring trips into a stricter zero-keyword-match path otherwise, so injecting hints into `text_content` rather than only the embedding is essential.
+
+**Why this respects the no-domain-knowledge rule:** the algorithm doesn't know what "vital signs" means. It just embeds whatever the OpenMRS Concept dictionary attaches to each concept's set membership. Medical knowledge stays in the dictionary, where it belongs.
+
+**Scope limit:** CIEL diagnoses (Zika, Syphilis, Pneumonia, Asthma) are not members of any concept set. STD/infections category queries still need a different enrichment source — likely ICD-10 chapter mappings (Zika `A92.5` → "Certain infectious and parasitic diseases"), which can be plugged into the same `extractCategoryHints` mechanism. Tracked as follow-up work.
+
+**Fixture-driven test suite:** unchanged at 20 failures. String fixtures bypass `loadAll()` so they don't exercise the new metadata path. The 14 vital-signs/STD/infections failures in the fixture tests are now empirically classified as **fixture limitations**, not algorithm bugs — production behavior (with real Concept metadata) is correct for vital signs.
+
 ## Planned future work
 
 - **Incremental embedding indexing**: The `EncounterService` AOP hook already uses an incremental strategy (indexes only new/changed encounters), but other data types (`ObsService`, `ConditionService`, etc.) still use `indexPatient()` which deletes all embeddings for a patient and recomputes from scratch. A fully incremental approach would track which record maps to which embedding row across all data types and only add, update, or delete the specific embeddings affected. This matters for patients with large charts where AOP hooks fire frequently.

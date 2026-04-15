@@ -334,8 +334,12 @@ public class LuceneIndexer implements Closeable {
 				String.valueOf(record.getResourceId()), Field.Store.YES));
 		// Index the prefixed text so Lucene gets the same type signals
 		// as the embedding pipeline (e.g. "Medical condition: Condition: ...")
+		// Includes any category hints (e.g. concept-set names) so keyword
+		// queries like "vital signs" can match records whose serialized text
+		// does not contain the category word literally.
 		String prefixedText = ChartSearchAiUtils.buildPrefixedText(
-				record.getResourceType(), record.getText());
+				record.getResourceType(), record.getText(),
+				record.getCategoryHints());
 		doc.add(new TextField(FIELD_TEXT, prefixedText, Field.Store.NO));
 		return doc;
 	}

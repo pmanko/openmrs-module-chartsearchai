@@ -25,8 +25,14 @@ import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.RESOURCE_T
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 
+import org.openmrs.Concept;
+import org.openmrs.ConceptSet;
+import org.openmrs.api.context.Context;
 import org.openmrs.util.OpenmrsUtil;
 
 public class ChartSearchAiUtils {
@@ -95,7 +101,108 @@ public class ChartSearchAiUtils {
 	 * @return the prefixed text ready for embedding or keyword scoring
 	 */
 	public static String buildPrefixedText(String resourceType, String text) {
-		return getEmbeddingPrefix(resourceType, text) + text;
+		return buildPrefixedText(resourceType, text, Collections.<String>emptyList());
+	}
+
+	/**
+	 * Builds the prefixed embedding text with optional category hints injected
+	 * between the structural prefix and the serialized text. Hints come from
+	 * OpenMRS concept metadata (currently {@code getSetsContainingConcept}) and
+	 * help the embedding model bridge category-name queries (e.g. "vital signs"
+	 * → Temperature/BP/Pulse) when the literal category word does not appear
+	 * in the serialized record text. Empty hints produce identical output to
+	 * the 2-arg overload.
+	 *
+	 * <p>Example output with hints {@code ["Vital signs"]}:
+	 * {@code "Clinical observation: Vital signs / Finding — Temperature: 36.7"}.
+	 *
+	 * @param resourceType the resource type constant
+	 * @param text the serialized record text
+	 * @param categoryHints concept-set names (or other category metadata)
+	 *        derived from the source domain object; may be empty
+	 * @return the prefixed text ready for embedding or keyword scoring
+	 */
+	public static String buildPrefixedText(String resourceType, String text,
+			List<String> categoryHints) {
+		return getEmbeddingPrefix(resourceType, text)
+				+ injectCategoryHints(text, categoryHints);
+	}
+
+	/**
+	 * Prepends category hints to the body text without adding a structural
+	 * prefix. Used to enrich {@code ChartEmbedding.textContent} so downstream
+	 * consumers (keyword scoring, concept-name extraction) see the same
+	 * hint-augmented text that was used for embedding. The 2-arg
+	 * {@link #buildPrefixedText(String, String)} called on hint-injected body
+	 * produces the same prefixed text as the 3-arg overload called on the
+	 * raw body with hints — so embeddings and keyword text stay consistent.
+	 *
+	 * <p>Empty or null hints return the body unchanged.</p>
+	 *
+	 * @param body the serialized record body (no structural prefix)
+	 * @param categoryHints hints to inject
+	 * @return body with hints prepended (e.g. "Vital signs / Finding — Temp: 37"),
+	 *         or unchanged body if hints are empty
+	 */
+	public static String injectCategoryHints(String body, List<String> categoryHints) {
+		if (categoryHints == null || categoryHints.isEmpty()) {
+			return body;
+		}
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < categoryHints.size(); i++) {
+			if (i > 0) {
+				sb.append(" / ");
+			}
+			sb.append(categoryHints.get(i));
+		}
+		sb.append(" / ").append(body);
+		return sb.toString();
+	}
+
+	/**
+	 * Extracts category hints for a concept by looking up the concept sets
+	 * (CIEL convention: e.g. concept 1114 "Vital signs" contains Temperature,
+	 * BP, Pulse, RR, SpO2). The returned list contains the names of the
+	 * containing set concepts and is intended to be passed to the 3-arg
+	 * {@link #buildPrefixedText(String, String, List)} so the literal
+	 * category word ends up in the embedding input.
+	 *
+	 * <p>Returns an empty list when the concept is null, has no containing
+	 * sets, or when the OpenMRS context is unavailable (e.g. during tests
+	 * that bypass Spring). This is intentional — callers should not need to
+	 * special-case the no-hints scenario.
+	 *
+	 * @param concept the source concept
+	 * @return list of containing-set names, or empty list
+	 */
+	public static List<String> extractCategoryHints(Concept concept) {
+		if (concept == null) {
+			return Collections.emptyList();
+		}
+		List<ConceptSet> sets;
+		try {
+			sets = Context.getConceptService().getSetsContainingConcept(concept);
+		}
+		catch (Exception e) {
+			// Context unavailable (test bypass) or transient API failure —
+			// fall back to no hints rather than failing the indexing flow.
+			return Collections.emptyList();
+		}
+		if (sets == null || sets.isEmpty()) {
+			return Collections.emptyList();
+		}
+		List<String> hints = new ArrayList<String>(sets.size());
+		for (ConceptSet cs : sets) {
+			Concept setConcept = cs.getConceptSet();
+			if (setConcept == null || setConcept.getName() == null) {
+				continue;
+			}
+			String name = setConcept.getName().getName();
+			if (name != null && !name.trim().isEmpty()) {
+				hints.add(name.trim());
+			}
+		}
+		return hints;
 	}
 
 	/**
