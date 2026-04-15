@@ -2236,11 +2236,40 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 		int tightThreshold = tightCheckConcepts.size();
+		// Count distinct concepts in the candidate set entering
+		// Phase 2 — used by the multi-concept umbrella bypass below.
+		Set<String> p2CandidateConcepts = new HashSet<String>();
+		for (ScoredEmbedding se : candidates) {
+			String cn = ConceptNameUtil.extractConceptName(
+					se.embedding.getTextContent());
+			if (cn != null) {
+				p2CandidateConcepts.add(cn);
+			}
+		}
 		boolean tightClusterDetected = belowFloorRescued
 				|| (firstPassGapDetected && adaptiveCutoff < tightThreshold)
 				|| (ratioFloorCandidateCount >= 0
 						&& ratioFloorCandidateCount < tightThreshold
 						&& initialZScore >= FLOOR_RESCUE_MIN_Z_SCORE
+						&& maxSemanticScore
+						>= config.noiseProfile.absoluteSimilarityFloor()
+								+ config.minScoreGap)
+				// Multi-concept umbrella bypass: when the ratio floor
+				// produced a tight cluster spanning 3+ distinct concepts
+				// AND the initial z-score passed its own gate, the concept
+				// diversity provides the structural confidence that
+				// FLOOR_RESCUE_MIN_Z_SCORE provides for single-concept
+				// clusters. The initial gate already validated that the
+				// top semantic score is a genuine outlier; the multi-concept
+				// spread confirms the cluster is not a coincidental
+				// grouping. This rescues broad-category queries like
+				// "vital signs" where the z-score is strong but just
+				// below the 2.0 threshold.
+				|| (ratioFloorCandidateCount >= 0
+						&& ratioFloorCandidateCount < tightThreshold
+						&& p2CandidateConcepts.size() >= 3
+						&& initialZThreshold > 0
+						&& initialZScore >= initialZThreshold
 						&& maxSemanticScore
 						>= config.noiseProfile.absoluteSimilarityFloor()
 								+ config.minScoreGap);
