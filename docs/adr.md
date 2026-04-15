@@ -1317,7 +1317,27 @@ Enriched form: `Clinical observation: Vital signs / Finding — Temperature: 36.
 
 **Why this respects the no-domain-knowledge rule:** the algorithm doesn't know what "vital signs" means. It just embeds whatever the OpenMRS Concept dictionary attaches to each concept's set membership. Medical knowledge stays in the dictionary, where it belongs.
 
-**Scope limit:** CIEL diagnoses (Zika, Syphilis, Pneumonia, Asthma) are not members of any concept set. STD/infections category queries still need a different enrichment source — likely ICD-10 chapter mappings (Zika `A92.5` → "Certain infectious and parasitic diseases"), which can be plugged into the same `extractCategoryHints` mechanism. Tracked as follow-up work.
+**Scope limit:** CIEL diagnoses (Zika, Syphilis, Pneumonia, Asthma) are not members of any concept set in the standalone CIEL distribution tested. STD/infections category queries still fail there — and a follow-up investigation showed that the obvious alternative metadata sources are also blocked by missing data, not missing code:
+
+| OpenMRS metadata source | Structure loaded? | Human-readable text loaded? |
+|---|---|---|
+| `concept_set` membership (Vital signs only) | ✓ | ✓ — **what the shipped fix uses** |
+| Concept synonyms (already used by serializer) | ✓ | ✓ — but only spellings/abbreviations, no category words |
+| `SAME-AS` reference mappings (14716 entries across CIEL/SNOMED/ICD-10/ICD-11/IMO) | ✓ | ✗ — **0 of 14716** with name or description |
+| `BROADER-THAN` mappings (452) | ✓ | ✗ — 0 with text |
+| `NARROWER-THAN` mappings (3263) | ✓ | ✗ — 0 with text |
+| Multi-locale concept names | ✓ | ✓ — but pure translations of the specific concept, no category words |
+
+The structural pointers for category enrichment exist (e.g., "Gonococcal arthritis NARROWER-THAN ICD-10 A54.4 'Gonococcal infection of musculoskeletal system'") but the term names and descriptions are uniformly NULL in this install — typical of the code-only CIEL distribution where SNOMED CT and ICD-10 descriptive text typically arrive via separate licensed content.
+
+**The blocker for STD/infections/cancer queries is dictionary curation, not algorithm.** The same `extractCategoryHints` mechanism will automatically benefit any deployment whose dictionary adds either (a) explicit concept-set membership for diagnoses, or (b) descriptive text for the existing reference-term mappings. No further code changes needed in those deployments.
+
+**Three deployment-time options for category-query coverage on diagnoses:**
+1. **Enrich the dictionary** — add concept-set memberships (e.g., create "Sexually transmitted infections" set with HIV, Syphilis, Zika as members). One-time CIEL maintenance task.
+2. **Load reference-term descriptive text** — typically requires the SNOMED CT or ICD-10-WHO content distribution with licensing implications.
+3. **Accept the limitation** for category queries on diagnoses until either of the above happens.
+
+When extending `extractCategoryHints` in the future, walk **NARROWER-THAN** mappings (the OpenMRS concept is narrower than the external broader category) — not BROADER-THAN. Both relationships exist; NARROWER-THAN is 7× more populated and points in the right direction for category queries.
 
 **Fixture-driven test suite:** unchanged at 20 failures. String fixtures bypass `loadAll()` so they don't exercise the new metadata path. The 14 vital-signs/STD/infections failures in the fixture tests are now empirically classified as **fixture limitations**, not algorithm bugs — production behavior (with real Concept metadata) is correct for vital signs.
 
