@@ -1341,6 +1341,27 @@ When extending `extractCategoryHints` in the future, walk **NARROWER-THAN** mapp
 
 **Fixture-driven test suite:** unchanged at 20 failures. String fixtures bypass `loadAll()` so they don't exercise the new metadata path. The 14 vital-signs/STD/infections failures in the fixture tests are now empirically classified as **fixture limitations**, not algorithm bugs — production behavior (with real Concept metadata) is correct for vital signs.
 
+### Rejected alternative: runtime query expansion via dictionary lookup
+
+After the vital-signs fix, we considered an alternative path for the unfixed diagnosis-category queries (STD, immunocompromised, etc.): rewriting the query at retrieval time by appending dictionary-derived synonyms for short uppercase tokens (e.g. `STD → "STD Sexually transmitted disease"`). Two trigger variants were prototyped and benchmarked against the running OpenMRS instance.
+
+**Reactive trigger** (only expand when retrieval returns zero records): never fired for the failing queries. Production retrieval returns 2 off-topic records for `STD`/`immunocompromised`/`opportunistic infections in HIV` — not zero — so the trigger condition was structurally wrong for the actual failure mode.
+
+**Eager trigger** (always expand when query has an all-uppercase 2–6-char alphabetic token): benchmarked across 91 of the 97 unique test queries (the 6 longest queries timed out equally in both modes). Pipeline-filtered record IDs compared between modes:
+
+- 87 queries (95.6%): pipeline output **identical** — uppercase candidate filter correctly skipped lowercase queries
+- 4 queries changed:
+  - `any STD?`: gained 4 relevant records (HIV, Zika) and 4 noise records (Hookworm, Haemorrhagic disease of newborn)
+  - `TB`: gained 2 noise records only (HIV via `getConceptsByName("TB")` matching `"TB/HIV clinic"`); patient has no actual TB
+  - `TB treatment history`: same `TB → HIV` noise contamination
+  - `HIV status and CD4 count`: gained PMTCT (relevant) but **lost HIV wasting syndrome** (relevant) — the expanded embedding shifted away from a previously-matched concept
+
+The mechanism that fails: `ConceptService.getConceptsByName(token)` does substring matching across the entire dictionary, so any concept name containing the token (even tangentially, like `"TB/HIV clinic"`) is returned and its preferred name appended to the query. For an LLM with a finite context, noise dilutes signal — a clinician asking about TB should not be handed HIV records.
+
+**Decision:** runtime query expansion via dictionary lookup is the wrong tool. The right path for STD/infections-style failures is **dictionary-side curation** — adding `concept_set` memberships that link HIV/Syphilis/Zika to a "Sexually transmitted disease" parent concept, the same mechanism the vital-signs fix uses. The `extractCategoryHints` code shipped earlier will then automatically benefit those queries with no further code changes.
+
+All query-expansion code was reverted. The lesson is captured here so future maintainers don't re-litigate.
+
 ## Planned future work
 
 - **Incremental embedding indexing**: The `EncounterService` AOP hook already uses an incremental strategy (indexes only new/changed encounters), but other data types (`ObsService`, `ConditionService`, etc.) still use `indexPatient()` which deletes all embeddings for a patient and recomputes from scratch. A fully incremental approach would track which record maps to which embedding row across all data types and only add, update, or delete the specific embeddings affected. This matters for patients with large charts where AOP hooks fire frequently.
