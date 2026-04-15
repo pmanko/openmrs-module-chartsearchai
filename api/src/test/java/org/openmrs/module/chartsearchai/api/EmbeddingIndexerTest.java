@@ -14,15 +14,22 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Date;
 import java.util.List;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.openmrs.Encounter;
 import org.openmrs.Patient;
 import org.openmrs.api.context.Context;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
+import org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
+import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
 import org.openmrs.test.jupiter.BaseModuleContextSensitiveTest;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -143,5 +150,112 @@ public class EmbeddingIndexerTest extends BaseModuleContextSensitiveTest {
 
 		assertEquals(firstCount, secondCount,
 				"Upsert should not create duplicate embeddings");
+	}
+
+	// --- Category-hint enrichment ---
+	// Guards the production fix that injects concept-set names (e.g.
+	// "Vital signs") into both the stored text_content and the embedding
+	// input so category-name queries match. Without these tests, a
+	// refactor that drops categoryHints from the SerializedRecord →
+	// buildEmbeddings flow would silently regress production retrieval.
+
+	private static final String MODEL_DIR = System.getProperty(
+			"chartsearchai.embedding.model.dir", "../models/all-MiniLM-L6-v2");
+	private static final String MODEL_PATH = MODEL_DIR + "/model.onnx";
+	private static final String VOCAB_PATH = MODEL_DIR + "/vocab.txt";
+
+	private static boolean modelFilesExist() {
+		return new java.io.File(MODEL_PATH).exists()
+				&& new java.io.File(VOCAB_PATH).exists();
+	}
+
+	@Test
+	public void buildEmbeddings_withCategoryHints_shouldStoreHintInjectedTextContent() {
+		Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model not found at " + MODEL_PATH);
+
+		OnnxEmbeddingProvider provider =
+				new OnnxEmbeddingProvider(MODEL_PATH, VOCAB_PATH);
+		try {
+			SerializedRecord recordWithHints = new SerializedRecord(
+					"obs", 1, "Finding — Temperature: 36.7", new Date(),
+					Arrays.asList("Vital signs"));
+
+			List<ChartEmbedding> embeddings = EmbeddingIndexer.buildEmbeddings(
+					Collections.singletonList(recordWithHints), provider);
+
+			assertEquals(1, embeddings.size());
+			assertEquals(
+					"Vital signs / Finding — Temperature: 36.7",
+					embeddings.get(0).getTextContent(),
+					"text_content must include the hint-injected body so the "
+					+ "keyword-scoring path sees the same enrichment as the "
+					+ "embedding vector");
+		} finally {
+			provider.close();
+		}
+	}
+
+	@Test
+	public void buildEmbeddings_withEmptyHints_shouldStoreRawTextContent() {
+		Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model not found at " + MODEL_PATH);
+
+		OnnxEmbeddingProvider provider =
+				new OnnxEmbeddingProvider(MODEL_PATH, VOCAB_PATH);
+		try {
+			SerializedRecord recordNoHints = new SerializedRecord(
+					"obs", 1, "Finding — Temperature: 36.7", new Date());
+
+			List<ChartEmbedding> embeddings = EmbeddingIndexer.buildEmbeddings(
+					Collections.singletonList(recordNoHints), provider);
+
+			assertEquals(1, embeddings.size());
+			assertEquals("Finding — Temperature: 36.7",
+					embeddings.get(0).getTextContent(),
+					"text_content must equal the raw record text when "
+					+ "no category hints are provided");
+		} finally {
+			provider.close();
+		}
+	}
+
+	@Test
+	public void buildEmbeddings_withCategoryHints_shouldShiftCosineForCategoryQuery() {
+		// Empirical guard: hint enrichment must measurably improve
+		// retrieval for category-name queries against the L6 model. With
+		// "Vital signs" hint, cosine to query "vital signs" should jump
+		// substantially (~0.30+ in ADR 19's measurements). This test is
+		// conservative — only requires the enriched cosine to clearly
+		// exceed the unenriched one.
+		Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model not found at " + MODEL_PATH);
+
+		OnnxEmbeddingProvider provider =
+				new OnnxEmbeddingProvider(MODEL_PATH, VOCAB_PATH);
+		try {
+			String body = "Finding — Temperature: 36.7";
+			SerializedRecord noHints = new SerializedRecord(
+					"obs", 1, body, new Date());
+			SerializedRecord withHints = new SerializedRecord(
+					"obs", 2, body, new Date(),
+					Arrays.asList("Vital signs"));
+
+			List<ChartEmbedding> embeddings = EmbeddingIndexer.buildEmbeddings(
+					Arrays.asList(noHints, withHints), provider);
+
+			float[] queryEmb = provider.embed("vital signs");
+			double cosWithoutHints = ChartSearchAiUtils.cosineSimilarity(
+					queryEmb, embeddings.get(0).getEmbeddingVector());
+			double cosWithHints = ChartSearchAiUtils.cosineSimilarity(
+					queryEmb, embeddings.get(1).getEmbeddingVector());
+
+			assertTrue(cosWithHints > cosWithoutHints + 0.10,
+					"Hint enrichment must measurably raise cosine to category "
+					+ "query (got " + cosWithHints + " enriched vs "
+					+ cosWithoutHints + " unenriched)");
+		} finally {
+			provider.close();
+		}
 	}
 }

@@ -9,6 +9,7 @@
  */
 package org.openmrs.module.chartsearchai;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -16,6 +17,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Collections;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.test.jupiter.BaseModuleContextSensitiveTest;
@@ -84,5 +87,77 @@ public class ChartSearchAiUtilsTest extends BaseModuleContextSensitiveTest {
 			tempFile.delete();
 			subDir.delete();
 		}
+	}
+
+	// --- Category-hint enrichment ---
+	// These tests guard the metadata flow that makes category-name queries
+	// (e.g. "vital signs" → Temperature/BP/Pulse) work when the OpenMRS
+	// Concept dictionary classifies the source concept under a containing
+	// concept-set. Refactors that drop hints from any link in the chain
+	// would silently regress production retrieval; these tests catch that.
+
+	@Test
+	public void injectCategoryHints_withEmptyHints_shouldReturnBodyUnchanged() {
+		String body = "Finding — Temperature: 36.7";
+		assertEquals(body,
+				ChartSearchAiUtils.injectCategoryHints(body, Collections.<String>emptyList()));
+		assertEquals(body, ChartSearchAiUtils.injectCategoryHints(body, null));
+	}
+
+	@Test
+	public void injectCategoryHints_withSingleHint_shouldPrependWithSlashSeparator() {
+		assertEquals("Vital signs / Finding — Temperature: 36.7",
+				ChartSearchAiUtils.injectCategoryHints(
+						"Finding — Temperature: 36.7",
+						Arrays.asList("Vital signs")));
+	}
+
+	@Test
+	public void injectCategoryHints_withMultipleHints_shouldJoinWithSlashSeparator() {
+		assertEquals("Vital signs / Anthropometric / Finding — Weight: 70",
+				ChartSearchAiUtils.injectCategoryHints(
+						"Finding — Weight: 70",
+						Arrays.asList("Vital signs", "Anthropometric")));
+	}
+
+	@Test
+	public void buildPrefixedText_threeArg_withEmptyHints_shouldEqualTwoArgVersion() {
+		String text = "Finding — Temperature: 36.7";
+		assertEquals(
+				ChartSearchAiUtils.buildPrefixedText("obs", text),
+				ChartSearchAiUtils.buildPrefixedText("obs", text,
+						Collections.<String>emptyList()));
+	}
+
+	@Test
+	public void buildPrefixedText_threeArg_withHints_shouldInjectBetweenPrefixAndBody() {
+		// Required for the embedding pipeline to bridge category-name
+		// queries: the literal category word must appear in the embedded
+		// text. Format: "<structuralPrefix><hint1> / <hint2> / <body>".
+		assertEquals(
+				"Clinical observation: Vital signs / Finding — Temperature: 36.7",
+				ChartSearchAiUtils.buildPrefixedText("obs",
+						"Finding — Temperature: 36.7",
+						Arrays.asList("Vital signs")));
+	}
+
+	@Test
+	public void buildPrefixedText_threeArg_shouldMatch_twoArgOnHintInjectedBody() {
+		// Invariant the EmbeddingIndexer relies on: embedding (computed
+		// from hint-injected body via 2-arg buildPrefixedText) and stored
+		// text_content (hint-injected body) are referentially consistent —
+		// keyword scoring re-prefixes text_content and gets the same
+		// string the embedding was computed from.
+		String body = "Finding — Pulse: 72";
+		java.util.List<String> hints = Arrays.asList("Vital signs");
+		String hintInjected = ChartSearchAiUtils.injectCategoryHints(body, hints);
+		assertEquals(
+				ChartSearchAiUtils.buildPrefixedText("obs", body, hints),
+				ChartSearchAiUtils.buildPrefixedText("obs", hintInjected));
+	}
+
+	@Test
+	public void extractCategoryHints_nullConcept_shouldReturnEmptyList() {
+		assertTrue(ChartSearchAiUtils.extractCategoryHints(null).isEmpty());
 	}
 }
