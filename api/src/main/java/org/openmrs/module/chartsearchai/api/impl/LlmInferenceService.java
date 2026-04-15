@@ -2104,7 +2104,8 @@ public class LlmInferenceService implements ChartSearchService {
 		if (!partialKwValidated && !allFullKeywordMatch
 				&& !isCompoundKeywordMatch
 				&& candidates.size() >= 4) {
-			return filterByCoherence(candidates);
+			return preserveUniqueCoverage(candidates,
+					filterByCoherence(candidates), queryTerms);
 		}
 		if (!partialKwValidated && !allFullKeywordMatch
 				&& !isCompoundKeywordMatch
@@ -2122,10 +2123,70 @@ public class LlmInferenceService implements ChartSearchService {
 				}
 			}
 			if (topSemantic > 0 && lowestSemantic / topSemantic >= 0.90) {
-				return filterByCoherence(candidates);
+				return preserveUniqueCoverage(candidates,
+						filterByCoherence(candidates), queryTerms);
 			}
 		}
 		return candidates;
+	}
+
+	/**
+	 * After Phase 1's coherence filter runs, restore any candidates whose
+	 * keyword evidence covers a query term NOT matched by the survivors.
+	 * Coherence filtering uses only embedding geometry and can drop
+	 * legitimate cross-concept matches in multi-concept queries (e.g.
+	 * Weight records in "blood pressure and weight" — Weight is less
+	 * coherent with the BP cluster but matches "weight" which BP doesn't
+	 * cover). Records whose keyword matches duplicate the survivors'
+	 * coverage (e.g. SpO2 also matching "blood" in a "blood pressure"
+	 * context) remain filtered — the survivors already account for that
+	 * term, so the dropped record adds no new query coverage.
+	 */
+	static List<ScoredEmbedding> preserveUniqueCoverage(
+			List<ScoredEmbedding> original,
+			List<ScoredEmbedding> filtered, String[] queryTerms) {
+		if (queryTerms == null || queryTerms.length == 0) {
+			return filtered;
+		}
+		Set<Integer> filteredIds = new HashSet<Integer>();
+		Set<String> coveredTerms = new HashSet<String>();
+		for (ScoredEmbedding se : filtered) {
+			filteredIds.add(se.embedding.getResourceId());
+			String text = ChartSearchAiUtils.buildPrefixedText(
+					se.embedding.getResourceType(),
+					ConceptNameUtil.stripSynonyms(
+							se.embedding.getTextContent()))
+					.toLowerCase();
+			String[] words = text.split("\\s+");
+			for (String term : queryTerms) {
+				if (termMatchesText(term, text, words)) {
+					coveredTerms.add(term);
+				}
+			}
+		}
+		List<ScoredEmbedding> result =
+				new ArrayList<ScoredEmbedding>(filtered);
+		for (ScoredEmbedding se : original) {
+			if (se.keywordScore <= 0
+					|| filteredIds.contains(
+							se.embedding.getResourceId())) {
+				continue;
+			}
+			String text = ChartSearchAiUtils.buildPrefixedText(
+					se.embedding.getResourceType(),
+					ConceptNameUtil.stripSynonyms(
+							se.embedding.getTextContent()))
+					.toLowerCase();
+			String[] words = text.split("\\s+");
+			for (String term : queryTerms) {
+				if (!coveredTerms.contains(term)
+						&& termMatchesText(term, text, words)) {
+					result.add(se);
+					break;
+				}
+			}
+		}
+		return result;
 	}
 
 	/**
