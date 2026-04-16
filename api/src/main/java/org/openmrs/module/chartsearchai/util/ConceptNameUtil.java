@@ -112,8 +112,12 @@ public final class ConceptNameUtil {
 		}
 
 		// Condition: "Condition: NAME. Status:" or "Condition: NAME, SEVERITY. Status:"
-		if (text.startsWith("Condition: ")) {
-			String rest = text.substring("Condition: ".length());
+		// Uses indexOf instead of startsWith so hint-enriched text like
+		// "Sexually transmitted disease / Condition: HIV disease. Status: ACTIVE"
+		// still finds the concept name correctly.
+		int condIdx = text.indexOf("Condition: ");
+		if (condIdx >= 0) {
+			String rest = text.substring(condIdx + "Condition: ".length());
 			int dotIdx = rest.indexOf(". ");
 			int commaIdx = rest.indexOf(", ");
 			int endIdx = minPositive(dotIdx, commaIdx);
@@ -121,22 +125,25 @@ public final class ConceptNameUtil {
 		}
 
 		// Diagnosis: "Diagnosis: NAME. Certainty:"
-		if (text.startsWith("Diagnosis: ")) {
-			String rest = text.substring("Diagnosis: ".length());
+		int diagIdx = text.indexOf("Diagnosis: ");
+		if (diagIdx >= 0) {
+			String rest = text.substring(diagIdx + "Diagnosis: ".length());
 			int dotIdx = rest.indexOf(". ");
 			return dotIdx > 0 ? rest.substring(0, dotIdx).trim() : rest.trim();
 		}
 
 		// Drug order: "Drug order: NAME. Dose:"
-		if (text.startsWith("Drug order: ")) {
-			String rest = text.substring("Drug order: ".length());
+		int drugIdx = text.indexOf("Drug order: ");
+		if (drugIdx >= 0) {
+			String rest = text.substring(drugIdx + "Drug order: ".length());
 			int dotIdx = rest.indexOf(". ");
 			return dotIdx > 0 ? rest.substring(0, dotIdx).trim() : rest.trim();
 		}
 
 		// Allergy: "Allergy: NAME (type). Severity:"
-		if (text.startsWith("Allergy: ")) {
-			String rest = text.substring("Allergy: ".length());
+		int allergyIdx = text.indexOf("Allergy: ");
+		if (allergyIdx >= 0) {
+			String rest = text.substring(allergyIdx + "Allergy: ".length());
 			int parenIdx = rest.indexOf(" (");
 			int dotIdx = rest.indexOf(". ");
 			int endIdx = minPositive(parenIdx, dotIdx);
@@ -144,15 +151,17 @@ public final class ConceptNameUtil {
 		}
 
 		// Program: "Program: NAME. Enrolled:"
-		if (text.startsWith("Program: ")) {
-			String rest = text.substring("Program: ".length());
+		int progIdx = text.indexOf("Program: ");
+		if (progIdx >= 0) {
+			String rest = text.substring(progIdx + "Program: ".length());
 			int dotIdx = rest.indexOf(". ");
 			return dotIdx > 0 ? rest.substring(0, dotIdx).trim() : rest.trim();
 		}
 
 		// Lab order: "Lab order: NAME. Urgency:"
-		if (text.startsWith("Lab order: ")) {
-			String rest = text.substring("Lab order: ".length());
+		int labIdx = text.indexOf("Lab order: ");
+		if (labIdx >= 0) {
+			String rest = text.substring(labIdx + "Lab order: ".length());
 			int dotIdx = rest.indexOf(". ");
 			return dotIdx > 0 ? rest.substring(0, dotIdx).trim() : rest.trim();
 		}
