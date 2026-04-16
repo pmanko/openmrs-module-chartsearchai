@@ -16,6 +16,9 @@
   7. Were all rules in this file followed?
 - Follow test-driven development: for every bug fix or new feature, first write a failing test that defines the expected behavior, then write production code to make it pass.
 - Always create a plan before writing code. Read the relevant code, outline the approach, then implement.
+- Never commit code with known regressions. If a change improves one query but breaks another, the root cause is in shared infrastructure (e.g. noise profile, score distribution), not in the individual pipeline stage. Diagnose the shared infrastructure problem before attempting fixes — patching individual stages will keep regressing.
+- When modifying the retrieval pipeline, run the cross-query regression tests (`enriched_*` in `LlmInferenceServiceTest`) AND the eval harness (`EnrichedRetrievalEvalTest`, 485 cases) before pushing. These catch cross-query side effects where improving one query silently breaks another.
+- When adding concept-set category hints to new record types, also add the corresponding entries to the `*_DATASET_CATEGORY_HINTS` maps in `TestDatasetHelper` and regenerate the eval baseline. The eval baseline must always match the current hints configuration.
 
 # API surface rules — do not bypass these methods
 
@@ -27,3 +30,6 @@ These methods are the ONLY correct entry points for their respective operations.
 - **Building embeddings**: Use `EmbeddingIndexer.buildEmbeddings()`. Never construct `ChartEmbedding` objects manually with `provider.embed()`.
 - **Cosine similarity**: Use `ChartSearchAiUtils.cosineSimilarity()`. Never reimplement the formula.
 - **Test datasets**: Use `TestDatasetHelper.FULL_PATIENT_DATASET`, `TestDatasetHelper.SECOND_PATIENT_DATASET`, `TestDatasetHelper.toSerializedRecords()`, `TestDatasetHelper.inferResourceType()`, `TestDatasetHelper.stripDatasetPrefixAndDate()`. Never duplicate these helpers in individual test files.
+- **Category hints in tests**: Use `TestDatasetHelper.FULL_DATASET_CATEGORY_HINTS` (and per-dataset variants). Never duplicate hints maps in individual test files.
+- **Stripping category hints**: Use `ChartSearchAiUtils.stripCategoryHints()`. Never reimplement the hint-detection pattern.
+- **Noise profile with enrichment**: Use `ModelNoiseProfile.compute(embeddings, provider)` (2-arg form) so cross-concept similarity is computed from hint-stripped re-embeddings. The 1-arg form without provider is a backward-compatible fallback that uses enriched vectors and will give inflated statistics when hints are present.
