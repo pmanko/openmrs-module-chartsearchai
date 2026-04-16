@@ -2108,7 +2108,7 @@ public class LlmInferenceService implements ChartSearchService {
 				} else if (queryTerms != null) {
 					List<ScoredEmbedding> rescued =
 							filterRedundantKeywordTier(candidates,
-									queryTerms, kwMax);
+									queryTerms, kwMax, bonusThreshold);
 					if (rescued.size() >= refinedCutoff) {
 						log.debug("Refinement gap at {} is a concept boundary: rescued {} records with new coverage",
 								refinedCutoff, rescued.size() - refinedCutoff);
@@ -2123,7 +2123,7 @@ public class LlmInferenceService implements ChartSearchService {
 				}
 			} else if (queryTerms != null) {
 				candidates = filterRedundantKeywordTier(
-						candidates, queryTerms, kwMax);
+						candidates, queryTerms, kwMax, bonusThreshold);
 			}
 		}
 		return candidates;
@@ -2160,11 +2160,14 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 		boolean isCompoundKeywordMatch = isCompoundKeywordMatch(
 				candidates, queryTerms);
+		double bonusThreshold = queryTerms.length == 0 ? 1.0
+				: (double) Math.min(2, queryTerms.length) / queryTerms.length;
 		if (!partialKwValidated && !allFullKeywordMatch
 				&& !isCompoundKeywordMatch
 				&& candidates.size() >= 4) {
 			return preserveUniqueCoverage(candidates,
-					filterByCoherence(candidates), queryTerms);
+					filterByCoherence(candidates), queryTerms,
+					bonusThreshold);
 		}
 		if (!partialKwValidated && !allFullKeywordMatch
 				&& !isCompoundKeywordMatch
@@ -2183,7 +2186,8 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 			if (topSemantic > 0 && lowestSemantic / topSemantic >= 0.90) {
 				return preserveUniqueCoverage(candidates,
-						filterByCoherence(candidates), queryTerms);
+						filterByCoherence(candidates), queryTerms,
+						bonusThreshold);
 			}
 		}
 		return candidates;
@@ -2203,7 +2207,8 @@ public class LlmInferenceService implements ChartSearchService {
 	 */
 	static List<ScoredEmbedding> preserveUniqueCoverage(
 			List<ScoredEmbedding> original,
-			List<ScoredEmbedding> filtered, String[] queryTerms) {
+			List<ScoredEmbedding> filtered, String[] queryTerms,
+			double bonusThreshold) {
 		if (queryTerms == null || queryTerms.length == 0) {
 			return filtered;
 		}
@@ -2225,9 +2230,12 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 		List<ScoredEmbedding> result =
 				new ArrayList<ScoredEmbedding>(filtered);
+		Set<Integer> restoredIds = new HashSet<Integer>(filteredIds);
+		// Pass 1: restore records that cover query terms NOT already
+		// covered by coherence survivors (existing behavior).
 		for (ScoredEmbedding se : original) {
 			if (se.keywordScore <= 0
-					|| filteredIds.contains(
+					|| restoredIds.contains(
 							se.embedding.getResourceId())) {
 				continue;
 			}
@@ -2241,8 +2249,30 @@ public class LlmInferenceService implements ChartSearchService {
 				if (!coveredTerms.contains(term)
 						&& termMatchesText(term, text, words)) {
 					result.add(se);
+					restoredIds.add(se.embedding.getResourceId());
 					break;
 				}
+			}
+		}
+		// Pass 2: restore records with strong keyword relevance
+		// (keywordScore >= bonusThreshold) even when their matched
+		// terms overlap with survivors. Multi-concept queries like
+		// "opportunistic infections in HIV" produce candidates from
+		// different clinical domains (HIV, TB) that both match the
+		// same query terms but don't cohere — coherence filtering
+		// drops the less-coherent group even though it's genuinely
+		// relevant. The bonus threshold (min(2,N)/N query terms)
+		// ensures only records with strong keyword evidence are
+		// restored, preventing noisy partial matches (e.g. "blood"
+		// matching "blood pressure" for "blood problems" won't
+		// trigger this — bonusThreshold=1.0 for 2-term queries).
+		for (ScoredEmbedding se : original) {
+			if (restoredIds.contains(se.embedding.getResourceId())) {
+				continue;
+			}
+			if (se.keywordScore >= bonusThreshold) {
+				result.add(se);
+				restoredIds.add(se.embedding.getResourceId());
 			}
 		}
 		return result;
@@ -3012,7 +3042,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 	static List<ScoredEmbedding> filterRedundantKeywordTier(
 			List<ScoredEmbedding> candidates, String[] queryTerms,
-			double kwMax) {
+			double kwMax, double bonusThreshold) {
 		// Collect query terms covered by the higher-keyword tier.
 		// Strip synonyms so "(syn. ...)" text doesn't inflate term
 		// coverage — matches findSimilar keyword scoring behavior.
@@ -3050,10 +3080,19 @@ public class LlmInferenceService implements ChartSearchService {
 
 		// Keep lower-tier records only if they match a term the higher
 		// tier doesn't cover, OR have zero keyword match but high
-		// semantic relevance (rescued synonym/concept mismatch).
+		// semantic relevance (rescued synonym/concept mismatch), OR
+		// have strong keyword relevance (kwScore >= bonusThreshold).
 		List<ScoredEmbedding> filtered = new ArrayList<ScoredEmbedding>();
 		for (ScoredEmbedding se : candidates) {
 			if (se.keywordScore >= kwMax - 0.01) {
+				filtered.add(se);
+			} else if (se.keywordScore >= bonusThreshold) {
+				// Strong keyword match (e.g. TB matching 2/3 terms of
+				// "opportunistic infections in HIV") — genuinely
+				// relevant even when terms overlap with the top tier.
+				// Without this, multi-concept queries lose cross-domain
+				// records that share query terms with the dominant
+				// cluster.
 				filtered.add(se);
 			} else if (se.keywordScore == 0
 					&& se.semanticScore >= semanticFloor) {
