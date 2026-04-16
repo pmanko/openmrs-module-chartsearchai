@@ -906,6 +906,10 @@ final class TestDatasetHelper {
 		m.put(135, Arrays.asList("Infectious disease", "Opportunistic infectious disease")); // TB assessment
 		// Program enrollments
 		m.put(2,   Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // PMTCT
+		// Vital sign obs (from "Vital signs" concept set — same as production extractCategoryHints on obs.getConcept())
+		for (int vi : new int[]{14, 15, 16, 17, 18, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33, 34, 36, 37, 38, 43, 44, 45, 46, 47, 48, 57, 58, 59, 60, 63, 64, 65, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 93, 94, 95, 96, 97, 98, 100, 101, 102, 103, 104, 107, 108, 109, 111, 112, 113, 114, 115, 116, 117, 124, 125, 126, 128, 129, 130, 131, 132, 133, 136, 137, 138, 143, 144, 145, 147, 148, 149, 150, 151, 152}) {
+			if (!m.containsKey(vi)) { m.put(vi, Arrays.asList("Vital signs")); }
+		}
 		FULL_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
 
 		// SECOND_PATIENT_DATASET
@@ -916,6 +920,9 @@ final class TestDatasetHelper {
 		m.put(19, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Syphilitic Cirrhosis diag
 		m.put(29, Arrays.asList("Cardiovascular disease")); // Atherosclerosis
 		m.put(32, Arrays.asList("Cardiovascular disease")); // Atherosclerosis diag
+		for (int vi : new int[]{5, 6, 7, 8, 9, 10, 11, 12, 20, 21, 22, 23, 24, 25, 26, 27, 35, 36, 37, 38, 39, 40, 41, 42, 46, 47, 48, 49, 50, 51, 52, 53, 59, 60, 61, 62, 63, 64, 65, 66}) {
+			if (!m.containsKey(vi)) { m.put(vi, Arrays.asList("Vital signs")); }
+		}
 		SECOND_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
 
 		// THIRD_PATIENT_DATASET
@@ -929,6 +936,9 @@ final class TestDatasetHelper {
 		m.put(118, Arrays.asList("Infectious disease")); // Pneumonia
 		m.put(119, Arrays.asList("Infectious disease")); // Pneumonia diag
 		m.put(148, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // PMTCT
+		for (int vi : new int[]{6, 7, 8, 9, 10, 11, 12, 13, 25, 26, 27, 28, 29, 30, 31, 32, 36, 37, 38, 39, 40, 41, 42, 43, 56, 57, 58, 59, 60, 61, 62, 63, 75, 76, 77, 78, 79, 80, 81, 82, 95, 96, 97, 98, 99, 100, 101, 102, 120, 121, 122, 123, 124, 125, 126, 127, 131, 132, 133, 134, 135, 137, 139, 140, 141, 142, 143, 144, 145, 149, 150, 151, 152, 153, 154, 158, 159}) {
+			if (!m.containsKey(vi)) { m.put(vi, Arrays.asList("Vital signs")); }
+		}
 		THIRD_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
 
 		// FOURTH_PATIENT_DATASET
@@ -944,6 +954,9 @@ final class TestDatasetHelper {
 		m.put(137, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Gonococcal
 		m.put(139, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Gonococcal diag
 		m.put(148, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // PMTCT
+		for (int vi : new int[]{6, 7, 8, 9, 10, 11, 12, 13, 23, 24, 25, 26, 27, 28, 29, 30, 37, 38, 39, 40, 41, 42, 43, 44, 54, 55, 56, 57, 58, 59, 60, 61, 67, 68, 69, 70, 71, 72, 73, 74, 80, 81, 82, 83, 84, 85, 86, 87, 98, 99, 100, 101, 102, 103, 104, 105, 111, 112, 113, 114, 115, 116, 117, 118, 126, 127, 128, 129, 130, 131, 132, 133, 140, 141, 142, 143, 144, 145, 146, 147, 152, 153, 154, 155, 156, 157, 158, 159}) {
+			if (!m.containsKey(vi)) { m.put(vi, Arrays.asList("Vital signs")); }
+		}
 		FOURTH_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
 
 		// FIFTH_PATIENT_DATASET (same structure as FOURTH)
@@ -959,6 +972,9 @@ final class TestDatasetHelper {
 		m.put(137, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Gonococcal
 		m.put(139, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Gonococcal diag
 		m.put(148, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // PMTCT
+		for (int vi : new int[]{6, 7, 8, 9, 10, 11, 12, 13, 23, 24, 25, 26, 27, 28, 29, 30, 37, 38, 39, 40, 41, 42, 43, 44, 54, 55, 56, 57, 58, 59, 60, 61, 67, 68, 69, 70, 71, 72, 73, 74, 80, 81, 82, 83, 84, 85, 86, 87, 98, 99, 100, 101, 102, 103, 104, 105, 111, 112, 113, 114, 115, 116, 117, 118, 126, 127, 128, 129, 130, 131, 132, 133, 140, 141, 142, 143, 144, 145, 146, 147, 152, 153, 154, 155, 156, 157, 158, 159}) {
+			if (!m.containsKey(vi)) { m.put(vi, Arrays.asList("Vital signs")); }
+		}
 		FIFTH_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
 	}
 }
