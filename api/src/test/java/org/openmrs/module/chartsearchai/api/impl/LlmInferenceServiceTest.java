@@ -4546,28 +4546,10 @@ public class LlmInferenceServiceTest {
 	//  92  = Diagnosis: Hypertension
 	// 110  = Diagnosis: HIV Disease
 
-	private static final Map<Integer, List<String>> CATEGORY_HINTS;
-
-	static {
-		Map<Integer, List<String>> m = new HashMap<Integer, List<String>>();
-		m.put(7,   Arrays.asList("Infectious disease", "Opportunistic infectious disease"));
-		m.put(21,  Arrays.asList("Infectious disease"));
-		m.put(39,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
-		m.put(51,  Arrays.asList("Infectious disease"));
-		m.put(52,  Arrays.asList("Infectious disease", "Opportunistic infectious disease"));
-		m.put(54,  Arrays.asList("Cardiovascular disease"));
-		m.put(61,  Arrays.asList("Infectious disease"));
-		m.put(66,  Arrays.asList("Infectious disease"));
-		m.put(69,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
-		m.put(71,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
-		m.put(92,  Arrays.asList("Cardiovascular disease"));
-		m.put(110, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
-		CATEGORY_HINTS = Collections.unmodifiableMap(m);
-	}
-
 	private static List<Integer> runEnrichedPipeline(String query, int topK) {
 		return runRealModelPipeline(query, topK, FULL_PATIENT_DATASET,
-				LlmInferenceService.PipelineConfig.defaults(), CATEGORY_HINTS);
+				LlmInferenceService.PipelineConfig.defaults(),
+				TestDatasetHelper.FULL_DATASET_CATEGORY_HINTS);
 	}
 
 	// --- Regression guards: these queries work WITHOUT hints and must

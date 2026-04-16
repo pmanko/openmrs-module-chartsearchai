@@ -10,7 +10,11 @@
 package org.openmrs.module.chartsearchai.api.impl;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
@@ -838,12 +842,50 @@ final class TestDatasetHelper {
 	 * {@link org.openmrs.module.chartsearchai.api.EmbeddingIndexer#buildEmbeddings}.
 	 */
 	static List<SerializedRecord> toSerializedRecords(String[] dataset) {
+		return toSerializedRecords(dataset, null);
+	}
+
+	/**
+	 * Converts a raw dataset array into {@link SerializedRecord} objects
+	 * with optional concept-set category hints per record.
+	 */
+	static List<SerializedRecord> toSerializedRecords(String[] dataset,
+			Map<Integer, List<String>> categoryHintsMap) {
 		List<SerializedRecord> records = new ArrayList<>();
 		for (int i = 0; i < dataset.length; i++) {
 			String resourceType = inferResourceType(dataset[i]);
 			String textContent = stripDatasetPrefixAndDate(dataset[i]);
-			records.add(new SerializedRecord(resourceType, i, textContent, null));
+			List<String> hints = categoryHintsMap != null
+					? categoryHintsMap.getOrDefault(i, Collections.<String>emptyList())
+					: Collections.<String>emptyList();
+			records.add(new SerializedRecord(resourceType, i, textContent, null, hints));
 		}
 		return records;
+	}
+
+	/**
+	 * Concept-set category hints for FULL_PATIENT_DATASET Condition and
+	 * Diagnosis records. Represents what {@code extractCategoryHints}
+	 * returns when the OpenMRS dictionary has concept_set memberships for
+	 * clinical categories (STD, Infectious disease, Cardiovascular, etc.).
+	 * Shared by cross-query regression tests and the eval harness.
+	 */
+	static final Map<Integer, List<String>> FULL_DATASET_CATEGORY_HINTS;
+
+	static {
+		Map<Integer, List<String>> m = new HashMap<Integer, List<String>>();
+		m.put(7,   Arrays.asList("Infectious disease", "Opportunistic infectious disease"));
+		m.put(21,  Arrays.asList("Infectious disease"));
+		m.put(39,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
+		m.put(51,  Arrays.asList("Infectious disease"));
+		m.put(52,  Arrays.asList("Infectious disease", "Opportunistic infectious disease"));
+		m.put(54,  Arrays.asList("Cardiovascular disease"));
+		m.put(61,  Arrays.asList("Infectious disease"));
+		m.put(66,  Arrays.asList("Infectious disease"));
+		m.put(69,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
+		m.put(71,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
+		m.put(92,  Arrays.asList("Cardiovascular disease"));
+		m.put(110, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
+		FULL_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
 	}
 }

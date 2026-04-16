@@ -1,0 +1,393 @@
+{
+  "dataset" : "enriched-retrieval-v1",
+  "description" : "Baseline for enriched pipeline with concept-set category hints on FULL_PATIENT_DATASET",
+  "cases" : [ {
+    "query" : "Any family history of cancer?",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "Does this patient use any family planning methods?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 5, 6 ]
+  }, {
+    "query" : "HIV status and CD4 count",
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 8, 40, 68, 85 ]
+  }, {
+    "query" : "Hb results",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "How have this patient's blood pressure, weight, and temperature trended across their last 7 visits?",
+    "expectedMinRecords" : 28,
+    "resultIndices" : [ 17, 18, 22, 23, 25, 26, 31, 33, 36, 38, 47, 48, 58, 63, 64, 73, 74, 76, 77, 81, 93, 94, 96, 101, 111, 113, 114, 131 ]
+  }, {
+    "query" : "I need to know the patient's most recent blood pressure and weight readings",
+    "expectedMinRecords" : 31,
+    "resultIndices" : [ 18, 22, 23, 26, 31, 33, 36, 47, 48, 58, 63, 64, 73, 74, 77, 81, 93, 94, 101, 102, 107, 111, 114, 126, 128, 129, 137, 138, 144, 147, 148 ]
+  }, {
+    "query" : "I want to review the patient's complete medication history including dosages",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 0, 1 ]
+  }, {
+    "query" : "TB",
+    "expectedMinRecords" : 5,
+    "resultIndices" : [ 7, 12, 52, 134, 135 ]
+  }, {
+    "query" : "TB treatment history",
+    "expectedMinRecords" : 5,
+    "resultIndices" : [ 7, 12, 52, 134, 135 ]
+  }, {
+    "query" : "Were all lab orders placed for this patient resulted?",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "What are this patient's HB results over time, and are values moving toward or away from the normal range?",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "What is the current CD4 Count?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 8, 85 ]
+  }, {
+    "query" : "What is the latest CD4 Count?",
+    "expectedMinRecords" : 1,
+    "resultIndices" : [ 8 ]
+  }, {
+    "query" : "What is the patient allergic to?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 4, 53 ]
+  }, {
+    "query" : "When were each of this patient's active conditions first recorded, and have any resolved or escalated?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 7, 54 ]
+  }, {
+    "query" : "allergies",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 4, 53 ]
+  }, {
+    "query" : "allergies and current medications",
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 0, 1, 4, 53 ]
+  }, {
+    "query" : "anaemia",
+    "expectedMinRecords" : 3,
+    "resultIndices" : [ 29, 55, 72 ]
+  }, {
+    "query" : "anemia",
+    "expectedMinRecords" : 3,
+    "resultIndices" : [ 29, 55, 72 ]
+  }, {
+    "query" : "any STD?",
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 39, 69, 71, 110 ]
+  }, {
+    "query" : "any allergies?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 4, 53 ]
+  }, {
+    "query" : "any blood problems?",
+    "expectedMinRecords" : 3,
+    "resultIndices" : [ 29, 55, 72 ]
+  }, {
+    "query" : "any cancer?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 11, 88 ]
+  }, {
+    "query" : "any conditions",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 7, 54 ]
+  }, {
+    "query" : "any conditions?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 7, 54 ]
+  }, {
+    "query" : "any cough?",
+    "expectedMinRecords" : 1,
+    "resultIndices" : [ 50 ]
+  }, {
+    "query" : "any episodes?",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "any fracture?",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "any history of cancer?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 11, 88 ]
+  }, {
+    "query" : "any infections?",
+    "expectedMinRecords" : 13,
+    "resultIndices" : [ 7, 21, 39, 51, 52, 61, 66, 69, 71, 90, 110, 118, 122 ]
+  }, {
+    "query" : "any known conditions?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 7, 54 ]
+  }, {
+    "query" : "any prescriptions?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 0, 1 ]
+  }, {
+    "query" : "any sexually transmitted disease?",
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 39, 69, 71, 110 ]
+  }, {
+    "query" : "any sexually transmitted diseases?",
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 39, 69, 71, 110 ]
+  }, {
+    "query" : "azithromycin",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 0, 1 ]
+  }, {
+    "query" : "blood pressure and pulse",
+    "expectedMinRecords" : 35,
+    "resultIndices" : [ 16, 22, 23, 24, 31, 36, 43, 47, 48, 58, 60, 64, 73, 74, 75, 81, 82, 93, 94, 95, 100, 102, 107, 111, 112, 126, 128, 129, 130, 137, 138, 144, 147, 148, 149 ]
+  }, {
+    "query" : "blood sugar",
+    "expectedMinRecords" : 3,
+    "resultIndices" : [ 49, 67, 146 ]
+  }, {
+    "query" : "bowel disease",
+    "expectedMinRecords" : 5,
+    "resultIndices" : [ 40, 51, 68, 90, 118 ]
+  }, {
+    "query" : "breathing problems",
+    "expectedMinRecords" : 15,
+    "resultIndices" : [ 15, 28, 32, 44, 65, 80, 84, 98, 104, 109, 117, 125, 133, 136, 152 ]
+  }, {
+    "query" : "can you tell me about the patient's respiratory symptoms and oxygen levels",
+    "expectedMinRecords" : 25,
+    "resultIndices" : [ 15, 28, 32, 34, 44, 45, 59, 65, 79, 80, 83, 84, 98, 103, 104, 108, 109, 116, 117, 125, 133, 136, 145, 151, 152 ]
+  }, {
+    "query" : "cancer",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 11, 88 ]
+  }, {
+    "query" : "cardiovascular disease",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 54, 92 ]
+  }, {
+    "query" : "cardiovascular risk factors",
+    "expectedMinRecords" : 11,
+    "resultIndices" : [ 31, 54, 64, 81, 92, 94, 102, 107, 129, 137, 144 ]
+  }, {
+    "query" : "cholesterol",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "dental problems",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 89, 141 ]
+  }, {
+    "query" : "depression",
+    "expectedMinRecords" : 8,
+    "resultIndices" : [ 19, 35, 41, 56, 91, 106, 120, 123 ]
+  }, {
+    "query" : "diabetes",
+    "expectedMinRecords" : 3,
+    "resultIndices" : [ 49, 67, 146 ]
+  }, {
+    "query" : "disease problem",
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 56, 70, 91, 119 ]
+  }, {
+    "query" : "disease treatment",
+    "expectedMinRecords" : 6,
+    "resultIndices" : [ 41, 56, 70, 91, 119, 120 ]
+  }, {
+    "query" : "does he have cancer?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 11, 88 ]
+  }, {
+    "query" : "does she have any blood problem?",
+    "expectedMinRecords" : 3,
+    "resultIndices" : [ 29, 55, 72 ]
+  }, {
+    "query" : "does the patient have any allergies",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 4, 53 ]
+  }, {
+    "query" : "does the patient have any allergies?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 4, 53 ]
+  }, {
+    "query" : "does the patient have cancer?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 11, 88 ]
+  }, {
+    "query" : "ever been immunized?",
+    "expectedMinRecords" : 1,
+    "resultIndices" : [ 3 ]
+  }, {
+    "query" : "ever got pregnant?",
+    "expectedMinRecords" : 1,
+    "resultIndices" : [ 4 ]
+  }, {
+    "query" : "fever",
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 25, 70, 113, 119 ]
+  }, {
+    "query" : "fracture",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "hair loss",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "has this patient ever been diagnosed with any sexually transmitted infections",
+    "expectedMinRecords" : 9,
+    "resultIndices" : [ 21, 39, 51, 52, 61, 66, 69, 71, 110 ]
+  }, {
+    "query" : "has this patient had a sexually transmitted disease?",
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 39, 69, 71, 110 ]
+  }, {
+    "query" : "headache",
+    "expectedMinRecords" : 1,
+    "resultIndices" : [ 99 ]
+  }, {
+    "query" : "how hot is the patient?",
+    "expectedMinRecords" : 11,
+    "resultIndices" : [ 17, 25, 38, 76, 89, 96, 113, 131, 141, 143, 150 ]
+  }, {
+    "query" : "immunization",
+    "expectedMinRecords" : 1,
+    "resultIndices" : [ 3 ]
+  }, {
+    "query" : "is the patient anemic?",
+    "expectedMinRecords" : 3,
+    "resultIndices" : [ 29, 55, 72 ]
+  }, {
+    "query" : "is the patient enrolled in any programs?",
+    "expectedMinRecords" : 1,
+    "resultIndices" : [ 2 ]
+  }, {
+    "query" : "is the patient immunocompromised?",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "is the patient on any medications?",
+    "expectedMinRecords" : 3,
+    "resultIndices" : [ 0, 1, 9 ]
+  }, {
+    "query" : "is the patient tired?",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "kidney function",
+    "expectedMinRecords" : 3,
+    "resultIndices" : [ 51, 90, 118 ]
+  }, {
+    "query" : "kidney problems",
+    "expectedMinRecords" : 3,
+    "resultIndices" : [ 51, 90, 118 ]
+  }, {
+    "query" : "latest vital signs",
+    "expectedMinRecords" : 26,
+    "resultIndices" : [ 15, 16, 24, 28, 32, 43, 44, 60, 65, 75, 80, 82, 84, 95, 98, 100, 104, 109, 112, 117, 125, 130, 133, 136, 149, 152 ]
+  }, {
+    "query" : "list all allergies",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 4, 53 ]
+  }, {
+    "query" : "liver problems",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "mental health",
+    "expectedMinRecords" : 7,
+    "resultIndices" : [ 35, 41, 56, 91, 106, 120, 123 ]
+  }, {
+    "query" : "musculoskeletal injuries",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "nutritional status",
+    "expectedMinRecords" : 7,
+    "resultIndices" : [ 18, 26, 33, 63, 77, 101, 114 ]
+  }, {
+    "query" : "opportunistic infections in HIV",
+    "expectedMinRecords" : 6,
+    "resultIndices" : [ 7, 39, 52, 69, 71, 110 ]
+  }, {
+    "query" : "oxygen saturation",
+    "expectedMinRecords" : 10,
+    "resultIndices" : [ 34, 45, 59, 79, 83, 103, 108, 116, 145, 151 ]
+  }, {
+    "query" : "patient denies chest pain",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "pregnancy-related concerns",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "pulse rate",
+    "expectedMinRecords" : 11,
+    "resultIndices" : [ 16, 24, 43, 60, 75, 82, 95, 100, 112, 130, 149 ]
+  }, {
+    "query" : "recent temperature readings",
+    "expectedMinRecords" : 9,
+    "resultIndices" : [ 17, 25, 38, 76, 96, 113, 131, 143, 150 ]
+  }, {
+    "query" : "signs of infection or inflammation",
+    "expectedMinRecords" : 6,
+    "resultIndices" : [ 62, 70, 90, 118, 119, 122 ]
+  }, {
+    "query" : "skin rash",
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 61, 70, 119, 122 ]
+  }, {
+    "query" : "stroke",
+    "expectedMinRecords" : 1,
+    "resultIndices" : [ 99 ]
+  }, {
+    "query" : "substance abuse",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 56, 91 ]
+  }, {
+    "query" : "vital signs",
+    "expectedMinRecords" : 26,
+    "resultIndices" : [ 15, 16, 24, 28, 32, 43, 44, 60, 65, 75, 80, 82, 84, 95, 98, 100, 104, 109, 112, 117, 125, 130, 133, 136, 149, 152 ]
+  }, {
+    "query" : "wasting",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  }, {
+    "query" : "what are the most recent two heart rates?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 16, 24 ]
+  }, {
+    "query" : "what chronic conditions has this patient been diagnosed with over the years",
+    "expectedMinRecords" : 3,
+    "resultIndices" : [ 13, 42, 121 ]
+  }, {
+    "query" : "what is the current cd4 count and when was it recorded?",
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 8, 85 ]
+  }, {
+    "query" : "what is the latest heart rate?",
+    "expectedMinRecords" : 1,
+    "resultIndices" : [ 16 ]
+  }, {
+    "query" : "what is the latest weight?",
+    "expectedMinRecords" : 1,
+    "resultIndices" : [ 18 ]
+  }, {
+    "query" : "what is the patient being treated for?",
+    "expectedMinRecords" : 6,
+    "resultIndices" : [ 41, 56, 70, 91, 119, 120 ]
+  }, {
+    "query" : "what medications is the patient on?",
+    "expectedMinRecords" : 3,
+    "resultIndices" : [ 0, 1, 9 ]
+  }, {
+    "query" : "what tests have been ordered for this patient",
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
+  } ]
+}
