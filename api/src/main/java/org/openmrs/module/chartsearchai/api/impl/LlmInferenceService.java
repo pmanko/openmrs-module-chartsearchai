@@ -3378,6 +3378,24 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
+		// 4. Shared-prefix match for long compound medical terms:
+		// "immunocompromised" and "immunodeficiency" share the root
+		// "immuno" but diverge after that — no simple stemmer catches
+		// this. For terms AND text words both >= 12 characters, match
+		// if they share a prefix of >= 6 characters. The length
+		// constraints prevent false positives on short common words
+		// (e.g. "immunization" at 12 chars wouldn't false-match
+		// because its prefix "immuni" differs from "immuno").
+		if (term.length() >= 12) {
+			String termPrefix = term.substring(0, 6);
+			for (String word : textWords) {
+				String clean = word.replaceAll("[^a-z0-9]+$", "");
+				if (clean.length() >= 12 && clean.startsWith(termPrefix)) {
+					return true;
+				}
+			}
+		}
+
 		return false;
 	}
 
