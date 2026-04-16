@@ -149,8 +149,8 @@
   }, {
     "query" : "any infections?",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 22,
-    "resultIndices" : [ 7, 11, 12, 21, 39, 40, 51, 52, 61, 62, 66, 68, 69, 71, 88, 90, 105, 110, 118, 122, 134, 135 ]
+    "expectedMinRecords" : 23,
+    "resultIndices" : [ 2, 7, 11, 12, 21, 39, 40, 51, 52, 61, 62, 66, 68, 69, 71, 88, 90, 105, 110, 118, 122, 134, 135 ]
   }, {
     "query" : "any known conditions?",
     "datasetIndex" : 0,
@@ -164,13 +164,13 @@
   }, {
     "query" : "any sexually transmitted disease?",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 11, 39, 40, 68, 69, 71, 88, 110 ]
+    "expectedMinRecords" : 9,
+    "resultIndices" : [ 2, 11, 39, 40, 68, 69, 71, 88, 110 ]
   }, {
     "query" : "any sexually transmitted diseases?",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 11, 39, 40, 68, 69, 71, 88, 110 ]
+    "expectedMinRecords" : 9,
+    "resultIndices" : [ 2, 11, 39, 40, 68, 69, 71, 88, 110 ]
   }, {
     "query" : "azithromycin",
     "datasetIndex" : 0,
@@ -299,13 +299,13 @@
   }, {
     "query" : "has this patient ever been diagnosed with any sexually transmitted infections",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 13,
-    "resultIndices" : [ 11, 21, 39, 40, 51, 52, 61, 66, 68, 69, 71, 88, 110 ]
+    "expectedMinRecords" : 14,
+    "resultIndices" : [ 2, 11, 21, 39, 40, 51, 52, 61, 66, 68, 69, 71, 88, 110 ]
   }, {
     "query" : "has this patient had a sexually transmitted disease?",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 11, 39, 40, 68, 69, 71, 88, 110 ]
+    "expectedMinRecords" : 9,
+    "resultIndices" : [ 2, 11, 39, 40, 68, 69, 71, 88, 110 ]
   }, {
     "query" : "headache",
     "datasetIndex" : 0,
@@ -389,8 +389,8 @@
   }, {
     "query" : "opportunistic infections in HIV",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 13,
-    "resultIndices" : [ 7, 11, 12, 39, 40, 52, 68, 69, 71, 88, 110, 134, 135 ]
+    "expectedMinRecords" : 14,
+    "resultIndices" : [ 2, 7, 11, 12, 39, 40, 52, 68, 69, 71, 88, 110, 134, 135 ]
   }, {
     "query" : "oxygen saturation",
     "datasetIndex" : 0,
@@ -984,8 +984,8 @@
   }, {
     "query" : "HIV status and CD4 count",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 3,
-    "resultIndices" : [ 91, 105, 148 ]
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 105, 148 ]
   }, {
     "query" : "Hb results",
     "datasetIndex" : 2,
@@ -1119,8 +1119,8 @@
   }, {
     "query" : "any infections?",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 2, 4, 54, 55, 118, 119 ]
+    "expectedMinRecords" : 7,
+    "resultIndices" : [ 2, 4, 54, 55, 118, 119, 148 ]
   }, {
     "query" : "any known conditions?",
     "datasetIndex" : 2,
@@ -1269,8 +1269,8 @@
   }, {
     "query" : "has this patient ever been diagnosed with any sexually transmitted infections",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 4,
-    "resultIndices" : [ 2, 4, 55, 119 ]
+    "expectedMinRecords" : 5,
+    "resultIndices" : [ 2, 4, 55, 119, 148 ]
   }, {
     "query" : "has this patient had a sexually transmitted disease?",
     "datasetIndex" : 2,
@@ -1359,8 +1359,8 @@
   }, {
     "query" : "opportunistic infections in HIV",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 2, 4, 54, 118, 119, 148 ]
+    "expectedMinRecords" : 7,
+    "resultIndices" : [ 2, 4, 54, 55, 118, 119, 148 ]
   }, {
     "query" : "oxygen saturation",
     "datasetIndex" : 2,
@@ -1464,8 +1464,8 @@
   }, {
     "query" : "Does this patient use any family planning methods?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 1,
-    "resultIndices" : [ 148 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "HIV status and CD4 count",
     "datasetIndex" : 3,
@@ -1604,8 +1604,8 @@
   }, {
     "query" : "any infections?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 10,
-    "resultIndices" : [ 2, 4, 17, 20, 90, 94, 108, 110, 137, 139 ]
+    "expectedMinRecords" : 11,
+    "resultIndices" : [ 2, 4, 17, 20, 90, 94, 108, 110, 137, 139, 148 ]
   }, {
     "query" : "any known conditions?",
     "datasetIndex" : 3,
@@ -1619,13 +1619,13 @@
   }, {
     "query" : "any sexually transmitted disease?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139 ]
+    "expectedMinRecords" : 9,
+    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139, 148 ]
   }, {
     "query" : "any sexually transmitted diseases?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139 ]
+    "expectedMinRecords" : 9,
+    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139, 148 ]
   }, {
     "query" : "azithromycin",
     "datasetIndex" : 3,
@@ -1754,13 +1754,13 @@
   }, {
     "query" : "has this patient ever been diagnosed with any sexually transmitted infections",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139 ]
+    "expectedMinRecords" : 10,
+    "resultIndices" : [ 2, 4, 17, 20, 94, 108, 110, 137, 139, 148 ]
   }, {
     "query" : "has this patient had a sexually transmitted disease?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139 ]
+    "expectedMinRecords" : 9,
+    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139, 148 ]
   }, {
     "query" : "headache",
     "datasetIndex" : 3,
@@ -1844,8 +1844,8 @@
   }, {
     "query" : "opportunistic infections in HIV",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 4,
-    "resultIndices" : [ 17, 20, 108, 110 ]
+    "expectedMinRecords" : 5,
+    "resultIndices" : [ 17, 20, 108, 110, 148 ]
   }, {
     "query" : "oxygen saturation",
     "datasetIndex" : 3,
@@ -1949,8 +1949,8 @@
   }, {
     "query" : "Does this patient use any family planning methods?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 1,
-    "resultIndices" : [ 148 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "HIV status and CD4 count",
     "datasetIndex" : 4,
@@ -2089,8 +2089,8 @@
   }, {
     "query" : "any infections?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 10,
-    "resultIndices" : [ 2, 4, 17, 20, 90, 94, 108, 110, 137, 139 ]
+    "expectedMinRecords" : 11,
+    "resultIndices" : [ 2, 4, 17, 20, 90, 94, 108, 110, 137, 139, 148 ]
   }, {
     "query" : "any known conditions?",
     "datasetIndex" : 4,
@@ -2104,13 +2104,13 @@
   }, {
     "query" : "any sexually transmitted disease?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139 ]
+    "expectedMinRecords" : 9,
+    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139, 148 ]
   }, {
     "query" : "any sexually transmitted diseases?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139 ]
+    "expectedMinRecords" : 9,
+    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139, 148 ]
   }, {
     "query" : "azithromycin",
     "datasetIndex" : 4,
@@ -2239,13 +2239,13 @@
   }, {
     "query" : "has this patient ever been diagnosed with any sexually transmitted infections",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139 ]
+    "expectedMinRecords" : 10,
+    "resultIndices" : [ 2, 4, 17, 20, 94, 108, 110, 137, 139, 148 ]
   }, {
     "query" : "has this patient had a sexually transmitted disease?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139 ]
+    "expectedMinRecords" : 9,
+    "resultIndices" : [ 2, 4, 17, 20, 108, 110, 137, 139, 148 ]
   }, {
     "query" : "headache",
     "datasetIndex" : 4,

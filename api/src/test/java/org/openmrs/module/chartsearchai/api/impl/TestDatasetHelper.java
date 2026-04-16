@@ -904,6 +904,8 @@ final class TestDatasetHelper {
 		m.put(122, Arrays.asList("Infectious disease")); // Skin Infection assessment
 		m.put(134, Arrays.asList("Infectious disease", "Opportunistic infectious disease")); // TB assessment
 		m.put(135, Arrays.asList("Infectious disease", "Opportunistic infectious disease")); // TB assessment
+		// Program enrollments
+		m.put(2,   Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // PMTCT
 		FULL_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
 
 		// SECOND_PATIENT_DATASET
@@ -926,6 +928,7 @@ final class TestDatasetHelper {
 		m.put(55,  Arrays.asList("Infectious disease")); // Malaria diag
 		m.put(118, Arrays.asList("Infectious disease")); // Pneumonia
 		m.put(119, Arrays.asList("Infectious disease")); // Pneumonia diag
+		m.put(148, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // PMTCT
 		THIRD_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
 
 		// FOURTH_PATIENT_DATASET
@@ -940,6 +943,7 @@ final class TestDatasetHelper {
 		m.put(110, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // HIV diag
 		m.put(137, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Gonococcal
 		m.put(139, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Gonococcal diag
+		m.put(148, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // PMTCT
 		FOURTH_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
 
 		// FIFTH_PATIENT_DATASET (same structure as FOURTH)
@@ -954,6 +958,7 @@ final class TestDatasetHelper {
 		m.put(110, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // HIV diag
 		m.put(137, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Gonococcal
 		m.put(139, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Gonococcal diag
+		m.put(148, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // PMTCT
 		FIFTH_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
 	}
 }

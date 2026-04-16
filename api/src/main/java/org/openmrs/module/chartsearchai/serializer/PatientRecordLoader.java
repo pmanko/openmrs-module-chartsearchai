@@ -147,7 +147,11 @@ public class PatientRecordLoader {
 				.getPatientPrograms(patient, null, null, null, null, null, false)) {
 			String text = programSerializer.toText(pp);
 			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_PROGRAM, pp.getPatientProgramId(), seenKeys)) {
-				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_PROGRAM, pp.getPatientProgramId(), text, pp.getDateEnrolled()));
+				List<String> hints = pp.getProgram() != null
+						? ChartSearchAiUtils.extractCategoryHints(pp.getProgram().getConcept())
+						: Collections.<String>emptyList();
+				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_PROGRAM,
+						pp.getPatientProgramId(), text, pp.getDateEnrolled(), hints));
 			}
 		}
 
