@@ -216,8 +216,61 @@ public class ElasticsearchKnnFallbackTest {
 		float[] queryVector = embedQuery(question);
 		List<ElasticsearchSearchResult> results = search(question, topK);
 		String normalizedQuery = LlmInferenceService.stripQueryStopwords(question);
-		return LlmInferenceService.filterEsResults(
-				results, queryVector, normalizedQuery);
+
+		// Mirror the production ES path: run the full embedding pipeline
+		// on ALL patient embeddings (not just the ES-returned subset) so
+		// filterPipeline sees the full score distribution for gap detection.
+		List<ElasticsearchSearchResult> all =
+				indexer.fetchAllPatientEmbeddings(TEST_PATIENT_ID);
+		// Strip structural prefix from ES-stored text to avoid double-
+		// prefixing when findSimilar calls buildPrefixedText internally.
+		java.util.Set<String> prefixes =
+				org.openmrs.module.chartsearchai.ChartSearchAiUtils.getAllEmbeddingPrefixes();
+		List<org.openmrs.module.chartsearchai.model.ChartEmbedding> allEmbeddings =
+				new java.util.ArrayList<org.openmrs.module.chartsearchai.model.ChartEmbedding>();
+		for (ElasticsearchSearchResult r : all) {
+			if (r.getEmbedding() == null) continue;
+			org.openmrs.module.chartsearchai.model.ChartEmbedding ce =
+					new org.openmrs.module.chartsearchai.model.ChartEmbedding();
+			ce.setResourceType(r.getResourceType());
+			ce.setResourceId(r.getResourceId());
+			ce.setEmbeddingVector(r.getEmbedding());
+			String text = r.getText();
+			if (text != null) {
+				for (String pfx : prefixes) {
+					if (text.startsWith(pfx)) {
+						text = text.substring(pfx.length());
+						break;
+					}
+				}
+			}
+			ce.setTextContent(text);
+			allEmbeddings.add(ce);
+		}
+
+		// Full-corpus pipeline (same as embedding path)
+		java.util.Set<String> pipelineKeys = new java.util.HashSet<String>();
+		List<org.openmrs.module.chartsearchai.model.ChartEmbedding> pipelineFiltered =
+				LlmInferenceService.findSimilar(allEmbeddings, provider,
+						question, topK,
+						ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
+						LlmInferenceService.PipelineConfig.defaults());
+		if (pipelineFiltered != null) {
+			for (org.openmrs.module.chartsearchai.model.ChartEmbedding ce : pipelineFiltered) {
+				pipelineKeys.add(org.openmrs.module.chartsearchai.ChartSearchAiUtils
+						.resourceKey(ce.getResourceType(), ce.getResourceId()));
+			}
+		}
+
+		// Return the original ES results whose keys survived the pipeline
+		List<ElasticsearchSearchResult> out = new java.util.ArrayList<ElasticsearchSearchResult>();
+		for (ElasticsearchSearchResult r : results) {
+			if (pipelineKeys.contains(org.openmrs.module.chartsearchai.ChartSearchAiUtils
+					.resourceKey(r.getResourceType(), r.getResourceId()))) {
+				out.add(r);
+			}
+		}
+		return out;
 	}
 
 	private static List<Integer> sortedIds(List<ElasticsearchSearchResult> results) {

@@ -419,35 +419,57 @@ public class LlmInferenceService implements ChartSearchService {
 			return buildChartWithEmbeddings(patient, question);
 		}
 
-		List<ElasticsearchIndexer.ElasticsearchSearchResult> results =
+		// ES search: RRF combines BM25 keyword matches with kNN semantic
+		// matches. Used to identify candidates that may have keyword signal
+		// the pure-embedding path would miss (e.g. "allergy" → "Patient
+		// allergy:" via BM25).
+		List<ElasticsearchIndexer.ElasticsearchSearchResult> esResults =
 				elasticsearchIndexer.search(patient, normalizedQuery, queryVector,
 						getTopK() * ChartSearchAiConstants.ES_FETCH_MULTIPLIER);
 
-		if (results.isEmpty()) {
-			log.debug("Elasticsearch returned no results for query '{}', returning empty chart",
+		// Run the FULL embedding filter pipeline on all patient embeddings —
+		// not just the ES-returned subset. filterPipeline uses adaptive
+		// gap-based filtering that needs the full score distribution to
+		// distinguish signal from noise. Running it on the pre-filtered ES
+		// subset produces a compressed distribution where even relevant
+		// records (e.g. Kaposi for "cancer?") can't be separated from noise.
+		List<ElasticsearchIndexer.ElasticsearchSearchResult> allEsEmbeddings =
+				elasticsearchIndexer.fetchAllPatientEmbeddings(patient.getPatientId());
+		List<ChartEmbedding> allEmbeddings = esResultsToChartEmbeddings(allEsEmbeddings);
+
+		List<ChartEmbedding> pipelineFiltered = null;
+		if (!allEmbeddings.isEmpty()) {
+			pipelineFiltered = findSimilar(allEmbeddings, embeddingProvider,
+					question, getTopK(), getQueryPrefix(),
+					new PipelineConfig(getKeywordWeight(),
+							getScoreGapMultiplier(), getMinScoreGap(),
+							getGapValidationCosineThreshold(),
+							getSimilarityRatio(),
+							ModelNoiseProfile.conservativeDefault()));
+		}
+
+		// Use only the pipeline-filtered records — the full-corpus
+		// findSimilar already includes keyword scoring, so BM25-only
+		// matches from ES are also captured. The old filterEsResults
+		// (conservative default) is no longer in the union because its
+		// loose thresholds let through off-topic kNN matches (e.g. BP
+		// records for a "cd4 count" query).
+		Set<String> relevantKeys = new HashSet<String>();
+		if (pipelineFiltered != null) {
+			for (ChartEmbedding ce : pipelineFiltered) {
+				relevantKeys.add(ChartSearchAiUtils.resourceKey(
+						ce.getResourceType(), ce.getResourceId()));
+			}
+		}
+
+		if (relevantKeys.isEmpty()) {
+			log.debug("Elasticsearch: no records survived filtering for query '{}'",
 					normalizedQuery);
 			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
 
-		// Run ES results through the same filter pipeline as the embedding
-		// pipeline to remove noise — RRF always returns up to maxResults
-		// from the kNN side even when most are irrelevant.
-		List<ElasticsearchIndexer.ElasticsearchSearchResult> filtered =
-				filterEsResults(results, queryVector, normalizedQuery);
-
-		if (filtered.isEmpty()) {
-			log.debug("Elasticsearch: all {} results filtered out for query '{}'",
-					results.size(), normalizedQuery);
-			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
-		}
-
-		Set<String> relevantKeys = new HashSet<String>();
-		for (ElasticsearchIndexer.ElasticsearchSearchResult result : filtered) {
-			relevantKeys.add(ChartSearchAiUtils.resourceKey(result.getResourceType(), result.getResourceId()));
-		}
-
-		log.debug("Elasticsearch returned {} results ({} after filter pipeline) for query '{}': {}",
-				results.size(), relevantKeys.size(), normalizedQuery, relevantKeys);
+		log.debug("Elasticsearch returned {} ES results, {} after full pipeline for query '{}': {}",
+				esResults.size(), relevantKeys.size(), normalizedQuery, relevantKeys);
 
 		return filterAndSerialize(patient, question, relevantKeys);
 	}
@@ -463,6 +485,43 @@ public class LlmInferenceService implements ChartSearchService {
 	 * @param normalizedQuery the query after stopword removal (pre-computed
 	 *        by the caller to avoid redundant processing)
 	 */
+	/**
+	 * Converts ES search results to {@link ChartEmbedding} objects for use
+	 * with the embedding pipeline's {@link #findSimilar} method. The ES
+	 * index stores the PREFIXED text ({@code "Clinical observation: ..."})
+	 * but {@code findSimilar} re-prefixes via {@code buildPrefixedText},
+	 * so we must strip the structural prefix here to avoid double-prefixing
+	 * that corrupts keyword scoring and concept-name extraction.
+	 */
+	private static List<ChartEmbedding> esResultsToChartEmbeddings(
+			List<ElasticsearchIndexer.ElasticsearchSearchResult> esResults) {
+		Set<String> prefixes = ChartSearchAiUtils.getAllEmbeddingPrefixes();
+		List<ChartEmbedding> out = new ArrayList<ChartEmbedding>(esResults.size());
+		for (ElasticsearchIndexer.ElasticsearchSearchResult r : esResults) {
+			if (r.getEmbedding() == null) {
+				continue;
+			}
+			ChartEmbedding ce = new ChartEmbedding();
+			ce.setResourceType(r.getResourceType());
+			ce.setResourceId(r.getResourceId());
+			ce.setEmbeddingVector(r.getEmbedding());
+			// Strip the structural prefix that ES stores so findSimilar
+			// doesn't double-prefix when calling buildPrefixedText.
+			String text = r.getText();
+			if (text != null) {
+				for (String pfx : prefixes) {
+					if (text.startsWith(pfx)) {
+						text = text.substring(pfx.length());
+						break;
+					}
+				}
+			}
+			ce.setTextContent(text);
+			out.add(ce);
+		}
+		return out;
+	}
+
 	static List<ElasticsearchIndexer.ElasticsearchSearchResult> filterEsResults(
 			List<ElasticsearchIndexer.ElasticsearchSearchResult> results,
 			float[] queryVector, String normalizedQuery) {

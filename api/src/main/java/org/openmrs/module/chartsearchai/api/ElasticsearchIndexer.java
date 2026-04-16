@@ -534,6 +534,67 @@ public class ElasticsearchIndexer implements Closeable {
 	 * @param maxResults maximum number of results to return
 	 * @return matching results with resource type, ID, and RRF score
 	 */
+	/**
+	 * Fetches every indexed embedding for a patient so callers can run the
+	 * full-corpus filter pipeline (same as the embedding retrieval path).
+	 * Without full-corpus scores, the adaptive gap-based filtering in
+	 * {@code filterPipeline} sees a compressed score distribution from the
+	 * RRF pre-filtered subset and cannot reliably separate signal from
+	 * noise.
+	 *
+	 * @param patientId the patient whose embeddings to fetch
+	 * @return list of results with embedding vectors and text, or empty on
+	 *         failure
+	 */
+	public List<ElasticsearchSearchResult> fetchAllPatientEmbeddings(int patientId) {
+		List<ElasticsearchSearchResult> out = new ArrayList<ElasticsearchSearchResult>();
+		RestClient c = getClient();
+		if (c == null) {
+			return out;
+		}
+		try {
+			ObjectNode body = mapper.createObjectNode();
+			body.put("size", 10000);
+			ArrayNode source = body.putArray("_source");
+			source.add(FIELD_RESOURCE_TYPE);
+			source.add(FIELD_RESOURCE_ID);
+			source.add(FIELD_EMBEDDING);
+			source.add(FIELD_TEXT);
+			body.putObject("query").putObject("term")
+					.put(FIELD_PATIENT_ID, patientId);
+
+			Request req = new Request("POST", "/" + indexName + "/_search");
+			req.setJsonEntity(mapper.writeValueAsString(body));
+			Response response = c.performRequest(req);
+			JsonNode responseJson = mapper.readTree(
+					EntityUtils.toString(response.getEntity()));
+			for (JsonNode hit : responseJson.path("hits").path("hits")) {
+				JsonNode src = hit.path("_source");
+				if (!src.has(FIELD_RESOURCE_TYPE) || !src.has(FIELD_RESOURCE_ID)) {
+					continue;
+				}
+				float[] embedding = null;
+				JsonNode embNode = src.path(FIELD_EMBEDDING);
+				if (embNode.isArray() && embNode.size() > 0) {
+					embedding = new float[embNode.size()];
+					for (int i = 0; i < embNode.size(); i++) {
+						embedding[i] = (float) embNode.get(i).doubleValue();
+					}
+				}
+				String text = src.has(FIELD_TEXT) ? src.get(FIELD_TEXT).asText() : null;
+				out.add(new ElasticsearchSearchResult(
+						src.get(FIELD_RESOURCE_TYPE).asText(),
+						src.get(FIELD_RESOURCE_ID).asInt(),
+						0f, embedding, text));
+			}
+		}
+		catch (Exception e) {
+			log.error("Elasticsearch: fetchAllPatientEmbeddings failed for "
+					+ "patient [id={}]", patientId, e);
+		}
+		return out;
+	}
+
 	public List<ElasticsearchSearchResult> search(Patient patient, String queryText,
 			float[] queryVector, int maxResults) {
 		List<ElasticsearchSearchResult> results = new ArrayList<ElasticsearchSearchResult>();
