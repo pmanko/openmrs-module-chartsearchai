@@ -907,6 +907,20 @@ public class LlmInferenceServiceTest {
 
 	private static List<Integer> runRealModelPipeline(String query, int topK,
 			String[] dataset, LlmInferenceService.PipelineConfig config) {
+		return runRealModelPipeline(query, topK, dataset, config, null);
+	}
+
+	/**
+	 * Runs the full production pipeline with optional concept-set category
+	 * hints on specific records. When {@code categoryHintsMap} is non-null,
+	 * records whose 0-based index appears in the map are constructed with
+	 * the corresponding hints — same as production's
+	 * {@code PatientRecordLoader.loadAll()} does after
+	 * {@code extractCategoryHints()} returns concept-set names.
+	 */
+	private static List<Integer> runRealModelPipeline(String query, int topK,
+			String[] dataset, LlmInferenceService.PipelineConfig config,
+			Map<Integer, List<String>> categoryHintsMap) {
 		org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider provider =
 				new org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider(
 						MODEL_PATH, VOCAB_PATH);
@@ -917,8 +931,11 @@ public class LlmInferenceServiceTest {
 			for (int i = 0; i < dataset.length; i++) {
 				String resourceType = TestDatasetHelper.inferResourceType(dataset[i]);
 				String textContent = TestDatasetHelper.stripDatasetPrefixAndDate(dataset[i]);
+				List<String> hints = categoryHintsMap != null
+						? categoryHintsMap.getOrDefault(i, Collections.<String>emptyList())
+						: Collections.<String>emptyList();
 				records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
-						resourceType, i, textContent, null));
+						resourceType, i, textContent, null, hints));
 			}
 			List<ChartEmbedding> allEmbeddings =
 					org.openmrs.module.chartsearchai.api.EmbeddingIndexer.buildEmbeddings(
@@ -4499,4 +4516,193 @@ public class LlmInferenceServiceTest {
 				"'the most recent two heart rates' should return the 2 most recent Pulse records");
 	}
 
+	// ---- Cross-query regression tests with concept-set category hints ----
+	//
+	// These tests validate that enriching Condition and Diagnosis records
+	// with concept-set category hints (e.g. "Sexually transmitted disease"
+	// for HIV conditions) improves category-name queries WITHOUT regressing
+	// previously-working queries. The hints simulate what production's
+	// PatientRecordLoader.loadAll() produces when the OpenMRS Concept
+	// dictionary has concept_set memberships for clinical categories.
+	//
+	// The CATEGORY_HINTS map below represents a dictionary where:
+	//   - HIV is in sets: Sexually transmitted disease, Infectious disease,
+	//     Opportunistic infectious disease
+	//   - Tuberculosis is in: Infectious disease, Opportunistic infectious disease
+	//   - Hypertension is in: Cardiovascular disease
+	//   - Gastroenteritis, UTI, Skin Infection, Malaria are in: Infectious disease
+	//
+	// FULL_PATIENT_DATASET record indices (0-based):
+	//   7  = Condition: Tuberculosis
+	//  21  = Diagnosis: Gastroenteritis
+	//  39  = Diagnosis: HIV Disease
+	//  51  = Diagnosis: Urinary Tract Infection
+	//  52  = Diagnosis: Tuberculosis
+	//  54  = Condition: Hypertension
+	//  61  = Diagnosis: Skin Infection
+	//  66  = Diagnosis: Malaria
+	//  69  = Diagnosis: HIV Disease
+	//  71  = Diagnosis: HIV Disease
+	//  92  = Diagnosis: Hypertension
+	// 110  = Diagnosis: HIV Disease
+
+	private static final Map<Integer, List<String>> CATEGORY_HINTS;
+
+	static {
+		Map<Integer, List<String>> m = new HashMap<Integer, List<String>>();
+		m.put(7,   Arrays.asList("Infectious disease", "Opportunistic infectious disease"));
+		m.put(21,  Arrays.asList("Infectious disease"));
+		m.put(39,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
+		m.put(51,  Arrays.asList("Infectious disease"));
+		m.put(52,  Arrays.asList("Infectious disease", "Opportunistic infectious disease"));
+		m.put(54,  Arrays.asList("Cardiovascular disease"));
+		m.put(61,  Arrays.asList("Infectious disease"));
+		m.put(66,  Arrays.asList("Infectious disease"));
+		m.put(69,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
+		m.put(71,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
+		m.put(92,  Arrays.asList("Cardiovascular disease"));
+		m.put(110, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
+		CATEGORY_HINTS = Collections.unmodifiableMap(m);
+	}
+
+	private static List<Integer> runEnrichedPipeline(String query, int topK) {
+		return runRealModelPipeline(query, topK, FULL_PATIENT_DATASET,
+				LlmInferenceService.PipelineConfig.defaults(), CATEGORY_HINTS);
+	}
+
+	// --- Regression guards: these queries work WITHOUT hints and must
+	//     continue working WITH hints. A failure here means enrichment
+	//     broke a previously-working query (cross-query regression). ---
+
+	@Test
+	public void enriched_conditions_shouldStillReturnAllConditions() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model not found at " + MODEL_PATH);
+
+		// "any conditions?" returns TB (7) and Hypertension (54) without hints.
+		// With hints, these conditions get enriched text but the query
+		// "any conditions?" should still find them — enrichment must not
+		// shift the score distribution enough to drop them.
+		List<Integer> result = runEnrichedPipeline("any conditions?", 100);
+		assertFalse(result.isEmpty(),
+				"Enriched conditions query should still return condition records");
+		assertTrue(result.contains(7),
+				"Should still include Tuberculosis condition (index 7)");
+		assertTrue(result.contains(54),
+				"Should still include Hypertension condition (index 54)");
+	}
+
+	@Test
+	public void enriched_cancer_shouldStillReturnKaposiSarcoma() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model not found at " + MODEL_PATH);
+
+		// Kaposi sarcoma records (obs 11, 88) have no category hints
+		// (they are Obs, not Conditions). Enriching other records must
+		// not push Kaposi below the noise floor.
+		List<Integer> result = runEnrichedPipeline("any cancer?", 100);
+		assertTrue(result.contains(11) || result.contains(88),
+				"Should still include Kaposi sarcoma records");
+	}
+
+	@Test
+	public void enriched_allergies_shouldStillReturnAllergyRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model not found at " + MODEL_PATH);
+
+		// Allergy record (index 4) has no category hints. Must survive.
+		List<Integer> result = runEnrichedPipeline("allergies", 100);
+		assertTrue(result.contains(4),
+				"Should still include Beef allergy record (index 4)");
+	}
+
+	@Test
+	public void enriched_vitalSigns_shouldBeUnchanged() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model not found at " + MODEL_PATH);
+
+		// Vital signs already have "Vital signs" hints from the Obs path.
+		// Adding Condition/Diagnosis hints must not change vital signs results.
+		List<Integer> withHints = runEnrichedPipeline("vital signs", 100);
+		List<Integer> withoutHints = runRealModelPipeline("vital signs", 100);
+		assertEquals(withoutHints, withHints,
+				"Vital signs should be identical with and without "
+				+ "Condition/Diagnosis hints");
+	}
+
+	// --- Improvement assertions: these queries fail or return partial
+	//     results WITHOUT hints. With dictionary-curated concept-set
+	//     hints, they should return the expected clinical records. ---
+
+	@Test
+	public void enriched_std_shouldReturnHivRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "any STD?" should now find HIV records because they carry
+		// "Sexually transmitted disease" in their enriched text.
+		List<Integer> result = runEnrichedPipeline("any STD?", 100);
+		assertFalse(result.isEmpty(),
+				"FULL dataset has HIV records categorized as STD");
+		boolean hasHiv = false;
+		for (int idx : result) {
+			if (FULL_PATIENT_DATASET[idx].contains("HIV")) {
+				hasHiv = true;
+				break;
+			}
+		}
+		assertTrue(hasHiv,
+				"Should include HIV records via STD category hint");
+	}
+
+	@Test
+	public void enriched_infections_shouldReturnAllInfectionRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "any infections?" should now find HIV, TB, Gastroenteritis,
+		// UTI, Skin Infection, Malaria — all marked as Infectious disease.
+		List<Integer> result = runEnrichedPipeline("any infections?", 100);
+		assertTrue(result.contains(7) || result.contains(52),
+				"Should include Tuberculosis via Infectious disease hint");
+		assertTrue(result.contains(39) || result.contains(69)
+				|| result.contains(71) || result.contains(110),
+				"Should include HIV via Infectious disease hint");
+	}
+
+	@Test
+	public void enriched_cardiovascularRisk_shouldReturnCardiovascularRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "cardiovascular risk factors" should now find Hypertension
+		// records via the Cardiovascular disease hint.
+		List<Integer> result = runEnrichedPipeline(
+				"cardiovascular risk factors", 100);
+		assertFalse(result.isEmpty(),
+				"FULL dataset has Hypertension categorized as Cardiovascular disease");
+		assertTrue(result.contains(54) || result.contains(92),
+				"Should include Hypertension records via Cardiovascular disease hint");
+	}
+
+	@Test
+	public void enriched_opportunisticInfections_shouldReturnHivAndTb() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// "opportunistic infections in HIV" should now find both HIV AND TB
+		// records — both marked as Opportunistic infectious disease.
+		List<Integer> result = runEnrichedPipeline(
+				"opportunistic infections in HIV", 100);
+		boolean hasHiv = false, hasTb = false;
+		for (int idx : result) {
+			String rec = FULL_PATIENT_DATASET[idx];
+			if (rec.contains("HIV")) hasHiv = true;
+			if (rec.contains("Tuberculosis")) hasTb = true;
+		}
+		assertTrue(hasHiv,
+				"Should include HIV records via Opportunistic infectious disease hint");
+		assertTrue(hasTb,
+				"Should include Tuberculosis records via Opportunistic infectious disease hint");
+	}
 }
