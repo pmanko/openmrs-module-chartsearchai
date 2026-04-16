@@ -82,7 +82,17 @@ public class PatientRecordLoader {
 			String text = obsSerializer.toText(obs);
 			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_OBS, obs.getObsId(), seenKeys)) {
 				Date date = obs.getObsDatetime() != null ? obs.getObsDatetime() : obs.getDateCreated();
+				// Category hints from the Obs concept (e.g. Temperature
+				// → "Vital signs" set). If the Obs concept has no set
+				// membership, also check the value concept — assessment
+				// and diagnosis Obs reference a diagnosis concept via
+				// valueCoded (e.g. "Primary Diagnosis" obs with
+				// valueCoded = HIV Disease → "Sexually transmitted
+				// disease" set).
 				List<String> hints = ChartSearchAiUtils.extractCategoryHints(obs.getConcept());
+				if (hints.isEmpty() && obs.getValueCoded() != null) {
+					hints = ChartSearchAiUtils.extractCategoryHints(obs.getValueCoded());
+				}
 				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_OBS,
 						obs.getObsId(), text, date, hints));
 			}

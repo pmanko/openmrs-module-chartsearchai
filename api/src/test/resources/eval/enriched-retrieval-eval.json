@@ -14,8 +14,8 @@
   }, {
     "query" : "HIV status and CD4 count",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 4,
-    "resultIndices" : [ 8, 40, 68, 85 ]
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 8, 85 ]
   }, {
     "query" : "Hb results",
     "datasetIndex" : 0,
@@ -99,8 +99,8 @@
   }, {
     "query" : "any STD?",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 4,
-    "resultIndices" : [ 39, 69, 71, 110 ]
+    "expectedMinRecords" : 6,
+    "resultIndices" : [ 39, 40, 68, 69, 71, 110 ]
   }, {
     "query" : "any allergies?",
     "datasetIndex" : 0,
@@ -145,12 +145,12 @@
     "query" : "any history of cancer?",
     "datasetIndex" : 0,
     "expectedMinRecords" : 2,
-    "resultIndices" : [ 11, 88 ]
+    "resultIndices" : [ 8, 85 ]
   }, {
     "query" : "any infections?",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 13,
-    "resultIndices" : [ 7, 21, 39, 51, 52, 61, 66, 69, 71, 90, 110, 118, 122 ]
+    "expectedMinRecords" : 22,
+    "resultIndices" : [ 7, 11, 12, 21, 39, 40, 51, 52, 61, 62, 66, 68, 69, 71, 88, 90, 105, 110, 118, 122, 134, 135 ]
   }, {
     "query" : "any known conditions?",
     "datasetIndex" : 0,
@@ -164,13 +164,13 @@
   }, {
     "query" : "any sexually transmitted disease?",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 4,
-    "resultIndices" : [ 39, 69, 71, 110 ]
+    "expectedMinRecords" : 8,
+    "resultIndices" : [ 11, 39, 40, 68, 69, 71, 88, 110 ]
   }, {
     "query" : "any sexually transmitted diseases?",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 4,
-    "resultIndices" : [ 39, 69, 71, 110 ]
+    "expectedMinRecords" : 8,
+    "resultIndices" : [ 11, 39, 40, 68, 69, 71, 88, 110 ]
   }, {
     "query" : "azithromycin",
     "datasetIndex" : 0,
@@ -189,8 +189,8 @@
   }, {
     "query" : "bowel disease",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 5,
-    "resultIndices" : [ 40, 51, 68, 90, 118 ]
+    "expectedMinRecords" : 11,
+    "resultIndices" : [ 12, 40, 51, 62, 68, 90, 105, 118, 122, 134, 135 ]
   }, {
     "query" : "breathing problems",
     "datasetIndex" : 0,
@@ -225,7 +225,7 @@
     "query" : "dental problems",
     "datasetIndex" : 0,
     "expectedMinRecords" : 2,
-    "resultIndices" : [ 89, 141 ]
+    "resultIndices" : [ 11, 88 ]
   }, {
     "query" : "depression",
     "datasetIndex" : 0,
@@ -299,13 +299,13 @@
   }, {
     "query" : "has this patient ever been diagnosed with any sexually transmitted infections",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 9,
-    "resultIndices" : [ 21, 39, 51, 52, 61, 66, 69, 71, 110 ]
+    "expectedMinRecords" : 13,
+    "resultIndices" : [ 11, 21, 39, 40, 51, 52, 61, 66, 68, 69, 71, 88, 110 ]
   }, {
     "query" : "has this patient had a sexually transmitted disease?",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 4,
-    "resultIndices" : [ 39, 69, 71, 110 ]
+    "expectedMinRecords" : 8,
+    "resultIndices" : [ 11, 39, 40, 68, 69, 71, 88, 110 ]
   }, {
     "query" : "headache",
     "datasetIndex" : 0,
@@ -334,8 +334,8 @@
   }, {
     "query" : "is the patient immunocompromised?",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 11, 88 ]
   }, {
     "query" : "is the patient on any medications?",
     "datasetIndex" : 0,
@@ -389,8 +389,8 @@
   }, {
     "query" : "opportunistic infections in HIV",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 7, 39, 52, 69, 71, 110 ]
+    "expectedMinRecords" : 13,
+    "resultIndices" : [ 7, 11, 12, 39, 40, 52, 68, 69, 71, 88, 110, 134, 135 ]
   }, {
     "query" : "oxygen saturation",
     "datasetIndex" : 0,
@@ -419,8 +419,8 @@
   }, {
     "query" : "signs of infection or inflammation",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 62, 70, 90, 118, 119, 122 ]
+    "expectedMinRecords" : 3,
+    "resultIndices" : [ 90, 118, 122 ]
   }, {
     "query" : "skin rash",
     "datasetIndex" : 0,

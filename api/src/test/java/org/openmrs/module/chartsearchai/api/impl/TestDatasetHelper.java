@@ -879,7 +879,7 @@ final class TestDatasetHelper {
 	static {
 		Map<Integer, List<String>> m;
 
-		// FULL_PATIENT_DATASET
+		// FULL_PATIENT_DATASET — Conditions + Diagnoses
 		m = new HashMap<Integer, List<String>>();
 		m.put(7,   Arrays.asList("Infectious disease", "Opportunistic infectious disease"));
 		m.put(21,  Arrays.asList("Infectious disease"));
@@ -893,6 +893,17 @@ final class TestDatasetHelper {
 		m.put(71,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
 		m.put(92,  Arrays.asList("Cardiovascular disease"));
 		m.put(110, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
+		// Obs records that reference diagnosis concepts via valueCoded
+		m.put(11,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // Kaposi sarcoma obs
+		m.put(12,  Arrays.asList("Infectious disease", "Opportunistic infectious disease")); // TB assessment
+		m.put(40,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // HIV assessment
+		m.put(62,  Arrays.asList("Infectious disease")); // Pneumonia assessment
+		m.put(68,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // HIV assessment
+		m.put(88,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // Kaposi sarcoma obs
+		m.put(105, Arrays.asList("Infectious disease")); // Malaria assessment
+		m.put(122, Arrays.asList("Infectious disease")); // Skin Infection assessment
+		m.put(134, Arrays.asList("Infectious disease", "Opportunistic infectious disease")); // TB assessment
+		m.put(135, Arrays.asList("Infectious disease", "Opportunistic infectious disease")); // TB assessment
 		FULL_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
 
 		// SECOND_PATIENT_DATASET
