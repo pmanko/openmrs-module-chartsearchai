@@ -53,28 +53,54 @@ public class EnrichedRetrievalEvalTest {
 
 	private static final Logger log = LoggerFactory.getLogger(EnrichedRetrievalEvalTest.class);
 
-	private static final String[] DATASET = TestDatasetHelper.FULL_PATIENT_DATASET;
+	private static final String[][] DATASETS = {
+		TestDatasetHelper.FULL_PATIENT_DATASET,
+		TestDatasetHelper.SECOND_PATIENT_DATASET,
+		TestDatasetHelper.THIRD_PATIENT_DATASET,
+		TestDatasetHelper.FOURTH_PATIENT_DATASET,
+		TestDatasetHelper.FIFTH_PATIENT_DATASET,
+	};
+
+	private static final String[] DATASET_NAMES = {
+		"FULL", "SECOND", "THIRD", "FOURTH", "FIFTH"
+	};
+
+	@SuppressWarnings("unchecked")
+	private static final java.util.Map<Integer, List<String>>[] DATASET_HINTS = new java.util.Map[] {
+		TestDatasetHelper.FULL_DATASET_CATEGORY_HINTS,
+		TestDatasetHelper.SECOND_DATASET_CATEGORY_HINTS,
+		TestDatasetHelper.THIRD_DATASET_CATEGORY_HINTS,
+		TestDatasetHelper.FOURTH_DATASET_CATEGORY_HINTS,
+		TestDatasetHelper.FIFTH_DATASET_CATEGORY_HINTS,
+	};
 
 	private static OnnxEmbeddingProvider provider;
 
-	private static List<ChartEmbedding> allEmbeddings;
+	private static List<ChartEmbedding>[] datasetEmbeddings;
 
-	private static List<SerializedRecord> allRecords;
+	private static List<SerializedRecord>[] datasetRecords;
 
+	@SuppressWarnings("unchecked")
 	private static void ensureInitialized() {
 		if (provider == null) {
 			provider = new OnnxEmbeddingProvider(
 					TestDatasetHelper.MODEL_PATH, TestDatasetHelper.VOCAB_PATH);
-			allRecords = TestDatasetHelper.toSerializedRecords(
-					DATASET, TestDatasetHelper.FULL_DATASET_CATEGORY_HINTS);
-			allEmbeddings = EmbeddingIndexer.buildEmbeddings(allRecords, provider);
+			datasetEmbeddings = new List[DATASETS.length];
+			datasetRecords = new List[DATASETS.length];
+			for (int d = 0; d < DATASETS.length; d++) {
+				datasetRecords[d] = TestDatasetHelper.toSerializedRecords(
+						DATASETS[d], DATASET_HINTS[d]);
+				datasetEmbeddings[d] = EmbeddingIndexer.buildEmbeddings(
+						datasetRecords[d], provider);
+			}
 		}
 	}
 
-	private static List<Integer> runQuery(String query) {
+	private static List<Integer> runQuery(String query, int datasetIndex) {
 		ensureInitialized();
 		List<SerializedRecord> results = LlmInferenceService.findRelevantRecords(
-				allEmbeddings, allRecords, provider, query, 100,
+				datasetEmbeddings[datasetIndex], datasetRecords[datasetIndex],
+				provider, query, 100,
 				ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
 				LlmInferenceService.PipelineConfig.defaults());
 		List<Integer> indices = new ArrayList<>();
@@ -106,8 +132,12 @@ public class EnrichedRetrievalEvalTest {
 		JsonNode cases = root.get("cases");
 		List<Arguments> args = new ArrayList<>();
 		for (JsonNode c : cases) {
+			int dsIdx = c.has("datasetIndex") ? c.get("datasetIndex").asInt() : 0;
+			String dsName = dsIdx < DATASET_NAMES.length ? DATASET_NAMES[dsIdx] : "DS" + dsIdx;
 			args.add(Arguments.of(
+					dsName + ": " + c.get("query").asText(),
 					c.get("query").asText(),
+					dsIdx,
 					c.get("expectedMinRecords").asInt(),
 					c.has("mustContainText") ? c.get("mustContainText").asText() : null));
 		}
@@ -116,27 +146,28 @@ public class EnrichedRetrievalEvalTest {
 
 	@ParameterizedTest(name = "[{index}] {0}")
 	@MethodSource("evalCases")
-	public void enrichedRetrieval_shouldMeetBaseline(String query,
+	public void enrichedRetrieval_shouldMeetBaseline(String label,
+			String query, int datasetIndex,
 			int expectedMinRecords, String mustContainText) {
 		Assumptions.assumeTrue(TestDatasetHelper.modelFilesExist(),
 				"Skipping: ONNX model not found");
 
-		List<Integer> result = runQuery(query);
+		List<Integer> result = runQuery(query, datasetIndex);
 
 		assertTrue(result.size() >= expectedMinRecords,
-				"'" + query + "' should return >= " + expectedMinRecords
+				"'" + label + "' should return >= " + expectedMinRecords
 				+ " records but got " + result.size() + ": " + result);
 
 		if (mustContainText != null) {
 			boolean found = false;
 			for (int idx : result) {
-				if (DATASET[idx].contains(mustContainText)) {
+				if (DATASETS[datasetIndex][idx].contains(mustContainText)) {
 					found = true;
 					break;
 				}
 			}
 			assertTrue(found,
-					"'" + query + "' should return a record containing '"
+					"'" + label + "' should return a record containing '"
 					+ mustContainText + "' but none of " + result + " do");
 		}
 	}
@@ -202,18 +233,21 @@ public class EnrichedRetrievalEvalTest {
 
 		ObjectMapper mapper = new ObjectMapper();
 		com.fasterxml.jackson.databind.node.ObjectNode root = mapper.createObjectNode();
-		root.put("dataset", "enriched-retrieval-v1");
-		root.put("description", "Baseline for enriched pipeline with concept-set category hints on FULL_PATIENT_DATASET");
+		root.put("dataset", "enriched-retrieval-v2");
+		root.put("description", "Baseline for enriched pipeline across all 5 patient datasets");
 		com.fasterxml.jackson.databind.node.ArrayNode cases = root.putArray("cases");
 
-		for (String q : QUERIES) {
-			List<Integer> result = runQuery(q);
-			com.fasterxml.jackson.databind.node.ObjectNode c = cases.addObject();
-			c.put("query", q);
-			c.put("expectedMinRecords", result.size());
-			com.fasterxml.jackson.databind.node.ArrayNode ids = c.putArray("resultIndices");
-			for (int idx : result) {
-				ids.add(idx);
+		for (int d = 0; d < DATASETS.length; d++) {
+			for (String q : QUERIES) {
+				List<Integer> result = runQuery(q, d);
+				com.fasterxml.jackson.databind.node.ObjectNode c = cases.addObject();
+				c.put("query", q);
+				c.put("datasetIndex", d);
+				c.put("expectedMinRecords", result.size());
+				com.fasterxml.jackson.databind.node.ArrayNode ids = c.putArray("resultIndices");
+				for (int idx : result) {
+					ids.add(idx);
+				}
 			}
 		}
 

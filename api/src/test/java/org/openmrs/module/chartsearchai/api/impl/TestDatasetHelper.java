@@ -871,9 +871,16 @@ final class TestDatasetHelper {
 	 * Shared by cross-query regression tests and the eval harness.
 	 */
 	static final Map<Integer, List<String>> FULL_DATASET_CATEGORY_HINTS;
+	static final Map<Integer, List<String>> SECOND_DATASET_CATEGORY_HINTS;
+	static final Map<Integer, List<String>> THIRD_DATASET_CATEGORY_HINTS;
+	static final Map<Integer, List<String>> FOURTH_DATASET_CATEGORY_HINTS;
+	static final Map<Integer, List<String>> FIFTH_DATASET_CATEGORY_HINTS;
 
 	static {
-		Map<Integer, List<String>> m = new HashMap<Integer, List<String>>();
+		Map<Integer, List<String>> m;
+
+		// FULL_PATIENT_DATASET
+		m = new HashMap<Integer, List<String>>();
 		m.put(7,   Arrays.asList("Infectious disease", "Opportunistic infectious disease"));
 		m.put(21,  Arrays.asList("Infectious disease"));
 		m.put(39,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
@@ -887,5 +894,55 @@ final class TestDatasetHelper {
 		m.put(92,  Arrays.asList("Cardiovascular disease"));
 		m.put(110, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease"));
 		FULL_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
+
+		// SECOND_PATIENT_DATASET
+		m = new HashMap<Integer, List<String>>();
+		m.put(1,  Arrays.asList("Cardiovascular disease")); // Nonparalytic stroke
+		m.put(3,  Arrays.asList("Cardiovascular disease")); // Nonparalytic stroke diag
+		m.put(17, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Syphilitic Cirrhosis
+		m.put(19, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Syphilitic Cirrhosis diag
+		m.put(29, Arrays.asList("Cardiovascular disease")); // Atherosclerosis
+		m.put(32, Arrays.asList("Cardiovascular disease")); // Atherosclerosis diag
+		SECOND_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
+
+		// THIRD_PATIENT_DATASET
+		m = new HashMap<Integer, List<String>>();
+		m.put(2,   Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Zika
+		m.put(4,   Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Zika diag
+		m.put(34,  Arrays.asList("Cardiovascular disease")); // Hypertension
+		m.put(35,  Arrays.asList("Cardiovascular disease")); // Hypertension diag
+		m.put(54,  Arrays.asList("Infectious disease")); // Malaria
+		m.put(55,  Arrays.asList("Infectious disease")); // Malaria diag
+		m.put(118, Arrays.asList("Infectious disease")); // Pneumonia
+		m.put(119, Arrays.asList("Infectious disease")); // Pneumonia diag
+		THIRD_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
+
+		// FOURTH_PATIENT_DATASET
+		m = new HashMap<Integer, List<String>>();
+		m.put(2,   Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Zika
+		m.put(4,   Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Zika diag
+		m.put(17,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // Wasting
+		m.put(20,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // Wasting diag
+		m.put(90,  Arrays.asList("Infectious disease")); // Hookworm
+		m.put(94,  Arrays.asList("Infectious disease")); // Hookworm diag
+		m.put(108, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // HIV
+		m.put(110, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // HIV diag
+		m.put(137, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Gonococcal
+		m.put(139, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Gonococcal diag
+		FOURTH_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
+
+		// FIFTH_PATIENT_DATASET (same structure as FOURTH)
+		m = new HashMap<Integer, List<String>>();
+		m.put(2,   Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Zika
+		m.put(4,   Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Zika diag
+		m.put(17,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // Wasting (HIV wasting)
+		m.put(20,  Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // Wasting diag
+		m.put(90,  Arrays.asList("Infectious disease")); // Hookworm
+		m.put(94,  Arrays.asList("Infectious disease")); // Hookworm diag
+		m.put(108, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // HIV
+		m.put(110, Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // HIV diag
+		m.put(137, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Gonococcal
+		m.put(139, Arrays.asList("Sexually transmitted disease", "Infectious disease")); // Gonococcal diag
+		FIFTH_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
 	}
 }
