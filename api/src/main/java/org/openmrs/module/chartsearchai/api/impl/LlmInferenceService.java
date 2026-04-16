@@ -96,19 +96,9 @@ public class LlmInferenceService implements ChartSearchService {
 	private LlmProvider llmProvider;
 
 
-	private static final String NO_RECORDS_ANSWER = "No relevant records found.";
-
 	@Override
 	public ChartAnswer search(Patient patient, String question) {
 		PatientChart chart = buildChart(patient, question);
-
-		// Short-circuit when retrieval found no records — don't burn
-		// LLM tokens on an empty chart, and prevent hallucination
-		// (LLMs tend to fabricate answers when given no context).
-		if (chart.getMappings().isEmpty()) {
-			return new ChartAnswer(NO_RECORDS_ANSWER,
-					Collections.<RecordReference>emptyList(), 0, 0);
-		}
 
 		LlmResponse response = llmProvider.search(chart.getText(), question);
 
@@ -121,12 +111,6 @@ public class LlmInferenceService implements ChartSearchService {
 	public ChartAnswer searchStreaming(Patient patient, String question,
 			Consumer<String> tokenConsumer) {
 		PatientChart chart = buildChart(patient, question);
-
-		if (chart.getMappings().isEmpty()) {
-			tokenConsumer.accept(NO_RECORDS_ANSWER);
-			return new ChartAnswer(NO_RECORDS_ANSWER,
-					Collections.<RecordReference>emptyList(), 0, 0);
-		}
 
 		LlmResponse response = llmProvider.searchStreaming(chart.getText(), question, tokenConsumer);
 
