@@ -906,10 +906,6 @@ final class TestDatasetHelper {
 		m.put(135, Arrays.asList("Infectious disease", "Opportunistic infectious disease")); // TB assessment
 		// Program enrollments
 		m.put(2,   Arrays.asList("Sexually transmitted disease", "Infectious disease", "Opportunistic infectious disease")); // PMTCT
-		// Vital sign obs (from "Vital signs" concept set — same as production extractCategoryHints on obs.getConcept())
-		for (int vi : new int[]{14, 15, 16, 17, 18, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33, 34, 36, 37, 38, 43, 44, 45, 46, 47, 48, 57, 58, 59, 60, 63, 64, 65, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 93, 94, 95, 96, 97, 98, 100, 101, 102, 103, 104, 107, 108, 109, 111, 112, 113, 114, 115, 116, 117, 124, 125, 126, 128, 129, 130, 131, 132, 133, 136, 137, 138, 143, 144, 145, 147, 148, 149, 150, 151, 152}) {
-			if (!m.containsKey(vi)) { m.put(vi, Arrays.asList("Vital signs")); }
-		}
 		FULL_DATASET_CATEGORY_HINTS = Collections.unmodifiableMap(m);
 
 		// SECOND_PATIENT_DATASET

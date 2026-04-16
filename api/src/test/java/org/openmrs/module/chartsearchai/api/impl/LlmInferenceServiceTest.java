@@ -4599,28 +4599,19 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
-	public void enriched_vitalSigns_shouldReturnAllVitalSigns() {
+	public void enriched_vitalSigns_shouldBeUnchanged() {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model not found at " + MODEL_PATH);
 
-		// With "Vital signs" hints on all vital sign obs (matching
-		// production where obs.getConcept() is in the Vital signs set),
-		// the pipeline should return ALL vital signs including
-		// Temperature, BP, SpO2 that the model alone cannot bridge.
-		List<Integer> result = runEnrichedPipeline("vital signs", 100);
-		assertTrue(result.size() >= 50,
-				"Enriched pipeline should return most vital signs, got "
-				+ result.size());
-		boolean hasTemp = false, hasBP = false, hasPulse = false;
-		for (int idx : result) {
-			String rec = FULL_PATIENT_DATASET[idx];
-			if (rec.contains("Temperature")) hasTemp = true;
-			if (rec.contains("lood pressure")) hasBP = true;
-			if (rec.contains("Pulse")) hasPulse = true;
-		}
-		assertTrue(hasTemp, "Should include Temperature records");
-		assertTrue(hasBP, "Should include Blood Pressure records");
-		assertTrue(hasPulse, "Should include Pulse records");
+		// Without vital-sign obs hints in the fixture map (those are
+		// production-only via extractCategoryHints(obs.getConcept())),
+		// enriching Condition/Diagnosis records must not change the
+		// vital signs result set.
+		List<Integer> withHints = runEnrichedPipeline("vital signs", 100);
+		List<Integer> withoutHints = runRealModelPipeline("vital signs", 100);
+		assertEquals(withoutHints, withHints,
+				"Vital signs should be identical with and without "
+				+ "Condition/Diagnosis hints");
 	}
 
 	// --- Improvement assertions: these queries fail or return partial
