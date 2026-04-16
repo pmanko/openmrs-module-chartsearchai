@@ -93,7 +93,10 @@ public class PatientRecordLoader {
 			String text = conditionSerializer.toText(condition);
 			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_CONDITION, condition.getConditionId(), seenKeys)) {
 				Date date = condition.getOnsetDate() != null ? condition.getOnsetDate() : condition.getDateCreated();
-				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION, condition.getConditionId(), text, date));
+				List<String> hints = ChartSearchAiUtils.extractCategoryHints(
+						condition.getCondition() != null ? condition.getCondition().getCoded() : null);
+				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION,
+						condition.getConditionId(), text, date, hints));
 			}
 		}
 
@@ -111,7 +114,10 @@ public class PatientRecordLoader {
 			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS, diagnosis.getDiagnosisId(), seenKeys)) {
 				Date date = diagnosis.getEncounter() != null
 						? diagnosis.getEncounter().getEncounterDatetime() : diagnosis.getDateCreated();
-				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS, diagnosis.getDiagnosisId(), text, date));
+				List<String> hints = ChartSearchAiUtils.extractCategoryHints(
+						diagnosis.getDiagnosis() != null ? diagnosis.getDiagnosis().getCoded() : null);
+				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS,
+						diagnosis.getDiagnosisId(), text, date, hints));
 			}
 		}
 
