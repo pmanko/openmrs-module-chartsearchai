@@ -251,14 +251,16 @@ public class ChartSearchAiUtils {
 			// Context unavailable (test bypass) or transient API failure
 		}
 
-		// Source 2: compact concept description — the first clause
-		// (up to first period, max MAX_DESCRIPTION_HINT_WORDS words).
-		// Descriptions contain category-level vocabulary the concept
-		// name lacks (e.g. Fetishism → "A condition in which...",
-		// CD4 Count → "Measure of CD4 (T-helper cells) in blood",
-		// Hookworm → "Infection of humans..."). This is domain-agnostic:
-		// the algorithm passes whatever the dictionary says.
-		try {
+		// Source 2: compact concept description — only when the concept
+		// ALSO has concept-set membership. The description supplements
+		// the set name with additional category vocabulary (e.g.
+		// Hookworm in "Infectious disease" set gets "Infection of
+		// humans..." from its description). Without set membership,
+		// the description becomes the ONLY hint and can dominate the
+		// embedding inappropriately (e.g. "Disorders related or
+		// resulting from use of cocaine" for Cocaine abuse pushes the
+		// embedding away from "mental health" toward substance semantics).
+		if (!hints.isEmpty()) try {
 			org.openmrs.ConceptDescription desc = concept.getDescription();
 			if (desc != null && desc.getDescription() != null
 					&& !desc.getDescription().trim().isEmpty()) {
