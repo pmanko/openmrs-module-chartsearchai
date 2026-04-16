@@ -82,9 +82,33 @@ public final class ModelNoiseProfile {
 	 */
 	public static ModelNoiseProfile compute(
 			ChartEmbedding[] embeddings) {
-		// Group by concept name
+		return compute(embeddings, null);
+	}
+
+	/**
+	 * Computes a noise profile, optionally using hint-stripped embeddings
+	 * for cross-concept similarity. When {@code provider} is non-null,
+	 * the representative record for each concept is re-embedded with its
+	 * category hints stripped (via {@link ChartSearchAiUtils#stripCategoryHints}).
+	 * This makes the noise profile STABLE across hint enrichment —
+	 * adding "Vital signs / " to Temperature records no longer inflates
+	 * cross-concept similarity because the pairwise comparison uses
+	 * the UNHINTED embedding of "Finding — Temperature (C): 36.7".
+	 *
+	 * <p>Cost: O(C) extra embeddings where C = unique concepts (~30).
+	 * At ~1ms per embed, ~30ms total — negligible vs LLM latency.</p>
+	 *
+	 * @param embeddings the patient's chart embeddings
+	 * @param provider embedding provider for re-embedding stripped text,
+	 *        or null to fall back to record-embedding-based computation
+	 */
+	public static ModelNoiseProfile compute(
+			ChartEmbedding[] embeddings, EmbeddingProvider provider) {
+		// Group by concept name, tracking representative records
 		Map<String, List<float[]>> byConcept =
 				new HashMap<String, List<float[]>>();
+		Map<String, ChartEmbedding> representativeRecord =
+				new HashMap<String, ChartEmbedding>();
 		for (ChartEmbedding ce : embeddings) {
 			if (ce.getEmbeddingVector() == null) {
 				continue;
@@ -98,6 +122,7 @@ public final class ModelNoiseProfile {
 			if (vecs == null) {
 				vecs = new ArrayList<float[]>();
 				byConcept.put(name, vecs);
+				representativeRecord.put(name, ce);
 			}
 			vecs.add(ce.getEmbeddingVector());
 		}
@@ -106,14 +131,33 @@ public final class ModelNoiseProfile {
 				byConcept.keySet());
 
 		// Cross-concept similarities: one representative per concept.
-		// Using one representative avoids the bias where high-frequency
-		// concepts (e.g., Temperature with 15 records) contribute
-		// disproportionately to the distribution.
+		// When a provider is available, re-embed the representative
+		// record's text with hints stripped so enrichment doesn't
+		// inflate cross-concept similarity.
+		Map<String, float[]> crossVectors = new HashMap<String, float[]>();
+		for (String name : concepts) {
+			if (provider != null) {
+				ChartEmbedding rep = representativeRecord.get(name);
+				try {
+					String stripped = ChartSearchAiUtils.stripCategoryHints(
+							rep.getTextContent());
+					String prefixed = ChartSearchAiUtils.buildPrefixedText(
+							rep.getResourceType(), stripped);
+					crossVectors.put(name, provider.embed(prefixed));
+				} catch (Exception e) {
+					crossVectors.put(name,
+							byConcept.get(name).get(0));
+				}
+			} else {
+				crossVectors.put(name, byConcept.get(name).get(0));
+			}
+		}
+
 		List<Double> crossSims = new ArrayList<Double>();
 		for (int i = 0; i < concepts.size(); i++) {
-			float[] vi = byConcept.get(concepts.get(i)).get(0);
+			float[] vi = crossVectors.get(concepts.get(i));
 			for (int j = i + 1; j < concepts.size(); j++) {
-				float[] vj = byConcept.get(concepts.get(j)).get(0);
+				float[] vj = crossVectors.get(concepts.get(j));
 				crossSims.add(ChartSearchAiUtils.cosineSimilarity(
 						vi, vj));
 			}

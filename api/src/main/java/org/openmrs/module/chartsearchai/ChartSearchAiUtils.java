@@ -160,6 +160,53 @@ public class ChartSearchAiUtils {
 	}
 
 	/**
+	 * Strips category hint prefixes from text that was enriched by
+	 * {@link #injectCategoryHints}. The hint format is
+	 * {@code "hint1 / hint2 / ... / originalBody"}. This method finds
+	 * the original body by scanning for the first occurrence of a known
+	 * record-body pattern (em-dash for Obs, "Condition:", "Diagnosis:",
+	 * etc.) and taking the " / " boundary just before it.
+	 *
+	 * <p>Used by {@link org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile}
+	 * to compute stable noise statistics unaffected by enrichment.</p>
+	 *
+	 * @param text the potentially hint-enriched text
+	 * @return the original body without hint prefixes, or the input
+	 *         unchanged if no hints are detected
+	 */
+	public static String stripCategoryHints(String text) {
+		if (text == null || !text.contains(" / ")) {
+			return text;
+		}
+		// Find the earliest known record-body pattern
+		int earliest = text.length();
+		// Obs: "TYPE — CONCEPT:"
+		int emDash = text.indexOf(" \u2014 ");
+		if (emDash >= 0 && emDash < earliest) {
+			earliest = emDash;
+		}
+		// Condition/Diagnosis/Order/Allergy/Program patterns
+		String[] patterns = { "Condition: ", "Diagnosis: ", "Drug order: ",
+				"Allergy: ", "Program: ", "Lab order: " };
+		for (String p : patterns) {
+			int idx = text.indexOf(p);
+			if (idx >= 0 && idx < earliest) {
+				earliest = idx;
+			}
+		}
+		if (earliest == text.length()) {
+			return text; // no known pattern found
+		}
+		// Find the " / " boundary just before the pattern
+		String prefix = text.substring(0, earliest);
+		int lastSlash = prefix.lastIndexOf(" / ");
+		if (lastSlash >= 0) {
+			return text.substring(lastSlash + 3);
+		}
+		return text;
+	}
+
+	/**
 	 * Extracts category hints for a concept by looking up the concept sets
 	 * (CIEL convention: e.g. concept 1114 "Vital signs" contains Temperature,
 	 * BP, Pulse, RR, SpO2). The returned list contains the names of the

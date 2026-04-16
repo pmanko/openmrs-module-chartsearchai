@@ -904,10 +904,11 @@ public class LlmInferenceService implements ChartSearchService {
 			keywordScores = java.util.Arrays.copyOf(keywordScores, validCount);
 		}
 
-		// Compute noise profile from the patient's embeddings so all
-		// pipeline thresholds adapt to this embedding model's geometry.
+		// Compute noise profile using hint-stripped re-embeddings for
+		// cross-concept similarity, so the profile stays stable across
+		// category-hint enrichment. O(C) extra embeddings (~30ms).
 		ModelNoiseProfile noiseProfile =
-				ModelNoiseProfile.compute(embeddings);
+				ModelNoiseProfile.compute(embeddings, provider);
 		log.debug("NoiseProfile: Q1={} median={} mean={} P95={} "
 				+ "intraMean={} floor={}",
 				String.format("%.4f", noiseProfile.noiseQ1),
