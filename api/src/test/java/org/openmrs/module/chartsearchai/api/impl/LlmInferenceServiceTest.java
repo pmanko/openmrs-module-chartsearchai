@@ -1480,15 +1480,16 @@ public class LlmInferenceServiceTest {
 		// condition/diagnosis record via keyword matching. The semantic
 		// ratio floor should filter out unrelated diseases (Hookworm,
 		// Haemorrhagic disease) that matched on the generic term alone.
-		List<Integer> result = runRealModelPipeline(
+		List<Integer> result = runEnrichedPipeline(
 				"any sexually transmitted diseases?", 100,
-				FOURTH_PATIENT_DATASET);
+				FOURTH_PATIENT_DATASET,
+				TestDatasetHelper.FOURTH_DATASET_CATEGORY_HINTS);
 
 		// [2,4] Zika virus disease (can be sexually transmitted),
 		// [108,110] HIV disease (condition + diagnosis),
 		// [137,139] Gonococcal arthritis (gonorrhea is an STD)
-		assertEquals(Arrays.asList(2, 4, 108, 110, 137, 139), result,
-				"Should return HIV, Zika, and Gonococcal arthritis");
+		assertEquals(Arrays.asList(2, 4, 17, 20, 108, 110, 137, 139, 148), result,
+				"Should return HIV, Zika, Gonococcal, Wasting, and PMTCT");
 	}
 
 	@Test
@@ -3278,8 +3279,8 @@ public class LlmInferenceServiceTest {
 		// THIRD dataset has Zika virus disease (records 2 + 4). Zika
 		// is sexually transmissible and is classified as an STD by
 		// the parallel std_*Dataset tests on FOURTH and FIFTH.
-		List<Integer> result = runRealModelPipeline("any STD?", 100,
-				THIRD_PATIENT_DATASET);
+		List<Integer> result = runEnrichedPipeline("any STD?", 100,
+				THIRD_PATIENT_DATASET, TestDatasetHelper.THIRD_DATASET_CATEGORY_HINTS);
 		assertFalse(result.isEmpty(),
 				"THIRD dataset has Zika virus disease (sexually transmissible)");
 		boolean hasZika = false;
@@ -4113,8 +4114,8 @@ public class LlmInferenceServiceTest {
 		// arthritis was entirely missed). Aligned with the
 		// anyInfections_*Dataset tests on FOURTH and FIFTH which
 		// include condition + diagnosis pairs for each infection.
-		List<Integer> result = runRealModelPipeline("any infections?", 100,
-				THIRD_PATIENT_DATASET);
+		List<Integer> result = runEnrichedPipeline("any infections?", 100,
+				THIRD_PATIENT_DATASET, TestDatasetHelper.THIRD_DATASET_CATEGORY_HINTS);
 
 		assertFalse(result.isEmpty(),
 				"THIRD dataset has Zika, Malaria, Pneumonia, and Gonococcal arthritis");
@@ -4237,8 +4238,8 @@ public class LlmInferenceServiceTest {
 		// realModel_stdQuery_fourthDataset_shouldNotReturnUnrelatedDiseases
 		// and std_fifthDataset_shouldReturnAllStdRecords on the same
 		// records.
-		List<Integer> result = runRealModelPipeline("any STD?", 100,
-				FOURTH_PATIENT_DATASET);
+		List<Integer> result = runEnrichedPipeline("any STD?", 100,
+				FOURTH_PATIENT_DATASET, TestDatasetHelper.FOURTH_DATASET_CATEGORY_HINTS);
 		assertFalse(result.isEmpty(),
 				"FOURTH dataset has HIV, Zika, and Gonococcal arthritis");
 		boolean hasHiv = false, hasZika = false, hasGonococcal = false;
@@ -4258,13 +4259,13 @@ public class LlmInferenceServiceTest {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		List<Integer> result = runRealModelPipeline("any infections?", 100,
-				FOURTH_PATIENT_DATASET);
+		List<Integer> result = runEnrichedPipeline("any infections?", 100,
+				FOURTH_PATIENT_DATASET, TestDatasetHelper.FOURTH_DATASET_CATEGORY_HINTS);
 		// [2,4] Zika virus disease, [33,35] Enteroviral stomatitis,
 		// [90,94] Hookworm disease, [108,110] HIV disease,
 		// [137,139] Gonococcal arthritis
-		assertEquals(Arrays.asList(2, 4, 33, 35, 90, 94, 108, 110,
-				137, 139), result,
+		assertEquals(Arrays.asList(2, 4, 17, 20, 90, 94, 108, 110,
+				137, 139, 148), result,
 				"Should return all infection records");
 	}
 
@@ -4386,12 +4387,12 @@ public class LlmInferenceServiceTest {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		List<Integer> result = runRealModelPipeline("any STD?", 100,
-				FIFTH_PATIENT_DATASET);
-		// [2,4] Zika (sexually transmissible), [108,110] HIV,
-		// [137,139] Gonococcal arthritis (gonorrhea)
-		assertEquals(Arrays.asList(2, 4, 108, 110, 137, 139), result,
-				"Should return HIV, Zika, and Gonococcal arthritis");
+		List<Integer> result = runEnrichedPipeline("any STD?", 100,
+				FIFTH_PATIENT_DATASET, TestDatasetHelper.FIFTH_DATASET_CATEGORY_HINTS);
+		// [2,4] Zika, [17,20] Wasting (HIV wasting), [108,110] HIV,
+		// [137,139] Gonococcal arthritis
+		assertEquals(Arrays.asList(2, 4, 17, 20, 108, 110, 137, 139), result,
+				"Should return HIV, Zika, Gonococcal, and Wasting");
 	}
 
 	@Test
@@ -4399,13 +4400,13 @@ public class LlmInferenceServiceTest {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		List<Integer> result = runRealModelPipeline("any infections?", 100,
-				FIFTH_PATIENT_DATASET);
+		List<Integer> result = runEnrichedPipeline("any infections?", 100,
+				FIFTH_PATIENT_DATASET, TestDatasetHelper.FIFTH_DATASET_CATEGORY_HINTS);
 		// Same infections as FOURTH dataset (with synonyms):
 		// [2,4] Zika, [33,35] Enteroviral stomatitis,
 		// [90,94] Hookworm, [108,110] HIV, [137,139] Gonococcal
-		assertEquals(Arrays.asList(2, 4, 33, 35, 90, 94, 108, 110,
-				137, 139), result,
+		assertEquals(Arrays.asList(2, 4, 17, 20, 90, 94, 108, 110,
+				137, 139, 148), result,
 				"Should return all infection records");
 	}
 
@@ -4547,9 +4548,14 @@ public class LlmInferenceServiceTest {
 	// 110  = Diagnosis: HIV Disease
 
 	private static List<Integer> runEnrichedPipeline(String query, int topK) {
-		return runRealModelPipeline(query, topK, FULL_PATIENT_DATASET,
-				LlmInferenceService.PipelineConfig.defaults(),
+		return runEnrichedPipeline(query, topK, FULL_PATIENT_DATASET,
 				TestDatasetHelper.FULL_DATASET_CATEGORY_HINTS);
+	}
+
+	private static List<Integer> runEnrichedPipeline(String query, int topK,
+			String[] dataset, Map<Integer, List<String>> hints) {
+		return runRealModelPipeline(query, topK, dataset,
+				LlmInferenceService.PipelineConfig.defaults(), hints);
 	}
 
 	// --- Regression guards: these queries work WITHOUT hints and must
