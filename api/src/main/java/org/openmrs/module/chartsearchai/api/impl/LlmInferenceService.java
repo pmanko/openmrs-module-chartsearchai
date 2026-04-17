@@ -797,10 +797,17 @@ public class LlmInferenceService implements ChartSearchService {
 			return null;
 		}
 
+		// Select model-specific pipeline config based on the active
+		// embedding model. Falls back to L6-v2 defaults when the model
+		// name is unknown.
+		String modelName = embeddingProvider != null
+				? embeddingProvider.getModelName() : null;
+		PipelineConfig baseConfig = PipelineConfig.forModel(modelName);
 		PipelineConfig config = new PipelineConfig(
 				getKeywordWeight(), getScoreGapMultiplier(), getMinScoreGap(),
 				getGapValidationCosineThreshold(), getSimilarityRatio(),
-				ModelNoiseProfile.conservativeDefault());
+				ModelNoiseProfile.conservativeDefault(),
+				baseConfig.floorRescueMinZScore);
 
 		try {
 			return findSimilar(allEmbeddings, embeddingProvider, question, topK,
@@ -921,7 +928,8 @@ public class LlmInferenceService implements ChartSearchService {
 				config.keywordWeight, config.scoreGapMultiplier,
 				config.minScoreGap,
 				config.gapValidationCosineThreshold,
-				config.similarityRatio, noiseProfile);
+				config.similarityRatio, noiseProfile,
+				config.floorRescueMinZScore);
 
 			return filterPipeline(semanticScores, keywordScores, embeddings,
 				queryTerms, topK, profiledConfig);
@@ -2439,7 +2447,7 @@ public class LlmInferenceService implements ChartSearchService {
 				|| (firstPassGapDetected && adaptiveCutoff < tightThreshold)
 				|| (ratioFloorCandidateCount >= 0
 						&& ratioFloorCandidateCount < tightThreshold
-						&& initialZScore >= FLOOR_RESCUE_MIN_Z_SCORE
+						&& initialZScore >= config.floorRescueMinZScore
 						&& maxSemanticScore
 						>= config.noiseProfile.absoluteSimilarityFloor()
 								+ config.minScoreGap)
@@ -2447,7 +2455,7 @@ public class LlmInferenceService implements ChartSearchService {
 				// produced a tight cluster spanning 3+ distinct concepts
 				// AND the initial z-score passed its own gate, the concept
 				// diversity provides the structural confidence that
-				// FLOOR_RESCUE_MIN_Z_SCORE provides for single-concept
+				// floorRescueMinZScore provides for single-concept
 				// clusters. The initial gate already validated that the
 				// top semantic score is a genuine outlier; the multi-concept
 				// spread confirms the cluster is not a coincidental
@@ -3741,28 +3749,45 @@ public class LlmInferenceService implements ChartSearchService {
 		final double gapValidationCosineThreshold;
 		final double similarityRatio;
 		final ModelNoiseProfile noiseProfile;
+		/** Minimum z-score for tight-cluster bypass of the
+		 * zero-keyword z-score gate. */
+		final double floorRescueMinZScore;
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
 				double minScoreGap, double gapValidationCosineThreshold,
 				double similarityRatio) {
 			this(keywordWeight, scoreGapMultiplier, minScoreGap,
 					gapValidationCosineThreshold, similarityRatio,
-					ModelNoiseProfile.conservativeDefault());
+					ModelNoiseProfile.conservativeDefault(),
+					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE);
 		}
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
 				double minScoreGap, double gapValidationCosineThreshold,
 				double similarityRatio,
 				ModelNoiseProfile noiseProfile) {
+			this(keywordWeight, scoreGapMultiplier, minScoreGap,
+					gapValidationCosineThreshold, similarityRatio,
+					noiseProfile,
+					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE);
+		}
+
+		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
+				double minScoreGap, double gapValidationCosineThreshold,
+				double similarityRatio,
+				ModelNoiseProfile noiseProfile,
+				double floorRescueMinZScore) {
 			this.keywordWeight = keywordWeight;
 			this.scoreGapMultiplier = scoreGapMultiplier;
 			this.minScoreGap = minScoreGap;
 			this.gapValidationCosineThreshold = gapValidationCosineThreshold;
 			this.similarityRatio = similarityRatio;
 			this.noiseProfile = noiseProfile;
+			this.floorRescueMinZScore = floorRescueMinZScore;
 		}
 
-		/** Returns a config using all default constant values. */
+		/** Returns a config using all default constant values
+		 * (tuned for all-MiniLM-L6-v2). */
 		static PipelineConfig defaults() {
 			return new PipelineConfig(
 					ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
@@ -3770,7 +3795,37 @@ public class LlmInferenceService implements ChartSearchService {
 					ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
 					ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
 					ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO,
-					ModelNoiseProfile.conservativeDefault());
+					ModelNoiseProfile.conservativeDefault(),
+					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE);
+		}
+
+		/**
+		 * Returns a model-specific config based on the model path.
+		 * Falls back to {@link #defaults()} for unrecognized models.
+		 *
+		 * @param modelPath the embedding model file path or directory
+		 *        name (e.g. "pubmedbert-onnx", "/path/to/pubmedbert-onnx/model.onnx")
+		 */
+		static PipelineConfig forModel(String modelPath) {
+			if (modelPath != null
+					&& modelPath.toLowerCase().contains("pubmedbert")) {
+				return pubmedbertDefaults();
+			}
+			return defaults();
+		}
+
+		/**
+		 * Pipeline defaults for pubmedbert-onnx / pubmedbert-matryoshka.
+		 * Currently identical to L6-v2 defaults — the data-derived
+		 * {@link ModelNoiseProfile} adapts thresholds automatically.
+		 * PubMedBERT fixes 2 false-positive tests (allergies, headache)
+		 * but introduces ~68 regressions on clinical shorthand notation
+		 * (fever→Temperature, cancer→Kaposi sarcoma), so L6-v2 remains
+		 * the recommended default. This profile exists as a hook for
+		 * future model-specific tuning.
+		 */
+		static PipelineConfig pubmedbertDefaults() {
+			return defaults();
 		}
 	}
 

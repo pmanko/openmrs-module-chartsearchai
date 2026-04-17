@@ -902,7 +902,7 @@ public class LlmInferenceServiceTest {
 	private static List<Integer> runRealModelPipeline(String query, int topK,
 			String[] dataset) {
 		return runRealModelPipeline(query, topK, dataset,
-				LlmInferenceService.PipelineConfig.defaults());
+				LlmInferenceService.PipelineConfig.forModel(MODEL_DIR));
 	}
 
 	private static List<Integer> runRealModelPipeline(String query, int topK,

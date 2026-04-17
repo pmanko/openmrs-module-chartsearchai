@@ -88,6 +88,14 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 		return detectedDimensions;
 	}
 
+	@Override
+	public String getModelName() {
+		if (loadedModelPath != null) {
+			return loadedModelPath;
+		}
+		return explicitModelPath;
+	}
+
 	public synchronized void close() {
 		if (session != null) {
 			log.info("Closing ONNX embedding session");

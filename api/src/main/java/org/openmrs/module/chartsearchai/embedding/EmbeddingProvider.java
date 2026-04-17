@@ -26,4 +26,12 @@ public interface EmbeddingProvider {
 	 * @return the dimensionality of vectors produced by this provider
 	 */
 	int getDimensions();
+
+	/**
+	 * Returns the model name or path, used to select model-specific
+	 * pipeline configuration. Returns {@code null} by default.
+	 */
+	default String getModelName() {
+		return null;
+	}
 }
