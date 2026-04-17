@@ -1,0 +1,32 @@
+FROM maven:3.9-eclipse-temurin-11 AS builder
+
+RUN git clone --depth 1 https://github.com/openmrs/openmrs-module-chartsearchai.git /build
+WORKDIR /build
+RUN mvn clean package -DskipTests -B
+
+# Copy the OpenMRS distribution from the official image
+FROM openmrs/openmrs-reference-application-3-backend:nightly AS openmrs-dist
+
+# Rebase onto Ubuntu (glibc 2.39) so java-llama.cpp native libs load correctly.
+# The official image uses Amazon Linux 2 (glibc 2.26) which is too old.
+FROM eclipse-temurin:21-jre
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r openmrs && useradd -r -g openmrs -u 1001 openmrs
+
+# Copy everything from the official OpenMRS backend image
+COPY --from=openmrs-dist /openmrs /openmrs
+COPY --from=openmrs-dist /usr/local/tomcat /usr/local/tomcat
+
+# Add the chartsearchai module
+COPY --from=builder /build/omod/target/chartsearchai-*.omod /openmrs/distribution/openmrs_modules/
+COPY --chmod=755 docker/backend-init.sh /usr/local/bin/backend-init.sh
+
+RUN mkdir -p /openmrs/data && chown -R 1001:0 /openmrs /usr/local/tomcat
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/backend-init.sh"]

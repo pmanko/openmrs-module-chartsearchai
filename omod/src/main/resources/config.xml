@@ -57,8 +57,8 @@
 
 	<globalProperty>
 		<property>chartsearchai.llm.modelFilePath</property>
-		<defaultValue>chartsearchai/medgemma-1.5-4b-it.Q4_K_M.gguf</defaultValue>
-		<description>Relative path, including the filename, within the OpenMRS application data directory to the GGUF LLM model file used for inference. Example: chartsearchai/medgemma-1.5-4b-it.Q4_K_M.gguf (resolves to &lt;application-data-directory&gt;/chartsearchai/medgemma-1.5-4b-it.Q4_K_M.gguf). The recommended model is MedGemma 1.5 4B Instruct (Q4_K_M quantization, ~2.5GB). Download from https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF. Path traversal (e.g. "..") is not allowed.</description>
+		<defaultValue>chartsearchai/medgemma-1.5-4b-it-Q4_K_M.gguf</defaultValue>
+		<description>Relative path, including the filename, within the OpenMRS application data directory to the GGUF LLM model file used for inference. Example: chartsearchai/medgemma-1.5-4b-it-Q4_K_M.gguf (resolves to &lt;application-data-directory&gt;/chartsearchai/medgemma-1.5-4b-it-Q4_K_M.gguf). The recommended model is MedGemma 1.5 4B Instruct (Q4_K_M quantization, ~2.5GB). Download from https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF. Path traversal (e.g. "..") is not allowed.</description>
 	</globalProperty>
 
 	<globalProperty>
