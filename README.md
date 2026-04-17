@@ -13,6 +13,7 @@ The standalone download above includes the backend module, frontend ESM, and the
 
 ## Table of Contents
 
+- [Docker](#docker)
 - [Requirements](#requirements)
 - [Setup](#setup)
   - [1. Build](#1-build)
@@ -34,6 +35,27 @@ The standalone download above includes the backend module, frontend ESM, and the
 - [Evaluated models](#evaluated-models)
 - [Architecture](#architecture)
 - [License](#license)
+
+## Docker
+
+Run the full O3 stack with Chart Search AI in one command:
+
+```bash
+docker compose up -d --build
+```
+
+This builds everything from GitHub — no local checkout, JDK, or model downloads needed. On first start, the embedding model (~86MB) and LLM (~2.5GB) are downloaded automatically from HuggingFace and persisted in a Docker volume.
+
+Once started, open http://localhost/openmrs/spa (default credentials: `admin` / `Admin123`).
+
+**Files:**
+- `docker-compose.yml` — gateway, frontend, backend, MariaDB
+- `Dockerfile.frontend` — builds O3 SPA with the [chartsearchai ESM](https://github.com/openmrs/openmrs-esm-chartsearchai)
+- `Dockerfile.backend` — builds the omod, rebased on Ubuntu for ARM64 llama.cpp compatibility
+- `docker/backend-init.sh` — downloads models on first start
+- `docker/spa-build-config.json` — O3 frontend module list
+
+First startup takes 15–30 minutes (model downloads + database initialization). Subsequent starts are fast since the data volume persists.
 
 ## Requirements
 
