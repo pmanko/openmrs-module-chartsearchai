@@ -54,9 +54,13 @@ docker compose up -d --build
 
 No JDK or model downloads needed — the Docker build handles everything. On first start, the embedding model (~86MB) and LLM (~2.5GB) are downloaded automatically from HuggingFace and persisted in a Docker volume.
 
-Once started, open http://localhost/openmrs/spa (default credentials: `admin` / `Admin123`).
+Monitor startup progress with:
 
-First startup takes 15–30 minutes (model downloads + database initialization). Subsequent starts are fast since the data volume persists.
+```bash
+docker compose logs -f backend
+```
+
+First startup takes 15–30 minutes (model downloads + database initialization). Once `docker compose ps` shows the backend as `healthy`, open http://localhost/openmrs/spa (default credentials: `admin` / `Admin123`). Subsequent starts are fast since the data volume persists.
 
 Alternatively, download the [O3 Standalone with Chart Search AI](https://nightly.link/openmrs/openmrs-module-chartsearchai/workflows/build-standalone.yml/main/openmrs-standalone-chartsearchai.zip) — a single zip with everything included, no Docker required (Java 21+ needed). See the [OpenMRS Standalone guide](https://openmrs.atlassian.net/wiki/spaces/docs/pages/25472583/OpenMRS+Standalone) for instructions.
 
