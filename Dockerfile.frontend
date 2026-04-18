@@ -39,7 +39,7 @@ RUN cd /app/dist && \
       fs.writeFileSync('routes.registry.json', JSON.stringify(registry, null, 2)); \
     "
 
-# Serve via nginx with SPA fallback
-FROM nginx:alpine
-RUN printf 'server {\n  listen 80;\n  location / {\n    root /usr/share/nginx/html;\n    try_files $uri $uri/ /index.html;\n  }\n}\n' > /etc/nginx/conf.d/default.conf
+# Use the official O3 frontend image as the base — it has the correct
+# index.html (with SPA bootstrap), nginx config, and env var substitution.
+FROM openmrs/openmrs-reference-application-3-frontend:nightly
 COPY --from=final-spa /app/dist /usr/share/nginx/html
