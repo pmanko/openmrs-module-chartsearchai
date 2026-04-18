@@ -13,8 +13,8 @@ The standalone download above includes the backend module, frontend ESM, and the
 
 ## Table of Contents
 
-- [Docker](#docker)
 - [Requirements](#requirements)
+- [Docker](#docker)
 - [Setup](#setup)
   - [1. Build](#1-build)
   - [2. Download the LLM model](#2-download-the-llm-model-local-mode-only)
@@ -36,6 +36,14 @@ The standalone download above includes the backend module, frontend ESM, and the
 - [Architecture](#architecture)
 - [License](#license)
 
+## Requirements
+
+- Java 11+
+- OpenMRS Platform 2.8.0+
+- Webservices REST module 2.44.0+
+- 6GB+ RAM recommended (for local LLM inference with the default MedGemma 1.5 4B model; not required when using a remote LLM)
+- Elasticsearch 8.14+ *(optional, for the hybrid retrieval pipeline; the default embedding and Lucene pipelines require no external services)*
+
 ## Docker
 
 ```bash
@@ -49,14 +57,6 @@ No JDK or model downloads needed — the Docker build handles everything. On fir
 Once started, open http://localhost/openmrs/spa (default credentials: `admin` / `Admin123`).
 
 First startup takes 15–30 minutes (model downloads + database initialization). Subsequent starts are fast since the data volume persists.
-
-## Requirements
-
-- Java 11+
-- OpenMRS Platform 2.8.0+
-- Webservices REST module 2.44.0+
-- 6GB+ RAM recommended (for local LLM inference with the default MedGemma 1.5 4B model; not required when using a remote LLM)
-- Elasticsearch 8.14+ *(optional, for the hybrid retrieval pipeline; the default embedding and Lucene pipelines require no external services)*
 
 ## Setup
 
