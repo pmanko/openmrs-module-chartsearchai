@@ -44,7 +44,7 @@ cd openmrs-module-chartsearchai
 docker compose up -d --build
 ```
 
-This builds everything from GitHub — no JDK or model downloads needed. On first start, the embedding model (~86MB) and LLM (~2.5GB) are downloaded automatically from HuggingFace and persisted in a Docker volume.
+No JDK or model downloads needed — the Docker build handles everything. On first start, the embedding model (~86MB) and LLM (~2.5GB) are downloaded automatically from HuggingFace and persisted in a Docker volume.
 
 Once started, open http://localhost/openmrs/spa (default credentials: `admin` / `Admin123`).
 
