@@ -2,7 +2,7 @@ FROM --platform=$BUILDPLATFORM node:20-alpine AS base-spa
 
 RUN npm install --global openmrs@next
 
-COPY docker/spa-build-config.json /app/spa-build-config.json
+COPY spa-build-config.json /app/spa-build-config.json
 RUN cd /app && openmrs assemble --mode config --config spa-build-config.json
 
 # Build the Chart Search AI ESM from source
