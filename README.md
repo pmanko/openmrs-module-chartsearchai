@@ -58,7 +58,11 @@ Once started, open http://localhost/openmrs/spa (default credentials: `admin` / 
 
 First startup takes 15–30 minutes (model downloads + database initialization). Subsequent starts are fast since the data volume persists.
 
-Alternatively, download the [O3 Standalone with Chart Search AI](https://nightly.link/openmrs/openmrs-module-chartsearchai/workflows/build-standalone.yml/main/openmrs-standalone-chartsearchai.zip) — a single zip with everything included, no Docker required (Java 21+ needed).
+Alternatively, download the [O3 Standalone with Chart Search AI](https://nightly.link/openmrs/openmrs-module-chartsearchai/workflows/build-standalone.yml/main/openmrs-standalone-chartsearchai.zip) — a single zip with everything included, no Docker required (Java 21+ needed). Unzip and run:
+
+```bash
+java -jar openmrs-standalone.jar
+```
 
 ## Setup
 
