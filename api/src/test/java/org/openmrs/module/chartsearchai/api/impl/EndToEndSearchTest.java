@@ -16,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.openmrs.Patient;
 import org.openmrs.api.context.Context;
@@ -52,6 +53,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
  * reject all candidates. A medical-domain embedding model will produce higher
  * scores and pass the floor gate.</p>
  */
+@Tag("eval")
 public class EndToEndSearchTest extends BaseModuleContextSensitiveTest {
 
 	private static final String TEST_DATA = "ChartSearchAiTestData.xml";
