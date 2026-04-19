@@ -797,15 +797,34 @@ public class LlmInferenceService implements ChartSearchService {
 			return null;
 		}
 
-		// Select model-specific pipeline config based on the active
-		// embedding model. Falls back to L6-v2 defaults when the model
-		// name is unknown.
+		// Select model-specific pipeline config by fingerprinting the
+		// model (embedding a sentinel string). Falls back to path-based
+		// detection, then L6-v2 defaults.
+		String modelIdentity = embeddingProvider != null
+				? embeddingProvider.identifyModel() : null;
 		String modelName = embeddingProvider != null
 				? embeddingProvider.getModelName() : null;
-		PipelineConfig baseConfig = PipelineConfig.forModel(modelName);
+		PipelineConfig baseConfig = PipelineConfig.forModel(
+				modelIdentity != null ? modelIdentity : modelName);
+		// Use model-specific defaults, but allow global property overrides
+		// when an admin has explicitly customized them (i.e., the GP value
+		// differs from the L6-v2 default that ships as the initial value).
 		PipelineConfig config = new PipelineConfig(
-				getKeywordWeight(), getScoreGapMultiplier(), getMinScoreGap(),
-				getGapValidationCosineThreshold(), getSimilarityRatio(),
+				overrideIfCustomized(getKeywordWeight(),
+						ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
+						baseConfig.keywordWeight),
+				overrideIfCustomized(getScoreGapMultiplier(),
+						ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
+						baseConfig.scoreGapMultiplier),
+				overrideIfCustomized(getMinScoreGap(),
+						ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
+						baseConfig.minScoreGap),
+				overrideIfCustomized(getGapValidationCosineThreshold(),
+						ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
+						baseConfig.gapValidationCosineThreshold),
+				overrideIfCustomized(getSimilarityRatio(),
+						ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO,
+						baseConfig.similarityRatio),
 				ModelNoiseProfile.conservativeDefault(),
 				baseConfig.floorRescueMinZScore);
 
@@ -914,8 +933,12 @@ public class LlmInferenceService implements ChartSearchService {
 		// Compute noise profile using hint-stripped re-embeddings for
 		// cross-concept similarity, so the profile stays stable across
 		// category-hint enrichment. O(C) extra embeddings (~30ms).
-		ModelNoiseProfile noiseProfile =
-				ModelNoiseProfile.compute(embeddings, provider);
+		// Reuse pre-computed profile from config when available
+		// (e.g. test harnesses that run many queries on the same dataset).
+		ModelNoiseProfile noiseProfile = config.noiseProfile != null
+				&& !config.noiseProfile.isConservativeDefault()
+				? config.noiseProfile
+				: ModelNoiseProfile.compute(embeddings, provider);
 		log.debug("NoiseProfile: Q1={} median={} mean={} P95={} "
 				+ "intraMean={} floor={}",
 				String.format("%.4f", noiseProfile.noiseQ1),
@@ -3210,6 +3233,19 @@ public class LlmInferenceService implements ChartSearchService {
 		return ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT;
 	}
 
+	/**
+	 * Returns the model-specific default unless the admin has explicitly
+	 * customized the global property (i.e., the GP value differs from the
+	 * L6-v2 default that ships as the initial value).
+	 */
+	private static double overrideIfCustomized(double gpValue,
+			double l6v2Default, double modelDefault) {
+		if (Math.abs(gpValue - l6v2Default) > 1e-9) {
+			return gpValue;
+		}
+		return modelDefault;
+	}
+
 	private static String getQueryPrefix() {
 		String value = org.openmrs.api.context.Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_QUERY_PREFIX);
@@ -3807,22 +3843,49 @@ public class LlmInferenceService implements ChartSearchService {
 		 *        name (e.g. "pubmedbert-onnx", "/path/to/pubmedbert-onnx/model.onnx")
 		 */
 		static PipelineConfig forModel(String modelPath) {
-			if (modelPath != null
-					&& modelPath.toLowerCase().contains("pubmedbert")) {
+			if (modelPath == null) {
+				return defaults();
+			}
+			String lower = modelPath.toLowerCase();
+			if (lower.contains("medembed")) {
+				return medembedDefaults();
+			}
+			if (lower.contains("pubmedbert")) {
 				return pubmedbertDefaults();
 			}
 			return defaults();
 		}
 
 		/**
+		 * Pipeline defaults for MedEmbed (medical IR fine-tune of
+		 * all-MiniLM-L12-v2). MedEmbed produces higher absolute cosine
+		 * similarities with a compressed score range — noise mean ~0.59
+		 * vs L6-v2's ~0.26. Parameters are adjusted for this tighter
+		 * distribution:
+		 * <ul>
+		 * <li>minScoreGap lowered: meaningful cluster gaps are 0.01–0.05
+		 *     vs L6-v2's 0.05–0.15</li>
+		 * <li>similarityRatio raised: noise mean is close to relevant
+		 *     scores, so the ratio floor must be tighter</li>
+		 * <li>gapValidationCosineThreshold raised: baseline cosines are
+		 *     higher, so gap validation needs a higher bar</li>
+		 * </ul>
+		 */
+		static PipelineConfig medembedDefaults() {
+			return new PipelineConfig(
+					0.3,    // keywordWeight — same as L6-v2
+					2.5,    // scoreGapMultiplier — same; avgGap adapts
+					0.03,   // minScoreGap — lower for compressed range
+					0.55,   // gapValidationCosineThreshold — higher baseline
+					0.80,   // similarityRatio — same as L6-v2; noise profile adapts
+					ModelNoiseProfile.conservativeDefault(),
+					2.0);   // floorRescueMinZScore — same statistical threshold
+		}
+
+		/**
 		 * Pipeline defaults for pubmedbert-onnx / pubmedbert-matryoshka.
 		 * Currently identical to L6-v2 defaults — the data-derived
 		 * {@link ModelNoiseProfile} adapts thresholds automatically.
-		 * PubMedBERT fixes 2 false-positive tests (allergies, headache)
-		 * but introduces ~68 regressions on clinical shorthand notation
-		 * (fever→Temperature, cancer→Kaposi sarcoma), so L6-v2 remains
-		 * the recommended default. This profile exists as a hook for
-		 * future model-specific tuning.
 		 */
 		static PipelineConfig pubmedbertDefaults() {
 			return defaults();
