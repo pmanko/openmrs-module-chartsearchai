@@ -82,6 +82,8 @@ public class EnrichedRetrievalEvalTest {
 
 	private static List<SerializedRecord>[] datasetRecords;
 
+	private static LlmInferenceService.PipelineConfig[] datasetConfigs;
+
 	@SuppressWarnings("unchecked")
 	private static void ensureInitialized() {
 		if (provider == null) {
@@ -89,11 +91,24 @@ public class EnrichedRetrievalEvalTest {
 					TestDatasetHelper.MODEL_PATH, TestDatasetHelper.VOCAB_PATH);
 			datasetEmbeddings = new List[DATASETS.length];
 			datasetRecords = new List[DATASETS.length];
+			datasetConfigs = new LlmInferenceService.PipelineConfig[DATASETS.length];
 			for (int d = 0; d < DATASETS.length; d++) {
 				datasetRecords[d] = TestDatasetHelper.toSerializedRecords(
 						DATASETS[d], DATASET_HINTS[d]);
-				datasetEmbeddings[d] = EmbeddingIndexer.buildEmbeddings(
+				datasetEmbeddings[d] = TestDatasetHelper.buildOrLoadCachedEmbeddings(
 						datasetRecords[d], provider);
+				// Pre-compute noise profile once per dataset so queries
+				// don't re-embed ~30 concepts each time.
+				org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile noise =
+						org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile.compute(
+								datasetEmbeddings[d].toArray(
+										new ChartEmbedding[0]), provider);
+				LlmInferenceService.PipelineConfig base =
+						LlmInferenceService.PipelineConfig.defaults();
+				datasetConfigs[d] = new LlmInferenceService.PipelineConfig(
+						base.keywordWeight, base.scoreGapMultiplier,
+						base.minScoreGap, base.gapValidationCosineThreshold,
+						base.similarityRatio, noise, base.floorRescueMinZScore);
 			}
 		}
 	}
@@ -104,7 +119,7 @@ public class EnrichedRetrievalEvalTest {
 				datasetEmbeddings[datasetIndex], datasetRecords[datasetIndex],
 				provider, query, 100,
 				ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
-				LlmInferenceService.PipelineConfig.defaults());
+				datasetConfigs[datasetIndex]);
 		List<Integer> indices = new ArrayList<>();
 		if (results != null) {
 			for (SerializedRecord r : results) {

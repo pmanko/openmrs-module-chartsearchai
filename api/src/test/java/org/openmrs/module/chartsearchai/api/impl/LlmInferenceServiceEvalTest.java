@@ -169,34 +169,54 @@ public class LlmInferenceServiceEvalTest {
 	 * {@code PatientRecordLoader.loadAll()} does after
 	 * {@code extractCategoryHints()} returns concept-set names.
 	 */
+	// Cache embeddings, records, and noise profiles per (dataset, hints)
+	// to avoid recomputing on every test invocation.
+	private static final Map<String, List<ChartEmbedding>> embeddingCache =
+			new java.util.concurrent.ConcurrentHashMap<String, List<ChartEmbedding>>();
+	private static final Map<String, List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord>> recordCache =
+			new java.util.concurrent.ConcurrentHashMap<String, List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord>>();
+	private static final Map<String, org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile> noiseCache =
+			new java.util.concurrent.ConcurrentHashMap<String, org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile>();
+
+	private static String cacheKey(String[] dataset, Map<Integer, List<String>> hints) {
+		return System.identityHashCode(dataset) + ":" + System.identityHashCode(hints);
+	}
+
 	private static List<Integer> runRealModelPipeline(String query, int topK,
 			String[] dataset, LlmInferenceService.PipelineConfig config,
 			Map<Integer, List<String>> categoryHintsMap) {
-		// Build embeddings using the exact production indexing code
-		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> records =
-				new ArrayList<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord>();
-		for (int i = 0; i < dataset.length; i++) {
-			String resourceType = TestDatasetHelper.inferResourceType(dataset[i]);
-			String textContent = TestDatasetHelper.stripDatasetPrefixAndDate(dataset[i]);
-			List<String> hints = categoryHintsMap != null
-					? categoryHintsMap.getOrDefault(i, Collections.<String>emptyList())
-					: Collections.<String>emptyList();
-			records.add(new org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord(
-					resourceType, i, textContent, null, hints));
-		}
-		List<ChartEmbedding> allEmbeddings =
-				org.openmrs.module.chartsearchai.api.EmbeddingIndexer.buildEmbeddings(
-						records, sharedProvider);
+		String key = cacheKey(dataset, categoryHintsMap);
 
-		// Run the full composed retrieval pipeline: findSimilar then
-		// filterAndCap (which applies the recency cap when the question
-		// contains a recency keyword like "the latest"). This mirrors
-		// what production runs end-to-end.
+		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord> records =
+				recordCache.get(key);
+		List<ChartEmbedding> allEmbeddings = embeddingCache.get(key);
+
+		if (records == null || allEmbeddings == null) {
+			records = TestDatasetHelper.toSerializedRecords(dataset, categoryHintsMap);
+			allEmbeddings = TestDatasetHelper.buildOrLoadCachedEmbeddings(
+					records, sharedProvider);
+			recordCache.put(key, records);
+			embeddingCache.put(key, allEmbeddings);
+		}
+
+		// Pre-compute noise profile once per dataset so each query
+		// doesn't re-embed ~30 concepts.
+		org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile noise = noiseCache.get(key);
+		if (noise == null) {
+			noise = org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile.compute(
+					allEmbeddings.toArray(new ChartEmbedding[0]), sharedProvider);
+			noiseCache.put(key, noise);
+		}
+		LlmInferenceService.PipelineConfig configWithNoise = new LlmInferenceService.PipelineConfig(
+				config.keywordWeight, config.scoreGapMultiplier,
+				config.minScoreGap, config.gapValidationCosineThreshold,
+				config.similarityRatio, noise, config.floorRescueMinZScore);
+
 		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord>
 				results = LlmInferenceService.findRelevantRecords(
 						allEmbeddings, records, sharedProvider, query, topK,
 						ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
-						config);
+						configWithNoise);
 
 		List<Integer> indices = new ArrayList<Integer>();
 		if (results != null) {
@@ -3979,4 +3999,5 @@ public class LlmInferenceServiceEvalTest {
 		assertTrue(hasHeight,
 				"BMI query should return Height records, got: " + result);
 	}
+
 }
