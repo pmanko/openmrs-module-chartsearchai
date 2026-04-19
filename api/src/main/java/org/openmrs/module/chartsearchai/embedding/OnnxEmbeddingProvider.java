@@ -104,6 +104,44 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 	}
 
 	/**
+	 * Known model fingerprints: first 4 embedding values for the sentinel
+	 * string {@link EmbeddingProvider#MODEL_IDENTITY_SENTINEL}, rounded to
+	 * 2 decimal places and concatenated. Computed by profiling each model.
+	 */
+	private static final String FINGERPRINT_MEDEMBED_SMALL =
+			"-0.03,0.04,0.02,-0.03";
+	private static final String FINGERPRINT_L6_V2 =
+			"-0.09,-0.01,-0.01,0.05";
+	private static final String FINGERPRINT_PUBMEDBERT =
+			"-0.01,0.04,-0.04,-0.02";
+	private static final String FINGERPRINT_L12_V2 =
+			"-0.09,0.06,-0.01,-0.01";
+
+	@Override
+	public String identifyModel() {
+		try {
+			float[] v = embed(MODEL_IDENTITY_SENTINEL);
+			String fp = String.format("%.2f,%.2f,%.2f,%.2f",
+					v[0], v[1], v[2], v[3]);
+			if (FINGERPRINT_MEDEMBED_SMALL.equals(fp)) {
+				return "medembed-small";
+			} else if (FINGERPRINT_L6_V2.equals(fp)) {
+				return "all-MiniLM-L6-v2";
+			} else if (FINGERPRINT_PUBMEDBERT.equals(fp)) {
+				return "pubmedbert";
+			} else if (FINGERPRINT_L12_V2.equals(fp)) {
+				return "all-MiniLM-L12-v2";
+			}
+			log.info("Unknown embedding model fingerprint: {}", fp);
+			return null;
+		}
+		catch (Exception e) {
+			log.warn("Failed to fingerprint embedding model", e);
+			return null;
+		}
+	}
+
+	/**
 	 * Returns the execution provider used by the ONNX session (e.g. CORE_ML, CUDA, or CPU).
 	 * The provider is determined when the session is first created.
 	 */

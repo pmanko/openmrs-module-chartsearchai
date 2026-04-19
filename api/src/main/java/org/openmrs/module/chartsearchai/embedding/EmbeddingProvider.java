@@ -34,4 +34,22 @@ public interface EmbeddingProvider {
 	default String getModelName() {
 		return null;
 	}
+
+	/**
+	 * Sentinel string embedded at startup to fingerprint the model.
+	 * Different models produce distinct, deterministic vectors for
+	 * the same input — the first 4 values uniquely identify the model.
+	 */
+	String MODEL_IDENTITY_SENTINEL = "model identity probe";
+
+	/**
+	 * Identifies the model by embedding a sentinel string and matching
+	 * the output fingerprint against known models. More reliable than
+	 * path-based detection since the model file can be renamed.
+	 * Returns a canonical model name (e.g. "medembed-small") or
+	 * {@code null} if the model is unrecognized.
+	 */
+	default String identifyModel() {
+		return null;
+	}
 }
