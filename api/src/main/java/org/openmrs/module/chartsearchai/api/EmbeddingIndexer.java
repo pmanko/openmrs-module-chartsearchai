@@ -67,6 +67,7 @@ public class EmbeddingIndexer {
 	 *
 	 * @param patient the patient to index
 	 */
+	@Transactional
 	public void indexPatient(Patient patient) {
 		log.info("Indexing patient [id={}]", patient.getPatientId());
 		Date now = new Date();
@@ -88,8 +89,8 @@ public class EmbeddingIndexer {
 					failed, records.size(), patient.getPatientId());
 		}
 
-		// Delete old and insert new atomically in a single transaction,
-		// without holding the transaction open during embedding computation above.
+		// Delete old and insert new atomically within this method's
+		// transaction so the patient is never without embeddings.
 		dao.replacePatientEmbeddings(patient, newEmbeddings);
 
 		log.info("Finished indexing patient [id={}] ({} of {} records)",
