@@ -219,6 +219,13 @@ public class ChartSearchAiUtils {
 	 * that bypass Spring). This is intentional — callers should not need to
 	 * special-case the no-hints scenario.
 	 *
+	 * <p>Only concept-set names are used as hints. Concept descriptions are
+	 * deliberately excluded — they can restate the concept name with
+	 * different vocabulary, creating asymmetric semantic bias between
+	 * related concepts (e.g. "Patient's weight in kilograms" has more
+	 * overlap with "BMI" than "Patient's height in centimeters", causing
+	 * Height to be dropped from BMI queries).
+	 *
 	 * @param concept the source concept
 	 * @return list of containing-set names, or empty list
 	 */
