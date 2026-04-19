@@ -13,9 +13,12 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
+import java.util.EnumSet;
+
 import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
+import ai.onnxruntime.OrtProvider;
 import ai.onnxruntime.OrtSession;
 
 import org.openmrs.api.context.Context;
@@ -41,11 +44,15 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 	private OrtSession session;
 
+	private OrtSession.SessionOptions sessionOptions;
+
 	private String loadedModelPath;
 
 	private WordPieceTokenizer tokenizer;
 
 	private volatile int detectedDimensions = -1;
+
+	private OrtProvider activeProvider = OrtProvider.CPU;
 
 	private String explicitModelPath;
 
@@ -96,6 +103,14 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 		return explicitModelPath;
 	}
 
+	/**
+	 * Returns the execution provider used by the ONNX session (e.g. CORE_ML, CUDA, or CPU).
+	 * The provider is determined when the session is first created.
+	 */
+	public OrtProvider getActiveProvider() {
+		return activeProvider;
+	}
+
 	public synchronized void close() {
 		if (session != null) {
 			log.info("Closing ONNX embedding session");
@@ -106,9 +121,14 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 				log.warn("Error closing ONNX session", e);
 			}
 			session = null;
+			if (sessionOptions != null) {
+				sessionOptions.close();
+				sessionOptions = null;
+			}
 			loadedModelPath = null;
 			tokenizer = null;
 			detectedDimensions = -1;
+			activeProvider = OrtProvider.CPU;
 		}
 		env = null;
 	}
@@ -233,7 +253,19 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 		if (session == null) {
 			log.info("Loading ONNX embedding model from {}", modelPath);
 			OrtEnvironment ortEnv = getOrCreateEnv();
-			session = ortEnv.createSession(modelPath);
+			sessionOptions = new OrtSession.SessionOptions();
+			EnumSet<OrtProvider> available = OrtEnvironment.getAvailableProviders();
+			log.info("Available ONNX execution providers: {}", available);
+			if (available.contains(OrtProvider.CORE_ML)) {
+				sessionOptions.addCoreML();
+				activeProvider = OrtProvider.CORE_ML;
+				log.info("CoreML execution provider enabled (GPU acceleration)");
+			} else if (available.contains(OrtProvider.CUDA)) {
+				sessionOptions.addCUDA();
+				activeProvider = OrtProvider.CUDA;
+				log.info("CUDA execution provider enabled (GPU acceleration)");
+			}
+			session = ortEnv.createSession(modelPath, sessionOptions);
 			loadedModelPath = modelPath;
 			log.info("ONNX embedding model loaded successfully");
 		}

@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -49,6 +50,7 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Skipped when ONNX model files are not present.</p>
  */
+@Tag("eval")
 public class EnrichedRetrievalEvalTest {
 
 	private static final Logger log = LoggerFactory.getLogger(EnrichedRetrievalEvalTest.class);
