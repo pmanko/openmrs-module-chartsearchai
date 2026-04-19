@@ -230,15 +230,26 @@ public final class ModelNoiseProfile {
 	 * Uses wide margins so the pipeline errs on the side of
 	 * including results rather than rejecting them.
 	 */
+	private static final ModelNoiseProfile CONSERVATIVE_DEFAULT =
+			new ModelNoiseProfile(
+					0.15,  // noiseMean
+					0.08,  // noiseStd
+					0.13,  // noiseMedian
+					0.08,  // noiseQ1
+					0.28,  // noiseP95
+					0.90,  // intraConceptMean
+					0.05); // intraConceptStd
+
 	public static ModelNoiseProfile conservativeDefault() {
-		return new ModelNoiseProfile(
-				0.15,  // noiseMean
-				0.08,  // noiseStd
-				0.13,  // noiseMedian
-				0.08,  // noiseQ1
-				0.28,  // noiseP95
-				0.90,  // intraConceptMean
-				0.05); // intraConceptStd
+		return CONSERVATIVE_DEFAULT;
+	}
+
+	/**
+	 * Returns true if this is the placeholder conservative default,
+	 * meaning a real noise profile should be computed from the data.
+	 */
+	public boolean isConservativeDefault() {
+		return this == CONSERVATIVE_DEFAULT;
 	}
 
 	/**
