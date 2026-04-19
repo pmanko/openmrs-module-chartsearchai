@@ -222,15 +222,13 @@ public class ChartSearchAiUtils {
 	 * @param concept the source concept
 	 * @return list of containing-set names, or empty list
 	 */
-	private static final int MAX_DESCRIPTION_HINT_WORDS = 10;
-
 	public static List<String> extractCategoryHints(Concept concept) {
 		if (concept == null) {
 			return Collections.emptyList();
 		}
 		List<String> hints = new ArrayList<String>();
 
-		// Source 1: concept-set membership (e.g. Temperature → "Vital signs")
+		// Concept-set membership (e.g. Temperature → "Vital signs")
 		try {
 			List<ConceptSet> sets = Context.getConceptService()
 					.getSetsContainingConcept(concept);
@@ -249,42 +247,6 @@ public class ChartSearchAiUtils {
 		}
 		catch (Exception e) {
 			// Context unavailable (test bypass) or transient API failure
-		}
-
-		// Source 2: compact concept description — only when the concept
-		// ALSO has concept-set membership. The description supplements
-		// the set name with additional category vocabulary (e.g.
-		// Hookworm in "Infectious disease" set gets "Infection of
-		// humans..." from its description). Without set membership,
-		// the description becomes the ONLY hint and can dominate the
-		// embedding inappropriately (e.g. "Disorders related or
-		// resulting from use of cocaine" for Cocaine abuse pushes the
-		// embedding away from "mental health" toward substance semantics).
-		if (!hints.isEmpty()) try {
-			org.openmrs.ConceptDescription desc = concept.getDescription();
-			if (desc != null && desc.getDescription() != null
-					&& !desc.getDescription().trim().isEmpty()) {
-				String full = desc.getDescription().trim();
-				// Take first sentence (up to first period)
-				int dot = full.indexOf('.');
-				String clause = dot > 0 ? full.substring(0, dot) : full;
-				// Truncate to max words
-				String[] words = clause.split("\\s+");
-				if (words.length > MAX_DESCRIPTION_HINT_WORDS) {
-					StringBuilder sb = new StringBuilder();
-					for (int i = 0; i < MAX_DESCRIPTION_HINT_WORDS; i++) {
-						if (i > 0) sb.append(' ');
-						sb.append(words[i]);
-					}
-					clause = sb.toString();
-				}
-				if (!clause.isEmpty()) {
-					hints.add(clause);
-				}
-			}
-		}
-		catch (Exception e) {
-			// Description not available
 		}
 
 		return hints;

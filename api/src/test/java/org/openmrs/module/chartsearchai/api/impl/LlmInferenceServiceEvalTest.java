@@ -3944,4 +3944,39 @@ public class LlmInferenceServiceEvalTest {
 		assertTrue(hasTb,
 				"Should include Tuberculosis records via Opportunistic infectious disease hint");
 	}
+
+	/**
+	 * Regression test for a live-instance bug where concept description hints
+	 * (e.g. "Patient's height in centimeters") created asymmetric semantic
+	 * bias, causing the pipeline to return Weight but not Height for BMI
+	 * queries. Fixed by removing description hints from
+	 * {@code extractCategoryHints()} so only concept-set names (e.g. "Vital
+	 * signs") are used — matching what these test hint maps provide.
+	 */
+	@Test
+	public void realModel_bmiQuery_fourthDataset_shouldReturnBothHeightAndWeight() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		List<Integer> result = runRealModelPipeline(
+				"Calculate BMI from the most recent height and weight",
+				100, FOURTH_PATIENT_DATASET,
+				LlmInferenceService.PipelineConfig.forModel(MODEL_DIR),
+				TestDatasetHelper.FOURTH_DATASET_CATEGORY_HINTS);
+
+		boolean hasHeight = false;
+		boolean hasWeight = false;
+		for (int idx : result) {
+			if (FOURTH_PATIENT_DATASET[idx].contains("Height")) {
+				hasHeight = true;
+			}
+			if (FOURTH_PATIENT_DATASET[idx].contains("Weight")) {
+				hasWeight = true;
+			}
+		}
+		assertTrue(hasWeight,
+				"BMI query should return Weight records, got: " + result);
+		assertTrue(hasHeight,
+				"BMI query should return Height records, got: " + result);
+	}
 }
