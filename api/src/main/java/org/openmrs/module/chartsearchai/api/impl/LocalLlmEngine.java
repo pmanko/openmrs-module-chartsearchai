@@ -429,15 +429,6 @@ public class LocalLlmEngine implements LlmEngine {
 	}
 
 	private String resolveServerBinaryPath() {
-		// Check if user configured a custom path
-		String configuredPath = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_SERVER_BINARY_PATH);
-		if (configuredPath != null && !configuredPath.trim().isEmpty()) {
-			return ChartSearchAiUtils.resolveModelPath(
-					configuredPath.trim(), ChartSearchAiConstants.GP_LLM_SERVER_BINARY_PATH);
-		}
-
-		// Extract bundled binary from JAR resources
 		return extractBundledServer();
 	}
 
@@ -457,8 +448,8 @@ public class LocalLlmEngine implements LlmEngine {
 			if (is == null) {
 				throw new IllegalStateException(
 						"No bundled llama-server for " + platform + "/" + arch
-								+ ". Set " + ChartSearchAiConstants.GP_LLM_SERVER_BINARY_PATH
-								+ " to the path of a manually installed llama-server binary.");
+								+ ". Place a compatible llama-server binary at "
+								+ targetFile.getAbsolutePath());
 			}
 
 			targetDir.mkdirs();

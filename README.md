@@ -165,7 +165,6 @@ These settings apply when `chartsearchai.retrieval.pipeline` is `embedding` (the
 | `chartsearchai.llm.timeoutSeconds` | `120` | Maximum seconds to wait for LLM inference before timing out |
 | `chartsearchai.llm.idleTimeoutMinutes` | `30` | *(Local engine only)* Minutes of inactivity after which the embedded llama-server is stopped to free RAM. It is automatically restarted on the next query. Set to `0` to keep it running indefinitely |
 | `chartsearchai.llm.serverPort` | `18085` | *(Local engine only)* Port for the embedded llama-server. Change if the default conflicts with another service |
-| `chartsearchai.llm.serverBinaryPath` | *(empty)* | *(Local engine only)* Override path to a custom llama-server binary (relative to the OpenMRS data directory). When empty, the bundled binary for the current platform is extracted automatically |
 
 #### Rate limiting and caching
 

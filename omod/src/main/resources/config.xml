@@ -130,12 +130,6 @@ Question: What lab orders were placed?
 	</globalProperty>
 
 	<globalProperty>
-		<property>chartsearchai.llm.serverBinaryPath</property>
-		<defaultValue>chartsearchai/llama-server</defaultValue>
-		<description>Relative path within the OpenMRS application data directory to the llama-server binary. This server is managed automatically by the module when chartsearchai.llm.engine is "local". Download a pre-built binary from https://github.com/ggml-org/llama.cpp/releases or build from source.</description>
-	</globalProperty>
-
-	<globalProperty>
 		<property>chartsearchai.llm.serverPort</property>
 		<defaultValue>18085</defaultValue>
 		<description>Port number for the embedded llama-server when chartsearchai.llm.engine is "local". Change if the default port conflicts with another service.</description>
