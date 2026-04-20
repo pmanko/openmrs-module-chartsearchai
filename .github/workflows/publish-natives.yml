@@ -12,79 +12,82 @@ env:
   LLAMA_VERSION: ${{ github.event.inputs.llama_cpp_version }}
 
 jobs:
-  download-and-publish:
+  build-native:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            platform: Mac
+            arch: aarch64
+            binary: llama-server
+            cmake_extra: ''
+          - os: macos-13
+            platform: Mac
+            arch: x86_64
+            binary: llama-server
+            cmake_extra: ''
+          - os: ubuntu-22.04
+            platform: Linux
+            arch: x86_64
+            binary: llama-server
+            cmake_extra: ''
+          - os: ubuntu-22.04-arm
+            platform: Linux
+            arch: aarch64
+            binary: llama-server
+            cmake_extra: ''
+          - os: windows-2022
+            platform: Windows
+            arch: x86_64
+            binary: llama-server.exe
+            cmake_extra: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ env.LLAMA_VERSION }}
+
+      - name: Build llama-server (static)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_STATIC=ON \
+            ${{ matrix.cmake_extra }}
+          cmake --build build --config Release --target llama-server -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
+        shell: bash
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}-${{ matrix.arch }}
+          path: build/bin/${{ matrix.binary }}
+
+  publish:
+    needs: build-native
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download llama-server binaries from llama.cpp release
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble natives resources
         run: |
           NATIVES=llama-server-natives/src/main/resources/llama-server
-          BASE_URL="https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_VERSION}"
-
-          # Copies the server binary and only the ABI-versioned shared libraries
-          # the binary references (*.0.dylib / *.so.0), skipping unversioned and
-          # fully-versioned symlink duplicates. Generates libs.txt manifest.
-          copy_platform_files() {
-            local src_dir="$1"
-            local dest_dir="$2"
-            local binary="$3"
-
-            mkdir -p "$dest_dir"
-            cp "$src_dir/$binary" "$dest_dir/"
-
-            > "$dest_dir/libs.txt"
-            for lib in "$src_dir"/*.dylib "$src_dir"/*.so* "$src_dir"/*.dll; do
-              [ -f "$lib" ] || continue
-              local name="$(basename "$lib")"
-              case "$name" in
-                *.0.dylib|*.so.0) ;;
-                libggml-cpu-*.so) ;;
-                *.dll) ;;
-                *) continue ;;
-              esac
-              cp "$lib" "$dest_dir/"
-              echo "$name" >> "$dest_dir/libs.txt"
-            done
-          }
-
-          # Mac arm64
-          mkdir -p /tmp/mac-arm64
-          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-macos-arm64.tar.gz" -o /tmp/mac-arm64.tar.gz
-          tar xzf /tmp/mac-arm64.tar.gz -C /tmp/mac-arm64
-          copy_platform_files "/tmp/mac-arm64/llama-${LLAMA_VERSION}" "$NATIVES/Mac/aarch64" "llama-server"
-
-          # Mac x86_64
-          mkdir -p /tmp/mac-x64
-          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-macos-x64.tar.gz" -o /tmp/mac-x64.tar.gz
-          tar xzf /tmp/mac-x64.tar.gz -C /tmp/mac-x64
-          copy_platform_files "/tmp/mac-x64/llama-${LLAMA_VERSION}" "$NATIVES/Mac/x86_64" "llama-server"
-
-          # Linux x86_64
-          mkdir -p /tmp/linux-x64
-          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-ubuntu-x64.tar.gz" -o /tmp/linux-x64.tar.gz
-          tar xzf /tmp/linux-x64.tar.gz -C /tmp/linux-x64
-          copy_platform_files "/tmp/linux-x64/llama-${LLAMA_VERSION}" "$NATIVES/Linux/x86_64" "llama-server"
-
-          # Linux arm64
-          mkdir -p /tmp/linux-arm64
-          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-ubuntu-arm64.tar.gz" -o /tmp/linux-arm64.tar.gz
-          tar xzf /tmp/linux-arm64.tar.gz -C /tmp/linux-arm64
-          copy_platform_files "/tmp/linux-arm64/llama-${LLAMA_VERSION}" "$NATIVES/Linux/aarch64" "llama-server"
-
-          # Windows x86_64
-          mkdir -p /tmp/win-x64
-          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-win-cpu-x64.zip" -o /tmp/win-x64.zip
-          unzip -o /tmp/win-x64.zip -d /tmp/win-x64
-          copy_platform_files "/tmp/win-x64" "$NATIVES/Windows/x86_64" "llama-server.exe"
-
-          # Windows arm64
-          mkdir -p /tmp/win-arm64
-          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-win-cpu-arm64.zip" -o /tmp/win-arm64.zip
-          unzip -o /tmp/win-arm64.zip -d /tmp/win-arm64
-          copy_platform_files "/tmp/win-arm64" "$NATIVES/Windows/aarch64" "llama-server.exe"
-
-          echo "Downloaded llama-server binaries for llama.cpp ${LLAMA_VERSION}"
+          for dir in artifacts/*/; do
+            name="$(basename "$dir")"
+            platform="${name%%-*}"
+            arch="${name##*-}"
+            mkdir -p "$NATIVES/$platform/$arch"
+            cp "$dir"/* "$NATIVES/$platform/$arch/"
+            chmod +x "$NATIVES/$platform/$arch/"* 2>/dev/null || true
+          done
+          echo "Assembled natives:"
           find "$NATIVES" -type f -exec ls -lh {} \;
 
       - name: Set up Java and Maven
