@@ -135,6 +135,15 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 	}
 
 	@Override
+	public boolean isSubwordToken(String term) {
+		try {
+			return getTokenizer().isSplitWord(term);
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
+	@Override
 	public String getModelName() {
 		if (loadedModelPath != null) {
 			return loadedModelPath;

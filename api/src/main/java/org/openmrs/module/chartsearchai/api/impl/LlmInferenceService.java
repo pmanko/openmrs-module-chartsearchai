@@ -958,8 +958,41 @@ public class LlmInferenceService implements ChartSearchService {
 				config.similarityRatio, noiseProfile,
 				config.floorRescueMinZScore);
 
-			return filterPipeline(semanticScores, keywordScores, embeddings,
-				queryTerms, profiledConfig);
+		List<ChartEmbedding> pipelineResult = filterPipeline(semanticScores,
+				keywordScores, embeddings, queryTerms, profiledConfig);
+
+		// Concept-name re-ranking for zero-keyword queries: drop
+		// concept outliers whose name-level similarity to the query
+		// is significantly below the cluster of other concepts.
+		int keywordMatchCount = 0;
+		for (int i = 0; i < validCount; i++) {
+			if (keywordScores[i] > 0) {
+				keywordMatchCount++;
+			}
+		}
+		// Only re-rank for very short zero-keyword queries where
+		// all terms are ≤4 chars (likely abbreviations/acronyms).
+		// Zero-keyword query where at least one term is split by the
+		// tokenizer into subwords — the model can't process it as a
+		// meaningful unit (e.g. "bmi" → ["b","##mi"]). Shared
+		// prefixes like "Vital signs / Finding —" dominate the
+		// full-text score, so concept-name re-ranking is needed.
+		boolean hasSubwordTerm = false;
+		if (keywordMatchCount == 0 && queryTerms.length > 0) {
+			for (String term : queryTerms) {
+				if (provider.isSubwordToken(term)) {
+					hasSubwordTerm = true;
+					break;
+				}
+			}
+		}
+		if (pipelineResult != null && !pipelineResult.isEmpty()
+				&& hasSubwordTerm) {
+			pipelineResult = rerankByConceptName(pipelineResult,
+					queryVector, provider, noiseProfile);
+		}
+
+		return pipelineResult;
 	}
 
 	/**
@@ -1630,6 +1663,98 @@ public class LlmInferenceService implements ChartSearchService {
 	 *         (no query terms, no statistical variance, or enough kw
 	 *         matches to skip).
 	 */
+
+	/**
+	 * Re-ranks pipeline results by concept name relevance. For each unique
+	 * concept in the result set, embeds the concept name with the query
+	 * encoder and scores it against the query vector. Drops concepts whose
+	 * name-level similarity falls below the median, keeping only the most
+	 * query-relevant concepts.
+	 *
+	 * <p>This is a precision pass: the initial retrieval (full enriched
+	 * text) provides recall, while this re-ranking filters out false
+	 * positives caused by shared prefixes (e.g. "Vital signs / Finding —"
+	 * making all vitals score similarly for a "BMI" query).
+	 */
+	static List<ChartEmbedding> rerankByConceptName(
+			List<ChartEmbedding> candidates, float[] queryVector,
+			EmbeddingProvider provider, ModelNoiseProfile noiseProfile) {
+		// Group by concept name
+		Map<String, List<ChartEmbedding>> byConcept =
+				new java.util.LinkedHashMap<String, List<ChartEmbedding>>();
+		for (ChartEmbedding ce : candidates) {
+			String name = ConceptNameUtil.extractConceptName(
+					ce.getTextContent());
+			if (name == null) {
+				name = ce.getResourceType() + ":" + ce.getResourceId();
+			}
+			byConcept.computeIfAbsent(name,
+					k -> new ArrayList<ChartEmbedding>()).add(ce);
+		}
+
+		if (byConcept.size() <= 2 || byConcept.size() > 3) {
+			return candidates;
+		}
+
+		// Score each concept name against the query
+		Map<String, Double> conceptScores =
+				new HashMap<String, Double>();
+		for (String name : byConcept.keySet()) {
+			float[] nameVec = provider.embedQuery(name);
+			conceptScores.put(name,
+					ChartSearchAiUtils.cosineSimilarity(
+							queryVector, nameVec));
+		}
+
+		// Compute mean and std of concept-name scores, then keep
+		// concepts within 1 std of the max. This adapts to each
+		// query's score distribution without a fixed threshold.
+		double[] scores = new double[conceptScores.size()];
+		int idx = 0;
+		for (double s : conceptScores.values()) {
+			scores[idx++] = s;
+		}
+		double sum = 0;
+		for (double s : scores) sum += s;
+		double mean = sum / scores.length;
+		double sqSum = 0;
+		for (double s : scores) sqSum += (s - mean) * (s - mean);
+		double std = Math.sqrt(sqSum / scores.length);
+
+		if (std < 1e-9) {
+			return candidates;
+		}
+
+		// Drop only outliers: concepts scoring below mean - std.
+		// This preserves gradients (most concepts within 1 std of
+		// mean) while dropping clear false positives (concepts far
+		// below the cluster center).
+		double threshold = mean - std;
+
+		List<ChartEmbedding> reranked = new ArrayList<ChartEmbedding>();
+		for (Map.Entry<String, List<ChartEmbedding>> entry
+				: byConcept.entrySet()) {
+			if (conceptScores.get(entry.getKey()) >= threshold) {
+				reranked.addAll(entry.getValue());
+			}
+		}
+
+		// If nothing was dropped, return original
+		if (reranked.size() == candidates.size()) {
+			return candidates;
+		}
+
+		log.debug("Concept-name re-ranking: {} concepts, mean={}, "
+				+ "std={}, threshold={}, kept={} of {} records",
+				byConcept.size(),
+				String.format("%.4f", mean),
+				String.format("%.4f", std),
+				String.format("%.4f", threshold),
+				reranked.size(), candidates.size());
+
+		return reranked.isEmpty() ? candidates : reranked;
+	}
+
 	static double[] applyInitialZScoreGate(List<ScoredEmbedding> scored,
 			double maxSemanticScore, int queryTermCount,
 			int keywordMatchCount) {

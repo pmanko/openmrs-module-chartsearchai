@@ -72,4 +72,18 @@ public interface EmbeddingProvider {
 	default String identifyModel() {
 		return null;
 	}
+
+	/**
+	 * Returns true if the given term would be split into multiple
+	 * subword tokens by the model's tokenizer. When a term is split,
+	 * the model can't process it as a meaningful unit — the concept-name
+	 * re-ranking step uses this to detect abbreviations (BMI, PMTCT)
+	 * that the tokenizer doesn't understand.
+	 *
+	 * @param term a single lowercase word to check
+	 * @return true if the tokenizer splits it, false if it's a single token
+	 */
+	default boolean isSubwordToken(String term) {
+		return false;
+	}
 }

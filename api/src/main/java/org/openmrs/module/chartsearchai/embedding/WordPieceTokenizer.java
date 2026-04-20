@@ -113,6 +113,20 @@ public class WordPieceTokenizer {
 		return new TokenizedInput(inputIds, attentionMask, tokenTypeIds);
 	}
 
+	/**
+	 * Returns true if the word would be split into multiple subword
+	 * tokens. A single-token word means the vocabulary contains it
+	 * as a whole unit; a multi-token word means the model sees it
+	 * as fragments.
+	 */
+	public boolean isSplitWord(String word) {
+		if (word == null || word.isEmpty() || word.length() > MAX_WORD_LENGTH) {
+			return true;
+		}
+		String lower = word.toLowerCase();
+		return vocab.get(lower) == null;
+	}
+
 	private void tokenizeWord(String word, List<Integer> tokenIds) {
 		if (word.length() > MAX_WORD_LENGTH) {
 			tokenIds.add(unkTokenId);
