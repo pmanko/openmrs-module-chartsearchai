@@ -88,7 +88,7 @@ Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<op
 | Mistral Nemo 12B | ~12GB total | `mistral` | [GGUF](https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF) |
 | Gemma 4 31B | ~20–24GB total | `gemma` | [GGUF](https://huggingface.co/bartowski/google_gemma-4-31B-it-GGUF) |
 
-To switch models, update `chartsearchai.llm.modelFilePath` and `chartsearchai.llm.chatTemplate` — no rebuild needed. See [Evaluated models](#evaluated-models) for a full comparison of all models tested, including size trade-offs and licensing.
+To switch models, update `chartsearchai.llm.modelFilePath` — no rebuild needed. The embedded llama-server detects the model's chat template automatically. See [Evaluated models](#evaluated-models) for a full comparison of all models tested, including size trade-offs and licensing.
 
 ### 3. Download the embedding model
 
@@ -108,7 +108,7 @@ Set these global properties in **Admin > Settings**:
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `chartsearchai.llm.engine` | `local` | LLM inference engine: `local` runs a GGUF model in-process via llama.cpp; `remote` calls an OpenAI-compatible API |
+| `chartsearchai.llm.engine` | `local` | LLM inference engine: `local` manages an embedded llama-server subprocess for GGUF model inference; `remote` calls an external OpenAI-compatible API |
 
 **Local engine** (default) — requires a downloaded GGUF model file (see step 2):
 
@@ -121,7 +121,7 @@ Set these global properties in **Admin > Settings**:
 | Property | Where | Description |
 |----------|-------|-------------|
 | `chartsearchai.llm.remote.endpointUrl` | Global property | Chat completions endpoint URL (e.g. `http://localhost:11434/v1/chat/completions` for Ollama, `http://gpu-server:8000/v1/chat/completions` for vLLM, `https://api.openai.com/v1/chat/completions` for OpenAI) |
-| `chartsearchai.llm.remote.apiKey` | `openmrs-runtime.properties` | API key for authentication (sent as `Bearer` token). Stored in runtime properties instead of the database for security. For self-hosted servers that don't require auth, set to any non-empty value (e.g. `none`) |
+| `chartsearchai.llm.remote.apiKey` | `openmrs-runtime.properties` | API key for authentication (sent as `Bearer` token). Stored in runtime properties instead of the database for security. Optional — omit for self-hosted servers that don't require auth |
 | `chartsearchai.llm.remote.modelName` | Global property | Model identifier (e.g. `llama3.3` for Ollama, `meta-llama/Llama-3.3-8B-Instruct` for vLLM, `gpt-4o` for OpenAI) |
 
 The API key is read from `openmrs-runtime.properties` (not from the database) so it is never exposed in the Admin UI or database backups. Add it to your runtime properties file:
@@ -163,8 +163,9 @@ These settings apply when `chartsearchai.retrieval.pipeline` is `embedding` (the
 |----------|---------|-------------|
 | `chartsearchai.llm.systemPrompt` | *(built-in clinical prompt)* | System prompt that guides how the LLM responds — e.g. answering only the question asked, using only the provided patient records, citing records by number, naming what is missing when records lack relevant information (e.g. "There are no records about diabetes in this patient's chart"), keeping answers concise, and returning structured JSON |
 | `chartsearchai.llm.timeoutSeconds` | `120` | Maximum seconds to wait for LLM inference before timing out |
-| `chartsearchai.llm.chatTemplate` | `gemma` | *(Local engine only)* Chat template for formatting prompts. Presets: `llama3`, `mistral`, `phi3`, `chatml`, `gemma`. Set to `auto` to use the model's built-in GGUF chat template. Or a custom template string with `{system}` and `{user}` placeholders |
-| `chartsearchai.llm.idleTimeoutMinutes` | `30` | *(Local engine only)* Minutes of inactivity after which the LLM model is unloaded from memory to free RAM. The model is automatically reloaded on the next query. Set to `0` to keep the model loaded indefinitely |
+| `chartsearchai.llm.idleTimeoutMinutes` | `30` | *(Local engine only)* Minutes of inactivity after which the embedded llama-server is stopped to free RAM. It is automatically restarted on the next query. Set to `0` to keep it running indefinitely |
+| `chartsearchai.llm.serverPort` | `18085` | *(Local engine only)* Port for the embedded llama-server. Change if the default conflicts with another service |
+| `chartsearchai.llm.serverBinaryPath` | *(empty)* | *(Local engine only)* Override path to a custom llama-server binary (relative to the OpenMRS data directory). When empty, the bundled binary for the current platform is extracted automatically |
 
 #### Rate limiting and caching
 
@@ -448,7 +449,6 @@ Or run a specific suite:
 mvn test -pl api -Dtest="RetrievalQualityEvalTest"
 mvn test -pl api -Dtest="CitationEvalTest"
 mvn test -pl api -Dtest="AbsentDataEvalTest"
-mvn test -pl api -Dtest="PromptInjectionEvalTest"
 ```
 
 ### Adding cases
@@ -460,7 +460,6 @@ Each suite is driven by a JSON dataset in `api/src/test/resources/eval/`. To add
 | `retrieval-eval-dataset.json` | Query → expected record indices (recall\@30) |
 | `citation-eval-dataset.json` | Simulated LLM JSON → expected citation indices (F1) |
 | `absent-data-eval-dataset.json` | Query → expected keywords in "no records" answer |
-| `prompt-injection-eval-dataset.json` | Adversarial payload → special tokens stripped |
 
 ### Metrics report
 
@@ -468,7 +467,7 @@ Each run appends per-case and summary metrics to `api/target/eval-results.csv` f
 
 ## Evaluated models
 
-The following models were evaluated for local inference via java-llama.cpp (Q4_K_M quantization, GGUF format). All figures are approximate and depend on hardware.
+The following models were evaluated for local inference via the embedded llama-server (Q4_K_M quantization, GGUF format). All figures are approximate and depend on hardware.
 
 | Model | Params | File Size | Total RAM | Context Window | CPU Speed | Chat Template |
 |-------|--------|-----------|-----------|----------------|-----------|---------------|
