@@ -22,42 +22,57 @@ jobs:
           NATIVES=llama-server-natives/src/main/resources/llama-server
           BASE_URL="https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_VERSION}"
 
+          # Copies the server binary, all shared libraries, and generates libs.txt
+          copy_platform_files() {
+            local src_dir="$1"
+            local dest_dir="$2"
+            local binary="$3"
+
+            cp "$src_dir/$binary" "$dest_dir/"
+
+            > "$dest_dir/libs.txt"
+            for lib in "$src_dir"/*.dylib "$src_dir"/*.so* "$src_dir"/*.dll; do
+              [ -f "$lib" ] || continue
+              cp "$lib" "$dest_dir/"
+              echo "$(basename "$lib")" >> "$dest_dir/libs.txt"
+            done
+          }
+
           # Mac arm64
-          mkdir -p "$NATIVES/Mac/aarch64"
-          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-macos-arm64.tar.gz" | tar xz --strip-components=1 -C /tmp/mac-arm64 2>/dev/null || true
-          mkdir -p /tmp/mac-arm64 && curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-macos-arm64.tar.gz" -o /tmp/mac-arm64.tar.gz
+          mkdir -p "$NATIVES/Mac/aarch64" /tmp/mac-arm64
+          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-macos-arm64.tar.gz" -o /tmp/mac-arm64.tar.gz
           tar xzf /tmp/mac-arm64.tar.gz -C /tmp/mac-arm64
-          cp /tmp/mac-arm64/*/llama-server "$NATIVES/Mac/aarch64/"
+          copy_platform_files "/tmp/mac-arm64/llama-${LLAMA_VERSION}" "$NATIVES/Mac/aarch64" "llama-server"
 
           # Mac x86_64
           mkdir -p "$NATIVES/Mac/x86_64" /tmp/mac-x64
           curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-macos-x64.tar.gz" -o /tmp/mac-x64.tar.gz
           tar xzf /tmp/mac-x64.tar.gz -C /tmp/mac-x64
-          cp /tmp/mac-x64/*/llama-server "$NATIVES/Mac/x86_64/"
+          copy_platform_files "/tmp/mac-x64/llama-${LLAMA_VERSION}" "$NATIVES/Mac/x86_64" "llama-server"
 
           # Linux x86_64
           mkdir -p "$NATIVES/Linux/x86_64" /tmp/linux-x64
           curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-ubuntu-x64.tar.gz" -o /tmp/linux-x64.tar.gz
           tar xzf /tmp/linux-x64.tar.gz -C /tmp/linux-x64
-          cp /tmp/linux-x64/*/llama-server "$NATIVES/Linux/x86_64/"
+          copy_platform_files "/tmp/linux-x64/llama-${LLAMA_VERSION}" "$NATIVES/Linux/x86_64" "llama-server"
 
           # Linux arm64
           mkdir -p "$NATIVES/Linux/aarch64" /tmp/linux-arm64
           curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-ubuntu-arm64.tar.gz" -o /tmp/linux-arm64.tar.gz
           tar xzf /tmp/linux-arm64.tar.gz -C /tmp/linux-arm64
-          cp /tmp/linux-arm64/*/llama-server "$NATIVES/Linux/aarch64/"
+          copy_platform_files "/tmp/linux-arm64/llama-${LLAMA_VERSION}" "$NATIVES/Linux/aarch64" "llama-server"
 
           # Windows x86_64
           mkdir -p "$NATIVES/Windows/x86_64" /tmp/win-x64
           curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-win-cpu-x64.zip" -o /tmp/win-x64.zip
           unzip -o /tmp/win-x64.zip -d /tmp/win-x64
-          cp /tmp/win-x64/llama-server.exe "$NATIVES/Windows/x86_64/"
+          copy_platform_files "/tmp/win-x64" "$NATIVES/Windows/x86_64" "llama-server.exe"
 
           # Windows arm64
           mkdir -p "$NATIVES/Windows/aarch64" /tmp/win-arm64
           curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-win-cpu-arm64.zip" -o /tmp/win-arm64.zip
           unzip -o /tmp/win-arm64.zip -d /tmp/win-arm64
-          cp /tmp/win-arm64/llama-server.exe "$NATIVES/Windows/aarch64/"
+          copy_platform_files "/tmp/win-arm64" "$NATIVES/Windows/aarch64" "llama-server.exe"
 
           echo "Downloaded llama-server binaries for llama.cpp ${LLAMA_VERSION}"
           find "$NATIVES" -type f -exec ls -lh {} \;

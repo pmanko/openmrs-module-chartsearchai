@@ -207,6 +207,11 @@ public class LocalLlmEngine implements LlmEngine {
 		try {
 			ProcessBuilder pb = new ProcessBuilder(command);
 			pb.redirectErrorStream(true);
+			String binDir = new File(serverBinaryPath).getParent();
+			if (binDir != null) {
+				pb.environment().put("DYLD_LIBRARY_PATH", binDir);
+				pb.environment().put("LD_LIBRARY_PATH", binDir);
+			}
 			serverProcess = pb.start();
 
 			// Drain server output in a daemon thread to prevent buffer blocking
@@ -437,14 +442,19 @@ public class LocalLlmEngine implements LlmEngine {
 		String arch = detectArch();
 
 		String binaryName = platform.equals("Windows") ? "llama-server.exe" : "llama-server";
-		String resourcePath = "llama-server/" + platform + "/" + arch + "/" + binaryName;
+		String resourceDir = "llama-server/" + platform + "/" + arch + "/";
 
 		File appDataDir = new File(
 				org.openmrs.util.OpenmrsUtil.getApplicationDataDirectory());
 		File targetDir = new File(appDataDir, "chartsearchai/bin");
 		File targetFile = new File(targetDir, binaryName);
 
-		try (InputStream is = getClass().getClassLoader().getResourceAsStream(resourcePath)) {
+		if (targetFile.isFile() && targetFile.canExecute()) {
+			log.info("Using existing llama-server at {}", targetFile.getAbsolutePath());
+			return targetFile.getAbsolutePath();
+		}
+
+		try (InputStream is = getClass().getClassLoader().getResourceAsStream(resourceDir + binaryName)) {
 			if (is == null) {
 				throw new IllegalStateException(
 						"No bundled llama-server for " + platform + "/" + arch
@@ -462,7 +472,44 @@ public class LocalLlmEngine implements LlmEngine {
 					"Failed to extract bundled llama-server: " + e.getMessage(), e);
 		}
 
+		extractSharedLibraries(resourceDir, targetDir, platform);
+
 		return targetFile.getAbsolutePath();
+	}
+
+	private void extractSharedLibraries(String resourceDir, File targetDir, String platform) {
+		String libListResource = resourceDir + "libs.txt";
+		try (InputStream libList = getClass().getClassLoader().getResourceAsStream(libListResource)) {
+			if (libList == null) {
+				log.warn("No libs.txt found at {}; shared libraries may be missing", libListResource);
+				return;
+			}
+			try (BufferedReader reader = new BufferedReader(new InputStreamReader(libList, StandardCharsets.UTF_8))) {
+				String libName;
+				while ((libName = reader.readLine()) != null) {
+					libName = libName.trim();
+					if (libName.isEmpty()) {
+						continue;
+					}
+					try (InputStream libStream = getClass().getClassLoader()
+							.getResourceAsStream(resourceDir + libName)) {
+						if (libStream == null) {
+							log.warn("Listed library {} not found in resources", libName);
+							continue;
+						}
+						File libFile = new File(targetDir, libName);
+						Files.copy(libStream, libFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+						if (!platform.equals("Windows")) {
+							libFile.setExecutable(true);
+						}
+						log.debug("Extracted shared library {}", libName);
+					}
+				}
+			}
+		}
+		catch (IOException e) {
+			log.warn("Failed to extract shared libraries: {}", e.getMessage());
+		}
 	}
 
 	int getServerPort() {
