@@ -155,6 +155,8 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 			"-0.01,0.04,-0.04,-0.02";
 	private static final String FINGERPRINT_L12_V2 =
 			"-0.09,0.06,-0.01,-0.01";
+	private static final String FINGERPRINT_MEDCPT =
+			"-0.01,0.00,-0.03,-0.01";
 
 	@Override
 	public String identifyModel() {
@@ -162,7 +164,9 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 			float[] v = embed(MODEL_IDENTITY_SENTINEL);
 			String fp = String.format("%.2f,%.2f,%.2f,%.2f",
 					v[0], v[1], v[2], v[3]);
-			if (FINGERPRINT_MEDEMBED_SMALL.equals(fp)) {
+			if (FINGERPRINT_MEDCPT.equals(fp)) {
+				return "medcpt";
+			} else if (FINGERPRINT_MEDEMBED_SMALL.equals(fp)) {
 				return "medembed-small";
 			} else if (FINGERPRINT_L6_V2.equals(fp)) {
 				return "all-MiniLM-L6-v2";
