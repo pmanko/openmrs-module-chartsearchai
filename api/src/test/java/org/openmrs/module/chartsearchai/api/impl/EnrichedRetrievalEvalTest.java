@@ -86,31 +86,80 @@ public class EnrichedRetrievalEvalTest {
 
 	private static LlmInferenceService.PipelineConfig[] datasetConfigs;
 
+	private static String activeModel;
+
+	private static String activeBaseline;
+
+	private static boolean medcptAvailable() {
+		try {
+			String base = new java.io.File(System.getProperty(
+					"chartsearchai.models.base", "../../models")
+					+ "/MedCPT").getCanonicalPath();
+			return new java.io.File(base + "/Article-Encoder/model-merged.onnx").exists()
+					&& new java.io.File(base + "/Query-Encoder/model-merged.onnx").exists();
+		} catch (java.io.IOException e) {
+			return false;
+		}
+	}
+
 	@SuppressWarnings("unchecked")
 	private static void ensureInitialized() {
-		if (provider == null) {
+		if (provider != null) return;
+
+		// Detect model: use MedCPT if available and requested via system
+		// property, otherwise fall back to L6-v2.
+		String modelChoice = System.getProperty(
+				"chartsearchai.eval.model", "auto");
+		boolean useMedCPT = false;
+		if ("medcpt".equalsIgnoreCase(modelChoice)) {
+			useMedCPT = true;
+		} else if ("auto".equalsIgnoreCase(modelChoice)) {
+			// Auto: use whatever is configured via the model dir property
+			useMedCPT = false;
+		}
+
+		if (useMedCPT && medcptAvailable()) {
+			try {
+				String base = new java.io.File(System.getProperty(
+						"chartsearchai.models.base", "../../models")
+						+ "/MedCPT").getCanonicalPath();
+				provider = new OnnxEmbeddingProvider(
+						base + "/Article-Encoder/model-merged.onnx",
+						base + "/Query-Encoder/model-merged.onnx",
+						base + "/Query-Encoder/vocab.txt");
+				activeModel = "medcpt";
+				activeBaseline = "eval/medcpt-retrieval-eval.json";
+			} catch (java.io.IOException e) {
+				throw new RuntimeException(e);
+			}
+		} else {
 			provider = new OnnxEmbeddingProvider(
 					TestDatasetHelper.MODEL_PATH, TestDatasetHelper.VOCAB_PATH);
-			cachingProvider = TestDatasetHelper.cachingProvider(provider);
-			datasetEmbeddings = new List[DATASETS.length];
-			datasetRecords = new List[DATASETS.length];
-			datasetConfigs = new LlmInferenceService.PipelineConfig[DATASETS.length];
-			for (int d = 0; d < DATASETS.length; d++) {
-				datasetRecords[d] = TestDatasetHelper.toSerializedRecords(
-						DATASETS[d], DATASET_HINTS[d]);
-				datasetEmbeddings[d] = TestDatasetHelper.buildOrLoadCachedEmbeddings(
-						datasetRecords[d], provider);
-				org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile noise =
-						TestDatasetHelper.buildOrLoadCachedNoiseProfile(
-								datasetEmbeddings[d], provider);
-				LlmInferenceService.PipelineConfig base =
-						LlmInferenceService.PipelineConfig.defaults();
-				datasetConfigs[d] = new LlmInferenceService.PipelineConfig(
-						base.keywordWeight, base.scoreGapMultiplier,
-						base.minScoreGap, base.gapValidationCosineThreshold,
-						base.similarityRatio, noise, base.floorRescueMinZScore);
-			}
+			activeModel = "l6-v2";
+			activeBaseline = "eval/enriched-retrieval-eval.json";
 		}
+
+		cachingProvider = TestDatasetHelper.cachingProvider(provider);
+		LlmInferenceService.PipelineConfig modelConfig =
+				LlmInferenceService.PipelineConfig.forModel(activeModel);
+
+		datasetEmbeddings = new List[DATASETS.length];
+		datasetRecords = new List[DATASETS.length];
+		datasetConfigs = new LlmInferenceService.PipelineConfig[DATASETS.length];
+		for (int d = 0; d < DATASETS.length; d++) {
+			datasetRecords[d] = TestDatasetHelper.toSerializedRecords(
+					DATASETS[d], DATASET_HINTS[d]);
+			datasetEmbeddings[d] = TestDatasetHelper.buildOrLoadCachedEmbeddings(
+					datasetRecords[d], provider);
+			org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile noise =
+					TestDatasetHelper.buildOrLoadCachedNoiseProfile(
+							datasetEmbeddings[d], provider);
+			datasetConfigs[d] = new LlmInferenceService.PipelineConfig(
+					modelConfig.keywordWeight, modelConfig.scoreGapMultiplier,
+					modelConfig.minScoreGap, modelConfig.gapValidationCosineThreshold,
+					modelConfig.similarityRatio, noise, modelConfig.floorRescueMinZScore);
+		}
+		log.info("Eval initialized with model={}, baseline={}", activeModel, activeBaseline);
 	}
 
 	private static List<Integer> runQuery(String query, int datasetIndex) {
@@ -133,14 +182,15 @@ public class EnrichedRetrievalEvalTest {
 	// --- Golden baseline loading ---
 
 	private static JsonNode loadBaseline() {
+		ensureInitialized();
 		try {
 			return new ObjectMapper().readTree(
 					new InputStreamReader(
 							EnrichedRetrievalEvalTest.class.getClassLoader()
-									.getResourceAsStream("eval/enriched-retrieval-eval.json"),
+									.getResourceAsStream(activeBaseline),
 							StandardCharsets.UTF_8));
 		} catch (IOException e) {
-			throw new RuntimeException("Failed to load enriched eval baseline", e);
+			throw new RuntimeException("Failed to load eval baseline: " + activeBaseline, e);
 		}
 	}
 
@@ -166,8 +216,9 @@ public class EnrichedRetrievalEvalTest {
 	public void enrichedRetrieval_shouldMeetBaseline(String label,
 			String query, int datasetIndex,
 			int expectedMinRecords, String mustContainText) {
-		Assumptions.assumeTrue(TestDatasetHelper.modelFilesExist(),
-				"Skipping: ONNX model not found");
+		ensureInitialized();
+		Assumptions.assumeTrue(provider != null,
+				"Skipping: embedding model not found");
 
 		List<Integer> result = runQuery(query, datasetIndex);
 
