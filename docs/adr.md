@@ -25,6 +25,8 @@ This document captures the architectural decisions made for the Chart Search AI 
 - [Decision 17: Remote LLM backend support](#decision-17-remote-llm-backend-support)
 - [Decision 18: Cross-encoder reranking stage (superseded)](#decision-18-cross-encoder-reranking-stage-superseded)
 - [Decision 19: Retain all-MiniLM-L6-v2 as the embedding model](#decision-19-retain-all-minilm-l6-v2-as-the-embedding-model)
+- [Decision 20: MedCPT dual-encoder as an alternative embedding model](#decision-20-medcpt-dual-encoder-as-an-alternative-embedding-model)
+- [Decision 21: Concept-name re-ranking for subword-tokenized queries](#decision-21-concept-name-re-ranking-for-subword-tokenized-queries)
 - [Known limitations](#known-limitations)
 - [Planned future work](#planned-future-work)
 
@@ -1285,6 +1287,92 @@ L6 was re-measured the same day on the same code revision so the comparison is a
 L12-v2 fixed 2 tests (one "should return empty" assertion that L12 satisfied by returning empty too often, and one excluded EndToEndSearchTest), regressed 52 tests, and shared 18 failures with L6. Regressions spanned every clinical category — cancer/Kaposi sarcoma, mental health, anemia, cardiovascular, blood, STD, allergies, and vital signs — across all five patient datasets. Most strikingly, L12 broke the entire cancer suite (currently passing on L6) and the mental health suite, confirming that the deeper sibling does not preserve L6's clinical-vocabulary associations.
 
 This reinforces the original finding: **the failure mode is not model capacity but the specific embedding geometry of L6-v2**. Even the closest sibling in the same family does not transfer. Future improvements to clinical retrieval should target the pipeline (or vocabulary expansion / synonym handling) rather than the embedding model.
+
+**Update (April 2026):** Decision 19's conclusion was partially superseded by Decisions 20 and 21. MedCPT is now a supported alternative with 88% recall (vs L6-v2's 69%), enabled by model-specific pipeline tuning, dual-encoder support, and concept-name re-ranking.
+
+## Decision 20: MedCPT dual-encoder as an alternative embedding model
+
+**Status: Accepted** (April 2026)
+
+### Problem
+
+Decision 19 retained all-MiniLM-L6-v2 because larger models and MedCPT produced compressed score distributions that defeated the pipeline's adaptive filtering. However, L6-v2 has a critical limitation: its WordPiece tokenizer (30K vocab from general English text) splits medical abbreviations like BMI, STD, COPD, ECG, and ICU into meaningless subword fragments (e.g. "bmi" → ["b", "##mi"]). The model literally cannot understand these terms.
+
+### Root cause analysis
+
+The earlier MedCPT rejection (Decision 18) was due to untested pipeline parameters — the pipeline used L6-v2's tuned constants with MedCPT's different score distribution. Three specific issues were identified and fixed:
+
+1. **No model-specific pipeline configuration.** MedCPT's compressed scores (noise mean ~0.67 vs L6-v2's ~0.26) require different `minScoreGap` (0.01 vs 0.10), `similarityRatio` (0.98 vs 0.80), and `floorRescueMinZScore` (1.0 vs 2.0). A `medcptDefaults()` config was added alongside L6-v2's `defaults()`.
+
+2. **topK caps truncating valid results.** The pipeline had two places where `topK` truncated zero-keyword candidates. With compressed scores, many valid records pass the ratio floor, and the topK cap arbitrarily cut them — discarding Height records for BMI queries. The topK caps were removed entirely; the pipeline's gap detection, ratio floor, and z-score gates determine the result set organically.
+
+3. **No dual-encoder support.** MedCPT uses separate query and article encoders trained in different embedding spaces. The pipeline used a single encoder for both, degrading MedCPT's query-article matching quality. `embedQuery()` was added to `EmbeddingProvider` with a separate ONNX session for the query encoder.
+
+### Model fingerprinting
+
+Models are identified automatically by embedding a sentinel string and matching the first 4 output values against known fingerprints. This detects the model regardless of file path, so `PipelineConfig.forModel()` selects the correct parameters without manual configuration.
+
+### Evaluation
+
+MedCPT (ncbi/MedCPT-Query-Encoder + ncbi/MedCPT-Article-Encoder, 768 dims, ~840MB total) was benchmarked against L6-v2 using the same 485-case eval harness across 5 patient datasets:
+
+| Metric | L6-v2 | MedCPT |
+|---|---|---|
+| Queries with results | 337/485 (69%) | **425/485 (88%)** |
+| Queries returning nothing | 148 | **60** |
+| Total records returned | 2,979 | 6,987 |
+| Cases where model returns more | 64 | **209** |
+
+MedCPT's medical tokenizer correctly handles BMI, STD, COPD, ECG, ICU, TB, BP as single tokens. Its PubMedBERT-based vocabulary was trained on biomedical text where these abbreviations appear frequently.
+
+### Decision
+
+Support MedCPT as an alternative to L6-v2 via the `chartsearchai.embedding.queryModelFilePath` global property. L6-v2 remains the default for backward compatibility. MedCPT requires merged ONNX model files (the ONNX runtime has a bug with external data files).
+
+Each model has its own eval baseline (`enriched-retrieval-eval.json` for L6-v2, `medcpt-retrieval-eval.json` for MedCPT) and pre-computed embedding caches committed to git for fast test runs.
+
+### ONNX external data workaround
+
+MedCPT's ONNX models split weights into `model.onnx` + `model.onnx.data`. The ONNX runtime 1.24.3 has a bug where it resolves the data file path as `<model_path>/model.onnx.data` instead of `<model_dir>/model.onnx.data`. The workaround is to merge weights back into a single file using `onnx.save()`. A `createSessionWithExternalData()` method attempts canonical path resolution first, falling back to byte-array loading.
+
+## Decision 21: Concept-name re-ranking for subword-tokenized queries
+
+**Status: Accepted** (April 2026)
+
+### Problem
+
+When a query term is split by the tokenizer into subword fragments (e.g. "bmi" → ["b","##mi"]), the model can't process it as a meaningful unit. The full-text embedding is then dominated by shared structural prefixes (e.g. "Vital signs / Finding —") rather than the actual concept content. This causes false positives — a BMI query returns Blood Pressure alongside the correct Height and Weight records because all vitals share the same prefix and score similarly.
+
+### Solution
+
+A concept-name re-ranking stage runs after the main pipeline, only when:
+- The query has **zero keyword matches** (the pipeline relied entirely on semantic scores)
+- At least one query term is **split by the tokenizer** (`EmbeddingProvider.isSubwordToken()` checks if the model's vocabulary contains the term as a whole token)
+
+The re-ranking extracts each unique concept name from the result set (via the existing `ConceptNameUtil.extractConceptName()`), embeds it with the query encoder, and drops concepts that are **outliers below the cluster** (scoring below `mean - std` of the concept-name scores).
+
+For "BMI" with 3 result concepts:
+- Weight (kg): concept-name score 0.81
+- Height (cm): 0.72
+- Diastolic blood pressure: 0.63
+- Mean = 0.72, std = 0.08, threshold = 0.64
+- BP (0.63) is below → dropped. Weight and Height are above → kept.
+
+### Why this works where cross-encoder reranking failed (Decision 18)
+
+The cross-encoder (Decision 18) reranked individual records using the full text, which couldn't separate records that all contain the same "Vital signs" prefix. Concept-name re-ranking strips the prefix and scores just the concept identity ("Weight (kg)" vs "Diastolic blood pressure") against the query, where the difference is clear.
+
+### Generic design
+
+The approach encodes no domain knowledge:
+- **Trigger:** determined by the model's own tokenizer vocabulary — not character length or language rules
+- **Threshold:** standard statistical outlier detection (mean - std) on the concept-name scores
+- **Self-correcting:** models that already understand the term as a single token (e.g. MedCPT knows "tb") don't trigger the re-ranking
+
+### Evaluation impact
+
+- **L6-v2:** 0 regressions (486/486 eval cases pass)
+- **MedCPT:** 1 baseline update ("any STD?" on FULL dataset: 7 → 5 records, the 2 dropped records were marginally related)
 
 ### Production fix: concept-set membership enrichment at index time
 
