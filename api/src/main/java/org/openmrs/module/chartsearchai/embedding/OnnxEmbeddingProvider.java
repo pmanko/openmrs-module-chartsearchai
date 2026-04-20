@@ -60,6 +60,15 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 	private int explicitMaxSeqLen = -1;
 
+	// Dual-encoder support: separate session for query encoding
+	private OrtSession querySession;
+
+	private OrtSession.SessionOptions querySessionOptions;
+
+	private String loadedQueryModelPath;
+
+	private String explicitQueryModelPath;
+
 	/**
 	 * Default constructor for Spring context — resolves model paths from
 	 * OpenMRS global properties.
@@ -69,13 +78,28 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 	/**
 	 * Test-friendly constructor that accepts explicit file paths, bypassing
-	 * the OpenMRS Context dependency.
+	 * the OpenMRS Context dependency. Uses single-encoder mode.
 	 *
 	 * @param modelPath absolute path to the ONNX model file
 	 * @param vocabPath absolute path to the WordPiece vocabulary file
 	 */
 	public OnnxEmbeddingProvider(String modelPath, String vocabPath) {
 		this.explicitModelPath = modelPath;
+		this.explicitVocabPath = vocabPath;
+		this.explicitMaxSeqLen = ChartSearchAiConstants.DEFAULT_MAX_SEQUENCE_LENGTH;
+	}
+
+	/**
+	 * Test-friendly constructor for dual-encoder models (e.g. MedCPT).
+	 *
+	 * @param articleModelPath path to the article/record encoder ONNX model
+	 * @param queryModelPath path to the query encoder ONNX model
+	 * @param vocabPath path to the shared WordPiece vocabulary file
+	 */
+	public OnnxEmbeddingProvider(String articleModelPath, String queryModelPath,
+			String vocabPath) {
+		this.explicitModelPath = articleModelPath;
+		this.explicitQueryModelPath = queryModelPath;
 		this.explicitVocabPath = vocabPath;
 		this.explicitMaxSeqLen = ChartSearchAiConstants.DEFAULT_MAX_SEQUENCE_LENGTH;
 	}
@@ -87,6 +111,21 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 		}
 		catch (OrtException e) {
 			throw new RuntimeException("Failed to compute embedding", e);
+		}
+	}
+
+	@Override
+	public synchronized float[] embedQuery(String text) {
+		try {
+			OrtSession qs = getQuerySession();
+			if (qs != null) {
+				return runInference(qs, getTokenizer(), text);
+			}
+			// Single-encoder fallback
+			return runInference(getSession(), getTokenizer(), text);
+		}
+		catch (OrtException e) {
+			throw new RuntimeException("Failed to compute query embedding", e);
 		}
 	}
 
@@ -167,6 +206,20 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 			tokenizer = null;
 			detectedDimensions = -1;
 			activeProvider = OrtProvider.CPU;
+		}
+		if (querySession != null) {
+			try {
+				querySession.close();
+			}
+			catch (OrtException e) {
+				log.warn("Error closing query ONNX session", e);
+			}
+			querySession = null;
+			if (querySessionOptions != null) {
+				querySessionOptions.close();
+				querySessionOptions = null;
+			}
+			loadedQueryModelPath = null;
 		}
 		env = null;
 	}
@@ -259,6 +312,43 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 		}
 	}
 
+	/**
+	 * Creates an ONNX session, handling models with external data files
+	 * (model.onnx.data). ONNX runtime resolves external data relative to the
+	 * model file path, which fails when the path contains ".." segments.
+	 * This method canonicalizes the path first; if that still fails (runtime
+	 * bug), it falls back to loading from a byte array.
+	 */
+	private OrtSession createSessionWithExternalData(OrtEnvironment ortEnv,
+			String modelPath, OrtSession.SessionOptions options) throws OrtException {
+		// Try canonical path first (handles ".." segments)
+		String canonical;
+		try {
+			canonical = new java.io.File(modelPath).getCanonicalPath();
+		} catch (java.io.IOException e) {
+			canonical = modelPath;
+		}
+		try {
+			return ortEnv.createSession(canonical, options);
+		} catch (OrtException e) {
+			// External data resolution failed — try loading as byte array.
+			// This works because the byte array approach doesn't need to
+			// resolve a .data file path. However, it requires the model
+			// to be self-contained (no external data), so this only works
+			// for models without external initializers.
+			log.warn("ONNX session creation failed with path '{}', "
+					+ "trying byte array fallback: {}", canonical, e.getMessage());
+			try {
+				byte[] modelBytes = java.nio.file.Files.readAllBytes(
+						java.nio.file.Paths.get(canonical));
+				return ortEnv.createSession(modelBytes, options);
+			} catch (java.io.IOException | OrtException fallbackE) {
+				// Byte array fallback also failed — throw original error
+				throw e;
+			}
+		}
+	}
+
 	private OrtEnvironment getOrCreateEnv() {
 		if (env == null) {
 			env = OrtEnvironment.getEnvironment();
@@ -303,11 +393,62 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 				activeProvider = OrtProvider.CUDA;
 				log.info("CUDA execution provider enabled (GPU acceleration)");
 			}
-			session = ortEnv.createSession(modelPath, sessionOptions);
+			session = createSessionWithExternalData(ortEnv, modelPath, sessionOptions);
 			loadedModelPath = modelPath;
 			log.info("ONNX embedding model loaded successfully");
 		}
 		return session;
+	}
+
+	/**
+	 * Returns the query-encoder session for dual-encoder models, or null
+	 * for single-encoder models. Lazily loads the query model on first call.
+	 */
+	private synchronized OrtSession getQuerySession() throws OrtException {
+		String queryModelPath;
+		if (explicitQueryModelPath != null) {
+			queryModelPath = explicitQueryModelPath;
+		} else {
+			try {
+				String configuredPath = Context.getAdministrationService()
+						.getGlobalProperty(
+								ChartSearchAiConstants.GP_EMBEDDING_QUERY_MODEL_FILE_PATH);
+				if (configuredPath == null || configuredPath.trim().isEmpty()) {
+					return null; // Single-encoder mode
+				}
+				queryModelPath = ChartSearchAiUtils.resolveModelPath(
+						configuredPath.trim(),
+						ChartSearchAiConstants.GP_EMBEDDING_QUERY_MODEL_FILE_PATH);
+			}
+			catch (Exception e) {
+				return null; // Context not available — single-encoder fallback
+			}
+		}
+
+		if (querySession != null && !queryModelPath.equals(loadedQueryModelPath)) {
+			log.info("Query model path changed, reloading");
+			if (querySession != null) {
+				try { querySession.close(); } catch (OrtException e) { /* ignore */ }
+			}
+			if (querySessionOptions != null) {
+				querySessionOptions.close();
+			}
+			querySession = null;
+		}
+
+		if (querySession == null) {
+			log.info("Loading ONNX query encoder from {}", queryModelPath);
+			OrtEnvironment ortEnv = getOrCreateEnv();
+			querySessionOptions = new OrtSession.SessionOptions();
+			// Use CPU for query encoder to avoid CoreML/CUDA conflicts
+			// with the article encoder session. Query inference is fast
+			// enough (~1ms) that GPU acceleration isn't needed.
+			querySession = createSessionWithExternalData(ortEnv, queryModelPath,
+					querySessionOptions);
+			loadedQueryModelPath = queryModelPath;
+			log.info("ONNX query encoder loaded successfully");
+		}
+		return querySession;
 	}
 
 	private synchronized WordPieceTokenizer getTokenizer() {

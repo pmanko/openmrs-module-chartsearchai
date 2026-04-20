@@ -101,7 +101,7 @@ public class HybridRetriever {
 		List<ChartEmbedding> allEmbeddings = dao.getByPatient(patient);
 		float[] queryVector = null;
 		if (allEmbeddings != null && !allEmbeddings.isEmpty()) {
-			queryVector = embeddingProvider.embed(queryPrefix + queryText);
+			queryVector = embeddingProvider.embedQuery(queryPrefix + queryText);
 		}
 
 		if (bm25Ranked.isEmpty()) {

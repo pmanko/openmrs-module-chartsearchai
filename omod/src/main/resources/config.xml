@@ -208,6 +208,12 @@ Question: What lab orders were placed?
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.embedding.queryModelFilePath</property>
+		<defaultValue></defaultValue>
+		<description>Optional: path to a separate query-encoder ONNX model for dual-encoder architectures (e.g. MedCPT). When set, queries are embedded with this model while records use the standard model (chartsearchai.embedding.modelFilePath). When empty, the standard model is used for both queries and records (single-encoder mode). Example for MedCPT: chartsearchai/MedCPT/Query-Encoder/model.onnx</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.embedding.vocabFilePath</property>
 		<defaultValue>chartsearchai/vocab.txt</defaultValue>
 		<description>Relative path, including the filename, within the OpenMRS application data directory to the WordPiece vocabulary file (vocab.txt) for the ONNX embedding model. Required when embedding pre-filtering is enabled (chartsearchai.embedding.preFilter is true, the default). Example: chartsearchai/vocab.txt (resolves to &lt;application-data-directory&gt;/chartsearchai/vocab.txt). Download vocab.txt from the same model repository as the ONNX model (e.g. https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2). Path traversal (e.g. "..") is not allowed.</description>
