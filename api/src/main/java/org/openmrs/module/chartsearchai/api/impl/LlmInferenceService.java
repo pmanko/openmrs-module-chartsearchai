@@ -309,16 +309,15 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	private PatientChart buildChartWithEmbeddings(Patient patient, String question) {
-		int topK = getTopK();
 		// findSimilar returns null when no embeddings exist (needs indexing),
 		// or an empty list when embeddings exist but nothing matched the query.
-		List<ChartEmbedding> similar = findSimilar(patient, question, topK);
+		List<ChartEmbedding> similar = findSimilar(patient, question);
 
 		if (similar == null) {
 			log.info("No embeddings found for patient [id={}], indexing now", patient.getPatientId());
 			try {
 				embeddingIndexer.indexPatient(patient);
-				similar = findSimilar(patient, question, topK);
+				similar = findSimilar(patient, question);
 			}
 			catch (Exception e) {
 				log.error("Failed to index patient [id={}], falling back to full chart",
@@ -440,7 +439,7 @@ public class LlmInferenceService implements ChartSearchService {
 		List<ChartEmbedding> pipelineFiltered = null;
 		if (!allEmbeddings.isEmpty()) {
 			pipelineFiltered = findSimilar(allEmbeddings, embeddingProvider,
-					question, getTopK(), getQueryPrefix(),
+					question, getQueryPrefix(),
 					new PipelineConfig(getKeywordWeight(),
 							getScoreGapMultiplier(), getMinScoreGap(),
 							getGapValidationCosineThreshold(),
@@ -788,10 +787,6 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	List<ChartEmbedding> findSimilar(Patient patient, String question) {
-		return findSimilar(patient, question, getTopK());
-	}
-
-	private List<ChartEmbedding> findSimilar(Patient patient, String question, int topK) {
 		List<ChartEmbedding> allEmbeddings = dao.getByPatient(patient);
 		if (allEmbeddings.isEmpty()) {
 			return null;
@@ -834,7 +829,7 @@ public class LlmInferenceService implements ChartSearchService {
 				config.similarityRatio, config.floorRescueMinZScore);
 
 		try {
-			return findSimilar(allEmbeddings, embeddingProvider, question, topK,
+			return findSimilar(allEmbeddings, embeddingProvider, question,
 					getQueryPrefix(), config);
 		}
 		catch (Exception e) {
@@ -853,15 +848,19 @@ public class LlmInferenceService implements ChartSearchService {
 	 *        {@link EmbeddingIndexer#indexPatient})
 	 * @param provider embedding provider for query vectorization
 	 * @param question the natural language question
-	 * @param topK target result count — applied only when some candidates
-	 *        lack keyword matches; bypassed when every candidate has a
-	 *        keyword match
 	 * @param queryPrefix prefix prepended to the query before embedding
 	 * @param config pipeline tuning parameters
 	 * @return filtered list of relevant embeddings, or null if empty
 	 */
+	/** @deprecated topK is no longer used by the pipeline. Use the overload without it. */
 	static List<ChartEmbedding> findSimilar(List<ChartEmbedding> allEmbeddings,
 			EmbeddingProvider provider, String question, int topK,
+			String queryPrefix, PipelineConfig config) {
+		return findSimilar(allEmbeddings, provider, question, queryPrefix, config);
+	}
+
+	static List<ChartEmbedding> findSimilar(List<ChartEmbedding> allEmbeddings,
+			EmbeddingProvider provider, String question,
 			String queryPrefix, PipelineConfig config) {
 		String normalizedQuery = stripQueryStopwords(question);
 		String[] queryTerms = extractQueryTerms(normalizedQuery);
@@ -960,7 +959,7 @@ public class LlmInferenceService implements ChartSearchService {
 				config.floorRescueMinZScore);
 
 			return filterPipeline(semanticScores, keywordScores, embeddings,
-				queryTerms, topK, profiledConfig);
+				queryTerms, profiledConfig);
 	}
 
 	/**
@@ -979,20 +978,29 @@ public class LlmInferenceService implements ChartSearchService {
 	 *        — used to apply the recency cap in date order)
 	 * @param provider embedding provider for query vectorization
 	 * @param question the natural language question
-	 * @param topK target result count for {@link #findSimilar}
 	 * @param queryPrefix prefix prepended to the query before embedding
 	 * @param config pipeline tuning parameters
 	 * @return filtered, capped, and concept-grouped serialized records,
 	 *         or {@code null} if {@code findSimilar} returned {@code null}
 	 *         (no embeddings)
 	 */
+	/** @deprecated topK is no longer used by the pipeline. Use the overload without it. */
 	static List<SerializedRecord> findRelevantRecords(
 			List<ChartEmbedding> allEmbeddings,
 			List<SerializedRecord> allRecords,
 			EmbeddingProvider provider, String question, int topK,
 			String queryPrefix, PipelineConfig config) {
+		return findRelevantRecords(allEmbeddings, allRecords, provider,
+				question, queryPrefix, config);
+	}
+
+	static List<SerializedRecord> findRelevantRecords(
+			List<ChartEmbedding> allEmbeddings,
+			List<SerializedRecord> allRecords,
+			EmbeddingProvider provider, String question,
+			String queryPrefix, PipelineConfig config) {
 		List<ChartEmbedding> similar = findSimilar(allEmbeddings, provider,
-				question, topK, queryPrefix, config);
+				question, queryPrefix, config);
 		if (similar == null) {
 			return null;
 		}
@@ -1014,9 +1022,9 @@ public class LlmInferenceService implements ChartSearchService {
 	 */
 	static List<ChartEmbedding> filterPipeline(double[] semanticScores,
 			double[] keywordScores, ChartEmbedding[] embeddings,
-			int queryTermCount, int topK, PipelineConfig config) {
+			int queryTermCount, PipelineConfig config) {
 		return filterPipeline(semanticScores, keywordScores, embeddings,
-				null, queryTermCount, topK, config);
+				null, queryTermCount,  config);
 	}
 
 	/**
@@ -1030,7 +1038,6 @@ public class LlmInferenceService implements ChartSearchService {
 	 * @param embeddings the chart embeddings (parallel to score arrays)
 	 * @param queryTerms query terms after stopword removal (null-safe:
 	 *        when null, the keyword-tier subset check is skipped)
-	 * @param topK target result count — applied only when some candidates
 	 *        lack keyword matches; bypassed when every candidate has a
 	 *        keyword match (gap detection + ratio floor already identified
 	 *        the relevant cluster in that case)
@@ -1039,15 +1046,15 @@ public class LlmInferenceService implements ChartSearchService {
 	 */
 	static List<ChartEmbedding> filterPipeline(double[] semanticScores,
 			double[] keywordScores, ChartEmbedding[] embeddings,
-			String[] queryTerms, int topK, PipelineConfig config) {
+			String[] queryTerms, PipelineConfig config) {
 		return filterPipeline(semanticScores, keywordScores, embeddings,
 				queryTerms, queryTerms != null ? queryTerms.length : 0,
-				topK, config);
+				config);
 	}
 
 	private static List<ChartEmbedding> filterPipeline(double[] semanticScores,
 			double[] keywordScores, ChartEmbedding[] embeddings,
-			String[] queryTerms, int queryTermCount, int topK,
+			String[] queryTerms, int queryTermCount, 
 			PipelineConfig config) {
 
 		double maxBaseScore = 0;
@@ -1235,7 +1242,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// genuine keyword matches from false positives.
 		//
 		// NON-REFINEMENT PATH: No keyword subset was found. Run a sensitive
-		// second-pass gap detection, then ratio floor + topK as a safety net.
+		// second-pass gap detection, then ratio floor
 		if (refinementActivated) {
 			// Refinement path: keyword refinement found a relevant
 			// subset. See applyRefinementPath for the partial-keyword
@@ -1243,15 +1250,15 @@ public class LlmInferenceService implements ChartSearchService {
 			boolean[] pkvOut = { false };
 			candidates = applyRefinementPath(candidates,
 					preRefinementCandidates, scored, queryTerms,
-					queryTermCount, bonusThreshold, minScore, topK,
+					queryTermCount, bonusThreshold, minScore, 
 					config, pkvOut);
 			partialKwValidated = pkvOut[0];
 		} else {
 			// Non-refinement path: second-pass gap detection, ratio
-			// floor with concept-pairing rescue, and topK safety net.
+			// floor with concept-pairing rescue.
 			int[] rfccOut = { -1 };
 			candidates = applyNonRefinementPath(candidates, scored,
-					maxSemanticScore, maxBaseScore, minScore, topK,
+					maxSemanticScore, maxBaseScore, minScore, 
 					config, rfccOut);
 			ratioFloorCandidateCount = rfccOut[0];
 		}
@@ -1374,7 +1381,7 @@ public class LlmInferenceService implements ChartSearchService {
 			results.add(se.embedding);
 		}
 
-		int logLimit = Math.min(topK, scored.size());
+		int logLimit = Math.min(20, scored.size());
 		StringBuilder scores = new StringBuilder();
 		for (int i = 0; i < logLimit; i++) {
 			if (i > 0) {
@@ -1752,7 +1759,6 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
-		// Gap detection considers ALL records above the floor — no topK cap.
 		int adaptiveCutoff = findAdaptiveCutoff(scored, scored.size(),
 				minScore, config.scoreGapMultiplier, firstPassMinGap);
 
@@ -1822,7 +1828,7 @@ public class LlmInferenceService implements ChartSearchService {
 			List<ScoredEmbedding> preRefinementCandidates,
 			List<ScoredEmbedding> scored,
 			String[] queryTerms, int queryTermCount,
-			double bonusThreshold, double minScore, int topK,
+			double bonusThreshold, double minScore, 
 			PipelineConfig config, boolean[] partialKwValidatedOut) {
 		double kwMin = Double.MAX_VALUE;
 		double kwMax = 0;
@@ -2591,7 +2597,7 @@ public class LlmInferenceService implements ChartSearchService {
 			List<ScoredEmbedding> candidates,
 			List<ScoredEmbedding> scored,
 			double maxSemanticScore, double maxBaseScore,
-			double minScore, int topK, PipelineConfig config,
+			double minScore, PipelineConfig config,
 			int[] ratioFloorCandidateCountOut) {
 		// Sensitive second-pass: same multiplier as the first pass, but
 		// with a much lower absolute floor derived from the score
@@ -2774,7 +2780,6 @@ public class LlmInferenceService implements ChartSearchService {
 		// combination of gap detection + ratio floor already identified
 		// the relevant cluster. TopK would arbitrarily truncate
 		// legitimate results (e.g. 40 vitals for a multi-concept query
-		// about "BP, weight, and temperature trend"). Only apply topK
 		// when some candidates lack keywords — they may be semantic
 		// false positives that need capping.
 		return candidates;
