@@ -19,10 +19,12 @@ jobs:
 
       - name: Download llama-server binaries from llama.cpp release
         run: |
+          NATIVES=llama-server-natives/src/main/resources/llama-server
           BASE_URL="https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_VERSION}"
 
-          # Copies the server binary and only the shared libraries the binary
-          # actually references (the .0. versioned ones), plus generates libs.txt.
+          # Copies the server binary and only the ABI-versioned shared libraries
+          # the binary references (*.0.dylib / *.so.0), skipping unversioned and
+          # fully-versioned symlink duplicates. Generates libs.txt manifest.
           copy_platform_files() {
             local src_dir="$1"
             local dest_dir="$2"
@@ -35,13 +37,10 @@ jobs:
             for lib in "$src_dir"/*.dylib "$src_dir"/*.so* "$src_dir"/*.dll; do
               [ -f "$lib" ] || continue
               local name="$(basename "$lib")"
-              # Skip unversioned symlinks (libfoo.dylib) and fully-versioned
-              # files (libfoo.0.9.11.dylib) — only keep the .0. ABI links
-              # that the binary references (libfoo.0.dylib / libfoo.so.0).
-              # On Linux, also keep CPU-variant .so files (libggml-cpu-*.so).
               case "$name" in
                 *.0.dylib|*.so.0) ;;
                 libggml-cpu-*.so) ;;
+                *.dll) ;;
                 *) continue ;;
               esac
               cp "$lib" "$dest_dir/"
@@ -53,44 +52,40 @@ jobs:
           mkdir -p /tmp/mac-arm64
           curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-macos-arm64.tar.gz" -o /tmp/mac-arm64.tar.gz
           tar xzf /tmp/mac-arm64.tar.gz -C /tmp/mac-arm64
-          copy_platform_files "/tmp/mac-arm64/llama-${LLAMA_VERSION}" "staging/macos-aarch64/llama-server/Mac/aarch64" "llama-server"
+          copy_platform_files "/tmp/mac-arm64/llama-${LLAMA_VERSION}" "$NATIVES/Mac/aarch64" "llama-server"
 
           # Mac x86_64
           mkdir -p /tmp/mac-x64
           curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-macos-x64.tar.gz" -o /tmp/mac-x64.tar.gz
           tar xzf /tmp/mac-x64.tar.gz -C /tmp/mac-x64
-          copy_platform_files "/tmp/mac-x64/llama-${LLAMA_VERSION}" "staging/macos-x86_64/llama-server/Mac/x86_64" "llama-server"
+          copy_platform_files "/tmp/mac-x64/llama-${LLAMA_VERSION}" "$NATIVES/Mac/x86_64" "llama-server"
 
           # Linux x86_64
           mkdir -p /tmp/linux-x64
           curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-ubuntu-x64.tar.gz" -o /tmp/linux-x64.tar.gz
           tar xzf /tmp/linux-x64.tar.gz -C /tmp/linux-x64
-          copy_platform_files "/tmp/linux-x64/llama-${LLAMA_VERSION}" "staging/linux-x86_64/llama-server/Linux/x86_64" "llama-server"
+          copy_platform_files "/tmp/linux-x64/llama-${LLAMA_VERSION}" "$NATIVES/Linux/x86_64" "llama-server"
 
           # Linux arm64
           mkdir -p /tmp/linux-arm64
           curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-ubuntu-arm64.tar.gz" -o /tmp/linux-arm64.tar.gz
           tar xzf /tmp/linux-arm64.tar.gz -C /tmp/linux-arm64
-          copy_platform_files "/tmp/linux-arm64/llama-${LLAMA_VERSION}" "staging/linux-aarch64/llama-server/Linux/aarch64" "llama-server"
+          copy_platform_files "/tmp/linux-arm64/llama-${LLAMA_VERSION}" "$NATIVES/Linux/aarch64" "llama-server"
 
           # Windows x86_64
           mkdir -p /tmp/win-x64
           curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-win-cpu-x64.zip" -o /tmp/win-x64.zip
           unzip -o /tmp/win-x64.zip -d /tmp/win-x64
-          copy_platform_files "/tmp/win-x64" "staging/windows-x86_64/llama-server/Windows/x86_64" "llama-server.exe"
+          copy_platform_files "/tmp/win-x64" "$NATIVES/Windows/x86_64" "llama-server.exe"
 
           # Windows arm64
           mkdir -p /tmp/win-arm64
           curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-win-cpu-arm64.zip" -o /tmp/win-arm64.zip
           unzip -o /tmp/win-arm64.zip -d /tmp/win-arm64
-          copy_platform_files "/tmp/win-arm64" "staging/windows-aarch64/llama-server/Windows/aarch64" "llama-server.exe"
+          copy_platform_files "/tmp/win-arm64" "$NATIVES/Windows/aarch64" "llama-server.exe"
 
           echo "Downloaded llama-server binaries for llama.cpp ${LLAMA_VERSION}"
-          for d in staging/*/; do
-            echo "=== $(basename "$d") ==="
-            du -sh "$d"
-            find "$d" -type f -exec ls -lh {} \;
-          done
+          find "$NATIVES" -type f -exec ls -lh {} \;
 
       - name: Set up Java and Maven
         uses: actions/setup-java@v4
@@ -101,31 +96,8 @@ jobs:
           server-username: MAVEN_REPO_USERNAME
           server-password: MAVEN_REPO_API_KEY
 
-      - name: Build and publish per-platform JARs
-        run: |
-          POM=llama-server-natives/pom.xml
-          REPO_URL=https://mavenrepo.openmrs.org/snapshots
-          REPO_ID=openmrs-repo-snapshots
-
-          for platform_dir in staging/*/; do
-            classifier="$(basename "$platform_dir")"
-            jar_file="llama-server-natives-${classifier}.jar"
-
-            # Build a JAR from the platform-specific staging directory
-            (cd "$platform_dir" && jar cf "../../$jar_file" .)
-
-            echo "Deploying $jar_file ($(du -sh "$jar_file" | cut -f1)) with classifier=$classifier"
-            mvn --batch-mode deploy:deploy-file \
-              -DgroupId=org.openmrs.module \
-              -DartifactId=llama-server-natives \
-              -Dversion=1.0.0-SNAPSHOT \
-              -Dclassifier="$classifier" \
-              -Dpackaging=jar \
-              -Dfile="$jar_file" \
-              -DpomFile="$POM" \
-              -DrepositoryId="$REPO_ID" \
-              -Durl="$REPO_URL"
-          done
+      - name: Publish natives JAR to OpenMRS Nexus
+        run: mvn --batch-mode deploy -DskipTests -f llama-server-natives/pom.xml
         env:
           MAVEN_REPO_USERNAME: ${{ secrets.MAVEN_REPO_USERNAME }}
           MAVEN_REPO_API_KEY: ${{ secrets.MAVEN_REPO_API_KEY }}
