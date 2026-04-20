@@ -1,0 +1,78 @@
+name: Publish llama-server natives
+
+on:
+  workflow_dispatch:
+    inputs:
+      llama_cpp_version:
+        description: 'llama.cpp release tag (e.g. b8850)'
+        required: true
+        default: 'b8850'
+
+env:
+  LLAMA_VERSION: ${{ github.event.inputs.llama_cpp_version }}
+
+jobs:
+  download-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download llama-server binaries from llama.cpp release
+        run: |
+          NATIVES=llama-server-natives/src/main/resources/llama-server
+          BASE_URL="https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_VERSION}"
+
+          # Mac arm64
+          mkdir -p "$NATIVES/Mac/aarch64"
+          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-macos-arm64.tar.gz" | tar xz --strip-components=1 -C /tmp/mac-arm64 2>/dev/null || true
+          mkdir -p /tmp/mac-arm64 && curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-macos-arm64.tar.gz" -o /tmp/mac-arm64.tar.gz
+          tar xzf /tmp/mac-arm64.tar.gz -C /tmp/mac-arm64
+          cp /tmp/mac-arm64/*/llama-server "$NATIVES/Mac/aarch64/"
+
+          # Mac x86_64
+          mkdir -p "$NATIVES/Mac/x86_64" /tmp/mac-x64
+          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-macos-x64.tar.gz" -o /tmp/mac-x64.tar.gz
+          tar xzf /tmp/mac-x64.tar.gz -C /tmp/mac-x64
+          cp /tmp/mac-x64/*/llama-server "$NATIVES/Mac/x86_64/"
+
+          # Linux x86_64
+          mkdir -p "$NATIVES/Linux/x86_64" /tmp/linux-x64
+          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-ubuntu-x64.tar.gz" -o /tmp/linux-x64.tar.gz
+          tar xzf /tmp/linux-x64.tar.gz -C /tmp/linux-x64
+          cp /tmp/linux-x64/*/llama-server "$NATIVES/Linux/x86_64/"
+
+          # Linux arm64
+          mkdir -p "$NATIVES/Linux/aarch64" /tmp/linux-arm64
+          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-ubuntu-arm64.tar.gz" -o /tmp/linux-arm64.tar.gz
+          tar xzf /tmp/linux-arm64.tar.gz -C /tmp/linux-arm64
+          cp /tmp/linux-arm64/*/llama-server "$NATIVES/Linux/aarch64/"
+
+          # Windows x86_64
+          mkdir -p "$NATIVES/Windows/x86_64" /tmp/win-x64
+          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-win-cpu-x64.zip" -o /tmp/win-x64.zip
+          unzip -o /tmp/win-x64.zip -d /tmp/win-x64
+          cp /tmp/win-x64/llama-server.exe "$NATIVES/Windows/x86_64/"
+
+          # Windows arm64
+          mkdir -p "$NATIVES/Windows/aarch64" /tmp/win-arm64
+          curl -sL "$BASE_URL/llama-${LLAMA_VERSION}-bin-win-cpu-arm64.zip" -o /tmp/win-arm64.zip
+          unzip -o /tmp/win-arm64.zip -d /tmp/win-arm64
+          cp /tmp/win-arm64/llama-server.exe "$NATIVES/Windows/aarch64/"
+
+          echo "Downloaded llama-server binaries for llama.cpp ${LLAMA_VERSION}"
+          find "$NATIVES" -type f -exec ls -lh {} \;
+
+      - name: Set up Java and Maven
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          server-id: openmrs-repo-snapshots
+          server-username: MAVEN_REPO_USERNAME
+          server-password: MAVEN_REPO_API_KEY
+
+      - name: Publish natives JAR to OpenMRS Nexus
+        run: mvn --batch-mode deploy -pl llama-server-natives -DskipTests
+        env:
+          MAVEN_REPO_USERNAME: ${{ secrets.MAVEN_REPO_USERNAME }}
+          MAVEN_REPO_API_KEY: ${{ secrets.MAVEN_REPO_API_KEY }}

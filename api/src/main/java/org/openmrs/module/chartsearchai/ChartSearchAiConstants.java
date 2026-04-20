@@ -216,6 +216,14 @@ public class ChartSearchAiConstants {
 
 	public static final int DEFAULT_LLM_IDLE_TIMEOUT_MINUTES = 30;
 
+	public static final String GP_LLM_SERVER_PORT = "chartsearchai.llm.serverPort";
+
+	public static final int DEFAULT_LLM_SERVER_PORT = 18085;
+
+	public static final String GP_LLM_SERVER_BINARY_PATH = "chartsearchai.llm.serverBinaryPath";
+
+	public static final String DEFAULT_LLM_SERVER_BINARY = "chartsearchai/llama-server";
+
 	public static final int DEFAULT_MAX_TOKENS = 2048;
 
 	public static final float DEFAULT_REPEAT_PENALTY = 1.0f;

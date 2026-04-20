@@ -25,6 +25,7 @@ import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.RESOURCE_T
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -34,8 +35,12 @@ import org.openmrs.Concept;
 import org.openmrs.ConceptSet;
 import org.openmrs.api.context.Context;
 import org.openmrs.util.OpenmrsUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ChartSearchAiUtils {
+
+	private static final Logger log = LoggerFactory.getLogger(ChartSearchAiUtils.class);
 
 	/**
 	 * Builds a composite key from a resource type and resource ID.
@@ -331,7 +336,38 @@ public class ChartSearchAiUtils {
 							+ ". Set the correct relative path in " + globalPropertyName);
 		}
 
+		removeQuarantineAttribute(modelFile.toPath());
+
 		return modelFile.getAbsolutePath();
+	}
+
+	/**
+	 * Removes the macOS quarantine extended attribute from a file if present.
+	 * Downloaded files on macOS are tagged with {@code com.apple.quarantine},
+	 * which prevents native libraries (e.g. llama.cpp, ONNX Runtime) from
+	 * loading them. Uses the {@code xattr} command because Java's
+	 * {@link UserDefinedFileAttributeView} only covers the {@code user.}
+	 * namespace and cannot access Apple system attributes.
+	 * This is a no-op on non-macOS systems.
+	 */
+	static void removeQuarantineAttribute(Path path) {
+		if (!System.getProperty("os.name", "").toLowerCase().contains("mac")) {
+			return;
+		}
+		try {
+			Process process = new ProcessBuilder(
+					"xattr", "-d", "com.apple.quarantine", path.toString())
+					.redirectErrorStream(true)
+					.start();
+			int exitCode = process.waitFor();
+			if (exitCode == 0) {
+				log.info("Removed macOS quarantine attribute from {}", path);
+			}
+		}
+		catch (IOException | InterruptedException e) {
+			log.warn("Failed to remove macOS quarantine attribute from {}: {}",
+					path, e.getMessage());
+		}
 	}
 
 	/**

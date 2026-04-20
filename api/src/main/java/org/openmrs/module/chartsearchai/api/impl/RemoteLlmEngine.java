@@ -52,18 +52,20 @@ public class RemoteLlmEngine implements LlmEngine {
 	@Override
 	public InferenceResult infer(String systemPrompt, String userMessage, int timeoutSeconds) {
 		String endpointUrl = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
-		String apiKey = getRequiredRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
+		String apiKey = getOptionalRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
 		String modelName = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
 
 		String requestBody = buildRequestBody(systemPrompt, userMessage, modelName, false);
 
-		HttpRequest request = HttpRequest.newBuilder()
+		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
 				.uri(URI.create(endpointUrl))
 				.timeout(Duration.ofSeconds(timeoutSeconds))
 				.header("Content-Type", "application/json")
-				.header("Authorization", "Bearer " + apiKey)
-				.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
-				.build();
+				.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8));
+		if (apiKey != null) {
+			requestBuilder.header("Authorization", "Bearer " + apiKey);
+		}
+		HttpRequest request = requestBuilder.build();
 
 		try {
 			HttpResponse<String> response = getHttpClient().send(request,
@@ -93,18 +95,20 @@ public class RemoteLlmEngine implements LlmEngine {
 	public InferenceResult inferStreaming(String systemPrompt, String userMessage,
 			int timeoutSeconds, Consumer<String> tokenConsumer) {
 		String endpointUrl = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
-		String apiKey = getRequiredRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
+		String apiKey = getOptionalRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
 		String modelName = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
 
 		String requestBody = buildRequestBody(systemPrompt, userMessage, modelName, true);
 
-		HttpRequest request = HttpRequest.newBuilder()
+		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
 				.uri(URI.create(endpointUrl))
 				.timeout(Duration.ofSeconds(timeoutSeconds))
 				.header("Content-Type", "application/json")
-				.header("Authorization", "Bearer " + apiKey)
-				.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
-				.build();
+				.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8));
+		if (apiKey != null) {
+			requestBuilder.header("Authorization", "Bearer " + apiKey);
+		}
+		HttpRequest request = requestBuilder.build();
 
 		try {
 			HttpResponse<InputStream> response = getHttpClient().send(request,
@@ -264,15 +268,10 @@ public class RemoteLlmEngine implements LlmEngine {
 		return value.trim();
 	}
 
-	private String getRequiredRuntimeProperty(String propertyName) {
+	private String getOptionalRuntimeProperty(String propertyName) {
 		Properties props = Context.getRuntimeProperties();
 		String value = props != null ? props.getProperty(propertyName) : null;
-		if (value == null || value.trim().isEmpty()) {
-			throw new IllegalStateException(
-					"Required runtime property not configured: " + propertyName
-							+ ". Add it to openmrs-runtime.properties.");
-		}
-		return value.trim();
+		return (value != null && !value.trim().isEmpty()) ? value.trim() : null;
 	}
 
 	private synchronized HttpClient getHttpClient() {

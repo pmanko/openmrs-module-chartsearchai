@@ -19,15 +19,9 @@
 			<type>jar</type>
 		</dependency>
 		<dependency>
-			<groupId>de.kherud</groupId>
-			<artifactId>llama</artifactId>
-			<version>4.1.0</version>
-			<exclusions>
-				<exclusion>
-					<groupId>org.jetbrains</groupId>
-					<artifactId>annotations</artifactId>
-				</exclusion>
-			</exclusions>
+			<groupId>org.openmrs.module</groupId>
+			<artifactId>llama-server-natives</artifactId>
+			<version>${project.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>com.microsoft.onnxruntime</groupId>

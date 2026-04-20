@@ -23,6 +23,7 @@
 	</scm>
 
 	<modules>
+		<module>llama-server-natives</module>
 		<module>api</module>
 		<module>omod</module>
 	</modules>

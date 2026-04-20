@@ -11,6 +11,14 @@ package org.openmrs.module.chartsearchai.api.impl;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -19,24 +27,26 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import de.kherud.llama.InferenceParameters;
-import de.kherud.llama.LlamaModel;
-import de.kherud.llama.LlamaOutput;
-import de.kherud.llama.ModelParameters;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.junit.jupiter.api.Test;
-import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 
 /**
- * Tests LLM answer quality for multi-concept trend queries by running the
- * actual GGUF model against the 28-record vitals dataset. Skipped automatically
- * when the model file is not found.
+ * Tests LLM answer quality for multi-concept trend queries by calling an
+ * OpenAI-compatible endpoint (e.g. llama-server). Skipped automatically
+ * unless the system property is set and the endpoint is reachable.
  *
- * <p>Uses a single LLM call with all 28 records and iterates through system
- * prompt variations to find the best citation coverage. Citations are collected
- * from both the answer text and the JSON citations array.</p>
+ * <p>Run with: {@code -Dchartsearchai.llm.quality.test=true} and optionally
+ * {@code -Dchartsearchai.llm.quality.endpoint=http://localhost:9999/v1/chat/completions}</p>
  */
 public class LlmAnswerQualityTest {
+
+	private static final ObjectMapper MAPPER = new ObjectMapper();
+
+	private static final String DEFAULT_ENDPOINT = "http://localhost:18085/v1/chat/completions";
 
 	// 28 records grouped by concept, matching production pipeline output.
 	private static final String RECORDS =
@@ -84,82 +94,72 @@ public class LlmAnswerQualityTest {
 
 	private static final Pattern CITATION_PATTERN = Pattern.compile("\\[(\\d+)]");
 
-	private static final String[] TEMPLATES_TO_TRY = { "llama3", "chatml" };
-
-	private static final String LLM_MODEL_PATH = resolveLlmModelPath();
-
-	private static String resolveLlmModelPath() {
-		String explicit = System.getProperty("chartsearchai.llm.model.path");
-		if (explicit != null) {
-			return explicit;
-		}
-		String[] baseDirs = { "../models", "../../models" };
-		for (String base : baseDirs) {
-			java.io.File dir = new java.io.File(base);
-			if (!dir.isDirectory()) {
-				continue;
-			}
-			java.io.File[] subdirs = dir.listFiles(java.io.File::isDirectory);
-			if (subdirs == null) {
-				continue;
-			}
-			for (java.io.File subdir : subdirs) {
-				java.io.File[] ggufFiles = subdir.listFiles(
-						(d, name) -> name.endsWith(".gguf"));
-				if (ggufFiles != null && ggufFiles.length > 0) {
-					java.io.File smallest = ggufFiles[0];
-					for (java.io.File f : ggufFiles) {
-						if (f.length() < smallest.length()) {
-							smallest = f;
-						}
-					}
-					return smallest.getPath();
-				}
-			}
-		}
-		return "../models/model.gguf";
+	private static String getEndpoint() {
+		String explicit = System.getProperty("chartsearchai.llm.quality.endpoint");
+		return (explicit != null && !explicit.isEmpty()) ? explicit : DEFAULT_ENDPOINT;
 	}
 
-	private static boolean llmModelFileExists() {
-		return new java.io.File(LLM_MODEL_PATH).exists();
-	}
-
-	private static String runLlm(LlamaModel model, String systemPrompt, String templateName) {
-		String userMessage = "Patient records (grouped by type, most recent first within each group):\n"
-				+ RECORDS + "\nQuestion: " + QUESTION;
-
-		String grammar = null;
+	private static boolean isEndpointReachable() {
 		try {
-			java.io.InputStream is = LlmProvider.class.getClassLoader()
-					.getResourceAsStream("json-answer.gbnf");
-			if (is != null) {
-				grammar = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-			}
-		} catch (java.io.IOException e) {
-			// proceed without grammar
+			String healthUrl = getEndpoint().replace("/v1/chat/completions", "/health");
+			HttpResponse<String> response = HttpClient.newHttpClient().send(
+					HttpRequest.newBuilder().uri(URI.create(healthUrl))
+							.timeout(Duration.ofSeconds(5)).GET().build(),
+					HttpResponse.BodyHandlers.ofString());
+			return response.statusCode() == 200;
+		}
+		catch (Exception e) {
+			return false;
+		}
+	}
+
+	private static String runLlm(String systemPrompt) throws IOException, InterruptedException {
+		ObjectNode root = MAPPER.createObjectNode();
+		root.put("temperature", 0.0);
+		root.put("max_tokens", 2048);
+		root.put("stream", false);
+
+		ObjectNode responseFormat = MAPPER.createObjectNode();
+		responseFormat.put("type", "json_object");
+		root.set("response_format", responseFormat);
+
+		ArrayNode messages = MAPPER.createArrayNode();
+		ObjectNode sysMsg = MAPPER.createObjectNode();
+		sysMsg.put("role", "system");
+		sysMsg.put("content", systemPrompt);
+		messages.add(sysMsg);
+
+		ObjectNode userMsg = MAPPER.createObjectNode();
+		userMsg.put("role", "user");
+		userMsg.put("content",
+				"Patient records (grouped by type, most recent first within each group):\n"
+						+ RECORDS + "\nQuestion: " + QUESTION);
+		messages.add(userMsg);
+		root.set("messages", messages);
+
+		HttpResponse<String> response = HttpClient.newHttpClient().send(
+				HttpRequest.newBuilder()
+						.uri(URI.create(getEndpoint()))
+						.timeout(Duration.ofSeconds(120))
+						.header("Content-Type", "application/json")
+						.POST(HttpRequest.BodyPublishers.ofString(
+								MAPPER.writeValueAsString(root), StandardCharsets.UTF_8))
+						.build(),
+				HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+		if (response.statusCode() != 200) {
+			throw new IOException("LLM endpoint returned HTTP " + response.statusCode());
 		}
 
-		String template = LocalLlmEngine.PRESET_TEMPLATES.get(templateName);
-		String prompt = template.replace("{system}", systemPrompt).replace("{user}", userMessage);
-		InferenceParameters params = new InferenceParameters(prompt)
-				.setStopStrings(LocalLlmEngine.resolveStopStrings(templateName))
-				.setTemperature(0.0f)
-				.setSeed(42)
-				.setCachePrompt(false)
-				.setRepeatPenalty(ChartSearchAiConstants.DEFAULT_REPEAT_PENALTY);
-		if (grammar != null) {
-			params.setGrammar(grammar);
-		}
-
-		StringBuilder result = new StringBuilder();
-		long deadline = System.currentTimeMillis() + 120_000;
-		for (LlamaOutput output : model.generate(params)) {
-			if (System.currentTimeMillis() > deadline) {
-				break;
+		JsonNode respRoot = MAPPER.readTree(response.body());
+		JsonNode choices = respRoot.get("choices");
+		if (choices != null && choices.isArray() && !choices.isEmpty()) {
+			JsonNode message = choices.get(0).get("message");
+			if (message != null && message.has("content")) {
+				return message.get("content").asText("");
 			}
-			result.append(output);
 		}
-		return result.toString();
+		return "";
 	}
 
 	private static Set<Integer> extractTextCitations(String answer) {
@@ -181,118 +181,94 @@ public class LlmAnswerQualityTest {
 		return found;
 	}
 
-	/**
-	 * Validates that a single LLM call with all 28 records achieves good
-	 * citation coverage. Iterates through prompt and template variations,
-	 * collecting citations from both answer text and JSON citations array.
-	 */
 	@Test
-	public void trendQuery_shouldCiteRecordsAndCoverAllConcepts() {
+	public void trendQuery_shouldCiteRecordsAndCoverAllConcepts() throws Exception {
 		org.junit.jupiter.api.Assumptions.assumeTrue(
 				"true".equalsIgnoreCase(System.getProperty("chartsearchai.llm.quality.test")),
 				"Skipping: set -Dchartsearchai.llm.quality.test=true to run");
-		org.junit.jupiter.api.Assumptions.assumeTrue(llmModelFileExists(),
-				"Skipping: LLM model file not found at " + LLM_MODEL_PATH);
+		org.junit.jupiter.api.Assumptions.assumeTrue(isEndpointReachable(),
+				"Skipping: LLM endpoint not reachable at " + getEndpoint());
 
-		ModelParameters modelParams = new ModelParameters()
-				.setModel(LLM_MODEL_PATH)
-				.setGpuLayers(-1)
-				.setCtxSize(8192);
-		LlamaModel model = new LlamaModel(modelParams);
+		List<String> promptVariations = buildPromptVariations();
 
-		try {
-			List<String> promptVariations = buildPromptVariations();
+		String bestConfig = null;
+		Set<Integer> bestCitations = new HashSet<>();
+		Set<String> bestConcepts = new HashSet<>();
+		String bestAnswer = null;
 
-			String bestConfig = null;
-			Set<Integer> bestCitations = new HashSet<>();
-			Set<String> bestConcepts = new HashSet<>();
-			String bestAnswer = null;
+		for (int p = 0; p < promptVariations.size(); p++) {
+			String rawResponse = runLlm(promptVariations.get(p));
+			LlmProvider.LlmResponse parsed = LlmProvider.extractResponse(rawResponse);
+			String answer = parsed.getAnswer();
 
-			for (String templateName : TEMPLATES_TO_TRY) {
-				for (int p = 0; p < promptVariations.size(); p++) {
-					String rawResponse = runLlm(model, promptVariations.get(p), templateName);
-					LlmProvider.LlmResponse parsed = LlmProvider.extractResponse(rawResponse);
-					String answer = parsed.getAnswer();
-
-					Set<Integer> allCitations = new HashSet<>();
-					allCitations.addAll(extractTextCitations(answer));
-					for (int c : parsed.getCitations()) {
-						allCitations.add(c);
-					}
-					// Only count valid citations (1-28)
-					allCitations.removeIf(c -> c < 1 || c > TOTAL_RECORDS);
-
-					Set<String> concepts = findMentionedConcepts(answer);
-
-					String config = "[" + templateName + "] Prompt " + (p + 1);
-					System.out.println("\n=== " + config + ": "
-							+ allCitations.size() + "/" + TOTAL_RECORDS
-							+ " citations, " + concepts.size() + " concepts ===");
-					System.out.println("Text citations: " + extractTextCitations(answer));
-					System.out.println("JSON citations: " + parsed.getCitations());
-					System.out.println("All unique: " + allCitations);
-
-					if (allCitations.size() > bestCitations.size()
-							|| (allCitations.size() == bestCitations.size()
-								&& concepts.size() > bestConcepts.size())) {
-						bestCitations = allCitations;
-						bestConcepts = concepts;
-						bestConfig = config;
-						bestAnswer = answer;
-					}
-				}
+			Set<Integer> allCitations = new HashSet<>();
+			allCitations.addAll(extractTextCitations(answer));
+			for (int c : parsed.getCitations()) {
+				allCitations.add(c);
 			}
+			allCitations.removeIf(c -> c < 1 || c > TOTAL_RECORDS);
 
-			System.out.println("\n=== BEST: " + bestConfig + " ("
-					+ bestCitations.size() + "/" + TOTAL_RECORDS + ") ===");
-			System.out.println("Citations: " + bestCitations);
-			System.out.println("Concepts: " + bestConcepts);
-			System.out.println("Answer: " + bestAnswer);
+			Set<String> concepts = findMentionedConcepts(answer);
 
-			// All 4 concepts must be present
-			for (String concept : REQUIRED_CONCEPTS) {
-				assertTrue(bestConcepts.contains(concept),
-						"Best answer should mention " + concept + ". Answer: " + bestAnswer);
+			String config = "Prompt " + (p + 1);
+			System.out.println("\n=== " + config + ": "
+					+ allCitations.size() + "/" + TOTAL_RECORDS
+					+ " citations, " + concepts.size() + " concepts ===");
+			System.out.println("Text citations: " + extractTextCitations(answer));
+			System.out.println("JSON citations: " + parsed.getCitations());
+			System.out.println("All unique: " + allCitations);
+
+			if (allCitations.size() > bestCitations.size()
+					|| (allCitations.size() == bestCitations.size()
+						&& concepts.size() > bestConcepts.size())) {
+				bestCitations = allCitations;
+				bestConcepts = concepts;
+				bestConfig = config;
+				bestAnswer = answer;
 			}
-
-			// Minimum citation coverage
-			Set<Integer> missing = new HashSet<>();
-			for (int i = 1; i <= TOTAL_RECORDS; i++) {
-				if (!bestCitations.contains(i)) {
-					missing.add(i);
-				}
-			}
-			assertTrue(bestCitations.size() >= MIN_REQUIRED_CITATIONS,
-					"Best answer should cite at least " + MIN_REQUIRED_CITATIONS
-					+ "/" + TOTAL_RECORDS + " records. Got: " + bestCitations.size()
-					+ ". Missing: " + missing + ". Answer: " + bestAnswer);
-		} finally {
-			model.close();
 		}
+
+		System.out.println("\n=== BEST: " + bestConfig + " ("
+				+ bestCitations.size() + "/" + TOTAL_RECORDS + ") ===");
+		System.out.println("Citations: " + bestCitations);
+		System.out.println("Concepts: " + bestConcepts);
+		System.out.println("Answer: " + bestAnswer);
+
+		for (String concept : REQUIRED_CONCEPTS) {
+			assertTrue(bestConcepts.contains(concept),
+					"Best answer should mention " + concept + ". Answer: " + bestAnswer);
+		}
+
+		Set<Integer> missing = new HashSet<>();
+		for (int i = 1; i <= TOTAL_RECORDS; i++) {
+			if (!bestCitations.contains(i)) {
+				missing.add(i);
+			}
+		}
+		assertTrue(bestCitations.size() >= MIN_REQUIRED_CITATIONS,
+				"Best answer should cite at least " + MIN_REQUIRED_CITATIONS
+				+ "/" + TOTAL_RECORDS + " records. Got: " + bestCitations.size()
+				+ ". Missing: " + missing + ". Answer: " + bestAnswer);
 	}
 
 	private static List<String> buildPromptVariations() {
 		List<String> prompts = new ArrayList<>();
 
-		// Variation 0: current production default
 		prompts.add(LlmProvider.DEFAULT_SYSTEM_PROMPT);
 
-		// Variation 1: anti-summarization
 		prompts.add(LlmProvider.DEFAULT_SYSTEM_PROMPT.replace(
 				"Include ALL relevant records in your answer — never omit any for brevity.",
 				"NEVER summarize multiple values into a range. List each measurement individually "
 				+ "with its date, value, and citation. Every record MUST appear in the answer."));
 
-		// Variation 2: strongest directive with arrow format
 		prompts.add(LlmProvider.DEFAULT_SYSTEM_PROMPT.replace(
 				"Include ALL relevant records in your answer — never omit any for brevity. "
 				+ "Cite EVERY record you reference by its number in brackets (e.g. [1], [3]).",
 				"CRITICAL REQUIREMENT: You must cite EVERY record provided. "
 				+ "For each record [N], include: the exact value, date, and [N] citation. "
 				+ "Do NOT summarize ranges. Do NOT skip records. "
-				+ "Use the arrow format: val (date) [N] \\u2192 val (date) [N] \\u2192 ..."));
+				+ "Use the arrow format: val (date) [N] \u2192 val (date) [N] \u2192 ..."));
 
-		// Variation 3: format directive with oldest-to-newest ordering
 		prompts.add(LlmProvider.DEFAULT_SYSTEM_PROMPT
 				.replace("Answer ONLY the specific question asked.",
 						"Answer ONLY the specific question asked. When the question asks about trends, "
@@ -300,7 +276,7 @@ public class LlmAnswerQualityTest {
 				.replace("Include ALL relevant records in your answer — never omit any for brevity. "
 						+ "Cite EVERY record you reference by its number in brackets (e.g. [1], [3]).",
 						"Cite EVERY record by its [N] number. Your answer must contain ALL record numbers. "
-						+ "Format: val (date) [N] \\u2192 val (date) [N] \\u2192 ..."));
+						+ "Format: val (date) [N] \u2192 val (date) [N] \u2192 ..."));
 
 		return prompts;
 	}

@@ -9,25 +9,33 @@
  */
 package org.openmrs.module.chartsearchai.api.impl;
 
+import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
-import de.kherud.llama.InferenceParameters;
-import de.kherud.llama.LlamaModel;
-import de.kherud.llama.LlamaOutput;
-import de.kherud.llama.ModelParameters;
-import de.kherud.llama.Pair;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.openmrs.api.APIException;
 import org.openmrs.api.context.Context;
@@ -38,59 +46,35 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * Local LLM engine using java-llama.cpp for in-process GGUF model inference.
- * The model is loaded lazily on first use and automatically unloaded after an
- * idle period to free memory.
+ * Local LLM engine that manages an embedded llama-server subprocess for GGUF
+ * model inference. The server is started lazily on first use and automatically
+ * stopped after an idle period to free memory. It exposes an
+ * OpenAI-compatible chat completions API internally.
  */
 @Component("chartSearchAi.localLlmEngine")
 public class LocalLlmEngine implements LlmEngine {
 
 	private static final Logger log = LoggerFactory.getLogger(LocalLlmEngine.class);
 
-	private static final String JSON_ANSWER_GRAMMAR = loadGrammar("json-answer.gbnf");
+	private static final ObjectMapper MAPPER = new ObjectMapper();
 
-	static final Map<String, String> PRESET_TEMPLATES;
+	private static final int SERVER_STARTUP_TIMEOUT_SECONDS = 120;
 
-	static final Map<String, List<String>> PRESET_STOP_STRINGS;
+	private static final int HEALTH_POLL_INTERVAL_MS = 500;
 
-	static {
-		Map<String, String> templates = new LinkedHashMap<>();
-		templates.put("llama3",
-				"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
-				+ "{system}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n"
-				+ "{user}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n");
-		templates.put("mistral", "[INST] {system}\n\n{user} [/INST]");
-		templates.put("phi3",
-				"<|system|>\n{system}<|end|>\n<|user|>\n{user}<|end|>\n<|assistant|>\n");
-		templates.put("chatml",
-				"<|im_start|>system\n{system}<|im_end|>\n"
-				+ "<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n");
-		templates.put("gemma",
-				"<start_of_turn>user\n{system}\n\n{user}<end_of_turn>\n"
-				+ "<start_of_turn>model\n");
-		PRESET_TEMPLATES = Collections.unmodifiableMap(templates);
-
-		Map<String, List<String>> stops = new LinkedHashMap<>();
-		stops.put("llama3", List.of("<|eot_id|>", "<|end_of_text|>"));
-		stops.put("mistral", List.of("</s>"));
-		stops.put("phi3", List.of("<|end|>"));
-		stops.put("chatml", List.of("<|im_end|>"));
-		stops.put("gemma", List.of("<end_of_turn>"));
-		PRESET_STOP_STRINGS = Collections.unmodifiableMap(stops);
-	}
-
-	private LlamaModel model;
+	private Process serverProcess;
 
 	private String loadedModelPath;
 
+	private int serverPort;
+
+	private HttpClient httpClient;
+
 	private final ScheduledExecutorService idleTimer = Executors.newSingleThreadScheduledExecutor(
-			new java.util.concurrent.ThreadFactory() {
-				@Override
-				public Thread newThread(Runnable r) {
-					Thread t = new Thread(r, "chartsearchai-llm-idle-timer");
-					t.setDaemon(true);
-					return t;
-				}
+			r -> {
+				Thread t = new Thread(r, "chartsearchai-llm-idle-timer");
+				t.setDaemon(true);
+				return t;
 			});
 
 	private ScheduledFuture<?> idleUnloadFuture;
@@ -98,59 +82,75 @@ public class LocalLlmEngine implements LlmEngine {
 	@Override
 	public synchronized InferenceResult infer(String systemPrompt, String userMessage,
 			int timeoutSeconds) {
-		LlamaModel llm = getModel();
+		ensureServerRunning();
 
-		PreparedInference prepared = createInferenceParameters(llm, systemPrompt, userMessage);
+		String requestBody = buildRequestBody(systemPrompt, userMessage, false);
 
-		long deadline = System.currentTimeMillis() + (timeoutSeconds * 1000L);
-		StringBuilder result = new StringBuilder();
-		int completionTokens = 0;
+		HttpRequest request = HttpRequest.newBuilder()
+				.uri(URI.create(getCompletionsUrl()))
+				.timeout(Duration.ofSeconds(timeoutSeconds))
+				.header("Content-Type", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
+				.build();
 
-		for (LlamaOutput output : llm.generate(prepared.params)) {
-			if (System.currentTimeMillis() > deadline) {
-				log.warn("LLM inference timed out after {} seconds", timeoutSeconds);
-				throw new APIException("LLM inference timed out after " + timeoutSeconds
-						+ " seconds. Try a more specific question or increase the timeout via "
-						+ ChartSearchAiConstants.GP_LLM_TIMEOUT_SECONDS);
+		try {
+			HttpResponse<String> response = getHttpClient().send(request,
+					HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+			if (response.statusCode() < 200 || response.statusCode() >= 300) {
+				log.error("Local llama-server returned HTTP {}: {}", response.statusCode(),
+						truncate(response.body()));
+				throw new APIException("Local llama-server returned HTTP " + response.statusCode());
 			}
-			result.append(output);
-			completionTokens++;
+
+			resetIdleTimer();
+			return parseResponse(response.body());
 		}
-
-		log.info("LLM token usage: {} input + {} output", prepared.promptTokens, completionTokens);
-
-		resetIdleTimer();
-		return new InferenceResult(result.toString(), prepared.promptTokens, completionTokens);
+		catch (IOException e) {
+			throw new APIException("Failed to call local llama-server: " + e.getMessage(), e);
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new APIException("Local llama-server call was interrupted", e);
+		}
 	}
 
 	@Override
 	public synchronized InferenceResult inferStreaming(String systemPrompt, String userMessage,
 			int timeoutSeconds, Consumer<String> tokenConsumer) {
-		LlamaModel llm = getModel();
+		ensureServerRunning();
 
-		PreparedInference prepared = createInferenceParameters(llm, systemPrompt, userMessage);
+		String requestBody = buildRequestBody(systemPrompt, userMessage, true);
 
-		long deadline = System.currentTimeMillis() + (timeoutSeconds * 1000L);
-		StringBuilder result = new StringBuilder();
-		int completionTokens = 0;
+		HttpRequest request = HttpRequest.newBuilder()
+				.uri(URI.create(getCompletionsUrl()))
+				.timeout(Duration.ofSeconds(timeoutSeconds))
+				.header("Content-Type", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
+				.build();
 
-		for (LlamaOutput output : llm.generate(prepared.params)) {
-			if (System.currentTimeMillis() > deadline) {
-				log.warn("LLM inference timed out after {} seconds", timeoutSeconds);
-				throw new APIException("LLM inference timed out after " + timeoutSeconds
-						+ " seconds. Try a more specific question or increase the timeout via "
-						+ ChartSearchAiConstants.GP_LLM_TIMEOUT_SECONDS);
+		try {
+			HttpResponse<InputStream> response = getHttpClient().send(request,
+					HttpResponse.BodyHandlers.ofInputStream());
+
+			if (response.statusCode() < 200 || response.statusCode() >= 300) {
+				String body = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
+				log.error("Local llama-server returned HTTP {}: {}", response.statusCode(),
+						truncate(body));
+				throw new APIException("Local llama-server returned HTTP " + response.statusCode());
 			}
-			String token = output.toString();
-			result.append(token);
-			tokenConsumer.accept(token);
-			completionTokens++;
+
+			InferenceResult result = parseStreamingResponse(response.body(), tokenConsumer);
+			resetIdleTimer();
+			return result;
 		}
-
-		log.info("LLM token usage: {} input + {} output", prepared.promptTokens, completionTokens);
-
-		resetIdleTimer();
-		return new InferenceResult(result.toString(), prepared.promptTokens, completionTokens);
+		catch (IOException e) {
+			throw new APIException("Failed to call local llama-server: " + e.getMessage(), e);
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new APIException("Local llama-server call was interrupted", e);
+		}
 	}
 
 	@Override
@@ -159,12 +159,7 @@ public class LocalLlmEngine implements LlmEngine {
 			idleUnloadFuture.cancel(false);
 			idleUnloadFuture = null;
 		}
-		if (model != null) {
-			log.info("Closing LLM model");
-			model.close();
-			model = null;
-		}
-		loadedModelPath = null;
+		stopServer();
 	}
 
 	@Override
@@ -173,92 +168,330 @@ public class LocalLlmEngine implements LlmEngine {
 		close();
 	}
 
-	private PreparedInference createInferenceParameters(LlamaModel llm, String systemPrompt,
-			String userMessage) {
-		String templateValue = getChatTemplate();
+	private void ensureServerRunning() {
+		String modelPath = resolveModelPath();
 
-		InferenceParameters params;
-		int promptTokens;
-		if ("auto".equalsIgnoreCase(templateValue)) {
-			List<Pair<String, String>> messages = new ArrayList<Pair<String, String>>();
-			messages.add(new Pair<String, String>("user", userMessage));
-			params = new InferenceParameters("")
-					.setUseChatTemplate(true)
-					.setMessages(systemPrompt, messages);
-			promptTokens = llm.encode(systemPrompt + "\n\n" + userMessage).length;
-			log.debug("Using model's built-in chat template");
-		} else {
-			String prompt = formatPrompt(templateValue, systemPrompt, userMessage);
-			promptTokens = llm.encode(prompt).length;
-			log.debug("LLM prompt size: {} tokens", promptTokens);
-			params = new InferenceParameters(prompt)
-					.setStopStrings(resolveStopStrings(templateValue));
+		if (serverProcess != null && serverProcess.isAlive()
+				&& modelPath.equals(loadedModelPath)) {
+			return;
 		}
 
-		InferenceParameters finalParams = params
-				.setTemperature(0.0f)
-				.setSeed(42)
-				.setCachePrompt(false)
-				.setNPredict(ChartSearchAiConstants.DEFAULT_MAX_TOKENS)
-				.setRepeatPenalty(ChartSearchAiConstants.DEFAULT_REPEAT_PENALTY)
-				.setGrammar(JSON_ANSWER_GRAMMAR);
+		if (serverProcess != null && serverProcess.isAlive()
+				&& !modelPath.equals(loadedModelPath)) {
+			log.info("LLM model path changed from {} to {}, restarting server",
+					loadedModelPath, modelPath);
+			stopServer();
+		}
 
-		return new PreparedInference(finalParams, promptTokens);
+		startServer(modelPath);
 	}
 
-	static class PreparedInference {
+	private void startServer(String modelPath) {
+		String serverBinaryPath = resolveServerBinaryPath();
+		serverPort = getServerPort();
 
-		final InferenceParameters params;
+		List<String> command = new ArrayList<>();
+		command.add(serverBinaryPath);
+		command.add("-m");
+		command.add(modelPath);
+		command.add("--port");
+		command.add(String.valueOf(serverPort));
+		command.add("-ngl");
+		command.add("99");
+		command.add("-c");
+		command.add("4096");
+		command.add("--log-disable");
 
-		final int promptTokens;
+		log.info("Starting llama-server on port {} with model {}", serverPort, modelPath);
 
-		PreparedInference(InferenceParameters params, int promptTokens) {
-			this.params = params;
-			this.promptTokens = promptTokens;
+		try {
+			ProcessBuilder pb = new ProcessBuilder(command);
+			pb.redirectErrorStream(true);
+			serverProcess = pb.start();
+
+			// Drain server output in a daemon thread to prevent buffer blocking
+			Thread outputDrain = new Thread(() -> {
+				try (BufferedReader reader = new BufferedReader(
+						new InputStreamReader(serverProcess.getInputStream(),
+								StandardCharsets.UTF_8))) {
+					String line;
+					while ((line = reader.readLine()) != null) {
+						log.debug("llama-server: {}", line);
+					}
+				}
+				catch (IOException e) {
+					log.debug("llama-server output stream closed");
+				}
+			}, "chartsearchai-llama-server-output");
+			outputDrain.setDaemon(true);
+			outputDrain.start();
+
+			waitForServerReady();
+			loadedModelPath = modelPath;
+			log.info("llama-server started successfully on port {}", serverPort);
+		}
+		catch (IOException e) {
+			throw new APIException(
+					"Failed to start llama-server. Ensure the binary exists at "
+							+ serverBinaryPath + ": " + e.getMessage(), e);
 		}
 	}
 
-	static String formatPrompt(String templateValue, String systemPrompt, String userMessage) {
-		String template = PRESET_TEMPLATES.getOrDefault(templateValue.toLowerCase(), templateValue);
-		String safeUser = stripSpecialTokens(userMessage);
-		return template.replace("{system}", systemPrompt).replace("{user}", safeUser);
-	}
+	private void waitForServerReady() {
+		long deadline = System.currentTimeMillis()
+				+ (SERVER_STARTUP_TIMEOUT_SECONDS * 1000L);
+		String healthUrl = "http://127.0.0.1:" + serverPort + "/health";
 
-	static String stripSpecialTokens(String text) {
-		if (text == null) {
-			return "";
+		while (System.currentTimeMillis() < deadline) {
+			if (!serverProcess.isAlive()) {
+				throw new APIException(
+						"llama-server process exited during startup with code "
+								+ serverProcess.exitValue());
+			}
+			try {
+				HttpResponse<String> response = getHttpClient().send(
+						HttpRequest.newBuilder()
+								.uri(URI.create(healthUrl))
+								.timeout(Duration.ofSeconds(2))
+								.GET()
+								.build(),
+						HttpResponse.BodyHandlers.ofString());
+				if (response.statusCode() == 200) {
+					JsonNode json = MAPPER.readTree(response.body());
+					String status = json.has("status") ? json.get("status").asText() : "";
+					if ("ok".equals(status)) {
+						return;
+					}
+				}
+			}
+			catch (IOException | InterruptedException e) {
+				// Server not ready yet
+			}
+			try {
+				Thread.sleep(HEALTH_POLL_INTERVAL_MS);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new APIException("Interrupted while waiting for llama-server to start");
+			}
 		}
-		return text
-				.replace("<|begin_of_text|>", "").replace("<|end_of_text|>", "")
-				.replace("<|start_header_id|>", "").replace("<|end_header_id|>", "")
-				.replace("<|eot_id|>", "")
-				.replace("[INST]", "").replace("[/INST]", "")
-				.replace("</s>", "")
-				.replace("<|system|>", "").replace("<|user|>", "")
-				.replace("<|assistant|>", "").replace("<|end|>", "")
-				.replace("<|im_start|>", "").replace("<|im_end|>", "")
-				.replace("<start_of_turn>", "").replace("<end_of_turn>", "")
-				.replaceAll("<\\|[^|]*\\|>", "");
+		stopServer();
+		throw new APIException("llama-server did not become healthy within "
+				+ SERVER_STARTUP_TIMEOUT_SECONDS + " seconds");
 	}
 
-	static String[] resolveStopStrings(String templateValue) {
-		List<String> stops = PRESET_STOP_STRINGS.get(templateValue.toLowerCase());
-		if (stops != null) {
-			return stops.toArray(new String[0]);
+	private void stopServer() {
+		if (serverProcess != null) {
+			log.info("Stopping llama-server");
+			serverProcess.destroy();
+			try {
+				if (!serverProcess.waitFor(10, TimeUnit.SECONDS)) {
+					serverProcess.destroyForcibly();
+				}
+			}
+			catch (InterruptedException e) {
+				serverProcess.destroyForcibly();
+				Thread.currentThread().interrupt();
+			}
+			serverProcess = null;
+			loadedModelPath = null;
 		}
-		return new String[0];
+		httpClient = null;
 	}
 
-	protected String getChatTemplate() {
+	private String buildRequestBody(String systemPrompt, String userMessage, boolean stream) {
+		ObjectNode root = MAPPER.createObjectNode();
+		root.put("temperature", 0.0);
+		root.put("max_tokens", ChartSearchAiConstants.DEFAULT_MAX_TOKENS);
+		root.put("stream", stream);
+		if (stream) {
+			ObjectNode streamOptions = MAPPER.createObjectNode();
+			streamOptions.put("include_usage", true);
+			root.set("stream_options", streamOptions);
+		}
+
+		ObjectNode responseFormat = MAPPER.createObjectNode();
+		responseFormat.put("type", "json_object");
+		root.set("response_format", responseFormat);
+
+		ArrayNode messages = MAPPER.createArrayNode();
+
+		ObjectNode systemMsg = MAPPER.createObjectNode();
+		systemMsg.put("role", "system");
+		systemMsg.put("content", systemPrompt);
+		messages.add(systemMsg);
+
+		ObjectNode userMsg = MAPPER.createObjectNode();
+		userMsg.put("role", "user");
+		userMsg.put("content", userMessage);
+		messages.add(userMsg);
+
+		root.set("messages", messages);
+
+		try {
+			return MAPPER.writeValueAsString(root);
+		}
+		catch (IOException e) {
+			throw new APIException("Failed to build request body", e);
+		}
+	}
+
+	private InferenceResult parseResponse(String responseBody) throws IOException {
+		JsonNode root = MAPPER.readTree(responseBody);
+
+		String text = "";
+		JsonNode choices = root.get("choices");
+		if (choices != null && choices.isArray() && !choices.isEmpty()) {
+			JsonNode message = choices.get(0).get("message");
+			if (message != null && message.has("content")) {
+				text = message.get("content").asText("");
+			}
+		}
+
+		int inputTokens = 0;
+		int outputTokens = 0;
+		JsonNode usage = root.get("usage");
+		if (usage != null) {
+			inputTokens = usage.has("prompt_tokens") ? usage.get("prompt_tokens").asInt(0) : 0;
+			outputTokens = usage.has("completion_tokens")
+					? usage.get("completion_tokens").asInt(0) : 0;
+		}
+
+		log.info("LLM token usage: {} input + {} output", inputTokens, outputTokens);
+		return new InferenceResult(text, inputTokens, outputTokens);
+	}
+
+	private InferenceResult parseStreamingResponse(InputStream inputStream,
+			Consumer<String> tokenConsumer) throws IOException {
+		StringBuilder fullText = new StringBuilder();
+		int inputTokens = 0;
+		int outputTokens = 0;
+
+		try (BufferedReader reader = new BufferedReader(
+				new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+			String line;
+			while ((line = reader.readLine()) != null) {
+				if (!line.startsWith("data: ")) {
+					continue;
+				}
+				String data = line.substring(6).trim();
+				if ("[DONE]".equals(data)) {
+					break;
+				}
+				try {
+					JsonNode chunk = MAPPER.readTree(data);
+					JsonNode choices = chunk.get("choices");
+					if (choices == null || !choices.isArray() || choices.isEmpty()) {
+						continue;
+					}
+					JsonNode delta = choices.get(0).get("delta");
+					if (delta != null && delta.has("content")) {
+						String content = delta.get("content").asText("");
+						if (!content.isEmpty()) {
+							fullText.append(content);
+							tokenConsumer.accept(content);
+						}
+					}
+					JsonNode usage = chunk.get("usage");
+					if (usage != null) {
+						inputTokens = usage.has("prompt_tokens")
+								? usage.get("prompt_tokens").asInt(0) : 0;
+						outputTokens = usage.has("completion_tokens")
+								? usage.get("completion_tokens").asInt(0) : 0;
+					}
+				}
+				catch (IOException e) {
+					log.debug("Skipping unparseable SSE chunk: {}", data);
+				}
+			}
+		}
+
+		if (inputTokens > 0 || outputTokens > 0) {
+			log.info("LLM token usage: {} input + {} output", inputTokens, outputTokens);
+		}
+		return new InferenceResult(fullText.toString(), inputTokens, outputTokens);
+	}
+
+	private String getCompletionsUrl() {
+		return "http://127.0.0.1:" + serverPort + "/v1/chat/completions";
+	}
+
+	private String resolveModelPath() {
+		String configuredPath = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH);
+		if (configuredPath == null || configuredPath.trim().isEmpty()) {
+			throw new IllegalStateException(
+					"LLM model path not configured. Set the global property: "
+							+ ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH);
+		}
+		return ChartSearchAiUtils.resolveModelPath(
+				configuredPath.trim(), ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH);
+	}
+
+	private String resolveServerBinaryPath() {
+		// Check if user configured a custom path
+		String configuredPath = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_SERVER_BINARY_PATH);
+		if (configuredPath != null && !configuredPath.trim().isEmpty()) {
+			return ChartSearchAiUtils.resolveModelPath(
+					configuredPath.trim(), ChartSearchAiConstants.GP_LLM_SERVER_BINARY_PATH);
+		}
+
+		// Extract bundled binary from JAR resources
+		return extractBundledServer();
+	}
+
+	private String extractBundledServer() {
+		String platform = detectPlatform();
+		String arch = detectArch();
+
+		String binaryName = platform.equals("Windows") ? "llama-server.exe" : "llama-server";
+		String resourcePath = "llama-server/" + platform + "/" + arch + "/" + binaryName;
+
+		File appDataDir = new File(
+				org.openmrs.util.OpenmrsUtil.getApplicationDataDirectory());
+		File targetDir = new File(appDataDir, "chartsearchai/bin");
+		File targetFile = new File(targetDir, binaryName);
+
+		try (InputStream is = getClass().getClassLoader().getResourceAsStream(resourcePath)) {
+			if (is == null) {
+				throw new IllegalStateException(
+						"No bundled llama-server for " + platform + "/" + arch
+								+ ". Set " + ChartSearchAiConstants.GP_LLM_SERVER_BINARY_PATH
+								+ " to the path of a manually installed llama-server binary.");
+			}
+
+			targetDir.mkdirs();
+			Files.copy(is, targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+			targetFile.setExecutable(true);
+			log.info("Extracted bundled llama-server to {}", targetFile.getAbsolutePath());
+		}
+		catch (IOException e) {
+			throw new IllegalStateException(
+					"Failed to extract bundled llama-server: " + e.getMessage(), e);
+		}
+
+		return targetFile.getAbsolutePath();
+	}
+
+	int getServerPort() {
 		String value = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_CHAT_TEMPLATE);
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_SERVER_PORT);
 		if (value != null && !value.trim().isEmpty()) {
-			return value.trim();
+			try {
+				int parsed = Integer.parseInt(value.trim());
+				if (parsed > 0 && parsed <= 65535) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid server port '{}', using default", value);
+			}
 		}
-		return "auto";
+		return ChartSearchAiConstants.DEFAULT_LLM_SERVER_PORT;
 	}
 
-	protected int getIdleTimeoutMinutes() {
+	private int getIdleTimeoutMinutes() {
 		String value = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_IDLE_TIMEOUT_MINUTES);
 		if (value != null && !value.trim().isEmpty()) {
@@ -267,7 +500,6 @@ public class LocalLlmEngine implements LlmEngine {
 				if (parsed >= 0) {
 					return parsed;
 				}
-				log.warn("Idle timeout must be non-negative, got '{}', using default", parsed);
 			}
 			catch (NumberFormatException e) {
 				log.warn("Invalid idle timeout value '{}', using default", value);
@@ -284,13 +516,10 @@ public class LocalLlmEngine implements LlmEngine {
 		int idleMinutes = getIdleTimeoutMinutes();
 		if (idleMinutes > 0) {
 			try {
-				idleUnloadFuture = idleTimer.schedule(new Runnable() {
-					@Override
-					public void run() {
-						log.info("LLM idle for {} minutes, unloading model to free memory",
-								idleMinutes);
-						close();
-					}
+				idleUnloadFuture = idleTimer.schedule(() -> {
+					log.info("LLM idle for {} minutes, stopping server to free memory",
+							idleMinutes);
+					close();
 				}, idleMinutes, TimeUnit.MINUTES);
 			}
 			catch (java.util.concurrent.RejectedExecutionException e) {
@@ -299,46 +528,42 @@ public class LocalLlmEngine implements LlmEngine {
 		}
 	}
 
-	private synchronized LlamaModel getModel() {
-		String configuredPath = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH);
-		if (configuredPath == null || configuredPath.trim().isEmpty()) {
-			throw new IllegalStateException(
-					"LLM model path not configured. Set the global property: "
-							+ ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH);
+	private synchronized HttpClient getHttpClient() {
+		if (httpClient == null) {
+			httpClient = HttpClient.newBuilder()
+					.connectTimeout(Duration.ofSeconds(5))
+					.build();
 		}
-		String modelPath = ChartSearchAiUtils.resolveModelPath(
-				configuredPath.trim(), ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH);
-
-		if (model != null && !modelPath.equals(loadedModelPath)) {
-			log.info("LLM model path changed from {} to {}, reloading", loadedModelPath,
-					modelPath);
-			close();
-		}
-
-		if (model == null) {
-			log.info("Loading LLM from {}", modelPath);
-			ModelParameters modelParams = new ModelParameters()
-					.setModel(modelPath)
-					.setGpuLayers(-1)
-					.setCtxSize(4096);
-			model = new LlamaModel(modelParams);
-			loadedModelPath = modelPath;
-			log.info("LLM loaded successfully");
-		}
-		return model;
+		return httpClient;
 	}
 
-	private static String loadGrammar(String resourceName) {
-		try (InputStream is = LocalLlmEngine.class.getClassLoader()
-				.getResourceAsStream(resourceName)) {
-			if (is == null) {
-				throw new IllegalStateException("Grammar resource not found: " + resourceName);
-			}
-			return new String(is.readAllBytes(), StandardCharsets.UTF_8);
+	private static String truncate(String text) {
+		if (text == null) {
+			return "";
 		}
-		catch (IOException e) {
-			throw new IllegalStateException("Failed to load grammar: " + resourceName, e);
+		return text.length() > 500 ? text.substring(0, 500) + "..." : text;
+	}
+
+	static String detectPlatform() {
+		String osName = System.getProperty("os.name", "");
+		if (osName.contains("Windows")) {
+			return "Windows";
 		}
+		if (osName.contains("Mac") || osName.contains("Darwin")) {
+			return "Mac";
+		}
+		String runtime = System.getProperty("java.runtime.name", "").toLowerCase();
+		if (runtime.contains("android")) {
+			return "Linux-Android";
+		}
+		return "Linux";
+	}
+
+	static String detectArch() {
+		String osArch = System.getProperty("os.arch", "").toLowerCase();
+		if (osArch.contains("aarch64") || osArch.contains("arm64")) {
+			return "aarch64";
+		}
+		return "x86_64";
 	}
 }
