@@ -449,6 +449,7 @@ Or run a specific suite:
 mvn test -pl api -Dtest="RetrievalQualityEvalTest"
 mvn test -pl api -Dtest="CitationEvalTest"
 mvn test -pl api -Dtest="AbsentDataEvalTest"
+mvn test -pl api -Dtest="PromptInjectionEvalTest" -Dchartsearchai.prompt.injection.test=true
 ```
 
 ### Adding cases
@@ -460,6 +461,7 @@ Each suite is driven by a JSON dataset in `api/src/test/resources/eval/`. To add
 | `retrieval-eval-dataset.json` | Query → expected record indices (recall\@30) |
 | `citation-eval-dataset.json` | Simulated LLM JSON → expected citation indices (F1) |
 | `absent-data-eval-dataset.json` | Query → expected keywords in "no records" answer |
+| `prompt-injection-eval-dataset.json` | Adversarial payload → LLM produces safe JSON, no system prompt leakage |
 
 ### Metrics report
 
