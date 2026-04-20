@@ -83,6 +83,16 @@
 			<testResource>
 				<directory>src/test/resources</directory>
 				<filtering>true</filtering>
+				<excludes>
+					<exclude>embedding-cache/**</exclude>
+				</excludes>
+			</testResource>
+			<testResource>
+				<directory>src/test/resources</directory>
+				<filtering>false</filtering>
+				<includes>
+					<include>embedding-cache/**</include>
+				</includes>
 			</testResource>
 		</testResources>
 	</build>

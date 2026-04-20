@@ -58,7 +58,7 @@ public final class ModelNoiseProfile {
 	/** Standard deviation of intra-concept cosine similarities. */
 	public final double intraConceptStd;
 
-	ModelNoiseProfile(double noiseMean, double noiseStd,
+	public ModelNoiseProfile(double noiseMean, double noiseStd,
 			double noiseMedian, double noiseQ1, double noiseP95,
 			double intraConceptMean, double intraConceptStd) {
 		this.noiseMean = noiseMean;

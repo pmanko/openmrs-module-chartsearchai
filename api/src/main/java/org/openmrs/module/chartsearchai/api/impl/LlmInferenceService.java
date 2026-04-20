@@ -412,7 +412,7 @@ public class LlmInferenceService implements ChartSearchService {
 		String embeddingInput = prepareEmbeddingInput(question, getQueryPrefix());
 		float[] queryVector;
 		try {
-			queryVector = embeddingProvider.embed(embeddingInput);
+			queryVector = embeddingProvider.embedQuery(embeddingInput);
 		}
 		catch (Exception e) {
 			log.error("Failed to embed query for ES search, falling back to embeddings", e);
@@ -827,6 +827,11 @@ public class LlmInferenceService implements ChartSearchService {
 						baseConfig.similarityRatio),
 				ModelNoiseProfile.conservativeDefault(),
 				baseConfig.floorRescueMinZScore);
+		log.debug("Model identity={}, config: kwWeight={}, gapMult={}, "
+				+ "minGap={}, gapCosThresh={}, simRatio={}, floorZScore={}",
+				modelIdentity, config.keywordWeight, config.scoreGapMultiplier,
+				config.minScoreGap, config.gapValidationCosineThreshold,
+				config.similarityRatio, config.floorRescueMinZScore);
 
 		try {
 			return findSimilar(allEmbeddings, embeddingProvider, question, topK,
@@ -861,7 +866,7 @@ public class LlmInferenceService implements ChartSearchService {
 		String normalizedQuery = stripQueryStopwords(question);
 		String[] queryTerms = extractQueryTerms(normalizedQuery);
 		String embeddingQuery = buildEmbeddingQuery(normalizedQuery);
-		float[] queryVector = provider.embed(queryPrefix + embeddingQuery);
+		float[] queryVector = provider.embedQuery(queryPrefix + embeddingQuery);
 
 		// Identify "type indicator" query terms — terms that appear in
 		// any structural embedding prefix (e.g. "medication" matches
@@ -1126,7 +1131,8 @@ public class LlmInferenceService implements ChartSearchService {
 		// Returns null to short-circuit, or {zScore, threshold} that are
 		// reused later by the cluster z-score gate.
 		double[] zScoreState = applyInitialZScoreGate(scored,
-				maxSemanticScore, queryTermCount, keywordMatchCount);
+				maxSemanticScore, queryTermCount, keywordMatchCount,
+				config.floorRescueMinZScore);
 		if (zScoreState == null) {
 			return Collections.emptyList();
 		}
@@ -1201,7 +1207,12 @@ public class LlmInferenceService implements ChartSearchService {
 			candidates = refined;
 		}
 
-		log.debug("Pipeline: adaptiveCutoff={}, afterRefinement={}, refinementActivated={}",
+		log.debug("Pipeline stages: maxSem={}, maxBase={}, floor={}, kwCount={}, "
+				+ "termCount={}, gapCutoff={}, candidates={}, refined={}",
+				String.format("%.4f", maxSemanticScore),
+				String.format("%.4f", maxBaseScore),
+				String.format("%.4f", config.noiseProfile.absoluteSimilarityFloor()),
+				keywordMatchCount, queryTermCount,
 				adaptiveCutoff, candidates.size(), refinementActivated);
 
 		boolean partialKwValidated = false;
@@ -1615,6 +1626,13 @@ public class LlmInferenceService implements ChartSearchService {
 	static double[] applyInitialZScoreGate(List<ScoredEmbedding> scored,
 			double maxSemanticScore, int queryTermCount,
 			int keywordMatchCount) {
+		return applyInitialZScoreGate(scored, maxSemanticScore,
+				queryTermCount, keywordMatchCount, -1);
+	}
+
+	static double[] applyInitialZScoreGate(List<ScoredEmbedding> scored,
+			double maxSemanticScore, int queryTermCount,
+			int keywordMatchCount, double maxZScoreThreshold) {
 		double[] result = { -1, -1 };
 		if (queryTermCount <= 0 || !hasStatisticalVariance(scored)) {
 			return result;
@@ -1624,11 +1642,17 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 		double zScore = computeSemanticZScore(scored, maxSemanticScore);
 		double threshold = effectiveGumbelThreshold(scored);
+		// Allow model-specific configs to cap the threshold for
+		// compressed-score models where the Gumbel threshold is
+		// too aggressive.
+		if (maxZScoreThreshold > 0 && threshold > maxZScoreThreshold) {
+			threshold = maxZScoreThreshold;
+		}
 		result[0] = zScore;
 		result[1] = threshold;
 		if (zScore < threshold) {
 			log.debug("Only {} keyword match(es) and top semantic "
-					+ "z-score {} is below Gumbel threshold {}, "
+					+ "z-score {} is below threshold {}, "
 					+ "returning empty (maxSem={})",
 					keywordMatchCount,
 					String.format("%.2f", zScore),
@@ -2350,11 +2374,16 @@ public class LlmInferenceService implements ChartSearchService {
 			log.debug("Phase 2: candidatesHaveKeywords={}, candidates={}: [{}]",
 					candidatesHaveKeywords, candidates.size(), sb);
 		}
+		log.debug("Phase2 entry: candidates={}, hasKw={}, partialKwValidated={}, belowFloorRescued={}, gapDetected={}, ratioFloorCount={}",
+				candidates.size(), candidatesHaveKeywords, partialKwValidated,
+				belowFloorRescued, firstPassGapDetected, ratioFloorCandidateCount);
 		if (partialKwValidated || candidatesHaveKeywords || candidates.isEmpty()) {
 			return candidates;
 		}
 		if (candidates.size() >= 2) {
+			int preMeanCoherence = candidates.size();
 			candidates = filterByMeanCoherence(candidates, config);
+			log.debug("Phase2 meanCoherence: {} → {}", preMeanCoherence, candidates.size());
 		}
 		// Small-cluster coherence gate: for ≤3 zero-keyword
 		// candidates, apply a stricter coherence threshold derived
@@ -2528,20 +2557,22 @@ public class LlmInferenceService implements ChartSearchService {
 				} else {
 					clusterZThreshold = medianGumbelThreshold(scored);
 				}
-				log.debug("Zero-keyword z-score check: mean={}, std={}, z={} ({}), threshold={}, candidates={}, scored={}",
+				log.debug("Phase2 z-score: mean={}, std={}, z={} ({}), threshold={}, tightCluster={}, candidates={}",
 						String.format("%.4f", mean),
 						String.format("%.4f", std),
 						String.format("%.2f", zRepresentative),
 						candidates.size() <= 3 ? "max" : "median",
 						String.format("%.2f", clusterZThreshold),
-						candidates.size(), scored.size());
+						tightClusterDetected, candidates.size());
 				if (zRepresentative < clusterZThreshold) {
 					if (candidates.size() <= 3
 							&& initialZThreshold > 0
 							&& initialZScore >= initialZThreshold) {
-						log.debug("Cluster z-score below threshold but initial gate validated signal, keeping");
+						log.debug("Phase2: z-score below threshold but initial gate validated, keeping");
 					} else {
-						log.debug("Zero-keyword results rejected");
+						log.debug("Phase2: REJECTED by z-score gate (z={} < threshold={})",
+								String.format("%.2f", zRepresentative),
+								String.format("%.2f", clusterZThreshold));
 						candidates = Collections.emptyList();
 					}
 				}
@@ -2685,6 +2716,9 @@ public class LlmInferenceService implements ChartSearchService {
 		// Capture the strict count before rescue so downstream
 		// gates see only candidates that truly passed the floor.
 		ratioFloorCandidateCountOut[0] = strict.size();
+		log.debug("Non-refinement: ratioFloor={}, strict={}, nearMiss={}, total={}",
+				String.format("%.4f", ratioFloor), strict.size(),
+				nearMiss.size(), candidates.size());
 		// Concept-pairing rescue: when a record barely misses
 		// the ratio floor but its same-concept partner survived,
 		// the floor is splitting a natural concept pair. Rescue
@@ -3847,6 +3881,9 @@ public class LlmInferenceService implements ChartSearchService {
 				return defaults();
 			}
 			String lower = modelPath.toLowerCase();
+			if (lower.contains("medcpt")) {
+				return medcptDefaults();
+			}
 			if (lower.contains("medembed")) {
 				return medembedDefaults();
 			}
@@ -3872,14 +3909,25 @@ public class LlmInferenceService implements ChartSearchService {
 		 * </ul>
 		 */
 		static PipelineConfig medembedDefaults() {
+			// MedEmbed produces compressed score distributions (noise
+			// mean ~0.59 vs L6-v2's ~0.26). Two parameters need to
+			// differ:
+			// - minScoreGap: meaningful cluster gaps are 0.01-0.05
+			//   vs L6-v2's 0.05-0.15
+			// - similarityRatio: noise scores (0.55-0.60) are close
+			//   to relevant scores (0.64-0.65), so the ratio floor
+			//   must be tighter to separate them. At 0.80 (L6-v2
+			//   default), floor = 0.52 which includes all noise.
+			//   At 0.95, floor = 0.61 which separates signal from
+			//   noise while keeping related records.
 			return new PipelineConfig(
-					0.3,    // keywordWeight — same as L6-v2
-					2.5,    // scoreGapMultiplier — same; avgGap adapts
+					ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
+					ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
 					0.03,   // minScoreGap — lower for compressed range
-					0.55,   // gapValidationCosineThreshold — higher baseline
-					0.80,   // similarityRatio — same as L6-v2; noise profile adapts
+					ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
+					0.95,   // similarityRatio — tighter for compressed range
 					ModelNoiseProfile.conservativeDefault(),
-					2.0);   // floorRescueMinZScore — same statistical threshold
+					1.5);   // floorRescueMinZScore — lower for compressed range
 		}
 
 		/**
@@ -3889,6 +3937,32 @@ public class LlmInferenceService implements ChartSearchService {
 		 */
 		static PipelineConfig pubmedbertDefaults() {
 			return defaults();
+		}
+
+		/**
+		 * Pipeline defaults for MedCPT (dual-encoder, PubMedBERT-based).
+		 * MedCPT uses a medical tokenizer that correctly handles
+		 * abbreviations (BMI, STD, COPD) as single tokens. Its score
+		 * distribution characteristics need to be profiled and tuned.
+		 * Starting with L6-v2 defaults; the dynamic
+		 * {@link ModelNoiseProfile} adapts automatically.
+		 */
+		static PipelineConfig medcptDefaults() {
+			// MedCPT (dual-encoder, PubMedBERT-based) produces highly
+			// compressed score distributions (noise mean ~0.67). Signal
+			// is only 3-5% above noise, requiring very tight parameters:
+			// - minScoreGap 0.01: gaps between clusters are 0.005-0.02
+			// - similarityRatio 0.98: floor must be very close to top
+			//   score to exclude noise at 0.669 when signal is at 0.700
+			// - floorRescueMinZScore 1.0: z-scores are compressed too
+			return new PipelineConfig(
+					ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
+					ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
+					0.01,
+					ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
+					0.98,
+					ModelNoiseProfile.conservativeDefault(),
+					1.0);
 		}
 	}
 

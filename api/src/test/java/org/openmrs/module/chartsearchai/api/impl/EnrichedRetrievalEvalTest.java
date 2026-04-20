@@ -78,6 +78,8 @@ public class EnrichedRetrievalEvalTest {
 
 	private static OnnxEmbeddingProvider provider;
 
+	private static org.openmrs.module.chartsearchai.embedding.EmbeddingProvider cachingProvider;
+
 	private static List<ChartEmbedding>[] datasetEmbeddings;
 
 	private static List<SerializedRecord>[] datasetRecords;
@@ -89,6 +91,7 @@ public class EnrichedRetrievalEvalTest {
 		if (provider == null) {
 			provider = new OnnxEmbeddingProvider(
 					TestDatasetHelper.MODEL_PATH, TestDatasetHelper.VOCAB_PATH);
+			cachingProvider = TestDatasetHelper.cachingProvider(provider);
 			datasetEmbeddings = new List[DATASETS.length];
 			datasetRecords = new List[DATASETS.length];
 			datasetConfigs = new LlmInferenceService.PipelineConfig[DATASETS.length];
@@ -97,12 +100,9 @@ public class EnrichedRetrievalEvalTest {
 						DATASETS[d], DATASET_HINTS[d]);
 				datasetEmbeddings[d] = TestDatasetHelper.buildOrLoadCachedEmbeddings(
 						datasetRecords[d], provider);
-				// Pre-compute noise profile once per dataset so queries
-				// don't re-embed ~30 concepts each time.
 				org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile noise =
-						org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile.compute(
-								datasetEmbeddings[d].toArray(
-										new ChartEmbedding[0]), provider);
+						TestDatasetHelper.buildOrLoadCachedNoiseProfile(
+								datasetEmbeddings[d], provider);
 				LlmInferenceService.PipelineConfig base =
 						LlmInferenceService.PipelineConfig.defaults();
 				datasetConfigs[d] = new LlmInferenceService.PipelineConfig(
@@ -117,7 +117,7 @@ public class EnrichedRetrievalEvalTest {
 		ensureInitialized();
 		List<SerializedRecord> results = LlmInferenceService.findRelevantRecords(
 				datasetEmbeddings[datasetIndex], datasetRecords[datasetIndex],
-				provider, query, 100,
+				cachingProvider, query, 100,
 				ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
 				datasetConfigs[datasetIndex]);
 		List<Integer> indices = new ArrayList<>();

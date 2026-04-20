@@ -199,8 +199,8 @@ public class LlmInferenceServiceEvalTest {
 			embeddingCache.put(key, allEmbeddings);
 		}
 
-		// Pre-compute noise profile once per dataset so each query
-		// doesn't re-embed ~30 concepts.
+		// In-memory noise profile cache — fast enough since noise profile
+		// computation is ~30ms with pre-computed embeddings.
 		org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile noise = noiseCache.get(key);
 		if (noise == null) {
 			noise = org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile.compute(
