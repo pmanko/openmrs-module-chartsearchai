@@ -87,7 +87,7 @@ jobs:
           server-password: MAVEN_REPO_API_KEY
 
       - name: Publish natives JAR to OpenMRS Nexus
-        run: mvn --batch-mode deploy -pl llama-server-natives -DskipTests
+        run: mvn --batch-mode deploy -DskipTests -f llama-server-natives/pom.xml
         env:
           MAVEN_REPO_USERNAME: ${{ secrets.MAVEN_REPO_USERNAME }}
           MAVEN_REPO_API_KEY: ${{ secrets.MAVEN_REPO_API_KEY }}
