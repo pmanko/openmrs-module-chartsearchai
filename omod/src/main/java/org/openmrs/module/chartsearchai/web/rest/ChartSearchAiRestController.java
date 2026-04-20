@@ -295,8 +295,14 @@ public class ChartSearchAiRestController {
 		response.setCharacterEncoding("UTF-8");
 		response.setHeader("Cache-Control", "no-cache");
 		response.setHeader("X-Accel-Buffering", "no");
+		response.setHeader("Connection", "keep-alive");
+		// Disable Tomcat's response buffer so tokens stream immediately
+		// instead of accumulating in the default 8KB buffer.
+		response.setBufferSize(0);
 
 		final OutputStream out = response.getOutputStream();
+		// Commit the response headers now so chunked transfer starts
+		response.flushBuffer();
 
 		String preFilterProp = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");

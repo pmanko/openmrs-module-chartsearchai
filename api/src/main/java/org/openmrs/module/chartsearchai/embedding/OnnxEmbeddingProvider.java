@@ -60,6 +60,11 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 
 	private int explicitMaxSeqLen = -1;
 
+	// Cached model identity to avoid redundant sentinel-string embedding
+	private String cachedModelIdentity;
+
+	private String identityCachedForModelPath;
+
 	// Dual-encoder support: separate session for query encoding
 	private OrtSession querySession;
 
@@ -168,24 +173,37 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 			"-0.01,0.00,-0.03,-0.01";
 
 	@Override
-	public String identifyModel() {
+	public synchronized String identifyModel() {
 		try {
+			// Ensure the current model is loaded (triggers reload if GP
+			// changed). Without this, the cache would silently prevent
+			// the model reload that getSession() normally performs.
+			getSession();
+			if (cachedModelIdentity != null && loadedModelPath != null
+					&& loadedModelPath.equals(identityCachedForModelPath)) {
+				return cachedModelIdentity;
+			}
 			float[] v = embed(MODEL_IDENTITY_SENTINEL);
 			String fp = String.format("%.2f,%.2f,%.2f,%.2f",
 					v[0], v[1], v[2], v[3]);
+			String result;
 			if (FINGERPRINT_MEDCPT.equals(fp)) {
-				return "medcpt";
+				result = "medcpt";
 			} else if (FINGERPRINT_MEDEMBED_SMALL.equals(fp)) {
-				return "medembed-small";
+				result = "medembed-small";
 			} else if (FINGERPRINT_L6_V2.equals(fp)) {
-				return "all-MiniLM-L6-v2";
+				result = "all-MiniLM-L6-v2";
 			} else if (FINGERPRINT_PUBMEDBERT.equals(fp)) {
-				return "pubmedbert";
+				result = "pubmedbert";
 			} else if (FINGERPRINT_L12_V2.equals(fp)) {
-				return "all-MiniLM-L12-v2";
+				result = "all-MiniLM-L12-v2";
+			} else {
+				log.info("Unknown embedding model fingerprint: {}", fp);
+				result = null;
 			}
-			log.info("Unknown embedding model fingerprint: {}", fp);
-			return null;
+			cachedModelIdentity = result;
+			identityCachedForModelPath = loadedModelPath;
+			return result;
 		}
 		catch (Exception e) {
 			log.warn("Failed to fingerprint embedding model", e);
@@ -216,6 +234,8 @@ public class OnnxEmbeddingProvider implements EmbeddingProvider {
 				sessionOptions = null;
 			}
 			loadedModelPath = null;
+			cachedModelIdentity = null;
+			identityCachedForModelPath = null;
 			tokenizer = null;
 			detectedDimensions = -1;
 			activeProvider = OrtProvider.CPU;

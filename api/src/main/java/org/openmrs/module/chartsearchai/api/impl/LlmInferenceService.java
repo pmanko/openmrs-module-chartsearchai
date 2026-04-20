@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -95,6 +96,36 @@ public class LlmInferenceService implements ChartSearchService {
 	@Autowired
 	private LlmProvider llmProvider;
 
+	private static final int NOISE_PROFILE_CACHE_MAX_SIZE = 100;
+
+	private final ConcurrentHashMap<String, ModelNoiseProfile> noiseProfileCache =
+			new ConcurrentHashMap<String, ModelNoiseProfile>();
+
+	/**
+	 * Bundles the pipeline result list with the computed noise profile so the
+	 * caller can cache the profile for reuse on subsequent queries.
+	 */
+	static class FindSimilarResult {
+
+		final List<ChartEmbedding> records;
+
+		final ModelNoiseProfile noiseProfile;
+
+		FindSimilarResult(List<ChartEmbedding> records,
+				ModelNoiseProfile noiseProfile) {
+			this.records = records;
+			this.noiseProfile = noiseProfile;
+		}
+	}
+
+	private void invalidateNoiseProfileCache(Patient patient) {
+		String prefix = patient.getPatientId() + ":";
+		for (String key : noiseProfileCache.keySet()) {
+			if (key.startsWith(prefix)) {
+				noiseProfileCache.remove(key);
+			}
+		}
+	}
 
 	@Override
 	public ChartAnswer search(Patient patient, String question) {
@@ -317,6 +348,8 @@ public class LlmInferenceService implements ChartSearchService {
 			log.info("No embeddings found for patient [id={}], indexing now", patient.getPatientId());
 			try {
 				embeddingIndexer.indexPatient(patient);
+				// Invalidate cached noise profile — embeddings have changed
+				invalidateNoiseProfileCache(patient);
 				similar = findSimilar(patient, question);
 			}
 			catch (Exception e) {
@@ -438,13 +471,14 @@ public class LlmInferenceService implements ChartSearchService {
 
 		List<ChartEmbedding> pipelineFiltered = null;
 		if (!allEmbeddings.isEmpty()) {
-			pipelineFiltered = findSimilar(allEmbeddings, embeddingProvider,
-					question, getQueryPrefix(),
+			FindSimilarResult fsResult = findSimilar(allEmbeddings,
+					embeddingProvider, question, getQueryPrefix(),
 					new PipelineConfig(getKeywordWeight(),
 							getScoreGapMultiplier(), getMinScoreGap(),
 							getGapValidationCosineThreshold(),
 							getSimilarityRatio(),
 							ModelNoiseProfile.conservativeDefault()));
+			pipelineFiltered = fsResult.records;
 		}
 
 		// Use only the pipeline-filtered records — the full-corpus
@@ -801,6 +835,13 @@ public class LlmInferenceService implements ChartSearchService {
 				? embeddingProvider.getModelName() : null;
 		PipelineConfig baseConfig = PipelineConfig.forModel(
 				modelIdentity != null ? modelIdentity : modelName);
+
+		// Reuse cached noise profile for this patient+model when
+		// available, avoiding ~30 redundant ONNX embeddings per query.
+		String cacheKey = patient.getPatientId()
+				+ ":" + (modelIdentity != null ? modelIdentity : modelName);
+		ModelNoiseProfile cachedProfile = noiseProfileCache.get(cacheKey);
+
 		// Use model-specific defaults, but allow global property overrides
 		// when an admin has explicitly customized them (i.e., the GP value
 		// differs from the L6-v2 default that ships as the initial value).
@@ -820,7 +861,8 @@ public class LlmInferenceService implements ChartSearchService {
 				overrideIfCustomized(getSimilarityRatio(),
 						ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO,
 						baseConfig.similarityRatio),
-				ModelNoiseProfile.conservativeDefault(),
+				cachedProfile != null ? cachedProfile
+						: ModelNoiseProfile.conservativeDefault(),
 				baseConfig.floorRescueMinZScore);
 		log.debug("Model identity={}, config: kwWeight={}, gapMult={}, "
 				+ "minGap={}, gapCosThresh={}, simRatio={}, floorZScore={}",
@@ -829,8 +871,17 @@ public class LlmInferenceService implements ChartSearchService {
 				config.similarityRatio, config.floorRescueMinZScore);
 
 		try {
-			return findSimilar(allEmbeddings, embeddingProvider, question,
-					getQueryPrefix(), config);
+			FindSimilarResult result = findSimilar(allEmbeddings,
+					embeddingProvider, question, getQueryPrefix(), config);
+			if (result.noiseProfile != null) {
+				if (noiseProfileCache.size() >= NOISE_PROFILE_CACHE_MAX_SIZE) {
+					// Evict an arbitrary entry to stay within bounds
+					String first = noiseProfileCache.keys().nextElement();
+					noiseProfileCache.remove(first);
+				}
+				noiseProfileCache.put(cacheKey, result.noiseProfile);
+			}
+			return result.records;
 		}
 		catch (Exception e) {
 			log.debug("Embedding provider not available, falling back to full chart", e);
@@ -856,10 +907,19 @@ public class LlmInferenceService implements ChartSearchService {
 	static List<ChartEmbedding> findSimilar(List<ChartEmbedding> allEmbeddings,
 			EmbeddingProvider provider, String question, int topK,
 			String queryPrefix, PipelineConfig config) {
-		return findSimilar(allEmbeddings, provider, question, queryPrefix, config);
+		return findSimilarWithProfile(allEmbeddings, provider, question,
+				queryPrefix, config).records;
 	}
 
-	static List<ChartEmbedding> findSimilar(List<ChartEmbedding> allEmbeddings,
+	static FindSimilarResult findSimilar(List<ChartEmbedding> allEmbeddings,
+			EmbeddingProvider provider, String question,
+			String queryPrefix, PipelineConfig config) {
+		return findSimilarWithProfile(allEmbeddings, provider, question,
+				queryPrefix, config);
+	}
+
+	static FindSimilarResult findSimilarWithProfile(
+			List<ChartEmbedding> allEmbeddings,
 			EmbeddingProvider provider, String question,
 			String queryPrefix, PipelineConfig config) {
 		String normalizedQuery = stripQueryStopwords(question);
@@ -992,7 +1052,7 @@ public class LlmInferenceService implements ChartSearchService {
 					queryVector, provider, noiseProfile);
 		}
 
-		return pipelineResult;
+		return new FindSimilarResult(pipelineResult, noiseProfile);
 	}
 
 	/**
@@ -1032,8 +1092,9 @@ public class LlmInferenceService implements ChartSearchService {
 			List<SerializedRecord> allRecords,
 			EmbeddingProvider provider, String question,
 			String queryPrefix, PipelineConfig config) {
-		List<ChartEmbedding> similar = findSimilar(allEmbeddings, provider,
+		FindSimilarResult fsResult = findSimilar(allEmbeddings, provider,
 				question, queryPrefix, config);
+		List<ChartEmbedding> similar = fsResult.records;
 		if (similar == null) {
 			return null;
 		}
