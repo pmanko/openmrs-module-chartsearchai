@@ -2074,21 +2074,6 @@ public class LlmInferenceService implements ChartSearchService {
 							semanticCore.size(),
 							String.format("%.4f", scoreFloor),
 							candidates.size());
-					if (candidates.size() > topK) {
-						boolean allExpHaveKw = true;
-						for (ScoredEmbedding se : candidates) {
-							if (se.keywordScore == 0) {
-								allExpHaveKw = false;
-								break;
-							}
-						}
-						if (!allExpHaveKw) {
-							candidates = new ArrayList<ScoredEmbedding>(
-									candidates.subList(0, topK));
-							log.debug("Semantic core topK cap: {} -> {}",
-									expanded.size(), topK);
-						}
-					}
 					partialKwValidatedOut[0] = true;
 				} else {
 					double maxSemanticKw = 0;
@@ -2792,16 +2777,6 @@ public class LlmInferenceService implements ChartSearchService {
 		// about "BP, weight, and temperature trend"). Only apply topK
 		// when some candidates lack keywords — they may be semantic
 		// false positives that need capping.
-		boolean allHaveKeywords = true;
-		for (ScoredEmbedding se : candidates) {
-			if (se.keywordScore == 0) {
-				allHaveKeywords = false;
-				break;
-			}
-		}
-		if (!allHaveKeywords && candidates.size() > topK) {
-			candidates = candidates.subList(0, topK);
-		}
 		return candidates;
 	}
 
