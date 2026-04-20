@@ -10,17 +10,37 @@
 package org.openmrs.module.chartsearchai.embedding;
 
 /**
- * Computes vector embeddings from text using ONNX Runtime with all-MiniLM-L6-v2.
+ * Computes vector embeddings from text using ONNX Runtime.
+ *
+ * <p>Supports both single-encoder models (e.g. all-MiniLM-L6-v2, MedEmbed)
+ * where the same model encodes both queries and records, and dual-encoder
+ * models (e.g. MedCPT) where separate models encode queries and records.
+ * Single-encoder models need only implement {@link #embed(String)};
+ * dual-encoder models should also override {@link #embedQuery(String)}.
  */
 public interface EmbeddingProvider {
 
 	/**
-	 * Compute a vector embedding for the given text.
+	 * Compute a vector embedding for record/document text. For dual-encoder
+	 * models, this uses the article/document encoder.
 	 *
 	 * @param text the text to embed
 	 * @return a float array representing the text's embedding vector
 	 */
 	float[] embed(String text);
+
+	/**
+	 * Compute a vector embedding for query text. For dual-encoder models
+	 * (e.g. MedCPT), this uses the query encoder which is trained to map
+	 * questions into the same vector space as record embeddings. For
+	 * single-encoder models, delegates to {@link #embed(String)}.
+	 *
+	 * @param text the query text to embed
+	 * @return a float array representing the query's embedding vector
+	 */
+	default float[] embedQuery(String text) {
+		return embed(text);
+	}
 
 	/**
 	 * @return the dimensionality of vectors produced by this provider
