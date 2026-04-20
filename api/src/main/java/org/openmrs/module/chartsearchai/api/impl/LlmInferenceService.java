@@ -374,7 +374,7 @@ public class LlmInferenceService implements ChartSearchService {
 			relevantKeys.add(ChartSearchAiUtils.resourceKey(ce.getResourceType(), ce.getResourceId()));
 		}
 
-		log.debug("findSimilar returned {} records for query '{}' patient [id={}]: {}",
+		log.warn("findSimilar returned {} records for query '{}' patient [id={}]: {}",
 				similar.size(), question, patient.getPatientId(), relevantKeys);
 
 		return filterAndSerialize(patient, question, relevantKeys);
@@ -864,7 +864,7 @@ public class LlmInferenceService implements ChartSearchService {
 				cachedProfile != null ? cachedProfile
 						: ModelNoiseProfile.conservativeDefault(),
 				baseConfig.floorRescueMinZScore);
-		log.debug("Model identity={}, config: kwWeight={}, gapMult={}, "
+		log.warn("Model identity={}, config: kwWeight={}, gapMult={}, "
 				+ "minGap={}, gapCosThresh={}, simRatio={}, floorZScore={}",
 				modelIdentity, config.keywordWeight, config.scoreGapMultiplier,
 				config.minScoreGap, config.gapValidationCosineThreshold,
@@ -1003,7 +1003,7 @@ public class LlmInferenceService implements ChartSearchService {
 				&& !config.noiseProfile.isConservativeDefault()
 				? config.noiseProfile
 				: ModelNoiseProfile.compute(embeddings, provider);
-		log.debug("NoiseProfile: Q1={} median={} mean={} P95={} "
+		log.warn("NoiseProfile: Q1={} median={} mean={} P95={} "
 				+ "intraMean={} floor={}",
 				String.format("%.4f", noiseProfile.noiseQ1),
 				String.format("%.4f", noiseProfile.noiseMedian),
@@ -1298,7 +1298,7 @@ public class LlmInferenceService implements ChartSearchService {
 			candidates = refined;
 		}
 
-		log.debug("Pipeline stages: maxSem={}, maxBase={}, floor={}, kwCount={}, "
+		log.warn("Pipeline stages: maxSem={}, maxBase={}, floor={}, kwCount={}, "
 				+ "termCount={}, gapCutoff={}, candidates={}, refined={}",
 				String.format("%.4f", maxSemanticScore),
 				String.format("%.4f", maxBaseScore),
@@ -1429,7 +1429,7 @@ public class LlmInferenceService implements ChartSearchService {
 					}
 				}
 				if (!rescued.isEmpty()) {
-					log.debug("Keyword-dominance rescue: merging "
+					log.warn("Keyword-dominance rescue: merging "
 							+ "{} non-kw records (threshold={}, "
 							+ "kwConf={}) with {} kw records",
 							rescued.size(),
@@ -1476,9 +1476,9 @@ public class LlmInferenceService implements ChartSearchService {
 					.append(":").append(se.embedding.getResourceId())
 					.append("=").append(String.format("%.4f", se.score));
 		}
-		log.debug("Similarity scores: [{}], minScore: {}, adaptiveCutoff: {}",
+		log.warn("Similarity scores: [{}], minScore: {}, adaptiveCutoff: {}",
 				scores, String.format("%.4f", minScore), adaptiveCutoff);
-		log.debug("Returning {} of {} candidates (topScore={})",
+		log.warn("Returning {} of {} candidates (topScore={})",
 				results.size(), scored.size(),
 				String.format("%.4f", maxBaseScore));
 		return results;
@@ -1630,7 +1630,7 @@ public class LlmInferenceService implements ChartSearchService {
 					}
 				}
 				belowFloorRescued = clusterDensity >= minCluster;
-				log.debug("Floor gate z-score rescue: zScore={}, "
+				log.warn("Floor gate z-score rescue: zScore={}, "
 						+ "density={} (band={}, floor={}), "
 						+ "minCluster={}, rescued={}",
 						String.format("%.2f", zScore),
@@ -1683,7 +1683,7 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 		if (aboveFloorCount < 2) {
-			log.debug("Slim-margin gate: maxSem={} is within "
+			log.warn("Slim-margin gate: maxSem={} is within "
 					+ "{} of floor {}, zero keywords, and only "
 					+ "{} record(s) above floor — returning empty",
 					String.format("%.4f", maxSemanticScore),
@@ -2043,7 +2043,7 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 		boolean partialKeywordMatch = uniformKeywords
 				&& kwMax < bonusThreshold;
-		log.debug("Pipeline refinement: kwMin={}, kwMax={}, uniform={}, partialKw={}, semDom={}",
+		log.warn("Pipeline refinement: kwMin={}, kwMax={}, uniform={}, partialKw={}, semDom={}",
 				String.format("%.4f", kwMin),
 				String.format("%.4f", kwMax), uniformKeywords,
 				partialKeywordMatch, semanticDominance);
@@ -2133,7 +2133,7 @@ public class LlmInferenceService implements ChartSearchService {
 				for (int i = 0; i < coreCutoff; i++) {
 					semanticCore.add(nonKeyword.get(i));
 				}
-				log.debug("Semantic core: {} non-keyword records, primary gap at {}, core size {}",
+				log.warn("Semantic core: {} non-keyword records, primary gap at {}, core size {}",
 						nonKeyword.size(), coreCutoff, semanticCore.size());
 				// Coherence-outlier concept pruning: when the core
 				// contains ≥3 distinct concepts (each with ≥2 members,
@@ -2154,6 +2154,10 @@ public class LlmInferenceService implements ChartSearchService {
 			boolean coreHasStructure = !semanticCore.isEmpty()
 					&& coreCutoff < nonKeyword.size();
 			boolean coreRelevant = false;
+			// The core is only topically relevant if its cosine to the
+			// keyword candidates is a statistical outlier in the noise
+			// distribution — i.e. more than 2 standard deviations above
+			// the mean cross-concept similarity for this patient's chart.
 			if (coreHasStructure && !semanticCore.isEmpty()
 					&& !candidates.isEmpty()) {
 				float[] coreVec = semanticCore.get(0).embedding.getEmbeddingVector();
@@ -2165,14 +2169,19 @@ public class LlmInferenceService implements ChartSearchService {
 						maxCoreKwCosine = cos;
 					}
 				}
-				coreRelevant = maxCoreKwCosine
-						>= ChartSearchAiConstants.SEMANTIC_CORE_MIN_COSINE;
-				log.debug("Core topical check: maxCos={} vs threshold={}, relevant={}",
+				double coreZScore = config.noiseProfile.noiseStd > 0
+						? (maxCoreKwCosine - config.noiseProfile.noiseMean)
+								/ config.noiseProfile.noiseStd
+						: 0;
+				coreRelevant = coreZScore > 2.0;
+				log.warn("Core topical check: maxCos={}, zScore={} (mean={}, std={}), relevant={}",
 						String.format("%.4f", maxCoreKwCosine),
-						ChartSearchAiConstants.SEMANTIC_CORE_MIN_COSINE,
+						String.format("%.2f", coreZScore),
+						String.format("%.4f", config.noiseProfile.noiseMean),
+						String.format("%.4f", config.noiseProfile.noiseStd),
 						coreRelevant);
 			}
-			log.debug("Core validation: structure={}, relevant={}, cutoff={}/{}, semDom={}",
+			log.warn("Core validation: structure={}, relevant={}, cutoff={}/{}, semDom={}",
 					coreHasStructure, coreRelevant,
 					coreCutoff, nonKeyword.size(), semanticDominance);
 			if (semanticDominance || coreRelevant) {
@@ -2209,7 +2218,11 @@ public class LlmInferenceService implements ChartSearchService {
 									maxCos = cos;
 								}
 							}
-							if (maxCos >= ChartSearchAiConstants.SEMANTIC_CORE_MIN_COSINE) {
+							double expZ = config.noiseProfile.noiseStd > 0
+									? (maxCos - config.noiseProfile.noiseMean)
+											/ config.noiseProfile.noiseStd
+									: 0;
+							if (expZ > 2.0) {
 								expanded.add(se);
 								expandedIds.add(se.embedding.getResourceId());
 							}

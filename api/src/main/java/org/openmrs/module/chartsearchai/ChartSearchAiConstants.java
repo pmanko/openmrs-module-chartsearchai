@@ -105,8 +105,7 @@ public class ChartSearchAiConstants {
 	 * e.g. SpO2 matching "blood" in "blood oxygen saturation" when
 	 * the query is about blood problems. Value of 0.55 sits between
 	 * same-topic cross-type pairs (~0.65-0.80) and cross-topic pairs
-	 * (~0.40-0.50). */
-	public static final double SEMANTIC_CORE_MIN_COSINE = 0.55;
+	 * (~0.40-0.50). Now derived from the noise profile's mean. */
 
 	/** Fraction of the semantic core's minimum score used as the
 	 * relevance floor for expansion candidates. Semantic score
