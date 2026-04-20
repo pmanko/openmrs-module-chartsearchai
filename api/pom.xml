@@ -22,6 +22,7 @@
 			<groupId>org.openmrs.module</groupId>
 			<artifactId>llama-server-natives</artifactId>
 			<version>${project.version}</version>
+			<classifier>${llama.natives.classifier}</classifier>
 		</dependency>
 		<dependency>
 			<groupId>com.microsoft.onnxruntime</groupId>

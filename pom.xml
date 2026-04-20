@@ -127,6 +127,63 @@
 		</pluginRepository>
 	</pluginRepositories>
 
+	<profiles>
+		<profile>
+			<id>natives-macos-aarch64</id>
+			<activation>
+				<os><family>mac</family><arch>aarch64</arch></os>
+			</activation>
+			<properties>
+				<llama.natives.classifier>macos-aarch64</llama.natives.classifier>
+			</properties>
+		</profile>
+		<profile>
+			<id>natives-macos-x86_64</id>
+			<activation>
+				<os><family>mac</family><arch>x86_64</arch></os>
+			</activation>
+			<properties>
+				<llama.natives.classifier>macos-x86_64</llama.natives.classifier>
+			</properties>
+		</profile>
+		<profile>
+			<id>natives-linux-aarch64</id>
+			<activation>
+				<os><name>linux</name><arch>aarch64</arch></os>
+			</activation>
+			<properties>
+				<llama.natives.classifier>linux-aarch64</llama.natives.classifier>
+			</properties>
+		</profile>
+		<profile>
+			<id>natives-linux-x86_64</id>
+			<activation>
+				<os><name>linux</name><arch>amd64</arch></os>
+			</activation>
+			<properties>
+				<llama.natives.classifier>linux-x86_64</llama.natives.classifier>
+			</properties>
+		</profile>
+		<profile>
+			<id>natives-windows-x86_64</id>
+			<activation>
+				<os><family>windows</family><arch>amd64</arch></os>
+			</activation>
+			<properties>
+				<llama.natives.classifier>windows-x86_64</llama.natives.classifier>
+			</properties>
+		</profile>
+		<profile>
+			<id>natives-windows-aarch64</id>
+			<activation>
+				<os><family>windows</family><arch>aarch64</arch></os>
+			</activation>
+			<properties>
+				<llama.natives.classifier>windows-aarch64</llama.natives.classifier>
+			</properties>
+		</profile>
+	</profiles>
+
 	<distributionManagement>
 		<repository>
 			<id>openmrs-repo-modules</id>
