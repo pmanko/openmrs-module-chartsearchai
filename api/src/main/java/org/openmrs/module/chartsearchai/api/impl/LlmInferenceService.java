@@ -1265,9 +1265,23 @@ public class LlmInferenceService implements ChartSearchService {
 						rMaxKw = se.keywordScore;
 					}
 				}
+				// Partial-match semantic floor: when keyword refinement
+				// kept only PARTIAL matches (no record matches all query
+				// terms) AND the best semantic score is below the noise
+				// floor, the keyword overlap is coincidental — the
+				// embedding model sees no topical relevance. The floor
+				// is max(absoluteFloor, noiseMean - 1 std): for models
+				// with wide distributions (L6-v2, noiseMean=0.26) this
+				// stays at the absolute floor; for compressed models
+				// (MedCPT, noiseMean=0.92) it rises to catch scores
+				// that look high in absolute terms but are below the
+				// noise baseline.
+				double partialKwFloor = Math.max(
+						config.noiseProfile.absoluteSimilarityFloor(),
+						config.noiseProfile.noiseMean
+								- config.noiseProfile.noiseStd);
 				if (rMaxKw < bonusThreshold
-						&& rMaxSem < config.noiseProfile
-								.absoluteSimilarityFloor()) {
+						&& rMaxSem < partialKwFloor) {
 					Set<Integer> badIds =
 							new HashSet<Integer>();
 					for (ScoredEmbedding se : refined) {
@@ -1283,14 +1297,12 @@ public class LlmInferenceService implements ChartSearchService {
 							cleaned.add(se);
 						}
 					}
-					log.debug("Partial-match semantic floor: "
+					log.warn("Partial-match semantic floor: "
 							+ "removing {} below-floor partial "
 							+ "kw records (maxSem={}, floor={})",
 							badIds.size(),
 							String.format("%.4f", rMaxSem),
-							String.format("%.4f",
-									config.noiseProfile
-											.absoluteSimilarityFloor()));
+							String.format("%.4f", partialKwFloor));
 					refined = cleaned;
 					refinementActivated = false;
 				}
@@ -2154,10 +2166,6 @@ public class LlmInferenceService implements ChartSearchService {
 			boolean coreHasStructure = !semanticCore.isEmpty()
 					&& coreCutoff < nonKeyword.size();
 			boolean coreRelevant = false;
-			// The core is only topically relevant if its cosine to the
-			// keyword candidates is a statistical outlier in the noise
-			// distribution — i.e. more than 2 standard deviations above
-			// the mean cross-concept similarity for this patient's chart.
 			if (coreHasStructure && !semanticCore.isEmpty()
 					&& !candidates.isEmpty()) {
 				float[] coreVec = semanticCore.get(0).embedding.getEmbeddingVector();
@@ -2169,16 +2177,11 @@ public class LlmInferenceService implements ChartSearchService {
 						maxCoreKwCosine = cos;
 					}
 				}
-				double coreZScore = config.noiseProfile.noiseStd > 0
-						? (maxCoreKwCosine - config.noiseProfile.noiseMean)
-								/ config.noiseProfile.noiseStd
-						: 0;
-				coreRelevant = coreZScore > 2.0;
-				log.warn("Core topical check: maxCos={}, zScore={} (mean={}, std={}), relevant={}",
+				coreRelevant = maxCoreKwCosine
+						>= ChartSearchAiConstants.SEMANTIC_CORE_MIN_COSINE;
+				log.warn("Core topical check: maxCos={} vs threshold={}, relevant={}",
 						String.format("%.4f", maxCoreKwCosine),
-						String.format("%.2f", coreZScore),
-						String.format("%.4f", config.noiseProfile.noiseMean),
-						String.format("%.4f", config.noiseProfile.noiseStd),
+						ChartSearchAiConstants.SEMANTIC_CORE_MIN_COSINE,
 						coreRelevant);
 			}
 			log.warn("Core validation: structure={}, relevant={}, cutoff={}/{}, semDom={}",
@@ -2218,11 +2221,7 @@ public class LlmInferenceService implements ChartSearchService {
 									maxCos = cos;
 								}
 							}
-							double expZ = config.noiseProfile.noiseStd > 0
-									? (maxCos - config.noiseProfile.noiseMean)
-											/ config.noiseProfile.noiseStd
-									: 0;
-							if (expZ > 2.0) {
+							if (maxCos >= ChartSearchAiConstants.SEMANTIC_CORE_MIN_COSINE) {
 								expanded.add(se);
 								expandedIds.add(se.embedding.getResourceId());
 							}
