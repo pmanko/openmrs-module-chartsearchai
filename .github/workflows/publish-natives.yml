@@ -63,7 +63,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}-${{ matrix.arch }}
-          path: build/bin/${{ matrix.binary }}
+          path: |
+            build/bin/${{ matrix.binary }}
+            build/bin/Release/${{ matrix.binary }}
 
   publish:
     needs: build-native
