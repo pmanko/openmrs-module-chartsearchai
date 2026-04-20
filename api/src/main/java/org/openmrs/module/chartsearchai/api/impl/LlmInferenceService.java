@@ -1024,30 +1024,20 @@ public class LlmInferenceService implements ChartSearchService {
 		// Concept-name re-ranking for zero-keyword queries: drop
 		// concept outliers whose name-level similarity to the query
 		// is significantly below the cluster of other concepts.
+		// When no query term matches any record text, the retrieval
+		// relies entirely on embedding similarity. Shared prefixes
+		// like "Vital signs / Finding —" can dominate scores, making
+		// all vitals look equally relevant. Re-ranking by concept
+		// name adds precision by comparing each concept name directly
+		// against the query embedding.
 		int keywordMatchCount = 0;
 		for (int i = 0; i < validCount; i++) {
 			if (keywordScores[i] > 0) {
 				keywordMatchCount++;
 			}
 		}
-		// Only re-rank for very short zero-keyword queries where
-		// all terms are ≤4 chars (likely abbreviations/acronyms).
-		// Zero-keyword query where at least one term is split by the
-		// tokenizer into subwords — the model can't process it as a
-		// meaningful unit (e.g. "bmi" → ["b","##mi"]). Shared
-		// prefixes like "Vital signs / Finding —" dominate the
-		// full-text score, so concept-name re-ranking is needed.
-		boolean hasSubwordTerm = false;
-		if (keywordMatchCount == 0 && queryTerms.length > 0) {
-			for (String term : queryTerms) {
-				if (provider.isSubwordToken(term)) {
-					hasSubwordTerm = true;
-					break;
-				}
-			}
-		}
 		if (pipelineResult != null && !pipelineResult.isEmpty()
-				&& hasSubwordTerm) {
+				&& keywordMatchCount == 0 && queryTerms.length > 0) {
 			pipelineResult = rerankByConceptName(pipelineResult,
 					queryVector, provider, noiseProfile);
 		}
