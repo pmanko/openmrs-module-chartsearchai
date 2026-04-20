@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpServletResponseWrapper;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -290,7 +291,21 @@ public class ChartSearchAiRestController {
 			return;
 		}
 
-		// All validation passed — start SSE streaming
+		// All validation passed — start SSE streaming.
+		// Unwrap any response wrappers (e.g. Spring's ContentCachingResponseWrapper
+		// from ShallowEtagHeaderFilter) that buffer the entire body, which would
+		// prevent SSE tokens from streaming to the client in real time.
+		HttpServletResponse unwrapped = response;
+		while (unwrapped instanceof HttpServletResponseWrapper) {
+			javax.servlet.ServletResponse inner =
+					((HttpServletResponseWrapper) unwrapped).getResponse();
+			if (inner instanceof HttpServletResponse) {
+				unwrapped = (HttpServletResponse) inner;
+			} else {
+				break;
+			}
+		}
+
 		response.setContentType("text/event-stream");
 		response.setCharacterEncoding("UTF-8");
 		response.setHeader("Cache-Control", "no-cache");
@@ -298,11 +313,11 @@ public class ChartSearchAiRestController {
 		response.setHeader("Connection", "keep-alive");
 		// Disable Tomcat's response buffer so tokens stream immediately
 		// instead of accumulating in the default 8KB buffer.
-		response.setBufferSize(0);
+		unwrapped.setBufferSize(0);
 
-		final OutputStream out = response.getOutputStream();
+		final OutputStream out = unwrapped.getOutputStream();
 		// Commit the response headers now so chunked transfer starts
-		response.flushBuffer();
+		unwrapped.flushBuffer();
 
 		String preFilterProp = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");

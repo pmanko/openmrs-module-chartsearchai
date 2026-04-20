@@ -201,7 +201,7 @@ public class LocalLlmEngine implements LlmEngine {
 		command.add("-fa");
 		command.add("on");
 		command.add("-c");
-		command.add("4096");
+		command.add(String.valueOf(getContextSize()));
 		command.add("--log-disable");
 
 		log.info("Starting llama-server on port {} with model {}", serverPort, modelPath);
@@ -512,6 +512,23 @@ public class LocalLlmEngine implements LlmEngine {
 		catch (IOException e) {
 			log.warn("Failed to extract shared libraries: {}", e.getMessage());
 		}
+	}
+
+	int getContextSize() {
+		String value = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_CONTEXT_SIZE);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				int parsed = Integer.parseInt(value.trim());
+				if (parsed > 0) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid context size '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_LLM_CONTEXT_SIZE;
 	}
 
 	int getServerPort() {

@@ -106,10 +106,161 @@ public class LlmProvider {
 				+ "\n\nClinician's query: " + question;
 		int timeoutSeconds = getTimeoutSeconds();
 
+		// Wrap the consumer to extract only the "answer" value from the JSON
+		// envelope the LLM generates, so the UI sees clean text instead of raw JSON.
+		AnswerExtractingConsumer filter = new AnswerExtractingConsumer(tokenConsumer);
+
 		LlmEngine.InferenceResult result = getActiveEngine().inferStreaming(
-				systemPrompt, userMessage, timeoutSeconds, tokenConsumer);
+				systemPrompt, userMessage, timeoutSeconds, filter);
 
 		return extractResponse(result.getText(), result.getInputTokens(), result.getOutputTokens());
+	}
+
+	/**
+	 * A streaming token consumer that buffers the raw JSON tokens from the LLM
+	 * and only forwards text content from inside the {@code "answer"} value.
+	 *
+	 * <p>The LLM is prompted to produce {@code {"answer": "...", "citations": [...]}}.
+	 * This consumer processes each character through a simple state machine and only
+	 * forwards characters that belong to the answer string value.</p>
+	 */
+	static class AnswerExtractingConsumer implements Consumer<String> {
+
+		private final Consumer<String> delegate;
+
+		/**
+		 * Character-level state machine:
+		 * BEFORE_KEY   — scanning for the start of {@code "answer"}
+		 * IN_KEY       — matching characters of {@code "answer"}
+		 * AFTER_KEY    — matched key, looking for {@code :}
+		 * AFTER_COLON  — found {@code :}, looking for opening {@code "}
+		 * IN_VALUE     — inside the answer string, forwarding content
+		 * DONE         — found closing quote, ignoring remaining tokens
+		 */
+		private enum State { BEFORE_KEY, IN_KEY, AFTER_KEY, AFTER_COLON, IN_VALUE, DONE }
+
+		private State state = State.BEFORE_KEY;
+
+		private static final String ANSWER_KEY = "\"answer\"";
+
+		/** How many characters of ANSWER_KEY we have matched so far. */
+		private int keyMatchPos;
+
+		/** Whether the next character in the answer value is escaped. */
+		private boolean escaped;
+
+		AnswerExtractingConsumer(Consumer<String> delegate) {
+			this.delegate = delegate;
+		}
+
+		@Override
+		public void accept(String token) {
+			if (state == State.DONE) {
+				return;
+			}
+
+			if (state == State.IN_VALUE) {
+				forwardAnswerContent(token);
+				return;
+			}
+
+			// Process character by character until we enter the answer value
+			for (int i = 0; i < token.length(); i++) {
+				char c = token.charAt(i);
+				switch (state) {
+					case BEFORE_KEY:
+						if (c == ANSWER_KEY.charAt(0)) {
+							keyMatchPos = 1;
+							state = State.IN_KEY;
+						}
+						break;
+					case IN_KEY:
+						if (c == ANSWER_KEY.charAt(keyMatchPos)) {
+							keyMatchPos++;
+							if (keyMatchPos == ANSWER_KEY.length()) {
+								state = State.AFTER_KEY;
+							}
+						} else {
+							// Mismatch — restart. Check if current char starts a new match.
+							state = State.BEFORE_KEY;
+							if (c == ANSWER_KEY.charAt(0)) {
+								keyMatchPos = 1;
+								state = State.IN_KEY;
+							}
+						}
+						break;
+					case AFTER_KEY:
+						if (c == ':') {
+							state = State.AFTER_COLON;
+						} else if (c != ' ') {
+							// Not the pattern we expected, reset
+							state = State.BEFORE_KEY;
+							keyMatchPos = 0;
+						}
+						break;
+					case AFTER_COLON:
+						if (c == '"') {
+							state = State.IN_VALUE;
+							// Forward remainder of this token as answer content
+							if (i + 1 < token.length()) {
+								forwardAnswerContent(token.substring(i + 1));
+							}
+							return; // rest of token handled by forwardAnswerContent
+						} else if (c != ' ') {
+							// Value isn't a string, reset
+							state = State.BEFORE_KEY;
+							keyMatchPos = 0;
+						}
+						break;
+					default:
+						break;
+				}
+			}
+		}
+
+		/**
+		 * Forward characters from {@code text} that are part of the answer
+		 * string value, stopping at the unescaped closing double-quote.
+		 */
+		private void forwardAnswerContent(String text) {
+			StringBuilder out = new StringBuilder();
+			for (int i = 0; i < text.length(); i++) {
+				char c = text.charAt(i);
+				if (escaped) {
+					switch (c) {
+						case 'n':
+							out.append('\n');
+							break;
+						case 't':
+							out.append('\t');
+							break;
+						case '"':
+							out.append('"');
+							break;
+						case '\\':
+							out.append('\\');
+							break;
+						case '/':
+							out.append('/');
+							break;
+						default:
+							out.append('\\').append(c);
+							break;
+					}
+					escaped = false;
+				} else if (c == '\\') {
+					escaped = true;
+				} else if (c == '"') {
+					state = State.DONE;
+					break;
+				} else {
+					out.append(c);
+				}
+			}
+			if (out.length() > 0) {
+				delegate.accept(out.toString());
+			}
+		}
 	}
 
 	private static String normalizeRecords(String numberedRecords) {

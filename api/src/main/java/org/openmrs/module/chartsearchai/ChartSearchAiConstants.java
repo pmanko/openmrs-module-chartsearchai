@@ -220,6 +220,10 @@ public class ChartSearchAiConstants {
 
 	public static final int DEFAULT_LLM_SERVER_PORT = 18085;
 
+	public static final String GP_LLM_CONTEXT_SIZE = "chartsearchai.llm.contextSize";
+
+	public static final int DEFAULT_LLM_CONTEXT_SIZE = 16384;
+
 	public static final int DEFAULT_MAX_TOKENS = 2048;
 
 	public static final float DEFAULT_REPEAT_PENALTY = 1.0f;
