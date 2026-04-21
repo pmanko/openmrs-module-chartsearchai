@@ -9,6 +9,7 @@
  */
 package org.openmrs.module.chartsearchai.api.impl;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -201,15 +202,18 @@ public class EnrichedRetrievalEvalTest {
 		for (JsonNode c : cases) {
 			int dsIdx = c.has("datasetIndex") ? c.get("datasetIndex").asInt() : 0;
 			String dsName = dsIdx < DATASET_NAMES.length ? DATASET_NAMES[dsIdx] : "DS" + dsIdx;
-			int expectedMax = c.has("expectedMaxRecords")
-					? c.get("expectedMaxRecords").asInt() : -1;
+			List<Integer> expectedIndices = new ArrayList<>();
+			if (c.has("resultIndices")) {
+				for (JsonNode idx : c.get("resultIndices")) {
+					expectedIndices.add(idx.asInt());
+				}
+				Collections.sort(expectedIndices);
+			}
 			args.add(Arguments.of(
 					dsName + ": " + c.get("query").asText(),
 					c.get("query").asText(),
 					dsIdx,
-					c.get("expectedMinRecords").asInt(),
-					expectedMax,
-					c.has("mustContainText") ? c.get("mustContainText").asText() : null));
+					expectedIndices));
 		}
 		return args.stream();
 	}
@@ -218,36 +222,16 @@ public class EnrichedRetrievalEvalTest {
 	@MethodSource("evalCases")
 	public void enrichedRetrieval_shouldMeetBaseline(String label,
 			String query, int datasetIndex,
-			int expectedMinRecords, int expectedMaxRecords,
-			String mustContainText) {
+			List<Integer> expectedIndices) {
 		ensureInitialized();
 		Assumptions.assumeTrue(provider != null,
 				"Skipping: embedding model not found");
 
 		List<Integer> result = runQuery(query, datasetIndex);
 
-		assertTrue(result.size() >= expectedMinRecords,
-				"'" + label + "' should return >= " + expectedMinRecords
-				+ " records but got " + result.size() + ": " + result);
-
-		if (expectedMaxRecords >= 0) {
-			assertTrue(result.size() <= expectedMaxRecords,
-					"'" + label + "' should return <= " + expectedMaxRecords
-					+ " records but got " + result.size() + ": " + result);
-		}
-
-		if (mustContainText != null) {
-			boolean found = false;
-			for (int idx : result) {
-				if (DATASETS[datasetIndex][idx].contains(mustContainText)) {
-					found = true;
-					break;
-				}
-			}
-			assertTrue(found,
-					"'" + label + "' should return a record containing '"
-					+ mustContainText + "' but none of " + result + " do");
-		}
+		assertEquals(expectedIndices, result,
+				"'" + label + "' expected " + expectedIndices
+				+ " but got " + result);
 	}
 
 	@Test
