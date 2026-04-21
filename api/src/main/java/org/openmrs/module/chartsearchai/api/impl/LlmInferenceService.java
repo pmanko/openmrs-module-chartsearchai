@@ -1461,6 +1461,81 @@ public class LlmInferenceService implements ChartSearchService {
 					inCandidates.add(
 							se.embedding.getResourceId());
 				}
+
+				// For the selective-keyword rescue path, compute a
+				// distribution-based coherence threshold instead of
+				// the fixed noise-profile one. The fixed threshold
+				// (sqrt(noiseMean * noiseP95)) uses doc-doc stats
+				// which, for compressed models, can reject related-
+				// but-different concepts (e.g. "Nonunion of fracture"
+				// vs "Crushing injury": coherence 0.935 < threshold
+				// 0.940). The distribution-based approach computes
+				// each record's coherence with the candidates and
+				// sets the threshold at mean + std — records that are
+				// statistical outliers in coherence are genuinely
+				// related. This naturally adapts: compressed models
+				// get a tighter band (std ~0.01), wide-range models
+				// get a wider band (std ~0.15).
+				double effectiveThreshold = perRecordThreshold;
+				if (selectiveKwRescued) {
+					List<Double> cohValues =
+							new ArrayList<Double>();
+					for (ScoredEmbedding se : scored) {
+						if (inCandidates.contains(
+								se.embedding.getResourceId())
+								|| se.keywordScore > 0) {
+							continue;
+						}
+						float[] vec = se.embedding
+								.getEmbeddingVector();
+						if (vec == null) {
+							continue;
+						}
+						double cs = 0;
+						int cn = 0;
+						for (ScoredEmbedding kw : candidates) {
+							float[] kwVec = kw.embedding
+									.getEmbeddingVector();
+							if (kwVec != null
+									&& kwVec.length
+									== vec.length) {
+								cs += ChartSearchAiUtils
+										.cosineSimilarity(
+												vec, kwVec);
+								cn++;
+							}
+						}
+						if (cn > 0) {
+							cohValues.add(cs / cn);
+						}
+					}
+					if (cohValues.size() >= 4) {
+						double cohSum = 0;
+						for (double v : cohValues) {
+							cohSum += v;
+						}
+						double cohMean = cohSum
+								/ cohValues.size();
+						double cohSqSum = 0;
+						for (double v : cohValues) {
+							double d = v - cohMean;
+							cohSqSum += d * d;
+						}
+						double cohStd = Math.sqrt(cohSqSum
+								/ cohValues.size());
+						effectiveThreshold = cohMean + cohStd / 2;
+						log.debug("Selective rescue coherence "
+								+ "threshold: mean={}, std={}, "
+								+ "effective={} (fixed was {})",
+								String.format("%.4f", cohMean),
+								String.format("%.4f", cohStd),
+								String.format("%.4f",
+										effectiveThreshold),
+								String.format("%.4f",
+										perRecordThreshold));
+					}
+				}
+
 				List<ScoredEmbedding> rescued =
 						new ArrayList<ScoredEmbedding>();
 				for (ScoredEmbedding se : scored) {
@@ -1490,17 +1565,61 @@ public class LlmInferenceService implements ChartSearchService {
 					}
 					if (cnt > 0
 							&& cosSum / cnt
-							>= perRecordThreshold) {
+							>= effectiveThreshold) {
 						rescued.add(se);
 					}
 				}
 				if (!rescued.isEmpty()) {
+					// Concept-pairing for rescued records (only
+					// in the selective-keyword rescue path):
+					// when a condition is rescued, its diagnosis
+					// partner (or vice versa) may have missed the
+					// mergeFloor by a small margin. Pull in
+					// partners whose concept name matches a rescued
+					// record — these are the same clinical finding
+					// recorded as different resource types.
+					Set<String> rescuedConcepts =
+							new HashSet<String>();
+					Set<Integer> rescuedIds =
+							new HashSet<Integer>();
+					for (ScoredEmbedding se : rescued) {
+						rescuedIds.add(
+								se.embedding.getResourceId());
+						String cn = ConceptNameUtil
+								.extractConceptName(
+										se.embedding
+												.getTextContent());
+						if (cn != null) {
+							rescuedConcepts.add(cn);
+						}
+					}
+					if (selectiveKwRescued
+						&& !rescuedConcepts.isEmpty()) {
+						for (ScoredEmbedding se : scored) {
+							int rid = se.embedding
+									.getResourceId();
+							if (inCandidates.contains(rid)
+									|| rescuedIds.contains(rid)) {
+								continue;
+							}
+							String cn = ConceptNameUtil
+									.extractConceptName(
+											se.embedding
+													.getTextContent());
+							if (cn != null
+									&& rescuedConcepts
+											.contains(cn)) {
+								rescued.add(se);
+								rescuedIds.add(rid);
+							}
+						}
+					}
 					log.warn("Keyword-dominance rescue: merging "
 							+ "{} non-kw records (threshold={}, "
 							+ "kwConf={}) with {} kw records",
 							rescued.size(),
 							String.format("%.4f",
-									perRecordThreshold),
+									effectiveThreshold),
 							String.format("%.2f", kwConf),
 							candidates.size());
 					List<ScoredEmbedding> merged =
