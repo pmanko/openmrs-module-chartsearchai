@@ -1259,6 +1259,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// Save pre-refinement candidates for semantic core discovery.
 		List<ScoredEmbedding> preRefinementCandidates = candidates;
 		boolean refinementActivated = false;
+		boolean selectiveKwRescued = false;
 		if (config.keywordWeight > 0) {
 			List<ScoredEmbedding> refined = refineByKeywords(candidates, queryTermCount);
 			refinementActivated = refined.size() < candidates.size();
@@ -1314,6 +1315,7 @@ public class LlmInferenceService implements ChartSearchService {
 					// refinement expansion path (which would flood
 					// on compressed score models).
 					refinementActivated = false;
+					selectiveKwRescued = true;
 					log.debug("Selective-keyword rescue: keeping {} "
 							+ "records via non-refinement path "
 							+ "(maxSem={}, floor={})",
@@ -1440,8 +1442,20 @@ public class LlmInferenceService implements ChartSearchService {
 				double perRecordThreshold = Math.sqrt(
 						config.noiseProfile.noiseMean
 						* config.noiseProfile.noiseP95) * kwConf;
-				double mergeFloor = kwMaxSem
-						* config.similarityRatio;
+				// When the selective-keyword rescue saved these
+				// candidates from below the noise floor, their
+				// semantic scores are systematically lower than
+				// the noise baseline. Non-keyword records that are
+				// topically related will be similarly depressed.
+				// Widen the merge floor by squaring the ratio
+				// (0.98² ≈ 0.96) to compensate. The coherence
+				// check guards precision. Outside the selective
+				// rescue path, the standard ratio floor applies.
+				double rescueRatio = selectiveKwRescued
+						? config.similarityRatio
+								* config.similarityRatio
+						: config.similarityRatio;
+				double mergeFloor = kwMaxSem * rescueRatio;
 				Set<Integer> inCandidates = new HashSet<Integer>();
 				for (ScoredEmbedding se : candidates) {
 					inCandidates.add(
