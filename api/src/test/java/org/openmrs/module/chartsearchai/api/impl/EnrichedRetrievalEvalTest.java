@@ -252,9 +252,16 @@ public class EnrichedRetrievalEvalTest {
 			log.warn("[{}] 'any physical injury?' returned {} records: {}{}",
 					DATASET_NAMES[ds], result.size(), result, details);
 
-			// FOURTH and FIFTH contain "Crushing injury of thigh" and
-			// "Nonunion of fracture" — expect those and nothing else.
-			if (ds == 3 || ds == 4) {
+			if (ds == 1) {
+				// SECOND contains "Complete tear of ligament of
+				// ankle or foot" — a physical injury.
+				assertTrue(result.contains(30),
+						DATASET_NAMES[ds] + ": should contain Complete tear condition [30]");
+				assertTrue(result.contains(33),
+						DATASET_NAMES[ds] + ": should contain Complete tear diagnosis [33]");
+			} else if (ds == 3 || ds == 4) {
+				// FOURTH and FIFTH contain "Crushing injury of
+				// thigh" and "Nonunion of fracture".
 				assertTrue(result.contains(93),
 						DATASET_NAMES[ds] + ": should contain Crushing injury condition [93]");
 				assertTrue(result.contains(97),
@@ -264,7 +271,7 @@ public class EnrichedRetrievalEvalTest {
 				assertTrue(result.contains(110),
 						DATASET_NAMES[ds] + ": should contain Nonunion of fracture diagnosis [110]");
 			} else {
-				// FULL, SECOND, THIRD have no injury records
+				// FULL and THIRD have no injury records
 				assertTrue(result.isEmpty(),
 						DATASET_NAMES[ds] + ": should return 0 records for 'any physical injury?' but got "
 						+ result.size() + ": " + details);
