@@ -1016,7 +1016,8 @@ public class LlmInferenceService implements ChartSearchService {
 				config.minScoreGap,
 				config.gapValidationCosineThreshold,
 				config.similarityRatio, noiseProfile,
-				config.floorRescueMinZScore);
+				config.floorRescueMinZScore,
+				config.conceptNameGateMinCandidates);
 
 		List<ChartEmbedding> pipelineResult = filterPipeline(semanticScores,
 				keywordScores, embeddings, queryTerms, profiledConfig);
@@ -1041,7 +1042,7 @@ public class LlmInferenceService implements ChartSearchService {
 			int beforeRerank = pipelineResult.size();
 			pipelineResult = rerankByConceptName(pipelineResult,
 					embeddings, validCount, queryVector, provider,
-					noiseProfile);
+					noiseProfile, profiledConfig);
 			if (pipelineResult.size() != beforeRerank) {
 				StringBuilder kept = new StringBuilder();
 				for (ChartEmbedding ce : pipelineResult) {
@@ -1961,7 +1962,8 @@ public class LlmInferenceService implements ChartSearchService {
 			List<ChartEmbedding> candidates,
 			ChartEmbedding[] allEmbeddings, int allCount,
 			float[] queryVector, EmbeddingProvider provider,
-			ModelNoiseProfile noiseProfile) {
+			ModelNoiseProfile noiseProfile,
+			PipelineConfig config) {
 		// Group candidates by concept name
 		Map<String, List<ChartEmbedding>> byConcept =
 				new java.util.LinkedHashMap<String, List<ChartEmbedding>>();
@@ -1997,7 +1999,18 @@ public class LlmInferenceService implements ChartSearchService {
 							queryVector, nameVec));
 		}
 
-		if (byConcept.size() <= 2) {
+		// Small-result bypass: skip the gate when the result
+		// set is below the model's configured minimum. Dual-
+		// encoder models (MedCPT, minCandidates=2) produce
+		// reliable concept-name z-scores even for small sets;
+		// single-encoder models (L6-v2, minCandidates=10) need
+		// larger sets AND at least 3 candidate concepts because
+		// their z-scores for vocabulary-mismatch queries are
+		// unreliable.
+		if (candidates.size()
+				< config.conceptNameGateMinCandidates
+				|| byConcept.size()
+				< config.conceptNameGateMinCandidates) {
 			return candidates;
 		}
 
@@ -2006,8 +2019,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// among ALL concept names in the dataset. Uses N^(3/4)
 		// as effective degrees of freedom. If no candidate stands
 		// out, the pipeline found coincidental embedding overlap.
-		if (allConceptNames.size() >= 5
-				&& candidates.size() >= 10) {
+		if (allConceptNames.size() >= 5) {
 			double[] cnScores = new double[conceptScores.size()];
 			int ci = 0;
 			for (double s : conceptScores.values()) {
@@ -4279,6 +4291,11 @@ public class LlmInferenceService implements ChartSearchService {
 		/** Minimum z-score for tight-cluster bypass of the
 		 * zero-keyword z-score gate. */
 		final double floorRescueMinZScore;
+		/** Minimum candidate count for the concept-name outlier
+		 * gate to fire. Dual-encoder models (MedCPT) produce
+		 * reliable concept-name z-scores even for small sets;
+		 * single-encoder models (L6-v2) need larger sets. */
+		final int conceptNameGateMinCandidates;
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
 				double minScoreGap, double gapValidationCosineThreshold,
@@ -4286,7 +4303,8 @@ public class LlmInferenceService implements ChartSearchService {
 			this(keywordWeight, scoreGapMultiplier, minScoreGap,
 					gapValidationCosineThreshold, similarityRatio,
 					ModelNoiseProfile.conservativeDefault(),
-					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE);
+					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
+					10);
 		}
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
@@ -4296,7 +4314,8 @@ public class LlmInferenceService implements ChartSearchService {
 			this(keywordWeight, scoreGapMultiplier, minScoreGap,
 					gapValidationCosineThreshold, similarityRatio,
 					noiseProfile,
-					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE);
+					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
+					10);
 		}
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
@@ -4304,6 +4323,17 @@ public class LlmInferenceService implements ChartSearchService {
 				double similarityRatio,
 				ModelNoiseProfile noiseProfile,
 				double floorRescueMinZScore) {
+			this(keywordWeight, scoreGapMultiplier, minScoreGap,
+					gapValidationCosineThreshold, similarityRatio,
+					noiseProfile, floorRescueMinZScore, 10);
+		}
+
+		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
+				double minScoreGap, double gapValidationCosineThreshold,
+				double similarityRatio,
+				ModelNoiseProfile noiseProfile,
+				double floorRescueMinZScore,
+				int conceptNameGateMinCandidates) {
 			this.keywordWeight = keywordWeight;
 			this.scoreGapMultiplier = scoreGapMultiplier;
 			this.minScoreGap = minScoreGap;
@@ -4311,6 +4341,8 @@ public class LlmInferenceService implements ChartSearchService {
 			this.similarityRatio = similarityRatio;
 			this.noiseProfile = noiseProfile;
 			this.floorRescueMinZScore = floorRescueMinZScore;
+			this.conceptNameGateMinCandidates =
+					conceptNameGateMinCandidates;
 		}
 
 		/** Returns a config using all default constant values
@@ -4412,6 +4444,10 @@ public class LlmInferenceService implements ChartSearchService {
 			// - similarityRatio 0.98: floor must be very close to top
 			//   score to exclude noise at 0.669 when signal is at 0.700
 			// - floorRescueMinZScore 1.0: z-scores are compressed too
+			// - conceptNameGateMinCandidates 2: MedCPT's dual-encoder
+			//   query encoder produces reliable concept-name z-scores
+			//   even for small result sets, so the outlier gate can
+			//   fire at 2+ candidates (vs L6-v2's 10+).
 			return new PipelineConfig(
 					ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
 					ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
@@ -4419,7 +4455,8 @@ public class LlmInferenceService implements ChartSearchService {
 					ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
 					0.98,
 					ModelNoiseProfile.conservativeDefault(),
-					1.0);
+					1.0,
+					ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS);
 		}
 	}
 

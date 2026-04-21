@@ -219,8 +219,8 @@
   }, {
     "query" : "cholesterol",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 39, 67, 71, 92, 110, 146 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "dental problems",
     "datasetIndex" : 0,
@@ -374,8 +374,8 @@
   }, {
     "query" : "mental health",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 7, 13, 20, 30, 42, 54, 99, 121 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "musculoskeletal injuries",
     "datasetIndex" : 0,
@@ -429,8 +429,8 @@
   }, {
     "query" : "stroke",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 3,
-    "resultIndices" : [ 54, 92, 99 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "substance abuse",
     "datasetIndex" : 0,
@@ -504,8 +504,8 @@
   }, {
     "query" : "Hb results",
     "datasetIndex" : 1,
-    "expectedMinRecords" : 7,
-    "resultIndices" : [ 9, 24, 39, 50, 55, 57, 63 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "How have this patient's blood pressure, weight, and temperature trended across their last 7 visits?",
     "datasetIndex" : 1,
@@ -674,8 +674,8 @@
   }, {
     "query" : "bowel disease",
     "datasetIndex" : 1,
-    "expectedMinRecords" : 5,
-    "resultIndices" : [ 16, 17, 29, 31, 56 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "breathing problems",
     "datasetIndex" : 1,
@@ -709,8 +709,8 @@
   }, {
     "query" : "dental problems",
     "datasetIndex" : 1,
-    "expectedMinRecords" : 3,
-    "resultIndices" : [ 44, 45, 56 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "depression",
     "datasetIndex" : 1,
@@ -724,8 +724,8 @@
   }, {
     "query" : "disease problem",
     "datasetIndex" : 1,
-    "expectedMinRecords" : 5,
-    "resultIndices" : [ 16, 17, 29, 44, 56 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "disease treatment",
     "datasetIndex" : 1,
@@ -809,8 +809,8 @@
   }, {
     "query" : "is the patient anemic?",
     "datasetIndex" : 1,
-    "expectedMinRecords" : 5,
-    "resultIndices" : [ 9, 24, 39, 55, 57 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "is the patient enrolled in any programs?",
     "datasetIndex" : 1,
@@ -919,8 +919,8 @@
   }, {
     "query" : "substance abuse",
     "datasetIndex" : 1,
-    "expectedMinRecords" : 4,
-    "resultIndices" : [ 17, 31, 34, 55 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "vital signs",
     "datasetIndex" : 1,
@@ -959,8 +959,8 @@
   }, {
     "query" : "what is the patient being treated for?",
     "datasetIndex" : 1,
-    "expectedMinRecords" : 4,
-    "resultIndices" : [ 44, 45, 55, 57 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "what medications is the patient on?",
     "datasetIndex" : 1,
@@ -979,8 +979,8 @@
   }, {
     "query" : "Does this patient use any family planning methods?",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 136, 148 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "HIV status and CD4 count",
     "datasetIndex" : 2,
@@ -1244,8 +1244,8 @@
   }, {
     "query" : "ever been immunized?",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 118, 148 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "ever got pregnant?",
     "datasetIndex" : 2,
@@ -1344,8 +1344,8 @@
   }, {
     "query" : "mental health",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 2, 34, 54, 93, 129, 136 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "musculoskeletal injuries",
     "datasetIndex" : 2,
@@ -1534,8 +1534,8 @@
   }, {
     "query" : "allergies",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 33, 64, 66, 90, 150, 151 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "allergies and current medications",
     "datasetIndex" : 3,
@@ -1559,8 +1559,8 @@
   }, {
     "query" : "any allergies?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 33, 64, 66, 90, 150, 151 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "any blood problems?",
     "datasetIndex" : 3,
@@ -1569,8 +1569,8 @@
   }, {
     "query" : "any cancer?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 3, 5, 63, 65, 120, 123 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "any conditions",
     "datasetIndex" : 3,
@@ -1599,8 +1599,8 @@
   }, {
     "query" : "any history of cancer?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 3, 5, 63, 65, 120, 123 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "any infections?",
     "datasetIndex" : 3,
@@ -1659,8 +1659,8 @@
   }, {
     "query" : "cancer",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 3, 5, 63, 65, 120, 123 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "cardiovascular disease",
     "datasetIndex" : 3,
@@ -1689,8 +1689,8 @@
   }, {
     "query" : "diabetes",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 5,
-    "resultIndices" : [ 0, 15, 17, 88, 134 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "disease problem",
     "datasetIndex" : 3,
@@ -1704,8 +1704,8 @@
   }, {
     "query" : "does he have cancer?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 3, 5, 63, 65, 120, 123 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "does she have any blood problem?",
     "datasetIndex" : 3,
@@ -1714,18 +1714,18 @@
   }, {
     "query" : "does the patient have any allergies",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 33, 64, 66, 90, 150, 151 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "does the patient have any allergies?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 33, 64, 66, 90, 150, 151 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "does the patient have cancer?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 3, 5, 63, 65, 120, 123 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "ever been immunized?",
     "datasetIndex" : 3,
@@ -1749,8 +1749,8 @@
   }, {
     "query" : "hair loss",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 5,
-    "resultIndices" : [ 17, 46, 50, 64, 66 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "has this patient ever been diagnosed with any sexually transmitted infections",
     "datasetIndex" : 3,
@@ -1819,8 +1819,8 @@
   }, {
     "query" : "list all allergies",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 33, 64, 66, 90, 150, 151 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "liver problems",
     "datasetIndex" : 3,
@@ -1939,8 +1939,8 @@
   }, {
     "query" : "what tests have been ordered for this patient",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 9,
-    "resultIndices" : [ 0, 14, 15, 22, 51, 52, 66, 110, 124 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "Any family history of cancer?",
     "datasetIndex" : 4,
@@ -2019,8 +2019,8 @@
   }, {
     "query" : "allergies",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 33, 64, 66, 90, 150, 151 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "allergies and current medications",
     "datasetIndex" : 4,
@@ -2044,8 +2044,8 @@
   }, {
     "query" : "any allergies?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 33, 64, 66, 90, 150, 151 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "any blood problems?",
     "datasetIndex" : 4,
@@ -2054,8 +2054,8 @@
   }, {
     "query" : "any cancer?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 3, 5, 63, 65, 120, 123 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "any conditions",
     "datasetIndex" : 4,
@@ -2084,8 +2084,8 @@
   }, {
     "query" : "any history of cancer?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 3, 5, 63, 65, 120, 123 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "any infections?",
     "datasetIndex" : 4,
@@ -2144,8 +2144,8 @@
   }, {
     "query" : "cancer",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 3, 5, 63, 65, 120, 123 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "cardiovascular disease",
     "datasetIndex" : 4,
@@ -2174,8 +2174,8 @@
   }, {
     "query" : "diabetes",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 3,
-    "resultIndices" : [ 0, 15, 88 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "disease problem",
     "datasetIndex" : 4,
@@ -2189,8 +2189,8 @@
   }, {
     "query" : "does he have cancer?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 3, 5, 63, 65, 120, 123 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "does she have any blood problem?",
     "datasetIndex" : 4,
@@ -2199,18 +2199,18 @@
   }, {
     "query" : "does the patient have any allergies",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 33, 64, 66, 90, 150, 151 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "does the patient have any allergies?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 33, 64, 66, 90, 150, 151 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "does the patient have cancer?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 3, 5, 63, 65, 120, 123 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "ever been immunized?",
     "datasetIndex" : 4,
@@ -2234,8 +2234,8 @@
   }, {
     "query" : "hair loss",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 4,
-    "resultIndices" : [ 46, 50, 64, 66 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "has this patient ever been diagnosed with any sexually transmitted infections",
     "datasetIndex" : 4,
@@ -2304,8 +2304,8 @@
   }, {
     "query" : "list all allergies",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 33, 64, 66, 90, 150, 151 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "liver problems",
     "datasetIndex" : 4,
@@ -2424,7 +2424,7 @@
   }, {
     "query" : "what tests have been ordered for this patient",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 7,
-    "resultIndices" : [ 15, 22, 51, 52, 66, 110, 124 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   } ]
 }

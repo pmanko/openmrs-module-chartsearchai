@@ -158,7 +158,8 @@ public class EnrichedRetrievalEvalTest {
 			datasetConfigs[d] = new LlmInferenceService.PipelineConfig(
 					modelConfig.keywordWeight, modelConfig.scoreGapMultiplier,
 					modelConfig.minScoreGap, modelConfig.gapValidationCosineThreshold,
-					modelConfig.similarityRatio, noise, modelConfig.floorRescueMinZScore);
+					modelConfig.similarityRatio, noise, modelConfig.floorRescueMinZScore,
+					modelConfig.conceptNameGateMinCandidates);
 		}
 		log.info("Eval initialized with model={}, baseline={}", activeModel, activeBaseline);
 	}
