@@ -265,7 +265,7 @@ public class LlmProvider {
 
 	private static String normalizeRecords(String numberedRecords) {
 		return (numberedRecords == null || numberedRecords.trim().isEmpty())
-				? "This patient has no records matching this query."
+				? "(none)"
 				: numberedRecords.stripTrailing();
 	}
 
