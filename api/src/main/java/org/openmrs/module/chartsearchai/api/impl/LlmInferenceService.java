@@ -2733,9 +2733,19 @@ public class LlmInferenceService implements ChartSearchService {
 				p2CandidateConcepts.add(cn);
 			}
 		}
+		// Ratio-floor selectivity guard: the ratio floor must
+		// have been genuinely selective — keeping at most 25% of
+		// all scored records. Compressed-score models (e.g.
+		// MedCPT) have such narrow score ranges that a 0.98
+		// ratio floor can pass 25%+ of records despite no real
+		// match. When the ratio floor isn't selective, the set
+		// is just the upper tail of a smooth noise distribution,
+		// not a genuine cluster.
+		boolean ratioFloorSelective = ratioFloorCandidateCount >= 0
+				&& ratioFloorCandidateCount <= scored.size() / 4;
 		boolean tightClusterDetected = belowFloorRescued
 				|| (firstPassGapDetected && adaptiveCutoff < tightThreshold)
-				|| (ratioFloorCandidateCount >= 0
+				|| (ratioFloorSelective
 						&& ratioFloorCandidateCount < tightThreshold
 						&& initialZScore >= config.floorRescueMinZScore
 						&& maxSemanticScore
@@ -2752,7 +2762,7 @@ public class LlmInferenceService implements ChartSearchService {
 				// grouping. This rescues broad-category queries like
 				// "vital signs" where the z-score is strong but just
 				// below the 2.0 threshold.
-				|| (ratioFloorCandidateCount >= 0
+				|| (ratioFloorSelective
 						&& ratioFloorCandidateCount < tightThreshold
 						&& p2CandidateConcepts.size() >= 3
 						&& initialZThreshold > 0

@@ -392,7 +392,7 @@ public class EnrichedRetrievalEvalTest {
 		}
 
 		java.io.File outFile = new java.io.File(
-				"src/test/resources/eval/enriched-retrieval-eval.json");
+				"src/test/resources/" + activeBaseline);
 		mapper.writerWithDefaultPrettyPrinter().writeValue(outFile, root);
 		log.info("Generated baseline: {} queries, file: {}",
 				QUERIES.length, outFile.getAbsolutePath());
