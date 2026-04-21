@@ -265,7 +265,7 @@ public class EnrichedRetrievalEvalTest {
 							.append(DATASETS[ds][idx]);
 				}
 			}
-			log.info("[{}] 'any physical injury?' returned {} records: {}{}",
+			log.warn("[{}] 'any physical injury?' returned {} records: {}{}",
 					DATASET_NAMES[ds], result.size(), result, details);
 
 			// FOURTH and FIFTH contain "Crushing injury of thigh" and
@@ -285,6 +285,46 @@ public class EnrichedRetrievalEvalTest {
 						DATASET_NAMES[ds] + ": should return 0 records for 'any physical injury?' but got "
 						+ result.size() + ": " + details);
 			}
+		}
+	}
+
+	@Test
+	public void latestBmi_shouldReturnHeightAndWeightRecords() {
+		ensureInitialized();
+		Assumptions.assumeTrue(provider != null,
+				"Skipping: embedding model not found");
+
+		for (int ds = 0; ds < DATASETS.length; ds++) {
+			List<Integer> result = runQuery("What is the latest BMI?", ds);
+			StringBuilder details = new StringBuilder();
+			for (int idx : result) {
+				if (idx < DATASETS[ds].length) {
+					details.append("\n  [").append(idx).append("] ")
+							.append(DATASETS[ds][idx]);
+				}
+			}
+			log.warn("[{}] 'What is the latest BMI?' returned {} records: {}{}",
+					DATASET_NAMES[ds], result.size(), result, details);
+
+			// BMI = weight / height². Every dataset has Height and Weight
+			// records, so the pipeline should return both.
+			boolean hasHeight = false;
+			boolean hasWeight = false;
+			for (int idx : result) {
+				if (idx < DATASETS[ds].length) {
+					String text = DATASETS[ds][idx];
+					if (text.contains("Height")) {
+						hasHeight = true;
+					}
+					if (text.contains("Weight")) {
+						hasWeight = true;
+					}
+				}
+			}
+			assertTrue(hasWeight,
+					DATASET_NAMES[ds] + ": BMI query should return Weight records, got: " + result);
+			assertTrue(hasHeight,
+					DATASET_NAMES[ds] + ": BMI query should return Height records, got: " + result);
 		}
 	}
 
