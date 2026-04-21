@@ -1629,8 +1629,8 @@
   }, {
     "query" : "azithromycin",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 3,
-    "resultIndices" : [ 64, 108, 110 ]
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 33, 64, 108, 110 ]
   }, {
     "query" : "blood pressure and pulse",
     "datasetIndex" : 3,
@@ -1684,8 +1684,8 @@
   }, {
     "query" : "depression",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 19, 121 ]
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 19, 47, 51, 121 ]
   }, {
     "query" : "diabetes",
     "datasetIndex" : 3,
@@ -2114,8 +2114,8 @@
   }, {
     "query" : "azithromycin",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 3,
-    "resultIndices" : [ 64, 108, 110 ]
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 33, 64, 108, 110 ]
   }, {
     "query" : "blood pressure and pulse",
     "datasetIndex" : 4,
@@ -2169,8 +2169,8 @@
   }, {
     "query" : "depression",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 19, 121 ]
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 19, 47, 51, 121 ]
   }, {
     "query" : "diabetes",
     "datasetIndex" : 4,

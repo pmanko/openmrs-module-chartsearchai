@@ -1040,7 +1040,8 @@ public class LlmInferenceService implements ChartSearchService {
 				&& keywordMatchCount == 0 && queryTerms.length > 0) {
 			int beforeRerank = pipelineResult.size();
 			pipelineResult = rerankByConceptName(pipelineResult,
-					queryVector, provider, noiseProfile);
+					embeddings, validCount, queryVector, provider,
+					noiseProfile);
 			if (pipelineResult.size() != beforeRerank) {
 				StringBuilder kept = new StringBuilder();
 				for (ChartEmbedding ce : pipelineResult) {
@@ -1957,9 +1958,11 @@ public class LlmInferenceService implements ChartSearchService {
 	 * making all vitals score similarly for a "BMI" query).
 	 */
 	static List<ChartEmbedding> rerankByConceptName(
-			List<ChartEmbedding> candidates, float[] queryVector,
-			EmbeddingProvider provider, ModelNoiseProfile noiseProfile) {
-		// Group by concept name
+			List<ChartEmbedding> candidates,
+			ChartEmbedding[] allEmbeddings, int allCount,
+			float[] queryVector, EmbeddingProvider provider,
+			ModelNoiseProfile noiseProfile) {
+		// Group candidates by concept name
 		Map<String, List<ChartEmbedding>> byConcept =
 				new java.util.LinkedHashMap<String, List<ChartEmbedding>>();
 		for (ChartEmbedding ce : candidates) {
@@ -1972,18 +1975,82 @@ public class LlmInferenceService implements ChartSearchService {
 					k -> new ArrayList<ChartEmbedding>()).add(ce);
 		}
 
-		// Score each concept name against the query
+		// Collect ALL unique concept names in the dataset
+		Set<String> allConceptNames =
+				new java.util.LinkedHashSet<String>();
+		for (int i = 0; i < allCount; i++) {
+			String name = ConceptNameUtil.extractConceptName(
+					allEmbeddings[i].getTextContent());
+			if (name != null) {
+				allConceptNames.add(name);
+			}
+		}
+		allConceptNames.addAll(byConcept.keySet());
+
+		// Score ALL concept names against the query
 		Map<String, Double> conceptScores =
 				new HashMap<String, Double>();
-		for (String name : byConcept.keySet()) {
+		for (String name : allConceptNames) {
 			float[] nameVec = provider.embedQuery(name);
 			conceptScores.put(name,
 					ChartSearchAiUtils.cosineSimilarity(
 							queryVector, nameVec));
 		}
 
-		if (byConcept.size() <= 2 || byConcept.size() > 3) {
+		if (byConcept.size() <= 2) {
 			return candidates;
+		}
+
+		// Full-distribution concept-name outlier gate: for
+		// multi-concept results (≥3 candidate concepts), check
+		// if any candidate concept name is a statistical outlier
+		// among ALL concept names in the dataset. Uses sqrt(N)
+		// as effective degrees of freedom. If no candidate stands
+		// out, the pipeline found coincidental embedding overlap
+		// (e.g. "eye problems" returning 40 random MedCPT
+		// records). Only applied for ≥3 candidate concepts —
+		// 1-2 concept results (like "cancer" → Kaposi sarcoma)
+		// are vocabulary-mismatch edge cases where the gate
+		// can't reliably distinguish genuine from coincidental.
+		if (allConceptNames.size() >= 5
+				&& candidates.size() >= 10) {
+			double[] cnScores = new double[conceptScores.size()];
+			int ci = 0;
+			for (double s : conceptScores.values()) {
+				cnScores[ci++] = s;
+			}
+			double cnSum = 0;
+			for (double s : cnScores) cnSum += s;
+			double cnMean = cnSum / cnScores.length;
+			double cnSqSum = 0;
+			for (double s : cnScores) {
+				cnSqSum += (s - cnMean) * (s - cnMean);
+			}
+			double cnStd = Math.sqrt(cnSqSum / cnScores.length);
+			if (cnStd > 1e-9) {
+				double maxCandidateScore = 0;
+				for (String name : byConcept.keySet()) {
+					Double s = conceptScores.get(name);
+					if (s != null && s > maxCandidateScore) {
+						maxCandidateScore = s;
+					}
+				}
+				double candidateZ = (maxCandidateScore - cnMean)
+						/ cnStd;
+				double effectiveN = Math.sqrt(cnScores.length);
+				double zThreshold = Math.sqrt(
+						2 * Math.log(Math.max(2, effectiveN)));
+				if (candidateZ < zThreshold) {
+					log.warn("Concept-name outlier gate: z={}"
+							+ " < threshold={} (best={}, N={})",
+							String.format("%.2f", candidateZ),
+							String.format("%.2f", zThreshold),
+							String.format("%.4f",
+									maxCandidateScore),
+							cnScores.length);
+					return Collections.emptyList();
+				}
+			}
 		}
 
 		// Compute mean and std of concept-name scores, then keep
