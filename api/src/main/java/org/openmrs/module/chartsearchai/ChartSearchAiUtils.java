@@ -192,7 +192,8 @@ public class ChartSearchAiUtils {
 		}
 		// Condition/Diagnosis/Order/Allergy/Program patterns
 		String[] patterns = { "Condition: ", "Diagnosis: ", "Drug order: ",
-				"Allergy: ", "Program: ", "Lab order: " };
+				"Test order: ", "Referral order: ", "Dispensed: ",
+				"Allergy: ", "Program: " };
 		for (String p : patterns) {
 			int idx = text.indexOf(p);
 			if (idx >= 0 && idx < earliest) {

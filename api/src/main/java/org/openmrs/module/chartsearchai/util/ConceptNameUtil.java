@@ -158,10 +158,26 @@ public final class ConceptNameUtil {
 			return dotIdx > 0 ? rest.substring(0, dotIdx).trim() : rest.trim();
 		}
 
-		// Lab order: "Lab order: NAME. Urgency:"
-		int labIdx = text.indexOf("Lab order: ");
-		if (labIdx >= 0) {
-			String rest = text.substring(labIdx + "Lab order: ".length());
+		// Test order: "Test order: NAME. Action:"
+		int testIdx = text.indexOf("Test order: ");
+		if (testIdx >= 0) {
+			String rest = text.substring(testIdx + "Test order: ".length());
+			int dotIdx = rest.indexOf(". ");
+			return dotIdx > 0 ? rest.substring(0, dotIdx).trim() : rest.trim();
+		}
+
+		// Referral order: "Referral order: NAME. Action:"
+		int refIdx = text.indexOf("Referral order: ");
+		if (refIdx >= 0) {
+			String rest = text.substring(refIdx + "Referral order: ".length());
+			int dotIdx = rest.indexOf(". ");
+			return dotIdx > 0 ? rest.substring(0, dotIdx).trim() : rest.trim();
+		}
+
+		// Medication dispense: "Dispensed: NAME. Status:"
+		int dispIdx = text.indexOf("Dispensed: ");
+		if (dispIdx >= 0) {
+			String rest = text.substring(dispIdx + "Dispensed: ".length());
 			int dotIdx = rest.indexOf(". ");
 			return dotIdx > 0 ? rest.substring(0, dotIdx).trim() : rest.trim();
 		}

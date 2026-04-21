@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Set;
 
 import org.openmrs.Allergy;
+import org.openmrs.Concept;
 import org.openmrs.Condition;
 import org.openmrs.Diagnosis;
 import org.openmrs.MedicationDispense;
@@ -114,7 +115,11 @@ public class PatientRecordLoader {
 		for (Allergy allergy : Context.getPatientService().getAllergies(patient)) {
 			String text = allergySerializer.toText(allergy);
 			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_ALLERGY, allergy.getAllergyId(), seenKeys)) {
-				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_ALLERGY, allergy.getAllergyId(), text, allergy.getDateCreated()));
+				List<String> hints = allergy.getAllergen() != null
+						? ChartSearchAiUtils.extractCategoryHints(allergy.getAllergen().getCodedAllergen())
+						: Collections.<String>emptyList();
+				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_ALLERGY,
+						allergy.getAllergyId(), text, allergy.getDateCreated(), hints));
 			}
 		}
 
@@ -138,7 +143,9 @@ public class PatientRecordLoader {
 			}
 			String text = orderSerializer.toText(order);
 			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_ORDER, order.getOrderId(), seenKeys)) {
-				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_ORDER, order.getOrderId(), text, order.getDateActivated()));
+				List<String> hints = ChartSearchAiUtils.extractCategoryHints(order.getConcept());
+				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_ORDER,
+						order.getOrderId(), text, order.getDateActivated(), hints));
 			}
 		}
 
@@ -165,8 +172,11 @@ public class PatientRecordLoader {
 					dispense.getMedicationDispenseId(), seenKeys)) {
 				Date date = dispense.getDateHandedOver() != null
 						? dispense.getDateHandedOver() : dispense.getDateCreated();
+				Concept dispenseConcept = dispense.getDrug() != null
+						? dispense.getDrug().getConcept() : dispense.getConcept();
+				List<String> hints = ChartSearchAiUtils.extractCategoryHints(dispenseConcept);
 				records.add(new SerializedRecord(ChartSearchAiConstants.RESOURCE_TYPE_MEDICATION_DISPENSE,
-						dispense.getMedicationDispenseId(), text, date));
+						dispense.getMedicationDispenseId(), text, date, hints));
 			}
 		}
 

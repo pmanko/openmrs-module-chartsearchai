@@ -1492,6 +1492,35 @@ public class LlmInferenceService implements ChartSearchService {
 			results.add(se.embedding);
 		}
 
+		// Safety net: if all downstream gates (gap detection, coherence,
+		// phase 2 z-score) rejected every record, but:
+		// 1. The initial z-score gate validated the top score as a
+		//    genuine statistical outlier (≥ 2x threshold), AND
+		// 2. The top semantic score clears floor + 2*minScoreGap,
+		// return the top record as a last-resort fallback. In a clinical
+		// system, silently dropping a record that passed both absolute
+		// and statistical validation is more dangerous than returning
+		// a single potentially marginal result.
+		if (results.isEmpty() && !scored.isEmpty()
+				&& initialZScore >= 0
+				&& initialZScore >= 2 * initialZThreshold
+				&& scored.get(0).semanticScore
+						>= config.noiseProfile.absoluteSimilarityFloor()
+								+ 2 * config.minScoreGap) {
+			log.warn("Safety net: all gates rejected {} records but top "
+					+ "semantic score {} >= floor+2*gap {} and z-score "
+					+ "{} >= 2*threshold {}, returning top record as "
+					+ "fallback",
+					scored.size(),
+					String.format("%.4f", scored.get(0).semanticScore),
+					String.format("%.4f",
+							config.noiseProfile.absoluteSimilarityFloor()
+									+ 2 * config.minScoreGap),
+					String.format("%.2f", initialZScore),
+					String.format("%.2f", 2 * initialZThreshold));
+			results = Collections.singletonList(scored.get(0).embedding);
+		}
+
 		int logLimit = Math.min(20, scored.size());
 		StringBuilder scores = new StringBuilder();
 		for (int i = 0; i < logLimit; i++) {
@@ -1710,6 +1739,21 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 		if (aboveFloorCount < 2) {
+			// Allow a single record if its score is in the upper half
+			// of the slim-margin zone [floor + gap/2, floor + gap).
+			// Records barely above the floor are likely noise; records
+			// further above are more likely genuine.
+			if (aboveFloorCount == 1
+					&& maxSemanticScore >= smFloor + config.minScoreGap / 2) {
+				if (log.isDebugEnabled()) {
+					log.debug("Slim-margin gate: single record at {} is in "
+							+ "upper half of margin zone [{}, {}), allowing",
+							String.format("%.4f", maxSemanticScore),
+							String.format("%.4f", smFloor + config.minScoreGap / 2),
+							String.format("%.4f", smFloor + config.minScoreGap));
+				}
+				return true;
+			}
 			log.warn("Slim-margin gate: maxSem={} is within "
 					+ "{} of floor {}, zero keywords, and only "
 					+ "{} record(s) above floor — returning empty",

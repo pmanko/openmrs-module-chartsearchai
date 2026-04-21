@@ -24,6 +24,7 @@ import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
@@ -792,6 +793,137 @@ public class LlmInferenceServiceTest {
 	public void extractQueryTerms_shouldHandleEmptyInput() {
 		String[] terms = LlmInferenceService.extractQueryTerms("");
 		assertEquals(0, terms.length);
+	}
+
+	@Test
+	public void stripCategoryHints_shouldStripHintsFromTestOrderText() {
+		// stripCategoryHints had "Lab order: " instead of "Test order: "
+		// in its patterns — Test orders are serialized as "Test order:"
+		// by OrderTextSerializer, so hint stripping must recognize that.
+		String enriched = "Laboratory tests / Test order: CBC. Action: NEW. Urgency: STAT";
+		String stripped = ChartSearchAiUtils.stripCategoryHints(enriched);
+		assertEquals("Test order: CBC. Action: NEW. Urgency: STAT", stripped);
+	}
+
+	@Test
+	public void stripCategoryHints_shouldStripHintsFromReferralOrderText() {
+		String enriched = "Specialty referrals / Referral order: Cardiology. Action: NEW";
+		String stripped = ChartSearchAiUtils.stripCategoryHints(enriched);
+		assertEquals("Referral order: Cardiology. Action: NEW", stripped);
+	}
+
+	@Test
+	public void stripCategoryHints_shouldStripHintsFromDispensedText() {
+		String enriched = "Antiretrovirals / Dispensed: Efavirenz 600mg. Status: Completed";
+		String stripped = ChartSearchAiUtils.stripCategoryHints(enriched);
+		assertEquals("Dispensed: Efavirenz 600mg. Status: Completed", stripped);
+	}
+
+	@Test
+	public void stripCategoryHints_shouldStripHintsFromRealDatasetTestOrder() {
+		// Uses real text from THIRD dataset index 15 (lab test order)
+		// to verify hint stripping works on production-shaped records.
+		String rawText = TestDatasetHelper.stripDatasetPrefixAndDate(
+				TestDatasetHelper.THIRD_PATIENT_DATASET[15]);
+		String enriched = ChartSearchAiUtils.injectCategoryHints(
+				rawText, Arrays.asList("Laboratory tests"));
+		assertEquals(rawText,
+				ChartSearchAiUtils.stripCategoryHints(enriched));
+	}
+
+	@Test
+	public void filterPipeline_safetyNet_shouldReturnTopRecordWhenAllGatesRejectButAboveFloor() {
+		// Three outlier records well above floor + 2*minScoreGap, each
+		// from a DIFFERENT concept (so coherence filtering sees cross-
+		// concept diversity), then 32 noise records below the floor.
+		// Gap detection identifies the 3 as candidates, but phase 2
+		// zero-keyword validation rejects them (low inter-concept
+		// coherence from the distinct embedding vectors). The safety
+		// net should catch this: scores passed both absolute AND
+		// statistical validation (2x z-score threshold, 2x gap above
+		// floor), so silently dropping them is a patient safety risk.
+		LlmInferenceService.PipelineConfig config =
+				LlmInferenceService.PipelineConfig.defaults();
+		double floor = config.noiseProfile.absoluteSimilarityFloor();
+		double topScore = floor + 2 * config.minScoreGap + 0.05;
+
+		int n = 35;
+		double[] semanticScores = new double[n];
+		double[] keywordScores = new double[n];
+		ChartEmbedding[] embeddings = new ChartEmbedding[n];
+
+		// 3 outliers from different concepts, each with distinct vectors
+		String[] concepts = { "ConceptA", "ConceptB", "ConceptC" };
+		for (int i = 0; i < 3; i++) {
+			semanticScores[i] = topScore - (i * 0.005);
+			keywordScores[i] = 0.0;
+			ChartEmbedding ce = new ChartEmbedding();
+			ce.setResourceType("obs");
+			ce.setResourceId(i);
+			ce.setTextContent(concepts[i] + " \u2014 " + concepts[i] + ": value");
+			float[] vec = new float[384];
+			vec[i * 100] = 1.0f; // orthogonal vectors → low coherence
+			ce.setEmbeddingVector(vec);
+			embeddings[i] = ce;
+		}
+
+		// 32 noise records well below floor
+		for (int i = 3; i < n; i++) {
+			semanticScores[i] = floor - 0.03 - (i * 0.001);
+			keywordScores[i] = 0.0;
+			ChartEmbedding ce = new ChartEmbedding();
+			ce.setResourceType("obs");
+			ce.setResourceId(i);
+			ce.setTextContent("Noise \u2014 Record" + i + ": value");
+			float[] vec = new float[384];
+			vec[(i * 7) % 384] = 1.0f;
+			ce.setEmbeddingVector(vec);
+			embeddings[i] = ce;
+		}
+
+		String[] queryTerms = { "somequery", "term" };
+		List<ChartEmbedding> result = LlmInferenceService.filterPipeline(
+				semanticScores, keywordScores, embeddings,
+				queryTerms, config);
+
+		assertFalse(result.isEmpty(),
+				"Safety net should return at least the top record when "
+				+ "all gates reject but top semantic score ("
+				+ String.format("%.4f", topScore) + ") >= floor+2*gap ("
+				+ String.format("%.4f", floor + 2 * config.minScoreGap)
+				+ ") and z-score validates it as a genuine outlier");
+	}
+
+	@Test
+	public void slimMarginGate_shouldPassWhenSingleRecordIsStrictlyAboveFloor() {
+		// Conservative default: noiseMean=0.15, noiseMedian=0.13, noiseP95=0.28
+		// → absoluteSimilarityFloor = 0.28 * 0.15 / (0.15 + 0.13) = 0.15
+		// minScoreGap default = 0.10, so slim-margin zone is [0.15, 0.25)
+		// A single record in the upper half of this zone (score ≥ 0.20)
+		// should pass. With zero keyword matches and only 1 record above
+		// floor, the old gate rejected — the fix allows records in the
+		// upper half [floor + gap/2, floor + gap).
+		LlmInferenceService.PipelineConfig config =
+				LlmInferenceService.PipelineConfig.defaults();
+		double floor = config.noiseProfile.absoluteSimilarityFloor();
+		// Score in the upper half of the margin zone: [floor+gap/2, floor+gap)
+		// floor=0.15, gap=0.10, upper half starts at 0.20
+		double maxSemantic = floor + config.minScoreGap * 0.75; // 0.225
+
+		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+				makeScoredEmbedding(maxSemantic, 0.0, maxSemantic),
+				makeScoredEmbedding(floor - 0.05, 0.0, floor - 0.05),
+				makeScoredEmbedding(floor - 0.10, 0.0, floor - 0.10));
+
+		boolean result = LlmInferenceService.applySlimMarginGate(
+				scored, maxSemantic, /* queryTermCount */ 2,
+				/* keywordMatchCount */ 0,
+				/* belowFloorRescued */ false, config);
+
+		assertTrue(result,
+				"Slim-margin gate should not reject when a single record "
+				+ "is strictly above the floor (score=" + maxSemantic
+				+ ", floor=" + floor + ")");
 	}
 
 	private static LlmInferenceService.ScoredEmbedding makeScoredEmbedding(double score) {

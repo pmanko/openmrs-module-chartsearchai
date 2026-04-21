@@ -359,7 +359,7 @@ final class TestDatasetHelper {
 			/* [ 89] */ "Clinical observation: (2025-11-03) Finding — Serum glucose: 70.5 mg/dL (LOW)",
 			/* [ 90] */ "Clinical observation: (2025-11-03) Finding — Serum potassium: 4.1 mmol/L (NORMAL)",
 			/* [ 91] */ "Clinical observation: (2025-11-03) Finding — Serum sodium: 137.2 mEq/L (NORMAL)",
-			/* [ 92] */ "Lab test order: (2025-08-26) Lab order: Complete Blood Count. Urgency: STAT. Clinical history: Abnormal red blood cells. Assessments: Anaemia",
+			/* [ 92] */ "Lab test order: (2025-08-26) Test order: Complete Blood Count. Action: NEW. Urgency: STAT. Clinical history: Abnormal red blood cells. Assessments: Anaemia",
 			/* [ 93] */ "Medication prescription: (2025-08-26) Drug order: Azithromycin. Dose: 1.0 Tablet) Oral Every four hours. Duration: 5 Days. Quantity: 5.0 Tablet). Dosing: Take after eating. Action: NEW. Urgency: ROUTINE. Reason: Anaemia",
 			/* [ 94] */ "Medical condition: (2025-08-26) Condition: Anaemia. Status: ACTIVE",
 			/* [ 95] */ "Clinical diagnosis: (2025-08-26) Diagnosis: Anaemia. Certainty: PROVISIONAL. Rank: Primary",

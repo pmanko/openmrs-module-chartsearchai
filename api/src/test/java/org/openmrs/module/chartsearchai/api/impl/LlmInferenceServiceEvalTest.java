@@ -4000,4 +4000,24 @@ public class LlmInferenceServiceEvalTest {
 				"BMI query should return Height records, got: " + result);
 	}
 
+	// --- P0 Patient Safety Fixes: eval-level regression guards ---
+
+	// Slim-margin gate fix: single records in the upper half of the
+	// margin zone [floor + gap/2, floor + gap) must not be rejected.
+	// Uses the same no-hints pipeline and FOURTH_PATIENT_DATASET as
+	// existing tests, reusing already-warmed embedding/noise caches.
+
+	@Test
+	public void slimMarginGateFix_fourthDataset_shouldReturnRecords() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		assertFalse(
+				runRealModelPipeline("azithromycin", 10, FOURTH_PATIENT_DATASET).isEmpty(),
+				"Slim-margin gate fix: 'azithromycin' should not return empty");
+		assertFalse(
+				runRealModelPipeline("depression", 10, FOURTH_PATIENT_DATASET).isEmpty(),
+				"Slim-margin gate fix: 'depression' should not return empty");
+	}
+
 }
