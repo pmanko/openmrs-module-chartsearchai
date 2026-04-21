@@ -250,6 +250,44 @@ public class EnrichedRetrievalEvalTest {
 		}
 	}
 
+	@Test
+	public void physicalInjury_shouldReturnOnlyInjuryRecords() {
+		ensureInitialized();
+		Assumptions.assumeTrue(provider != null,
+				"Skipping: embedding model not found");
+
+		for (int ds = 0; ds < DATASETS.length; ds++) {
+			List<Integer> result = runQuery("any physical injury?", ds);
+			StringBuilder details = new StringBuilder();
+			for (int idx : result) {
+				if (idx < DATASETS[ds].length) {
+					details.append("\n  [").append(idx).append("] ")
+							.append(DATASETS[ds][idx]);
+				}
+			}
+			log.info("[{}] 'any physical injury?' returned {} records: {}{}",
+					DATASET_NAMES[ds], result.size(), result, details);
+
+			// FOURTH and FIFTH contain "Crushing injury of thigh" and
+			// "Nonunion of fracture" — expect those and nothing else.
+			if (ds == 3 || ds == 4) {
+				assertTrue(result.contains(93),
+						DATASET_NAMES[ds] + ": should contain Crushing injury condition [93]");
+				assertTrue(result.contains(97),
+						DATASET_NAMES[ds] + ": should contain Crushing injury diagnosis [97]");
+				assertTrue(result.contains(108),
+						DATASET_NAMES[ds] + ": should contain Nonunion of fracture condition [108]");
+				assertTrue(result.contains(110),
+						DATASET_NAMES[ds] + ": should contain Nonunion of fracture diagnosis [110]");
+			} else {
+				// FULL, SECOND, THIRD have no injury records
+				assertTrue(result.isEmpty(),
+						DATASET_NAMES[ds] + ": should return 0 records for 'any physical injury?' but got "
+						+ result.size() + ": " + details);
+			}
+		}
+	}
+
 	/**
 	 * Generator: run all 97 queries and output the baseline JSON.
 	 * Enable this test ONCE to generate the golden file, then disable.
