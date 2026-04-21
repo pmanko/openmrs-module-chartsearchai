@@ -1038,8 +1038,20 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 		if (pipelineResult != null && !pipelineResult.isEmpty()
 				&& keywordMatchCount == 0 && queryTerms.length > 0) {
+			int beforeRerank = pipelineResult.size();
 			pipelineResult = rerankByConceptName(pipelineResult,
 					queryVector, provider, noiseProfile);
+			if (pipelineResult.size() != beforeRerank) {
+				StringBuilder kept = new StringBuilder();
+				for (ChartEmbedding ce : pipelineResult) {
+					if (kept.length() > 0) kept.append(", ");
+					kept.append(ce.getResourceType()).append(":")
+							.append(ce.getResourceId());
+				}
+				log.warn("Concept-name rerank {}: {} -> {} [{}]",
+						java.util.Arrays.toString(queryTerms),
+						beforeRerank, pipelineResult.size(), kept);
+			}
 		}
 
 		return new FindSimilarResult(pipelineResult, noiseProfile);
@@ -1096,7 +1108,10 @@ public class LlmInferenceService implements ChartSearchService {
 			relevantKeys.add(ChartSearchAiUtils.resourceKey(
 					ce.getResourceType(), ce.getResourceId()));
 		}
-		return groupByConcept(filterAndCap(allRecords, relevantKeys, question));
+		List<SerializedRecord> filtered = filterAndCap(allRecords, relevantKeys, question);
+		log.warn("findRelevantRecords: {} embeddings -> {} keys -> {} filtered records (keys={})",
+				similar.size(), relevantKeys.size(), filtered.size(), relevantKeys);
+		return groupByConcept(filtered);
 	}
 
 	/**
