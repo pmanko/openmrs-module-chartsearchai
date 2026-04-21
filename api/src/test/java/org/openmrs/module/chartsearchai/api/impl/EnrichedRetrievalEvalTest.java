@@ -201,11 +201,14 @@ public class EnrichedRetrievalEvalTest {
 		for (JsonNode c : cases) {
 			int dsIdx = c.has("datasetIndex") ? c.get("datasetIndex").asInt() : 0;
 			String dsName = dsIdx < DATASET_NAMES.length ? DATASET_NAMES[dsIdx] : "DS" + dsIdx;
+			int expectedMax = c.has("expectedMaxRecords")
+					? c.get("expectedMaxRecords").asInt() : -1;
 			args.add(Arguments.of(
 					dsName + ": " + c.get("query").asText(),
 					c.get("query").asText(),
 					dsIdx,
 					c.get("expectedMinRecords").asInt(),
+					expectedMax,
 					c.has("mustContainText") ? c.get("mustContainText").asText() : null));
 		}
 		return args.stream();
@@ -215,7 +218,8 @@ public class EnrichedRetrievalEvalTest {
 	@MethodSource("evalCases")
 	public void enrichedRetrieval_shouldMeetBaseline(String label,
 			String query, int datasetIndex,
-			int expectedMinRecords, String mustContainText) {
+			int expectedMinRecords, int expectedMaxRecords,
+			String mustContainText) {
 		ensureInitialized();
 		Assumptions.assumeTrue(provider != null,
 				"Skipping: embedding model not found");
@@ -225,6 +229,12 @@ public class EnrichedRetrievalEvalTest {
 		assertTrue(result.size() >= expectedMinRecords,
 				"'" + label + "' should return >= " + expectedMinRecords
 				+ " records but got " + result.size() + ": " + result);
+
+		if (expectedMaxRecords >= 0) {
+			assertTrue(result.size() <= expectedMaxRecords,
+					"'" + label + "' should return <= " + expectedMaxRecords
+					+ " records but got " + result.size() + ": " + result);
+		}
 
 		if (mustContainText != null) {
 			boolean found = false;

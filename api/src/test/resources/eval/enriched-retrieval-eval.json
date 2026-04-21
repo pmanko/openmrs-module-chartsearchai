@@ -2428,28 +2428,9 @@
     "resultIndices" : [ ]
   }, {
     "query" : "any physical injury?",
-    "datasetIndex" : 0,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
-  }, {
-    "query" : "any physical injury?",
-    "datasetIndex" : 1,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
-  }, {
-    "query" : "any physical injury?",
     "datasetIndex" : 2,
     "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
-  }, {
-    "query" : "any physical injury?",
-    "datasetIndex" : 3,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
-  }, {
-    "query" : "any physical injury?",
-    "datasetIndex" : 4,
-    "expectedMinRecords" : 0,
+    "expectedMaxRecords" : 0,
     "resultIndices" : [ ]
   } ]
 }
