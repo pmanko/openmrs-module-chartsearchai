@@ -1295,7 +1295,32 @@ public class LlmInferenceService implements ChartSearchService {
 						config.noiseProfile.absoluteSimilarityFloor(),
 						config.noiseProfile.noiseMean
 								- config.noiseProfile.noiseStd);
-				if (rMaxKw < bonusThreshold
+				// Selective-keyword exception: when the refined
+				// set is very small (≤ ADAPTIVE_MIN_RECORDS), the
+				// keyword match is highly selective — only a
+				// handful of records in the entire dataset contain
+				// the matching term. Keep ONLY the keyword-matched
+				// records and skip the refinement expansion path.
+				// Expansion into compressed score spaces (e.g.
+				// MedCPT) would flood non-keyword records; the
+				// keyword evidence is the sole structural signal.
+				boolean selectiveKwMatch = refined.size()
+						<= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS;
+				if (selectiveKwMatch && rMaxKw < bonusThreshold
+						&& rMaxSem < partialKwFloor) {
+					// Keep the keyword-matched records but route
+					// through the non-refinement path (which has
+					// ratio-floor and z-score guards) instead of the
+					// refinement expansion path (which would flood
+					// on compressed score models).
+					refinementActivated = false;
+					log.debug("Selective-keyword rescue: keeping {} "
+							+ "records via non-refinement path "
+							+ "(maxSem={}, floor={})",
+							refined.size(),
+							String.format("%.4f", rMaxSem),
+							String.format("%.4f", partialKwFloor));
+				} else if (rMaxKw < bonusThreshold
 						&& rMaxSem < partialKwFloor) {
 					Set<Integer> badIds =
 							new HashSet<Integer>();

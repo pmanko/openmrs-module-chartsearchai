@@ -1879,8 +1879,8 @@
   }, {
     "query" : "skin rash",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 64, 66 ]
   }, {
     "query" : "stroke",
     "datasetIndex" : 3,
@@ -2364,8 +2364,8 @@
   }, {
     "query" : "skin rash",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 64, 66 ]
   }, {
     "query" : "stroke",
     "datasetIndex" : 4,
