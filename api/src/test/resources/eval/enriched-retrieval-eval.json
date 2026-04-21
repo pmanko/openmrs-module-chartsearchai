@@ -1694,8 +1694,8 @@
   }, {
     "query" : "disease problem",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 17, 20, 46, 64, 66, 77, 150, 151 ]
+    "expectedMinRecords" : 14,
+    "resultIndices" : [ 17, 19, 20, 33, 46, 48, 50, 62, 64, 66, 77, 79, 150, 151 ]
   }, {
     "query" : "disease treatment",
     "datasetIndex" : 3,
@@ -2014,8 +2014,8 @@
   }, {
     "query" : "When were each of this patient's active conditions first recorded, and have any resolved or escalated?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 69,
-    "resultIndices" : [ 2, 3, 6, 9, 12, 17, 18, 19, 23, 26, 27, 29, 33, 34, 37, 40, 43, 45, 46, 47, 48, 49, 51, 54, 57, 60, 63, 64, 67, 70, 71, 73, 75, 76, 77, 80, 83, 86, 90, 91, 92, 93, 96, 98, 101, 104, 107, 108, 111, 114, 115, 117, 120, 121, 122, 126, 129, 130, 132, 136, 137, 140, 143, 146, 150, 151, 152, 155, 158 ]
+    "expectedMinRecords" : 5,
+    "resultIndices" : [ 23, 64, 77, 126, 150 ]
   }, {
     "query" : "allergies",
     "datasetIndex" : 4,
@@ -2179,13 +2179,13 @@
   }, {
     "query" : "disease problem",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 40,
-    "resultIndices" : [ 1, 16, 17, 19, 20, 22, 32, 33, 35, 42, 45, 46, 47, 48, 50, 52, 59, 62, 64, 66, 72, 75, 76, 77, 78, 79, 85, 89, 92, 93, 96, 106, 107, 116, 119, 121, 135, 150, 151, 157 ]
+    "expectedMinRecords" : 14,
+    "resultIndices" : [ 17, 19, 20, 33, 46, 48, 50, 62, 64, 66, 77, 79, 150, 151 ]
   }, {
     "query" : "disease treatment",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 30,
-    "resultIndices" : [ 17, 19, 20, 22, 32, 33, 45, 46, 47, 48, 50, 51, 62, 64, 66, 75, 76, 77, 79, 89, 92, 93, 107, 119, 121, 122, 135, 137, 150, 151 ]
+    "expectedMinRecords" : 29,
+    "resultIndices" : [ 17, 19, 20, 22, 32, 33, 45, 46, 47, 48, 50, 51, 62, 64, 66, 75, 76, 77, 79, 89, 92, 93, 107, 121, 122, 135, 137, 150, 151 ]
   }, {
     "query" : "does he have cancer?",
     "datasetIndex" : 4,

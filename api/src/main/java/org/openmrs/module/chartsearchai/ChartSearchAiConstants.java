@@ -57,7 +57,7 @@ public class ChartSearchAiConstants {
 
 	public static final String GP_EMBEDDING_MAX_SEQUENCE_LENGTH = "chartsearchai.embedding.maxSequenceLength";
 
-	public static final int DEFAULT_MAX_SEQUENCE_LENGTH = 256;
+	public static final int DEFAULT_MAX_SEQUENCE_LENGTH = 512;
 
 	public static final int ADAPTIVE_MIN_RECORDS = 2;
 

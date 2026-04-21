@@ -20,12 +20,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * WordPiece tokenizer compatible with BERT-based models (e.g. all-MiniLM-L6-v2).
  * Loads a vocab.txt file and tokenizes text using the WordPiece algorithm:
  * split into words, then greedily match the longest subword tokens from the vocabulary.
  */
 public class WordPieceTokenizer {
+
+	private static final Logger log = LoggerFactory.getLogger(WordPieceTokenizer.class);
 
 	private static final String CLS_TOKEN = "[CLS]";
 
@@ -95,7 +100,12 @@ public class WordPieceTokenizer {
 
 		// Truncate to leave room for [SEP]
 		if (tokenIds.size() > maxSequenceLength - 1) {
+			int originalSize = tokenIds.size();
 			tokenIds = new ArrayList<Integer>(tokenIds.subList(0, maxSequenceLength - 1));
+			log.debug("Truncated input from {} to {} tokens "
+					+ "(maxSequenceLength={}, text length={})",
+					originalSize, maxSequenceLength - 1,
+					maxSequenceLength, text.length());
 		}
 		tokenIds.add(sepTokenId);
 

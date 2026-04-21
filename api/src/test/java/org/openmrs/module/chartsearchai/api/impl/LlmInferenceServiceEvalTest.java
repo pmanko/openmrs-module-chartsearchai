@@ -4000,6 +4000,42 @@ public class LlmInferenceServiceEvalTest {
 				"BMI query should return Height records, got: " + result);
 	}
 
+	// --- P1: Token truncation — long records must not lose tail content ---
+
+	@Test
+	public void longEncounterNote_embeddingShouldCaptureTailContent() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
+				"Skipping: ONNX model files not found at " + MODEL_PATH);
+
+		// A long encounter note with generic filler, then a distinctive
+		// clinical finding past the old 256-token boundary. We test the
+		// EMBEDDING directly (not the full pipeline) because keyword
+		// matching on full textContent would compensate for truncation.
+		// ~25 repetitions × ~14 tokens ≈ 350 tokens of filler.
+		StringBuilder filler = new StringBuilder();
+		for (int i = 0; i < 25; i++) {
+			filler.append("Patient presented with stable vital signs and ")
+					.append("no acute distress noted during examination. ");
+		}
+		String tailContent = "Referred to nephrology for kidney transplant evaluation.";
+		String fullText = "Clinical observation: Assessment \u2014 "
+				+ "Text of encounter note: " + filler + tailContent;
+
+		// Embed the full text and a query about the tail content
+		float[] docVec = sharedProvider.embed(fullText);
+		float[] queryVec = sharedProvider.embedQuery("nephrology kidney transplant");
+
+		double similarity = ChartSearchAiUtils.cosineSimilarity(docVec, queryVec);
+
+		// With 512 tokens, the tail is captured and similarity should
+		// be meaningfully above noise (~0.15). At 256, the tail is
+		// truncated and the embedding only sees generic filler text.
+		assertTrue(similarity > 0.25,
+				"Embedding of long note should capture tail content "
+				+ "'kidney transplant' (cosine=" + String.format("%.4f", similarity)
+				+ "). If this fails, maxSequenceLength may be too low.");
+	}
+
 	// --- P0 Patient Safety Fixes: eval-level regression guards ---
 
 	// Slim-margin gate fix: single records in the upper half of the
