@@ -3504,12 +3504,7 @@
     {
       "query": "azithromycin",
       "datasetIndex": 3,
-      "resultIndices": [
-        33,
-        64,
-        108,
-        110
-      ]
+      "resultIndices": []
     },
     {
       "query": "blood pressure and pulse",
@@ -3713,12 +3708,7 @@
     {
       "query": "depression",
       "datasetIndex": 3,
-      "resultIndices": [
-        19,
-        47,
-        51,
-        121
-      ]
+      "resultIndices": []
     },
     {
       "query": "diabetes",
@@ -4837,12 +4827,7 @@
     {
       "query": "azithromycin",
       "datasetIndex": 4,
-      "resultIndices": [
-        33,
-        64,
-        108,
-        110
-      ]
+      "resultIndices": []
     },
     {
       "query": "blood pressure and pulse",
@@ -5026,12 +5011,7 @@
     {
       "query": "depression",
       "datasetIndex": 4,
-      "resultIndices": [
-        19,
-        47,
-        51,
-        121
-      ]
+      "resultIndices": []
     },
     {
       "query": "diabetes",

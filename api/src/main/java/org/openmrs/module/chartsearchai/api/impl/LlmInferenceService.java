@@ -1310,9 +1310,9 @@ public class LlmInferenceService implements ChartSearchService {
 			candidates = refined;
 		}
 
-		log.warn("Pipeline stages: maxSem={}, maxBase={}, floor={}, kwCount={}, "
+		log.warn("Pipeline stages {}: maxSem={}, maxBase={}, floor={}, kwCount={}, "
 				+ "termCount={}, gapCutoff={}, candidates={}, refined={}",
-				String.format("%.4f", maxSemanticScore),
+				java.util.Arrays.toString(queryTerms), String.format("%.4f", maxSemanticScore),
 				String.format("%.4f", maxBaseScore),
 				String.format("%.4f", config.noiseProfile.absoluteSimilarityFloor()),
 				keywordMatchCount, queryTermCount,
@@ -1490,8 +1490,8 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 		log.warn("Similarity scores: [{}], minScore: {}, adaptiveCutoff: {}",
 				scores, String.format("%.4f", minScore), adaptiveCutoff);
-		log.warn("Returning {} of {} candidates (topScore={})",
-				results.size(), scored.size(),
+		log.warn("Returning {} {} of {} candidates (topScore={})",
+				java.util.Arrays.toString(queryTerms), results.size(), scored.size(),
 				String.format("%.4f", maxBaseScore));
 		return results;
 	}
@@ -1755,10 +1755,6 @@ public class LlmInferenceService implements ChartSearchService {
 					k -> new ArrayList<ChartEmbedding>()).add(ce);
 		}
 
-		if (byConcept.size() <= 2 || byConcept.size() > 3) {
-			return candidates;
-		}
-
 		// Score each concept name against the query
 		Map<String, Double> conceptScores =
 				new HashMap<String, Double>();
@@ -1767,6 +1763,10 @@ public class LlmInferenceService implements ChartSearchService {
 			conceptScores.put(name,
 					ChartSearchAiUtils.cosineSimilarity(
 							queryVector, nameVec));
+		}
+
+		if (byConcept.size() <= 2 || byConcept.size() > 3) {
+			return candidates;
 		}
 
 		// Compute mean and std of concept-name scores, then keep
@@ -1807,7 +1807,7 @@ public class LlmInferenceService implements ChartSearchService {
 			return candidates;
 		}
 
-		log.debug("Concept-name re-ranking: {} concepts, mean={}, "
+		log.warn("Concept-name re-ranking: {} concepts, mean={}, "
 				+ "std={}, threshold={}, kept={} of {} records",
 				byConcept.size(),
 				String.format("%.4f", mean),
