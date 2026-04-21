@@ -2004,7 +2004,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// Full-distribution concept-name outlier gate: for
 		// multi-concept results (≥3 candidate concepts), check
 		// if any candidate concept name is a statistical outlier
-		// among ALL concept names in the dataset. Uses sqrt(N)
+		// among ALL concept names in the dataset. Uses N^(3/4)
 		// as effective degrees of freedom. If no candidate stands
 		// out, the pipeline found coincidental embedding overlap
 		// (e.g. "eye problems" returning 40 random MedCPT
@@ -2037,7 +2037,8 @@ public class LlmInferenceService implements ChartSearchService {
 				}
 				double candidateZ = (maxCandidateScore - cnMean)
 						/ cnStd;
-				double effectiveN = Math.sqrt(cnScores.length);
+				double effectiveN = Math.pow(cnScores.length,
+					0.75);
 				double zThreshold = Math.sqrt(
 						2 * Math.log(Math.max(2, effectiveN)));
 				if (candidateZ < zThreshold) {
