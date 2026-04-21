@@ -863,7 +863,8 @@ public class LlmInferenceService implements ChartSearchService {
 						baseConfig.similarityRatio),
 				cachedProfile != null ? cachedProfile
 						: ModelNoiseProfile.conservativeDefault(),
-				baseConfig.floorRescueMinZScore);
+				baseConfig.floorRescueMinZScore,
+				baseConfig.conceptNameGateMinCandidates);
 		log.warn("Model identity={}, config: kwWeight={}, gapMult={}, "
 				+ "minGap={}, gapCosThresh={}, simRatio={}, floorZScore={}",
 				modelIdentity, config.keywordWeight, config.scoreGapMultiplier,
