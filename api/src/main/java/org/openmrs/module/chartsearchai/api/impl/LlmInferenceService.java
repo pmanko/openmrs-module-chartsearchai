@@ -2001,17 +2001,11 @@ public class LlmInferenceService implements ChartSearchService {
 			return candidates;
 		}
 
-		// Full-distribution concept-name outlier gate: for
-		// multi-concept results (≥3 candidate concepts), check
-		// if any candidate concept name is a statistical outlier
+		// Full-distribution concept-name outlier gate: check if
+		// any CANDIDATE concept name is a statistical outlier
 		// among ALL concept names in the dataset. Uses N^(3/4)
 		// as effective degrees of freedom. If no candidate stands
-		// out, the pipeline found coincidental embedding overlap
-		// (e.g. "eye problems" returning 40 random MedCPT
-		// records). Only applied for ≥3 candidate concepts —
-		// 1-2 concept results (like "cancer" → Kaposi sarcoma)
-		// are vocabulary-mismatch edge cases where the gate
-		// can't reliably distinguish genuine from coincidental.
+		// out, the pipeline found coincidental embedding overlap.
 		if (allConceptNames.size() >= 5
 				&& candidates.size() >= 10) {
 			double[] cnScores = new double[conceptScores.size()];
