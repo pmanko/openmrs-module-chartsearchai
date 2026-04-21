@@ -281,6 +281,30 @@ public class EnrichedRetrievalEvalTest {
 	}
 
 	@Test
+	public void eyeProblems_shouldReturnEmptyForPatientsWithNoEyeRecords() {
+		ensureInitialized();
+		Assumptions.assumeTrue(provider != null,
+				"Skipping: embedding model not found");
+
+		for (int ds = 0; ds < DATASETS.length; ds++) {
+			List<Integer> result = runQuery("any eye problems?", ds);
+			StringBuilder details = new StringBuilder();
+			for (int idx : result) {
+				if (idx < DATASETS[ds].length) {
+					details.append("\n  [").append(idx).append("] ")
+							.append(DATASETS[ds][idx]);
+				}
+			}
+			// No dataset contains eye-related records
+			// (ophthalmology, vision, retina, glaucoma, etc.)
+			assertTrue(result.isEmpty(),
+					DATASET_NAMES[ds] + ": should return 0 records for"
+					+ " 'any eye problems?' but got "
+					+ result.size() + ": " + details);
+		}
+	}
+
+	@Test
 	public void latestBmi_shouldReturnHeightAndWeightRecords() {
 		ensureInitialized();
 		Assumptions.assumeTrue(provider != null,
