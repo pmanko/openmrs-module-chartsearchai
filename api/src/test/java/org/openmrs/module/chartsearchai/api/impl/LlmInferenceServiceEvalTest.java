@@ -207,10 +207,8 @@ public class LlmInferenceServiceEvalTest {
 					allEmbeddings.toArray(new ChartEmbedding[0]), sharedProvider);
 			noiseCache.put(key, noise);
 		}
-		LlmInferenceService.PipelineConfig configWithNoise = new LlmInferenceService.PipelineConfig(
-				config.keywordWeight, config.scoreGapMultiplier,
-				config.minScoreGap, config.gapValidationCosineThreshold,
-				config.similarityRatio, noise, config.floorRescueMinZScore);
+		LlmInferenceService.PipelineConfig configWithNoise =
+				config.withNoiseProfile(noise);
 
 		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord>
 				results = LlmInferenceService.findRelevantRecords(

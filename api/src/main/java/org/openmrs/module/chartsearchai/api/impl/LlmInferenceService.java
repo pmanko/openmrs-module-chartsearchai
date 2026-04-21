@@ -476,8 +476,7 @@ public class LlmInferenceService implements ChartSearchService {
 					new PipelineConfig(getKeywordWeight(),
 							getScoreGapMultiplier(), getMinScoreGap(),
 							getGapValidationCosineThreshold(),
-							getSimilarityRatio(),
-							ModelNoiseProfile.conservativeDefault()));
+							getSimilarityRatio()));
 			pipelineFiltered = fsResult.records;
 		}
 
@@ -1012,13 +1011,8 @@ public class LlmInferenceService implements ChartSearchService {
 				String.format("%.4f", noiseProfile.noiseP95),
 				String.format("%.4f", noiseProfile.intraConceptMean),
 				String.format("%.4f", noiseProfile.absoluteSimilarityFloor()));
-		PipelineConfig profiledConfig = new PipelineConfig(
-				config.keywordWeight, config.scoreGapMultiplier,
-				config.minScoreGap,
-				config.gapValidationCosineThreshold,
-				config.similarityRatio, noiseProfile,
-				config.floorRescueMinZScore,
-				config.conceptNameGateMinCandidates);
+		PipelineConfig profiledConfig =
+				config.withNoiseProfile(noiseProfile);
 
 		List<ChartEmbedding> pipelineResult = filterPipeline(semanticScores,
 				keywordScores, embeddings, queryTerms, profiledConfig);
@@ -4311,27 +4305,6 @@ public class LlmInferenceService implements ChartSearchService {
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
 				double minScoreGap, double gapValidationCosineThreshold,
 				double similarityRatio,
-				ModelNoiseProfile noiseProfile) {
-			this(keywordWeight, scoreGapMultiplier, minScoreGap,
-					gapValidationCosineThreshold, similarityRatio,
-					noiseProfile,
-					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
-					10);
-		}
-
-		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
-				double minScoreGap, double gapValidationCosineThreshold,
-				double similarityRatio,
-				ModelNoiseProfile noiseProfile,
-				double floorRescueMinZScore) {
-			this(keywordWeight, scoreGapMultiplier, minScoreGap,
-					gapValidationCosineThreshold, similarityRatio,
-					noiseProfile, floorRescueMinZScore, 10);
-		}
-
-		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
-				double minScoreGap, double gapValidationCosineThreshold,
-				double similarityRatio,
 				ModelNoiseProfile noiseProfile,
 				double floorRescueMinZScore,
 				int conceptNameGateMinCandidates) {
@@ -4346,6 +4319,25 @@ public class LlmInferenceService implements ChartSearchService {
 					conceptNameGateMinCandidates;
 		}
 
+		/**
+		 * Returns a copy of this config with only the noise
+		 * profile replaced. All other parameters (including
+		 * model-specific values like conceptNameGateMinCandidates)
+		 * are preserved. Use this instead of constructing a new
+		 * PipelineConfig when updating the noise profile — it
+		 * prevents config drift where new fields are forgotten
+		 * in manual constructor calls.
+		 */
+		PipelineConfig withNoiseProfile(
+				ModelNoiseProfile newNoiseProfile) {
+			return new PipelineConfig(keywordWeight,
+					scoreGapMultiplier, minScoreGap,
+					gapValidationCosineThreshold,
+					similarityRatio, newNoiseProfile,
+					floorRescueMinZScore,
+					conceptNameGateMinCandidates);
+		}
+
 		/** Returns a config using all default constant values
 		 * (tuned for all-MiniLM-L6-v2). */
 		static PipelineConfig defaults() {
@@ -4356,7 +4348,8 @@ public class LlmInferenceService implements ChartSearchService {
 					ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
 					ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO,
 					ModelNoiseProfile.conservativeDefault(),
-					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE);
+					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
+					10);
 		}
 
 		/**
@@ -4417,7 +4410,8 @@ public class LlmInferenceService implements ChartSearchService {
 					ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
 					0.95,   // similarityRatio — tighter for compressed range
 					ModelNoiseProfile.conservativeDefault(),
-					1.5);   // floorRescueMinZScore — lower for compressed range
+					1.5,    // floorRescueMinZScore — lower for compressed range
+					10);    // conceptNameGateMinCandidates — same as L6-v2
 		}
 
 		/**

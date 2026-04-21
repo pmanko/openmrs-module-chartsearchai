@@ -155,11 +155,7 @@ public class EnrichedRetrievalEvalTest {
 			org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile noise =
 					TestDatasetHelper.buildOrLoadCachedNoiseProfile(
 							datasetEmbeddings[d], provider);
-			datasetConfigs[d] = new LlmInferenceService.PipelineConfig(
-					modelConfig.keywordWeight, modelConfig.scoreGapMultiplier,
-					modelConfig.minScoreGap, modelConfig.gapValidationCosineThreshold,
-					modelConfig.similarityRatio, noise, modelConfig.floorRescueMinZScore,
-					modelConfig.conceptNameGateMinCandidates);
+			datasetConfigs[d] = modelConfig.withNoiseProfile(noise);
 		}
 		log.info("Eval initialized with model={}, baseline={}", activeModel, activeBaseline);
 	}
