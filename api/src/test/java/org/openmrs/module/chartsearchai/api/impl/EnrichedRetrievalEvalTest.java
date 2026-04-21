@@ -261,15 +261,16 @@ public class EnrichedRetrievalEvalTest {
 						DATASET_NAMES[ds] + ": should contain Complete tear diagnosis [33]");
 			} else if (ds == 3 || ds == 4) {
 				// FOURTH and FIFTH contain "Crushing injury of
-				// thigh" and "Nonunion of fracture".
-				assertTrue(result.contains(93),
-						DATASET_NAMES[ds] + ": should contain Crushing injury condition [93]");
-				assertTrue(result.contains(97),
-						DATASET_NAMES[ds] + ": should contain Crushing injury diagnosis [97]");
-				assertTrue(result.contains(108),
-						DATASET_NAMES[ds] + ": should contain Nonunion of fracture condition [108]");
-				assertTrue(result.contains(110),
-						DATASET_NAMES[ds] + ": should contain Nonunion of fracture diagnosis [110]");
+				// thigh" and "Nonunion of fracture". Indices are
+				// 0-based array positions (comment number - 1).
+				assertTrue(result.contains(92),
+						DATASET_NAMES[ds] + ": should contain Crushing injury condition [92]");
+				assertTrue(result.contains(96),
+						DATASET_NAMES[ds] + ": should contain Crushing injury diagnosis [96]");
+				assertTrue(result.contains(107),
+						DATASET_NAMES[ds] + ": should contain Nonunion of fracture condition [107]");
+				assertTrue(result.contains(109),
+						DATASET_NAMES[ds] + ": should contain Nonunion of fracture diagnosis [109]");
 			} else {
 				// FULL and THIRD have no injury records
 				assertTrue(result.isEmpty(),
