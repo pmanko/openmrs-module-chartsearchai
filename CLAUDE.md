@@ -14,7 +14,7 @@
   5. Does it use the real production pipeline, not a simulation or mock?
   6. Were any tests modified? If so, that's a rule violation — revert and fix the production code instead.
   7. Were all rules in this file followed?
-- Follow test-driven development: for every bug fix or new feature, first write a failing test that defines the expected behavior, then write production code to make it pass.
+- Follow test-driven development: for every bug fix or new feature, first write a failing test that defines the expected behavior, then write production code to make it pass. Write the strictest assertion — if it doesn't fail, tighten it until it does.
 - Always create a plan before writing code. Read the relevant code, outline the approach, then implement.
 - Never commit code with known regressions. If a change improves one query but breaks another, the root cause is in shared infrastructure (e.g. noise profile, score distribution), not in the individual pipeline stage. Diagnose the shared infrastructure problem before attempting fixes — patching individual stages will keep regressing.
 - When a fix causes "regressions," check what the regressions actually return before reverting. Many apparent regressions are the fix correctly catching additional false positives that were baked into the baseline (e.g. Photoallergy for "dental problems," Fetishism for "depression"). Regenerate the baseline and verify the net effect — do not revert based on failure count alone.
