@@ -461,6 +461,7 @@ public class EnrichedRetrievalEvalTest {
 		}
 	}
 
+
 	@Test
 	public void allergies_shouldSurviveConceptNameGateOnLargeDataset() {
 		ensureInitialized();
