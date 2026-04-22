@@ -1078,6 +1078,56 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
+		// IDF-based term filtering: compute document frequency for
+		// each query term. Terms matching > 20% of records are too
+		// generic (e.g. "normal", "range", "time") and would flood
+		// keyword scoring with noise. Replace queryTerms with the
+		// filtered set for keyword scoring only (semantic embedding
+		// still uses the full query).
+		String[] kwTerms = queryTerms;
+		if (queryTerms.length > 2) {
+			int totalDocs = 0;
+			int[] docFreq = new int[queryTerms.length];
+			for (int i = 0; i < allEmbeddings.size(); i++) {
+				ChartEmbedding ce = allEmbeddings.get(i);
+				if (ce.getEmbeddingVector() == null) continue;
+				totalDocs++;
+				String text = (ce.getTextContent() != null
+						? ce.getTextContent() : "").toLowerCase();
+				for (int t = 0; t < queryTerms.length; t++) {
+					if (text.contains(queryTerms[t])) {
+						docFreq[t]++;
+					}
+				}
+			}
+			if (totalDocs > 0) {
+				double threshold = totalDocs * 0.2;
+				List<String> filtered = new ArrayList<String>();
+				int genericCount = 0;
+				for (int t = 0; t < queryTerms.length; t++) {
+					if (docFreq[t] <= threshold) {
+						filtered.add(queryTerms[t]);
+					} else {
+						genericCount++;
+					}
+				}
+				// Only activate when the query is dominated by
+				// generic terms (> 50% filtered). This targets
+				// long queries like "HB results over time, are
+				// values moving toward normal range" without
+				// affecting shorter, focused queries.
+				if (!filtered.isEmpty()
+						&& genericCount > queryTerms.length / 2) {
+					kwTerms = filtered.toArray(
+							new String[filtered.size()]);
+					log.warn("IDF filter: {} -> {} terms (dropped "
+							+ "generic terms from {})",
+							queryTerms.length, kwTerms.length,
+							java.util.Arrays.toString(queryTerms));
+				}
+			}
+		}
+
 		double[] semanticScores = new double[allEmbeddings.size()];
 		double[] keywordScores = new double[allEmbeddings.size()];
 		ChartEmbedding[] embeddings = new ChartEmbedding[allEmbeddings.size()];
@@ -1100,10 +1150,10 @@ public class LlmInferenceService implements ChartSearchService {
 					ce.getResourceType(), body);
 			if (typeIndicatorTerms.isEmpty()) {
 				keywordScores[validCount] = computeKeywordScore(
-						queryTerms, keywordText);
+						kwTerms, keywordText);
 			} else {
 				keywordScores[validCount] = computeKeywordScoreRestricted(
-						queryTerms, keywordText, body,
+						kwTerms, keywordText, body,
 						typeIndicatorTerms);
 			}
 			validCount++;
