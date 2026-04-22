@@ -1964,8 +1964,8 @@
   }, {
     "query" : "How have this patient's blood pressure, weight, and temperature trended across their last 7 visits?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 14,
-    "resultIndices" : [ 7, 8, 24, 25, 38, 39, 55, 56, 68, 69, 81, 82, 99, 100 ]
+    "expectedMinRecords" : 16,
+    "resultIndices" : [ 6, 7, 8, 11, 24, 25, 38, 39, 55, 56, 68, 69, 81, 82, 99, 100 ]
   }, {
     "query" : "I need to know the patient's most recent blood pressure and weight readings",
     "datasetIndex" : 4,

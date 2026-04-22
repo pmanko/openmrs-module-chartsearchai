@@ -401,6 +401,54 @@ public class EnrichedRetrievalEvalTest {
 	}
 
 	@Test
+	public void multiConceptVitals_shouldReturnAllRequestedConcepts() {
+		ensureInitialized();
+		Assumptions.assumeTrue(provider != null,
+				"Skipping: embedding model not found");
+
+		String query = "How have this patient's blood pressure, weight, "
+				+ "and temperature trended across their last 2 visits?";
+
+		for (int ds = 0; ds < DATASETS.length; ds++) {
+			List<Integer> result = runQuery(query, ds);
+			StringBuilder details = new StringBuilder();
+			boolean hasBP = false;
+			boolean hasWeight = false;
+			boolean hasTemperature = false;
+			for (int idx : result) {
+				if (idx < DATASETS[ds].length) {
+					String text = DATASETS[ds][idx];
+					details.append("\n  [").append(idx).append("] ")
+							.append(text);
+					if (text.toLowerCase().contains("blood pressure")
+							|| text.contains("Systolic")
+							|| text.contains("Diastolic")) {
+						hasBP = true;
+					}
+					if (text.contains("Weight")) {
+						hasWeight = true;
+					}
+					if (text.contains("Temperature")
+							|| text.contains("temperature")) {
+						hasTemperature = true;
+					}
+				}
+			}
+			log.warn("[{}] multi-concept vitals returned {} records:{}",
+					DATASET_NAMES[ds], result.size(), details);
+			assertTrue(hasBP,
+					DATASET_NAMES[ds] + ": should return blood pressure"
+					+ " records, got:" + details);
+			assertTrue(hasWeight,
+					DATASET_NAMES[ds] + ": should return Weight records"
+					+ ", got:" + details);
+			assertTrue(hasTemperature,
+					DATASET_NAMES[ds] + ": should return Temperature"
+					+ " records, got:" + details);
+		}
+	}
+
+	@Test
 	public void activeConditions_shouldReturnOnlyConditionAndDiagnosisRecords() {
 		ensureInitialized();
 		Assumptions.assumeTrue(provider != null,

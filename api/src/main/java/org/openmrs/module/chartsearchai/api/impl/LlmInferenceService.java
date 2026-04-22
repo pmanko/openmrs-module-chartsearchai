@@ -351,6 +351,18 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
+		// Multi-concept rescue: when the query lists multiple concepts
+		// separated by commas (e.g. "blood pressure, weight, and
+		// temperature") and some concepts are missing from the results,
+		// rescue the best keyword-matching record for each missing
+		// concept. Only fires for comma-separated lists — single-
+		// concept queries like "heart rates" are not affected.
+		if (provider != null && question.contains(",")
+				&& !filtered.isEmpty()) {
+			filtered = multiConceptRescue(filtered, allRecords,
+					provider, question, queryPrefix);
+		}
+
 		return groupByConcept(filtered);
 	}
 
@@ -1804,6 +1816,15 @@ public class LlmInferenceService implements ChartSearchService {
 			results = Collections.singletonList(scored.get(0).embedding);
 		}
 
+		// Multi-concept rescue: when a query mentions multiple distinct
+		// concepts (e.g. "blood pressure, weight, and temperature"),
+		// one concept can dominate keyword scoring (BP matches 2 terms)
+		// and push others below the gap. Rescue the best record for
+		// each query term that (a) has no matching candidate, (b) has
+		// keyword-matching records in the full set, and (c) has at
+		// least 3 such records (confirming it's a real concept, not
+		// a coincidental text match).
+
 		int logLimit = Math.min(20, scored.size());
 		StringBuilder scores = new StringBuilder();
 		for (int i = 0; i < logLimit; i++) {
@@ -2096,6 +2117,85 @@ public class LlmInferenceService implements ChartSearchService {
 	 * them against the query, and rescues the most recent record for
 	 * concepts scoring above the existing candidates' minimum score.
 	 */
+	/**
+	 * Multi-concept rescue for comma-separated queries. When a query
+	 * lists concepts like "blood pressure, weight, and temperature"
+	 * and some are missing from results, rescues the most recent
+	 * record for each missing concept by checking which query terms
+	 * appear in concept names of allRecords but not in the results.
+	 */
+	static List<SerializedRecord> multiConceptRescue(
+			List<SerializedRecord> filtered,
+			List<SerializedRecord> allRecords,
+			EmbeddingProvider provider, String question,
+			String queryPrefix) {
+		String normalizedQ = stripQueryStopwords(question);
+		String[] queryTerms = extractQueryTerms(normalizedQ);
+		if (queryTerms.length < 3) {
+			return filtered;
+		}
+
+		// Find which query terms are covered by current results
+		Set<String> coveredTerms = new HashSet<String>();
+		for (SerializedRecord r : filtered) {
+			String text = (r.getText() != null
+					? r.getText() : "").toLowerCase();
+			String[] textWords = text.split("\\s+");
+			for (String term : queryTerms) {
+				if (termMatchesText(term, text, textWords)) {
+					coveredTerms.add(term);
+				}
+			}
+		}
+
+		// For each uncovered term, check if it appears in a concept
+		// name of any record (not just body text). Require 3+ concept
+		// name matches to confirm it's a real missing concept.
+		List<SerializedRecord> rescued = new ArrayList<>(filtered);
+		Set<String> rescuedConcepts = new HashSet<>();
+		for (SerializedRecord r : filtered) {
+			String cn = ConceptNameUtil.extractConceptName(r.getText());
+			if (cn != null) rescuedConcepts.add(cn);
+		}
+
+		for (String term : queryTerms) {
+			if (coveredTerms.contains(term)) {
+				continue;
+			}
+			int conceptMatchCount = 0;
+			SerializedRecord bestRecord = null;
+			for (SerializedRecord r : allRecords) {
+				String conceptName =
+						ConceptNameUtil.extractConceptName(r.getText());
+				if (conceptName == null
+						|| rescuedConcepts.contains(conceptName)) {
+					continue;
+				}
+				String lowerName = conceptName.toLowerCase();
+				String[] nameWords = lowerName.split("\\s+");
+				if (termMatchesText(term, lowerName, nameWords)) {
+					conceptMatchCount++;
+					if (bestRecord == null) {
+						// allRecords is most-recent-first
+						bestRecord = r;
+					}
+				}
+			}
+			if (conceptMatchCount >= 3 && bestRecord != null) {
+				String cn = ConceptNameUtil.extractConceptName(
+						bestRecord.getText());
+				rescuedConcepts.add(cn);
+				rescued.add(bestRecord);
+			}
+		}
+
+		if (rescued.size() > filtered.size()) {
+			log.warn("Multi-concept rescue: {} -> {} for '{}'",
+					filtered.size(), rescued.size(), question);
+		}
+		return rescued;
+	}
+
 	static List<SerializedRecord> conceptNameRescueRecords(
 			List<SerializedRecord> filtered,
 			List<SerializedRecord> allRecords,
