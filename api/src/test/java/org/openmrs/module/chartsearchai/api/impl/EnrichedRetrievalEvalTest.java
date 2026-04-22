@@ -462,6 +462,106 @@ public class EnrichedRetrievalEvalTest {
 	}
 
 	@Test
+	public void allergies_shouldSurviveConceptNameGateOnLargeDataset() {
+		ensureInitialized();
+		Assumptions.assumeTrue(provider != null,
+				"Skipping: embedding model not found");
+
+		// Build a dataset with ~50 diverse concepts and one allergy
+		// record. On the live demo (160 records, N=44 concepts),
+		// the concept-name gate rejects "Beef" (z=2.04 < 2.38)
+		// and the type-indicator rescue saves it. This test
+		// verifies end-to-end allergy retrieval on a diverse
+		// dataset. The 50-record set doesn't fully reproduce the
+		// live demo's score compression — the rescue path is
+		// exercised on larger real-world datasets.
+		String[] largeDataset = {
+			"Patient allergy: (2026-03-18) Beef. Severity: Severe. Reactions: Diarrhea, Itching",
+			"Clinical observation: (2026-03-01) Test — Haemoglobin: 15.8 g/dL",
+			"Clinical observation: (2026-03-01) Test — CD4 Count: 988.0 cells/mmL",
+			"Clinical observation: (2026-03-01) Test — Height (cm): 131.0 cm",
+			"Clinical observation: (2026-03-01) Test — Weight (kg): 94.0 kg",
+			"Clinical observation: (2026-03-01) Test — Pulse: 95.0 beats/min",
+			"Clinical observation: (2026-03-01) Test — Temperature (C): 36.7 DEG C",
+			"Clinical observation: (2026-03-01) Test — Respiratory Rate: 18.0 breaths/min",
+			"Clinical observation: (2026-03-01) Test — Blood Oxygen Saturation: 94.0 %",
+			"Clinical observation: (2026-03-01) Test — Systolic Blood Pressure: 120.0 mmHg",
+			"Clinical observation: (2026-03-01) Test — Diastolic Blood Pressure: 80.0 mmHg",
+			"Clinical observation: (2026-03-01) Test — Serum glucose: 85.0 mg/dL",
+			"Clinical observation: (2026-03-01) Test — Serum creatinine: 1.2 mg/dL",
+			"Clinical observation: (2026-03-01) Test — White blood cell count: 5.5 x10^9/L",
+			"Clinical observation: (2026-03-01) Test — Platelet count: 250.0 x10^9/L",
+			"Clinical observation: (2026-03-01) Test — Hematocrit: 42.0 %",
+			"Clinical observation: (2026-03-01) Test — Blood urea nitrogen: 15.0 mg/dL",
+			"Clinical observation: (2026-03-01) Test — Albumin: 4.2 g/dL",
+			"Clinical observation: (2026-03-01) Test — Bilirubin: 0.8 mg/dL",
+			"Clinical observation: (2026-03-01) Test — Alkaline phosphatase: 70.0 U/L",
+			"Clinical observation: (2026-03-01) Test — Alanine aminotransferase: 25.0 U/L",
+			"Clinical observation: (2026-03-01) Test — Aspartate aminotransferase: 30.0 U/L",
+			"Clinical observation: (2026-03-01) Test — Cholesterol: 200.0 mg/dL",
+			"Clinical observation: (2026-03-01) Test — Triglycerides: 150.0 mg/dL",
+			"Clinical observation: (2026-03-01) Test — Sodium: 140.0 mEq/L",
+			"Clinical observation: (2026-03-01) Test — Potassium: 4.0 mEq/L",
+			"Clinical observation: (2026-03-01) Test — Calcium: 9.5 mg/dL",
+			"Clinical observation: (2026-03-01) Test — Magnesium: 2.0 mg/dL",
+			"Clinical observation: (2026-03-01) Test — Phosphate: 3.5 mg/dL",
+			"Clinical observation: (2026-03-01) Test — Uric acid: 5.0 mg/dL",
+			"Clinical observation: (2026-03-01) Test — Iron: 80.0 mcg/dL",
+			"Clinical observation: (2026-03-01) Test — Ferritin: 50.0 ng/mL",
+			"Clinical observation: (2026-03-01) Test — Vitamin D: 30.0 ng/mL",
+			"Clinical observation: (2026-03-01) Test — Thyroid stimulating hormone: 2.5 mIU/L",
+			"Clinical observation: (2026-03-01) Test — Free thyroxine: 1.2 ng/dL",
+			"Clinical observation: (2026-03-01) Test — Prostate specific antigen: 1.5 ng/mL",
+			"Clinical observation: (2026-03-01) Test — C-reactive protein: 0.5 mg/L",
+			"Clinical observation: (2026-03-01) Test — Erythrocyte sedimentation rate: 10.0 mm/hr",
+			"Clinical observation: (2026-03-01) Test — Prothrombin time: 12.0 seconds",
+			"Clinical observation: (2026-03-01) Test — Activated partial thromboplastin time: 30.0 seconds",
+			"Clinical observation: (2026-03-01) Test — International normalized ratio: 1.0",
+			"Clinical observation: (2026-03-01) Test — Lactate dehydrogenase: 200.0 U/L",
+			"Clinical observation: (2026-03-01) Test — Gamma-glutamyl transferase: 25.0 U/L",
+			"Clinical observation: (2026-03-01) Test — Amylase: 80.0 U/L",
+			"Clinical observation: (2026-03-01) Test — Lipase: 40.0 U/L",
+			"Medical condition: (2025-11-12) Condition: Tuberculosis. Status: ACTIVE",
+			"Medical condition: (2025-09-08) Condition: Hypertension. Status: ACTIVE",
+			"Medical condition: (2025-06-01) Condition: Diabetes. Status: ACTIVE",
+			"Medical condition: (2025-03-15) Condition: Asthma. Status: ACTIVE",
+			"Medical condition: (2025-01-20) Condition: Anemia. Status: ACTIVE",
+		};
+
+		List<SerializedRecord> records = TestDatasetHelper.toSerializedRecords(
+				largeDataset, null);
+		List<ChartEmbedding> embeddings = TestDatasetHelper.buildOrLoadCachedEmbeddings(
+				records, provider);
+		org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile noise =
+				TestDatasetHelper.buildOrLoadCachedNoiseProfile(embeddings, provider);
+		LlmInferenceService.PipelineConfig config =
+				LlmInferenceService.PipelineConfig.forModel(activeModel)
+						.withNoiseProfile(noise);
+
+		List<SerializedRecord> result = LlmInferenceService.findRelevantRecords(
+				embeddings, records, cachingProvider, "any allergies?",
+				ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX, config);
+
+		boolean hasAllergy = false;
+		StringBuilder details = new StringBuilder();
+		if (result != null) {
+			for (SerializedRecord r : result) {
+				details.append("\n  [").append(r.getResourceId())
+						.append("] ").append(r.getText());
+				if ("allergy".equals(r.getResourceType())) {
+					hasAllergy = true;
+				}
+			}
+		}
+		log.warn("Large-dataset allergy test ({}) returned {} records:{}",
+				activeModel, result != null ? result.size() : 0, details);
+		assertTrue(hasAllergy,
+				"Large dataset: 'any allergies?' should return the Beef"
+				+ " allergy record despite " + largeDataset.length
+				+ " diverse concepts, got:" + details);
+	}
+
+	@Test
 	public void allergies_shouldReturnAllergyRecords() {
 		ensureInitialized();
 		Assumptions.assumeTrue(provider != null,
