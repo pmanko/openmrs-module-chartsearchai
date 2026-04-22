@@ -136,7 +136,8 @@ public class LlmInferenceService implements ChartSearchService {
 		// guides the LLM to produce a query-specific "no records"
 		// response rather than "patient records are missing."
 		String chartText = chart.getMappings().isEmpty()
-				? "(none)" : chart.getText();
+				? "(No relevant records found)"
+				: chart.getText();
 		LlmResponse response = llmProvider.search(chartText, question);
 
 		return new ChartAnswer(response.getAnswer(),
@@ -150,7 +151,8 @@ public class LlmInferenceService implements ChartSearchService {
 		PatientChart chart = buildChart(patient, question);
 
 		String chartText = chart.getMappings().isEmpty()
-				? "(none)" : chart.getText();
+				? "(No relevant records found)"
+				: chart.getText();
 		LlmResponse response = llmProvider.searchStreaming(chartText, question, tokenConsumer);
 
 		return new ChartAnswer(response.getAnswer(),
