@@ -1278,6 +1278,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// against the query embedding.
 		if (pipelineResult != null && !pipelineResult.isEmpty()
 				&& keywordMatchCount == 0 && queryTerms.length > 0) {
+			List<ChartEmbedding> preGateCandidates = pipelineResult;
 			int beforeRerank = pipelineResult.size();
 			pipelineResult = rerankByConceptName(pipelineResult,
 					embeddings, validCount, queryVector, provider,
@@ -1292,6 +1293,29 @@ public class LlmInferenceService implements ChartSearchService {
 				log.warn("Concept-name rerank {}: {} -> {} [{}]",
 						java.util.Arrays.toString(queryTerms),
 						beforeRerank, pipelineResult.size(), kept);
+			}
+
+			// Type-indicator rescue: when the gate rejects all
+			// candidates but type indicators exist, rescue
+			// candidates whose record type matches the indicated
+			// type. This handles cases where the bare concept name
+			// is uninformative (e.g. "Beef" for an allergy query)
+			// but the record type confirms relevance.
+			if (pipelineResult.isEmpty()
+					&& !typeIndicatorTerms.isEmpty()) {
+				List<ChartEmbedding> rescued = new ArrayList<>();
+				for (ChartEmbedding ce : preGateCandidates) {
+					if (matchesTypeIndicator(ce,
+							typeIndicatorTerms)) {
+						rescued.add(ce);
+					}
+				}
+				if (!rescued.isEmpty()) {
+					pipelineResult = rescued;
+					log.warn("Type-indicator rescue after "
+							+ "concept-name gate: 0 -> {} for {}",
+							rescued.size(), typeIndicatorTerms);
+				}
 			}
 		}
 
