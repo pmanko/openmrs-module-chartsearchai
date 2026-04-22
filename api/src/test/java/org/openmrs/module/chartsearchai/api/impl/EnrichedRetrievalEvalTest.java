@@ -462,6 +462,42 @@ public class EnrichedRetrievalEvalTest {
 	}
 
 	@Test
+	public void longHbQuery_shouldReturnHaemoglobinRecords() {
+		ensureInitialized();
+		Assumptions.assumeTrue(provider != null,
+				"Skipping: embedding model not found");
+
+		String query = "What are this patient's HB results over time, "
+				+ "and are values moving toward or away from the "
+				+ "normal range?";
+
+		for (int ds = 0; ds < DATASETS.length; ds++) {
+			List<Integer> result = runQuery(query, ds);
+			StringBuilder details = new StringBuilder();
+			boolean hasHb = false;
+			for (int idx : result) {
+				if (idx < DATASETS[ds].length) {
+					String text = DATASETS[ds][idx];
+					details.append("\n  [").append(idx).append("] ")
+							.append(text);
+					if (text.contains("Haemoglobin")
+							|| text.contains("Hemoglobin")
+							|| text.contains("haemoglobin")
+							|| text.contains("hemoglobin")
+							|| text.contains("Hb")) {
+						hasHb = true;
+					}
+				}
+			}
+			log.warn("[{}] long HB query returned {} records:{}",
+					DATASET_NAMES[ds], result.size(), details);
+			assertTrue(hasHb,
+					DATASET_NAMES[ds] + ": long HB query should return"
+					+ " Haemoglobin records, got:" + details);
+		}
+	}
+
+	@Test
 	public void activeConditions_shouldReturnOnlyConditionAndDiagnosisRecords() {
 		ensureInitialized();
 		Assumptions.assumeTrue(provider != null,
