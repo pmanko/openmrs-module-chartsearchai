@@ -2161,12 +2161,14 @@ public class LlmInferenceService implements ChartSearchService {
 			if (cn != null) rescuedConcepts.add(cn);
 		}
 
+		int recencyCap = extractRecencyCap(question);
+
 		for (String term : queryTerms) {
 			if (coveredTerms.contains(term)) {
 				continue;
 			}
-			int conceptMatchCount = 0;
-			SerializedRecord bestRecord = null;
+			// Collect ALL records for each matching concept name.
+			List<SerializedRecord> matches = new ArrayList<>();
 			for (SerializedRecord r : allRecords) {
 				String conceptName =
 						ConceptNameUtil.extractConceptName(r.getText());
@@ -2177,18 +2179,21 @@ public class LlmInferenceService implements ChartSearchService {
 				String lowerName = conceptName.toLowerCase();
 				String[] nameWords = lowerName.split("\\s+");
 				if (termMatchesText(term, lowerName, nameWords)) {
-					conceptMatchCount++;
-					if (bestRecord == null) {
-						// allRecords is most-recent-first
-						bestRecord = r;
-					}
+					matches.add(r);
 				}
 			}
-			if (conceptMatchCount >= 1 && bestRecord != null) {
+			if (!matches.isEmpty()) {
 				String cn = ConceptNameUtil.extractConceptName(
-						bestRecord.getText());
+						matches.get(0).getText());
 				rescuedConcepts.add(cn);
-				rescued.add(bestRecord);
+				// Apply recency cap to just the rescued concept's
+				// records before adding, so "last 3 visits" keeps
+				// 3 per concept without restructuring the existing
+				// filtered set.
+				if (recencyCap > 0) {
+					matches = capPerConcept(matches, recencyCap);
+				}
+				rescued.addAll(matches);
 			}
 		}
 
