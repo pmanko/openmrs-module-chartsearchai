@@ -1161,17 +1161,39 @@ public class LlmInferenceService implements ChartSearchService {
 		log.warn("findRelevantRecords: {} embeddings -> {} keys -> {} filtered records (keys={})",
 				similar.size(), relevantKeys.size(), filtered.size(), relevantKeys);
 
+		// Concept-name rescue: when the recency cap reduces the set
+		// to 1-2 records for a zero-keyword query, related concepts
+		// may have been lost (e.g. "Height" for "BMI" when only
+		// "Weight" survived). Scan all records' concept names,
+		// score them against the query, and rescue missing concepts
+		// that score highly.
+		boolean recencyCapReduced = filtered.size() < similar.size() / 2;
+		int preRescueSize = filtered.size();
+		if (recencyCapReduced && fsResult.keywordMatchCount == 0
+				&& filtered.size() == 1) {
+			String normalizedQ = stripQueryStopwords(question);
+			String embQ = buildEmbeddingQuery(normalizedQ);
+			float[] qVec = provider.embedQuery(
+					ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX
+					+ embQ);
+			filtered = conceptNameRescueRecords(filtered, allRecords,
+					provider, qVec, question);
+		}
+		boolean rescueExpanded = filtered.size() > preRescueSize;
+
 		// Post-cap concept-name precision filter: when a recency cap
 		// (e.g. "latest BMI") drastically reduces the result set,
 		// irrelevant concepts from the same time period can survive
 		// because the pre-cap gate used permissive all-dataset stats.
 		// Re-check the small capped set using candidate-only mean-std.
 		// Only fires when: (1) the cap actually reduced the set
-		// significantly (>50%), (2) no keywords matched, and (3) the
-		// final set is small enough to benefit from precision filtering.
+		// significantly (>50%), (2) no keywords matched, (3) the
+		// final set is small enough, and (4) rescue didn't just
+		// expand the set (rescue already did concept-name scoring).
 		boolean recencyCapApplied = filtered.size() < similar.size() / 2;
-		if (recencyCapApplied && fsResult.keywordMatchCount == 0
-				&& filtered.size() >= 2 && filtered.size() <= 10) {
+		if (!rescueExpanded && recencyCapApplied
+				&& fsResult.keywordMatchCount == 0
+				&& filtered.size() >= 3 && filtered.size() <= 10) {
 			String normalizedQuery = stripQueryStopwords(question);
 			filtered = applyPostCapConceptFilter(filtered, provider,
 					normalizedQuery,
@@ -2030,6 +2052,129 @@ public class LlmInferenceService implements ChartSearchService {
 	 * Scores each unique concept name against the query and drops
 	 * concepts below candidate mean - std.
 	 */
+	/**
+	 * Concept-name rescue for post-cap results. When the recency cap
+	 * reduces a set to 1-2 records for a zero-keyword query, related
+	 * concepts may have been lost (e.g. "Height" for "BMI" when only
+	 * "Weight" survived). Scans all records' concept names, scores
+	 * them against the query, and rescues the most recent record for
+	 * concepts scoring above the existing candidates' minimum score.
+	 */
+	static List<SerializedRecord> conceptNameRescueRecords(
+			List<SerializedRecord> filtered,
+			List<SerializedRecord> allRecords,
+			EmbeddingProvider provider, float[] queryVector,
+			String question) {
+		// Score existing candidates' concept names
+		Set<String> existingConcepts = new HashSet<>();
+		double minExistingScore = Double.MAX_VALUE;
+		for (SerializedRecord r : filtered) {
+			String name = ConceptNameUtil.extractConceptName(
+					r.getText());
+			if (name != null && !existingConcepts.contains(name)) {
+				existingConcepts.add(name);
+				float[] nameVec = provider.embedQuery(name);
+				double score = ChartSearchAiUtils.cosineSimilarity(
+						queryVector, nameVec);
+				if (score < minExistingScore) {
+					minExistingScore = score;
+				}
+			}
+		}
+
+		// Score all unique concept names across allRecords
+		Map<String, Double> conceptScores = new HashMap<>();
+		Map<String, SerializedRecord> mostRecent = new HashMap<>();
+		for (SerializedRecord r : allRecords) {
+			String name = ConceptNameUtil.extractConceptName(
+					r.getText());
+			if (name == null || existingConcepts.contains(name)) {
+				continue;
+			}
+			if (!conceptScores.containsKey(name)) {
+				float[] nameVec = provider.embedQuery(name);
+				conceptScores.put(name,
+						ChartSearchAiUtils.cosineSimilarity(
+								queryVector, nameVec));
+			}
+			// allRecords is most-recent-first, so first occurrence
+			// is the most recent record for each concept.
+			if (!mostRecent.containsKey(name)) {
+				mostRecent.put(name, r);
+			}
+		}
+
+		// Rescue concepts scoring within the top quartile of ALL
+		// dataset concept-name scores. Using minExistingScore is too
+		// strict when only 1 record exists (e.g. Weight for "BMI" —
+		// Height scores lower but should still be rescued).
+		double[] allScores = new double[conceptScores.size()
+				+ existingConcepts.size()];
+		int ai = 0;
+		for (double s : conceptScores.values()) {
+			allScores[ai++] = s;
+		}
+		// Include existing scores in the distribution
+		for (SerializedRecord r : filtered) {
+			String name = ConceptNameUtil.extractConceptName(
+					r.getText());
+			if (name != null) {
+				float[] nameVec = provider.embedQuery(name);
+				allScores[ai++] = ChartSearchAiUtils.cosineSimilarity(
+						queryVector, nameVec);
+			}
+		}
+		if (ai < allScores.length) {
+			allScores = java.util.Arrays.copyOf(allScores, ai);
+		}
+		java.util.Arrays.sort(allScores);
+		int q3Start = allScores.length * 3 / 4;
+		double q3Sum = 0;
+		for (int i = q3Start; i < allScores.length; i++) {
+			q3Sum += allScores[i];
+		}
+		double rescueThreshold = q3Sum / (allScores.length - q3Start);
+
+		// Find the single best-scoring non-existing concept above
+		// the rescue threshold. Limiting to 1 prevents over-rescuing
+		// (e.g. Haemoglobin for "BMI" when only Height is needed).
+		String bestRescueName = null;
+		double bestRescueScore = 0;
+		for (Map.Entry<String, Double> entry
+				: conceptScores.entrySet()) {
+			if (entry.getValue() >= rescueThreshold
+					&& entry.getValue() > bestRescueScore) {
+				bestRescueScore = entry.getValue();
+				bestRescueName = entry.getKey();
+			}
+		}
+
+		int recencyCap = extractRecencyCap(question);
+		List<SerializedRecord> rescued = new ArrayList<>(filtered);
+		List<String> rescuedNames = new ArrayList<>();
+		if (bestRescueName != null) {
+			SerializedRecord r = mostRecent.get(bestRescueName);
+			if (r != null) {
+				rescued.add(r);
+				rescuedNames.add(bestRescueName);
+			}
+		}
+
+		// Apply recency cap to rescued records too
+		if (recencyCap > 0 && rescued.size() > filtered.size()) {
+			rescued = capPerConcept(rescued, recencyCap);
+		}
+
+		if (rescued.size() > filtered.size()) {
+			log.warn("Concept-name rescue: {} -> {} (threshold={}, "
+					+ "rescued: {})",
+					filtered.size(), rescued.size(),
+					String.format("%.4f", rescueThreshold),
+					rescuedNames);
+		}
+		return rescued;
+	}
+
 	static List<SerializedRecord> applyPostCapConceptFilter(
 			List<SerializedRecord> records,
 			EmbeddingProvider provider, String normalizedQuery,
@@ -2073,7 +2218,10 @@ public class LlmInferenceService implements ChartSearchService {
 		if (std < 1e-9) {
 			return records;
 		}
-		double threshold = mean - std;
+		// Use mean - 0.5*std: tighter than mean - std (which lets
+		// "Serum glucose" through for BMI on THIRD) but not as
+		// aggressive as mean (which drops "Height" for BMI on FULL).
+		double threshold = mean - 0.5 * std;
 
 		List<SerializedRecord> result = new ArrayList<>();
 		for (int i = 0; i < candScores.length; i++) {
