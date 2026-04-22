@@ -3865,6 +3865,24 @@ public class LlmInferenceService implements ChartSearchService {
 						prefixedText.length() - body.length());
 		String lowerPrefix = prefix.toLowerCase();
 		String[] prefixWords = lowerPrefix.split("\\s+");
+		// When type indicators exist, first check if this record
+		// matches ANY of them. If it doesn't, this record is the
+		// wrong type — non-type-indicator matches (e.g. "active"
+		// matching "Status: ACTIVE" on an obs record when the
+		// query asks for "conditions") are coincidental and
+		// should not contribute to keyword scoring.
+		boolean matchesType = false;
+		for (String term : queryTerms) {
+			if (typeIndicatorTerms.contains(term)
+					&& termMatchesText(term, lowerPrefix,
+							prefixWords)) {
+				matchesType = true;
+				break;
+			}
+		}
+		if (!matchesType) {
+			return 0.0;
+		}
 		int matched = 0;
 		for (String term : queryTerms) {
 			boolean isTypeIndicator = typeIndicatorTerms.contains(term);

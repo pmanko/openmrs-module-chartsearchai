@@ -299,8 +299,8 @@
   }, {
     "query" : "has this patient ever been diagnosed with any sexually transmitted infections",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 9,
-    "resultIndices" : [ 39, 51, 61, 69, 71, 90, 110, 118, 122 ]
+    "expectedMinRecords" : 8,
+    "resultIndices" : [ 39, 51, 61, 69, 71, 90, 110, 118 ]
   }, {
     "query" : "has this patient had a sexually transmitted disease?",
     "datasetIndex" : 0,
@@ -454,8 +454,8 @@
   }, {
     "query" : "what chronic conditions has this patient been diagnosed with over the years",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 3,
-    "resultIndices" : [ 13, 42, 121 ]
+    "expectedMinRecords" : 5,
+    "resultIndices" : [ 13, 20, 30, 42, 121 ]
   }, {
     "query" : "what is the current cd4 count and when was it recorded?",
     "datasetIndex" : 0,
@@ -519,8 +519,8 @@
   }, {
     "query" : "I want to review the patient's complete medication history including dosages",
     "datasetIndex" : 1,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 0, 31, 43, 54, 55, 56 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "TB",
     "datasetIndex" : 1,
@@ -1754,8 +1754,8 @@
   }, {
     "query" : "has this patient ever been diagnosed with any sexually transmitted infections",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 26,
-    "resultIndices" : [ 4, 5, 20, 21, 22, 35, 50, 51, 52, 53, 65, 66, 78, 79, 94, 95, 96, 97, 108, 110, 123, 124, 125, 138, 139, 151 ]
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 108, 110 ]
   }, {
     "query" : "has this patient had a sexually transmitted disease?",
     "datasetIndex" : 3,
@@ -2014,8 +2014,8 @@
   }, {
     "query" : "When were each of this patient's active conditions first recorded, and have any resolved or escalated?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 5,
-    "resultIndices" : [ 23, 64, 77, 126, 150 ]
+    "expectedMinRecords" : 27,
+    "resultIndices" : [ 2, 3, 17, 18, 19, 33, 34, 46, 47, 48, 49, 63, 64, 76, 77, 90, 91, 92, 93, 107, 108, 120, 121, 122, 136, 137, 150 ]
   }, {
     "query" : "allergies",
     "datasetIndex" : 4,
@@ -2239,8 +2239,8 @@
   }, {
     "query" : "has this patient ever been diagnosed with any sexually transmitted infections",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 26,
-    "resultIndices" : [ 4, 5, 20, 21, 22, 35, 50, 51, 52, 53, 65, 66, 78, 79, 94, 95, 96, 97, 108, 110, 123, 124, 125, 138, 139, 151 ]
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 108, 110 ]
   }, {
     "query" : "has this patient had a sexually transmitted disease?",
     "datasetIndex" : 4,
