@@ -1298,9 +1298,7 @@ public class LlmInferenceService implements ChartSearchService {
 			// Type-indicator rescue: when the gate rejects all
 			// candidates but type indicators exist, rescue
 			// candidates whose record type matches the indicated
-			// type. This handles cases where the bare concept name
-			// is uninformative (e.g. "Beef" for an allergy query)
-			// but the record type confirms relevance.
+			// type from the pre-gate set.
 			if (pipelineResult.isEmpty()
 					&& !typeIndicatorTerms.isEmpty()) {
 				List<ChartEmbedding> rescued = new ArrayList<>();
@@ -1316,6 +1314,39 @@ public class LlmInferenceService implements ChartSearchService {
 							+ "concept-name gate: 0 -> {} for {}",
 							rescued.size(), typeIndicatorTerms);
 				}
+			}
+		}
+
+		// Type-indicator full-scan rescue: when the pipeline returns
+		// empty but type indicators exist, the indicated record type
+		// may have scored below the pipeline's gap threshold (e.g.
+		// "Patient allergy: Beef" scores lower than conditions for
+		// "allergies" because MedCPT embeds "Beef" far from
+		// "allergies"). Scan ALL embeddings for records matching the
+		// indicated type.
+		// Type-indicator full-scan rescue: when the pipeline returns
+		// empty but type indicators exist, scan ALL embeddings for
+		// records matching the indicated type. Only rescue when the
+		// matching set is small (<=5 records) — a rare type like
+		// "allergy" with 1-2 records is likely a genuine miss, but
+		// a common type like "condition" with 20+ records means the
+		// pipeline correctly determined no specific match.
+		if ((pipelineResult == null || pipelineResult.isEmpty())
+				&& !typeIndicatorTerms.isEmpty()) {
+			List<ChartEmbedding> rescued = new ArrayList<>();
+			for (int i = 0; i < validCount; i++) {
+				if (matchesTypeIndicator(embeddings[i],
+						typeIndicatorTerms)) {
+					rescued.add(embeddings[i]);
+				}
+			}
+			if (!rescued.isEmpty()
+					&& rescued.size()
+					<= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
+				pipelineResult = rescued;
+				log.warn("Type-indicator full-scan rescue: "
+						+ "found {} records for {}",
+						rescued.size(), typeIndicatorTerms);
 			}
 		}
 
