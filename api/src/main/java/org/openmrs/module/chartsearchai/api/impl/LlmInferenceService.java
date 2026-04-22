@@ -345,12 +345,10 @@ public class LlmInferenceService implements ChartSearchService {
 		// Step 2: Post-cap concept-name precision filter — remove
 		// irrelevant concepts from zero-keyword queries (e.g. SpO2
 		// for "BMI"). For keyword-matching queries, the keyword
-		// scoring already provides precision. Also fires for
-		// keyword queries with comma lists to clean up before the
-		// multi-concept rescue adds new concepts.
-		boolean isCommaList = question.contains(",");
-		if (recencyCapReduced && provider != null
-				&& (keywordMatchCount == 0 || isCommaList)
+		// scoring already provides precision — the multi-concept
+		// rescue handles cleanup for comma-list queries.
+		if (recencyCapReduced && keywordMatchCount == 0
+				&& provider != null
 				&& filtered.size() >= 3
 				&& filtered.size() <= 10) {
 			String normalizedQ = stripQueryStopwords(question);
@@ -2194,7 +2192,7 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
-		if (rescued.size() > filtered.size()) {
+		if (rescued.size() != filtered.size()) {
 			log.warn("Multi-concept rescue: {} -> {} for '{}'",
 					filtered.size(), rescued.size(), question);
 		}
