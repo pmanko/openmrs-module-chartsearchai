@@ -21,6 +21,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -1184,8 +1185,12 @@ public class LlmInferenceService implements ChartSearchService {
 		PipelineConfig profiledConfig =
 				config.withNoiseProfile(noiseProfile);
 
-		List<ChartEmbedding> pipelineResult = filterPipeline(semanticScores,
-				keywordScores, embeddings, queryTerms, profiledConfig);
+		int[] gapCutoffOut = new int[1];
+		List<ChartEmbedding> pipelineResult = filterPipeline(
+				semanticScores, keywordScores, embeddings,
+				queryTerms, queryTerms.length, profiledConfig,
+				gapCutoffOut);
+		int gapCutoff = gapCutoffOut[0];
 
 		int keywordMatchCount = 0;
 		for (int i = 0; i < validCount; i++) {
@@ -1220,17 +1225,22 @@ public class LlmInferenceService implements ChartSearchService {
 				coreKw[i] = computeKeywordScore(coreTerms, kwText);
 			}
 
+			int[] retryGapCutoff = new int[1];
 			pipelineResult = filterPipeline(coreSemantic, coreKw,
-					embeddings, coreTerms, profiledConfig);
+					embeddings, coreTerms, coreTerms.length,
+					profiledConfig, retryGapCutoff);
 			if (pipelineResult != null && !pipelineResult.isEmpty()) {
+				gapCutoff = retryGapCutoff[0];
 				log.warn("Query truncation retry: '{}' -> '{}', "
 						+ "found {} results",
 						String.join(" ", queryTerms), coreQuery,
 						pipelineResult.size());
-				// Update keyword match count for downstream gates
+				// Update keyword match count and semantic scores
+				// for downstream gates
 				keywordMatchCount = 0;
 				for (int i = 0; i < validCount; i++) {
 					if (coreKw[i] > 0) keywordMatchCount++;
+					semanticScores[i] = coreSemantic[i];
 				}
 			}
 		}
@@ -1406,6 +1416,94 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
+		// Concept-name floor check: when pipeline results have no
+		// keyword anchoring (either kwCount=0 globally or kwCount>0
+		// but no pipeline result has positive keyword score), the
+		// results rely entirely on embedding similarity. If all
+		// results share a single concept whose name is below the
+		// noise floor, return empty (e.g. "COPD exacerbations"
+		// returning 3× Fetishism with sim=0.12).
+		if (!pipelineResult.isEmpty()
+				&& queryTerms.length > 0) {
+			boolean pipelineHasKwAnchoring = false;
+			if (keywordMatchCount > 0) {
+				Set<ChartEmbedding> kwFloorSet =
+						Collections.newSetFromMap(
+								new IdentityHashMap<
+										ChartEmbedding, Boolean>());
+				kwFloorSet.addAll(pipelineResult);
+				for (int i = 0; i < validCount; i++) {
+					if (kwFloorSet.contains(embeddings[i])
+							&& keywordScores[i] > 0) {
+						pipelineHasKwAnchoring = true;
+						break;
+					}
+				}
+			}
+			if (!pipelineHasKwAnchoring) {
+				Set<String> seenConcepts = new HashSet<>();
+				for (ChartEmbedding ce : pipelineResult) {
+					String name = ConceptNameUtil.extractConceptName(
+							ce.getTextContent());
+					if (name != null) {
+						seenConcepts.add(name);
+					}
+				}
+				if (seenConcepts.size() == 1) {
+					// Single concept: floor check
+					String conceptName =
+							seenConcepts.iterator().next();
+					float[] nameVec =
+							provider.embedQuery(conceptName);
+					double conceptSim = cosineSimilarity(
+							queryVector, nameVec);
+					double floorWithMargin = noiseProfile
+							.absoluteSimilarityFloor()
+							* profiledConfig.conceptFloorMargin;
+					if (conceptSim < floorWithMargin) {
+						log.warn("Concept-name floor check: "
+								+ "sim({})={} < floor*{}={}, "
+								+ "returning empty for {}",
+								conceptName,
+								String.format("%.4f", conceptSim),
+								String.format("%.2f",
+										profiledConfig.conceptFloorMargin),
+								String.format("%.4f",
+										floorWithMargin),
+								java.util.Arrays.toString(
+										queryTerms));
+						pipelineResult = Collections.emptyList();
+					}
+				}
+			}
+		}
+
+		// Gap-saturation check: when kwCount=0 and the gap analysis
+		// found no meaningful gap in the score distribution (i.e.
+		// gapCutoff exceeds the saturation threshold), the embedding
+		// scores are undifferentiated — every record looks equally
+		// relevant. This catches queries about topics not in the
+		// patient's chart (e.g. "COPD exacerbations" on a
+		// vitals-dominated patient: gapCutoff=158/160=99%).
+		// Legitimate queries have clear gaps (80/160=50%).
+		if (keywordMatchCount == 0
+				&& !pipelineResult.isEmpty()
+				&& validCount > 0
+				&& profiledConfig.gapSaturationThreshold > 0) {
+			double gapRatio = (double) gapCutoff / validCount;
+			if (gapRatio > profiledConfig.gapSaturationThreshold) {
+				log.warn("Gap-saturation check: "
+						+ "gapCutoff={}/{} ({}) — "
+						+ "returning empty for {}",
+						gapCutoff, validCount,
+						String.format("%.0f%%",
+								gapRatio * 100),
+						java.util.Arrays.toString(
+								queryTerms));
+				pipelineResult = Collections.emptyList();
+			}
+		}
+
 		return new FindSimilarResult(pipelineResult, noiseProfile,
 				keywordMatchCount);
 	}
@@ -1510,8 +1608,21 @@ public class LlmInferenceService implements ChartSearchService {
 
 	private static List<ChartEmbedding> filterPipeline(double[] semanticScores,
 			double[] keywordScores, ChartEmbedding[] embeddings,
-			String[] queryTerms, int queryTermCount, 
+			String[] queryTerms, int queryTermCount,
 			PipelineConfig config) {
+		return filterPipeline(semanticScores, keywordScores, embeddings,
+				queryTerms, queryTermCount, config, null);
+	}
+
+	/**
+	 * @param outGapCutoff if non-null, receives the gap-analysis candidate
+	 *        count in [0]. Used by the noise-saturation check to detect
+	 *        queries where the dataset has no genuine signal.
+	 */
+	private static List<ChartEmbedding> filterPipeline(double[] semanticScores,
+			double[] keywordScores, ChartEmbedding[] embeddings,
+			String[] queryTerms, int queryTermCount,
+			PipelineConfig config, int[] outGapCutoff) {
 
 		double maxBaseScore = 0;
 		double maxSemanticScore = 0;
@@ -1638,6 +1749,9 @@ public class LlmInferenceService implements ChartSearchService {
 				maxSemanticScore, bonusThreshold, config);
 		double minScore = built.minScore;
 		int adaptiveCutoff = built.adaptiveCutoff;
+		if (outGapCutoff != null && outGapCutoff.length > 0) {
+			outGapCutoff[0] = adaptiveCutoff;
+		}
 		List<ScoredEmbedding> candidates = built.candidates;
 
 		// Keyword refinement: when gap detection returns a broad set but
@@ -5145,6 +5259,17 @@ public class LlmInferenceService implements ChartSearchService {
 		 * reliable concept-name z-scores even for small sets;
 		 * single-encoder models (L6-v2) need larger sets. */
 		final int conceptNameGateMinCandidates;
+		/** Margin multiplier for the concept-name floor check.
+		 * The floor check rejects single-concept results whose
+		 * concept-name similarity is below
+		 * absoluteSimilarityFloor * conceptFloorMargin. */
+		final double conceptFloorMargin;
+		/** Gap-saturation threshold: when gapCutoff/validCount
+		 * exceeds this ratio and kwCount=0, embedding scores are
+		 * undifferentiated and results are discarded. Set to 0.0
+		 * to disable (e.g. for MedCPT where medical embeddings
+		 * produce meaningful similarity even for adjacent topics). */
+		final double gapSaturationThreshold;
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
 				double minScoreGap, double gapValidationCosineThreshold,
@@ -5153,7 +5278,7 @@ public class LlmInferenceService implements ChartSearchService {
 					gapValidationCosineThreshold, similarityRatio,
 					ModelNoiseProfile.conservativeDefault(),
 					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
-					10);
+					10, 0.85, 0.95);
 		}
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
@@ -5162,6 +5287,20 @@ public class LlmInferenceService implements ChartSearchService {
 				ModelNoiseProfile noiseProfile,
 				double floorRescueMinZScore,
 				int conceptNameGateMinCandidates) {
+			this(keywordWeight, scoreGapMultiplier, minScoreGap,
+					gapValidationCosineThreshold, similarityRatio,
+					noiseProfile, floorRescueMinZScore,
+					conceptNameGateMinCandidates, 0.85, 0.95);
+		}
+
+		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
+				double minScoreGap, double gapValidationCosineThreshold,
+				double similarityRatio,
+				ModelNoiseProfile noiseProfile,
+				double floorRescueMinZScore,
+				int conceptNameGateMinCandidates,
+				double conceptFloorMargin,
+				double gapSaturationThreshold) {
 			this.keywordWeight = keywordWeight;
 			this.scoreGapMultiplier = scoreGapMultiplier;
 			this.minScoreGap = minScoreGap;
@@ -5171,6 +5310,8 @@ public class LlmInferenceService implements ChartSearchService {
 			this.floorRescueMinZScore = floorRescueMinZScore;
 			this.conceptNameGateMinCandidates =
 					conceptNameGateMinCandidates;
+			this.conceptFloorMargin = conceptFloorMargin;
+			this.gapSaturationThreshold = gapSaturationThreshold;
 		}
 
 		/**
@@ -5189,7 +5330,9 @@ public class LlmInferenceService implements ChartSearchService {
 					gapValidationCosineThreshold,
 					similarityRatio, newNoiseProfile,
 					floorRescueMinZScore,
-					conceptNameGateMinCandidates);
+					conceptNameGateMinCandidates,
+					conceptFloorMargin,
+					gapSaturationThreshold);
 		}
 
 		/** Returns a config using all default constant values
@@ -5203,7 +5346,7 @@ public class LlmInferenceService implements ChartSearchService {
 					ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO,
 					ModelNoiseProfile.conservativeDefault(),
 					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
-					10);
+					10, 0.85, 0.95);
 		}
 
 		/**
@@ -5265,7 +5408,8 @@ public class LlmInferenceService implements ChartSearchService {
 					0.95,   // similarityRatio — tighter for compressed range
 					ModelNoiseProfile.conservativeDefault(),
 					1.5,    // floorRescueMinZScore — lower for compressed range
-					10);    // conceptNameGateMinCandidates — same as L6-v2
+					10,     // conceptNameGateMinCandidates — same as L6-v2
+					0.85, 0.95);
 		}
 
 		/**
@@ -5297,6 +5441,10 @@ public class LlmInferenceService implements ChartSearchService {
 			//   query encoder produces reliable concept-name z-scores
 			//   even for small result sets, so the outlier gate can
 			//   fire at 2+ candidates (vs L6-v2's 10+).
+			// - gapSaturationThreshold 0.0: disabled — MedCPT's medical
+			//   embeddings produce meaningful similarity for clinically
+			//   adjacent topics (e.g. COPD → Respiratory rate), so a
+			//   saturated gap doesn't imply no signal.
 			return new PipelineConfig(
 					ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
 					ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
@@ -5305,7 +5453,8 @@ public class LlmInferenceService implements ChartSearchService {
 					0.98,
 					ModelNoiseProfile.conservativeDefault(),
 					1.0,
-					ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS);
+					ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS,
+					0.85, 0.0);
 		}
 	}
 

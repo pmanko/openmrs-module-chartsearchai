@@ -14,6 +14,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -119,6 +120,57 @@ public class WordPieceTokenizer {
 			attentionMask[i] = 1;
 			tokenTypeIds[i] = 0;
 		}
+
+		return new TokenizedInput(inputIds, attentionMask, tokenTypeIds);
+	}
+
+	/**
+	 * Tokenizes a query-document pair for cross-encoder input.
+	 * Format: [CLS] query_tokens [SEP] doc_tokens [SEP]
+	 * token_type_ids: 0 for query, 1 for document.
+	 */
+	public TokenizedInput tokenizePair(String query, String document) {
+		List<Integer> queryIds = tokenizeToIds(query);
+		List<Integer> docIds = tokenizeToIds(document);
+
+		// Budget: [CLS] + query + [SEP] + doc + [SEP] = 3 special tokens
+		int maxContentLen = maxSequenceLength - 3;
+		// Give query up to 1/4 of budget, rest to document
+		int maxQueryLen = Math.max(16, maxContentLen / 4);
+		if (queryIds.size() > maxQueryLen) {
+			queryIds = queryIds.subList(0, maxQueryLen);
+		}
+		int maxDocLen = maxContentLen - queryIds.size();
+		if (docIds.size() > maxDocLen) {
+			docIds = docIds.subList(0, maxDocLen);
+		}
+
+		int seqLen = 1 + queryIds.size() + 1 + docIds.size() + 1;
+		long[] inputIds = new long[seqLen];
+		long[] attentionMask = new long[seqLen];
+		long[] tokenTypeIds = new long[seqLen];
+		Arrays.fill(attentionMask, 1);
+
+		int pos = 0;
+		inputIds[pos] = clsTokenId;
+		pos++;
+
+		for (int id : queryIds) {
+			inputIds[pos] = id;
+			pos++;
+		}
+
+		inputIds[pos] = sepTokenId;
+		pos++;
+
+		for (int id : docIds) {
+			inputIds[pos] = id;
+			tokenTypeIds[pos] = 1;
+			pos++;
+		}
+
+		inputIds[pos] = sepTokenId;
+		tokenTypeIds[pos] = 1;
 
 		return new TokenizedInput(inputIds, attentionMask, tokenTypeIds);
 	}

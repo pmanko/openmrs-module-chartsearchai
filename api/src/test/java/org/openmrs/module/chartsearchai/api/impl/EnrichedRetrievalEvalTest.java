@@ -624,6 +624,38 @@ public class EnrichedRetrievalEvalTest {
 	}
 
 	@Test
+	public void copdExacerbations_shouldReturnEmptyForAllDatasets() {
+		ensureInitialized();
+		Assumptions.assumeTrue(provider != null,
+				"Skipping: embedding model not found");
+
+		// No dataset contains COPD records — query should return empty.
+		// MedCPT is excluded: as a medical embedding model, it
+		// correctly associates COPD with respiratory-domain records
+		// (Pneumonia, Asthma, Respiratory rate vitals), returning
+		// clinically-adjacent results that the concept-name floor
+		// check can't distinguish. The L6-v2 fix targets the
+		// clearly-wrong case (Fetishism via narrative overlap).
+		Assumptions.assumeTrue("l6-v2".equals(activeModel),
+				"COPD empty assertion is L6-v2 specific");
+		String query = "Do they have any history of COPD exacerbations?";
+		for (int ds = 0; ds < DATASETS.length; ds++) {
+			List<Integer> result = runQuery(query, ds);
+			StringBuilder details = new StringBuilder();
+			for (int idx : result) {
+				if (idx < DATASETS[ds].length) {
+					details.append("\n  [").append(idx).append("] ")
+							.append(DATASETS[ds][idx]);
+				}
+			}
+			assertTrue(result.isEmpty(),
+					DATASET_NAMES[ds] + " has no COPD records — '"
+					+ query + "' should return empty, got "
+					+ result.size() + " results:" + details);
+		}
+	}
+
+	@Test
 	public void longHbQuery_shouldReturnSameAsShortQuery() {
 		ensureInitialized();
 		Assumptions.assumeTrue(provider != null,
