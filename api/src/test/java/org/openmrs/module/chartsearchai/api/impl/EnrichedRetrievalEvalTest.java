@@ -365,38 +365,38 @@ public class EnrichedRetrievalEvalTest {
 	}
 
 	@Test
-	public void latestBmi_shouldNotReturnUnrelatedVitals() {
+	public void latestBmi_shouldReturnOnlyHeightAndWeight() {
 		ensureInitialized();
 		Assumptions.assumeTrue(provider != null,
 				"Skipping: embedding model not found");
 
-		// Vitals that are unrelated to BMI (weight/height²) and
-		// should never appear in the result set.
-		String[] unrelatedPatterns = {
-			"blood pressure", "Systolic", "Diastolic",
-			"Pulse", "Temperature", "Respiratory",
-			"Blood Oxygen", "SpO2"
-		};
-
 		for (int ds = 0; ds < DATASETS.length; ds++) {
 			List<Integer> result = runQuery("What is the latest BMI?", ds);
-			List<String> forbidden = new ArrayList<>();
+			StringBuilder details = new StringBuilder();
+			boolean hasHeight = false;
+			boolean hasWeight = false;
+			List<String> other = new ArrayList<>();
 			for (int idx : result) {
 				if (idx < DATASETS[ds].length) {
-					String text = DATASETS[ds][idx].toLowerCase();
-					for (String pattern : unrelatedPatterns) {
-						if (text.contains(pattern.toLowerCase())) {
-							forbidden.add("[" + idx + "] "
-									+ DATASETS[ds][idx]);
-							break;
-						}
+					String text = DATASETS[ds][idx];
+					details.append("\n  [").append(idx).append("] ")
+							.append(text);
+					if (text.contains("Height")) {
+						hasHeight = true;
+					} else if (text.contains("Weight")) {
+						hasWeight = true;
+					} else {
+						other.add("[" + idx + "] " + text);
 					}
 				}
 			}
-			assertTrue(forbidden.isEmpty(),
-					DATASET_NAMES[ds] + ": BMI query should not return "
-					+ "unrelated vitals, but got:\n  "
-					+ String.join("\n  ", forbidden));
+			assertTrue(hasHeight && hasWeight,
+					DATASET_NAMES[ds] + ": BMI query should return both "
+					+ "Height and Weight, got:" + details);
+			assertTrue(other.isEmpty(),
+					DATASET_NAMES[ds] + ": BMI query should return ONLY "
+					+ "Height and Weight, but also got:\n  "
+					+ String.join("\n  ", other));
 		}
 	}
 
