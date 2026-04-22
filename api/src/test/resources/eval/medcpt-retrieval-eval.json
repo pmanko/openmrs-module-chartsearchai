@@ -54,8 +54,8 @@
   }, {
     "query" : "What are this patient's HB results over time, and are values moving toward or away from the normal range?",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 29, 55 ]
   }, {
     "query" : "What is the current CD4 Count?",
     "datasetIndex" : 0,
@@ -419,8 +419,8 @@
   }, {
     "query" : "signs of infection or inflammation",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 4,
+    "resultIndices" : [ 61, 90, 118, 122 ]
   }, {
     "query" : "skin rash",
     "datasetIndex" : 0,
@@ -904,8 +904,8 @@
   }, {
     "query" : "signs of infection or inflammation",
     "datasetIndex" : 1,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 17, 19 ]
   }, {
     "query" : "skin rash",
     "datasetIndex" : 1,
@@ -1024,8 +1024,8 @@
   }, {
     "query" : "What are this patient's HB results over time, and are values moving toward or away from the normal range?",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 0, 103 ]
   }, {
     "query" : "What is the current CD4 Count?",
     "datasetIndex" : 2,
@@ -1169,8 +1169,8 @@
   }, {
     "query" : "can you tell me about the patient's respiratory symptoms and oxygen levels",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 9,
+    "resultIndices" : [ 12, 31, 42, 62, 81, 101, 126, 144, 158 ]
   }, {
     "query" : "cancer",
     "datasetIndex" : 2,
@@ -1874,8 +1874,8 @@
   }, {
     "query" : "signs of infection or inflammation",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 108, 110 ]
   }, {
     "query" : "skin rash",
     "datasetIndex" : 3,
@@ -1994,8 +1994,8 @@
   }, {
     "query" : "What are this patient's HB results over time, and are values moving toward or away from the normal range?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 1,
+    "resultIndices" : [ 0 ]
   }, {
     "query" : "What is the current CD4 Count?",
     "datasetIndex" : 4,
@@ -2359,8 +2359,8 @@
   }, {
     "query" : "signs of infection or inflammation",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 2,
+    "resultIndices" : [ 108, 110 ]
   }, {
     "query" : "skin rash",
     "datasetIndex" : 4,

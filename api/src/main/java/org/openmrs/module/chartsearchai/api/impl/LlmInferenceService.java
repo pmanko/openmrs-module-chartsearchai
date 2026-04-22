@@ -1187,6 +1187,54 @@ public class LlmInferenceService implements ChartSearchService {
 		List<ChartEmbedding> pipelineResult = filterPipeline(semanticScores,
 				keywordScores, embeddings, queryTerms, profiledConfig);
 
+		int keywordMatchCount = 0;
+		for (int i = 0; i < validCount; i++) {
+			if (keywordScores[i] > 0) {
+				keywordMatchCount++;
+			}
+		}
+
+		// Query truncation retry: when the pipeline returns empty for
+		// a long query (>3 terms), the extra terms may dilute the
+		// embedding and flood keyword scoring. Retry with just the
+		// first 2 core terms and a fresh embedding. The short query
+		// "HB results" finds records that "What are this patient's
+		// HB results over time...normal range?" misses.
+		if ((pipelineResult == null || pipelineResult.isEmpty())
+				&& queryTerms.length > 3) {
+			String[] coreTerms = java.util.Arrays.copyOf(
+					queryTerms, Math.min(2, queryTerms.length));
+			String coreQuery = String.join(" ", coreTerms);
+			float[] coreVector = provider.embedQuery(
+					queryPrefix + coreQuery);
+
+			double[] coreSemantic = new double[validCount];
+			double[] coreKw = new double[validCount];
+			for (int i = 0; i < validCount; i++) {
+				coreSemantic[i] = cosineSimilarity(
+						coreVector, embeddings[i].getEmbeddingVector());
+				String body = ConceptNameUtil.stripSynonyms(
+						embeddings[i].getTextContent());
+				String kwText = ChartSearchAiUtils.buildPrefixedText(
+						embeddings[i].getResourceType(), body);
+				coreKw[i] = computeKeywordScore(coreTerms, kwText);
+			}
+
+			pipelineResult = filterPipeline(coreSemantic, coreKw,
+					embeddings, coreTerms, profiledConfig);
+			if (pipelineResult != null && !pipelineResult.isEmpty()) {
+				log.warn("Query truncation retry: '{}' -> '{}', "
+						+ "found {} results",
+						String.join(" ", queryTerms), coreQuery,
+						pipelineResult.size());
+				// Update keyword match count for downstream gates
+				keywordMatchCount = 0;
+				for (int i = 0; i < validCount; i++) {
+					if (coreKw[i] > 0) keywordMatchCount++;
+				}
+			}
+		}
+
 		// When type indicators are present, remove straggler records whose
 		// structural prefix doesn't match any type indicator term. Only
 		// fires when >75% of pipeline results already match — this targets
@@ -1228,12 +1276,6 @@ public class LlmInferenceService implements ChartSearchService {
 		// all vitals look equally relevant. Re-ranking by concept
 		// name adds precision by comparing each concept name directly
 		// against the query embedding.
-		int keywordMatchCount = 0;
-		for (int i = 0; i < validCount; i++) {
-			if (keywordScores[i] > 0) {
-				keywordMatchCount++;
-			}
-		}
 		if (pipelineResult != null && !pipelineResult.isEmpty()
 				&& keywordMatchCount == 0 && queryTerms.length > 0) {
 			int beforeRerank = pipelineResult.size();
@@ -1415,6 +1457,35 @@ public class LlmInferenceService implements ChartSearchService {
 			if (se.keywordScore > 0) {
 				keywordMatchCount++;
 			}
+		}
+
+		// Keyword flooding guard: when > 50% of records match keywords,
+		// the matching terms are too generic to distinguish relevant
+		// from irrelevant records (e.g. "normal", "range", "time" in
+		// "What are this patient's HB results over time..."). Zero
+		// out keyword scores and re-sort by semantic score only.
+		if (keywordMatchCount > scored.size() / 2
+				&& queryTermCount > 2) {
+			log.warn("Keyword flooding: {}/{} records match keywords,"
+					+ " zeroing keyword scores for {}",
+					keywordMatchCount, scored.size(),
+					java.util.Arrays.toString(queryTerms));
+			maxBaseScore = 0;
+			for (int i = 0; i < scored.size(); i++) {
+				ScoredEmbedding se = scored.get(i);
+				scored.set(i, new ScoredEmbedding(se.embedding,
+						se.semanticScore, 0, se.semanticScore));
+				if (se.semanticScore > maxBaseScore) {
+					maxBaseScore = se.semanticScore;
+				}
+			}
+			keywordMatchCount = 0;
+			Collections.sort(scored, new Comparator<ScoredEmbedding>() {
+				@Override
+				public int compare(ScoredEmbedding a, ScoredEmbedding b) {
+					return Double.compare(b.score, a.score);
+				}
+			});
 		}
 
 		// Floor gate: if neither the best semantic score nor the best

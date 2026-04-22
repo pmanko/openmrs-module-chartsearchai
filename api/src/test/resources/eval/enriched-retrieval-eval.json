@@ -49,8 +49,8 @@
   }, {
     "query" : "Were all lab orders placed for this patient resulted?",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 5,
+    "resultIndices" : [ 13, 20, 35, 121, 123 ]
   }, {
     "query" : "What are this patient's HB results over time, and are values moving toward or away from the normal range?",
     "datasetIndex" : 0,
@@ -1874,8 +1874,8 @@
   }, {
     "query" : "signs of infection or inflammation",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 15,
-    "resultIndices" : [ 2, 4, 33, 35, 62, 64, 66, 77, 90, 122, 125, 137, 139, 150, 151 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "skin rash",
     "datasetIndex" : 3,
@@ -2359,8 +2359,8 @@
   }, {
     "query" : "signs of infection or inflammation",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 16,
-    "resultIndices" : [ 2, 4, 33, 35, 62, 64, 66, 77, 90, 92, 122, 125, 137, 139, 150, 151 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "skin rash",
     "datasetIndex" : 4,

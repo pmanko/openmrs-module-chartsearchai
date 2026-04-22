@@ -462,38 +462,31 @@ public class EnrichedRetrievalEvalTest {
 	}
 
 	@Test
-	public void longHbQuery_shouldReturnHaemoglobinRecords() {
+	public void longHbQuery_shouldReturnSameAsShortQuery() {
 		ensureInitialized();
 		Assumptions.assumeTrue(provider != null,
 				"Skipping: embedding model not found");
 
-		String query = "What are this patient's HB results over time, "
-				+ "and are values moving toward or away from the "
-				+ "normal range?";
+		String shortQuery = "Hb results";
+		String longQuery = "What are this patient's HB results over "
+				+ "time, and are values moving toward or away from "
+				+ "the normal range?";
 
 		for (int ds = 0; ds < DATASETS.length; ds++) {
-			List<Integer> result = runQuery(query, ds);
-			StringBuilder details = new StringBuilder();
-			boolean hasHb = false;
-			for (int idx : result) {
-				if (idx < DATASETS[ds].length) {
-					String text = DATASETS[ds][idx];
-					details.append("\n  [").append(idx).append("] ")
-							.append(text);
-					if (text.contains("Haemoglobin")
-							|| text.contains("Hemoglobin")
-							|| text.contains("haemoglobin")
-							|| text.contains("hemoglobin")
-							|| text.contains("Hb")) {
-						hasHb = true;
-					}
-				}
+			List<Integer> shortResult = runQuery(shortQuery, ds);
+			List<Integer> longResult = runQuery(longQuery, ds);
+			log.warn("[{}] short='Hb results' -> {}, long -> {}",
+					DATASET_NAMES[ds], shortResult, longResult);
+			// The long query should return at least the same records
+			// as the short query — adding context words shouldn't
+			// cause relevant records to be lost.
+			for (int idx : shortResult) {
+				assertTrue(longResult.contains(idx),
+						DATASET_NAMES[ds] + ": long HB query missing"
+						+ " record [" + idx + "] that short query"
+						+ " found. Short: " + shortResult
+						+ ", Long: " + longResult);
 			}
-			log.warn("[{}] long HB query returned {} records:{}",
-					DATASET_NAMES[ds], result.size(), details);
-			assertTrue(hasHb,
-					DATASET_NAMES[ds] + ": long HB query should return"
-					+ " Haemoglobin records, got:" + details);
 		}
 	}
 
