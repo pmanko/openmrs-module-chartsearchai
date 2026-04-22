@@ -111,10 +111,19 @@ public class LlmInferenceService implements ChartSearchService {
 
 		final ModelNoiseProfile noiseProfile;
 
+		final int keywordMatchCount;
+
 		FindSimilarResult(List<ChartEmbedding> records,
 				ModelNoiseProfile noiseProfile) {
+			this(records, noiseProfile, -1);
+		}
+
+		FindSimilarResult(List<ChartEmbedding> records,
+				ModelNoiseProfile noiseProfile,
+				int keywordMatchCount) {
 			this.records = records;
 			this.noiseProfile = noiseProfile;
+			this.keywordMatchCount = keywordMatchCount;
 		}
 	}
 
@@ -1093,7 +1102,8 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
-		return new FindSimilarResult(pipelineResult, noiseProfile);
+		return new FindSimilarResult(pipelineResult, noiseProfile,
+				keywordMatchCount);
 	}
 
 	/**
@@ -1150,6 +1160,24 @@ public class LlmInferenceService implements ChartSearchService {
 		List<SerializedRecord> filtered = filterAndCap(allRecords, relevantKeys, question);
 		log.warn("findRelevantRecords: {} embeddings -> {} keys -> {} filtered records (keys={})",
 				similar.size(), relevantKeys.size(), filtered.size(), relevantKeys);
+
+		// Post-cap concept-name precision filter: when a recency cap
+		// (e.g. "latest BMI") drastically reduces the result set,
+		// irrelevant concepts from the same time period can survive
+		// because the pre-cap gate used permissive all-dataset stats.
+		// Re-check the small capped set using candidate-only mean-std.
+		// Only fires when: (1) the cap actually reduced the set
+		// significantly (>50%), (2) no keywords matched, and (3) the
+		// final set is small enough to benefit from precision filtering.
+		boolean recencyCapApplied = filtered.size() < similar.size() / 2;
+		if (recencyCapApplied && fsResult.keywordMatchCount == 0
+				&& filtered.size() >= 2 && filtered.size() <= 10) {
+			String normalizedQuery = stripQueryStopwords(question);
+			filtered = applyPostCapConceptFilter(filtered, provider,
+					normalizedQuery,
+					ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX);
+		}
+
 		return groupByConcept(filtered);
 	}
 
@@ -1995,6 +2023,73 @@ public class LlmInferenceService implements ChartSearchService {
 	 * positives caused by shared prefixes (e.g. "Vital signs / Finding —"
 	 * making all vitals score similarly for a "BMI" query).
 	 */
+	/**
+	 * Post-cap concept-name precision filter for recency-capped results.
+	 * When a recency cap (e.g. "latest BMI") drastically reduces the
+	 * set, irrelevant concepts from the same time period can survive.
+	 * Scores each unique concept name against the query and drops
+	 * concepts below candidate mean - std.
+	 */
+	static List<SerializedRecord> applyPostCapConceptFilter(
+			List<SerializedRecord> records,
+			EmbeddingProvider provider, String normalizedQuery,
+			String queryPrefix) {
+		Map<String, List<SerializedRecord>> byConcept =
+				new java.util.LinkedHashMap<String, List<SerializedRecord>>();
+		for (SerializedRecord r : records) {
+			String name = ConceptNameUtil.extractConceptName(r.getText());
+			if (name == null) {
+				name = r.getResourceType() + ":" + r.getResourceId();
+			}
+			byConcept.computeIfAbsent(name,
+					k -> new ArrayList<SerializedRecord>()).add(r);
+		}
+		if (byConcept.size() < 2) {
+			return records;
+		}
+
+		String embeddingQuery = buildEmbeddingQuery(normalizedQuery);
+		float[] queryVector = provider.embedQuery(
+				queryPrefix + embeddingQuery);
+		double[] candScores = new double[byConcept.size()];
+		String[] candNames = new String[byConcept.size()];
+		int ci = 0;
+		for (String name : byConcept.keySet()) {
+			float[] nameVec = provider.embedQuery(name);
+			candScores[ci] = ChartSearchAiUtils.cosineSimilarity(
+					queryVector, nameVec);
+			candNames[ci] = name;
+			ci++;
+		}
+
+		double sum = 0;
+		for (double s : candScores) sum += s;
+		double mean = sum / candScores.length;
+		double sqSum = 0;
+		for (double s : candScores) {
+			sqSum += (s - mean) * (s - mean);
+		}
+		double std = Math.sqrt(sqSum / candScores.length);
+		if (std < 1e-9) {
+			return records;
+		}
+		double threshold = mean - std;
+
+		List<SerializedRecord> result = new ArrayList<>();
+		for (int i = 0; i < candScores.length; i++) {
+			if (candScores[i] >= threshold) {
+				result.addAll(byConcept.get(candNames[i]));
+			}
+		}
+		if (result.size() < records.size() && !result.isEmpty()) {
+			log.warn("Post-cap concept filter: {} -> {} (threshold={})",
+					records.size(), result.size(),
+					String.format("%.4f", threshold));
+			return result;
+		}
+		return records;
+	}
+
 	static List<ChartEmbedding> rerankByConceptName(
 			List<ChartEmbedding> candidates,
 			ChartEmbedding[] allEmbeddings, int allCount,

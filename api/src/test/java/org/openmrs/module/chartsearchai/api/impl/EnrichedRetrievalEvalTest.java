@@ -338,6 +338,29 @@ public class EnrichedRetrievalEvalTest {
 					DATASET_NAMES[ds] + ": BMI query should return Weight records, got: " + result);
 			assertTrue(hasHeight,
 					DATASET_NAMES[ds] + ": BMI query should return Height records, got: " + result);
+
+			// BMI only involves Height and Weight. Other vitals like
+			// blood pressure, pulse, temperature, respiratory rate,
+			// and blood oxygen should not be returned. At minimum,
+			// irrelevant records should be fewer than relevant ones.
+			int relevantCount = 0;
+			List<String> irrelevant = new ArrayList<>();
+			for (int idx : result) {
+				if (idx < DATASETS[ds].length) {
+					String text = DATASETS[ds][idx];
+					if (text.contains("Height") || text.contains("Weight")
+							|| text.contains("BMI")) {
+						relevantCount++;
+					} else {
+						irrelevant.add("[" + idx + "] " + text);
+					}
+				}
+			}
+			assertTrue(irrelevant.size() <= relevantCount,
+					DATASET_NAMES[ds] + ": BMI query returned more irrelevant"
+					+ " records (" + irrelevant.size() + ") than relevant ("
+					+ relevantCount + "):\n  "
+					+ String.join("\n  ", irrelevant));
 		}
 	}
 
