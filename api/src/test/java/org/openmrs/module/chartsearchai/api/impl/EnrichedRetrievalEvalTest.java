@@ -365,6 +365,42 @@ public class EnrichedRetrievalEvalTest {
 	}
 
 	@Test
+	public void latestBmi_shouldNotReturnUnrelatedVitals() {
+		ensureInitialized();
+		Assumptions.assumeTrue(provider != null,
+				"Skipping: embedding model not found");
+
+		// Vitals that are unrelated to BMI (weight/height²) and
+		// should never appear in the result set.
+		String[] unrelatedPatterns = {
+			"blood pressure", "Systolic", "Diastolic",
+			"Pulse", "Temperature", "Respiratory",
+			"Blood Oxygen", "SpO2"
+		};
+
+		for (int ds = 0; ds < DATASETS.length; ds++) {
+			List<Integer> result = runQuery("What is the latest BMI?", ds);
+			List<String> forbidden = new ArrayList<>();
+			for (int idx : result) {
+				if (idx < DATASETS[ds].length) {
+					String text = DATASETS[ds][idx].toLowerCase();
+					for (String pattern : unrelatedPatterns) {
+						if (text.contains(pattern.toLowerCase())) {
+							forbidden.add("[" + idx + "] "
+									+ DATASETS[ds][idx]);
+							break;
+						}
+					}
+				}
+			}
+			assertTrue(forbidden.isEmpty(),
+					DATASET_NAMES[ds] + ": BMI query should not return "
+					+ "unrelated vitals, but got:\n  "
+					+ String.join("\n  ", forbidden));
+		}
+	}
+
+	@Test
 	public void activeConditions_shouldReturnOnlyConditionAndDiagnosisRecords() {
 		ensureInitialized();
 		Assumptions.assumeTrue(provider != null,
