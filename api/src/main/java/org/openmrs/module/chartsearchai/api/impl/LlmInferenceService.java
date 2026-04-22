@@ -327,36 +327,41 @@ public class LlmInferenceService implements ChartSearchService {
 		List<SerializedRecord> filtered = filterAndCap(
 				allRecords, relevantKeys, question);
 
-		if (pipelineSize > 0 && keywordMatchCount == 0
-				&& provider != null) {
-			boolean recencyCapReduced =
-					filtered.size() < pipelineSize / 2;
-			int preRescueSize = filtered.size();
-			if (recencyCapReduced && filtered.size() == 1) {
-				String normalizedQ = stripQueryStopwords(question);
-				String embQ = buildEmbeddingQuery(normalizedQ);
-				float[] qVec = provider.embedQuery(
-						queryPrefix + embQ);
-				filtered = conceptNameRescueRecords(filtered,
-						allRecords, provider, qVec, question);
-			}
-			boolean rescueExpanded =
-					filtered.size() > preRescueSize;
-			if (!rescueExpanded && recencyCapReduced
-					&& filtered.size() >= 3
-					&& filtered.size() <= 10) {
-				String normalizedQ = stripQueryStopwords(question);
-				filtered = applyPostCapConceptFilter(filtered,
-						provider, normalizedQ, queryPrefix);
-			}
+		boolean recencyCapReduced = pipelineSize > 0
+				&& filtered.size() < pipelineSize / 2;
+
+		// Step 1: Single-record concept-name rescue (e.g. Height
+		// for "latest BMI" when only Weight survived the cap).
+		if (recencyCapReduced && keywordMatchCount == 0
+				&& provider != null && filtered.size() == 1) {
+			String normalizedQ = stripQueryStopwords(question);
+			String embQ = buildEmbeddingQuery(normalizedQ);
+			float[] qVec = provider.embedQuery(
+					queryPrefix + embQ);
+			filtered = conceptNameRescueRecords(filtered,
+					allRecords, provider, qVec, question);
 		}
 
-		// Multi-concept rescue: when the query lists multiple concepts
-		// separated by commas (e.g. "blood pressure, weight, and
-		// temperature") and some concepts are missing from the results,
-		// rescue the best keyword-matching record for each missing
-		// concept. Only fires for comma-separated lists — single-
-		// concept queries like "heart rates" are not affected.
+		// Step 2: Post-cap concept-name precision filter — remove
+		// irrelevant concepts from zero-keyword queries (e.g. SpO2
+		// for "BMI"). For keyword-matching queries, the keyword
+		// scoring already provides precision. Also fires for
+		// keyword queries with comma lists to clean up before the
+		// multi-concept rescue adds new concepts.
+		boolean isCommaList = question.contains(",");
+		if (recencyCapReduced && provider != null
+				&& (keywordMatchCount == 0 || isCommaList)
+				&& filtered.size() >= 3
+				&& filtered.size() <= 10) {
+			String normalizedQ = stripQueryStopwords(question);
+			filtered = applyPostCapConceptFilter(filtered,
+					provider, normalizedQ, queryPrefix);
+		}
+
+		// Step 3: Multi-concept rescue for comma-separated queries
+		// (e.g. "blood pressure, weight, and temperature"). Runs
+		// AFTER the precision filter so rescued concepts aren't
+		// contaminated by noise that should have been filtered.
 		if (provider != null && question.contains(",")
 				&& !filtered.isEmpty()) {
 			filtered = multiConceptRescue(filtered, allRecords,
