@@ -299,6 +299,62 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
+	 * Shared post-retrieval pipeline called by both production
+	 * ({@link #filterAndSerialize}) and test ({@link #findRelevantRecords})
+	 * paths. Single source of truth for: filterAndCap, concept-name rescue,
+	 * post-cap precision filter, and groupByConcept.
+	 *
+	 * @param allRecords        all patient records
+	 * @param relevantKeys      keys selected by the retrieval stage
+	 * @param question          the user's natural-language question
+	 * @param pipelineSize      records returned by findSimilar (for detecting
+	 *                          recency-cap reduction); pass -1 to skip
+	 *                          rescue/post-cap filter
+	 * @param keywordMatchCount keyword matches from the pipeline; pass -1 to
+	 *                          skip rescue/post-cap filter
+	 * @param provider          embedding provider (null skips rescue/filter)
+	 * @param queryPrefix       prefix for embedding queries
+	 * @return filtered, rescued, and concept-grouped records
+	 */
+	static List<SerializedRecord> postRetrievalPipeline(
+			List<SerializedRecord> allRecords,
+			Set<String> relevantKeys,
+			String question,
+			int pipelineSize,
+			int keywordMatchCount,
+			EmbeddingProvider provider,
+			String queryPrefix) {
+		List<SerializedRecord> filtered = filterAndCap(
+				allRecords, relevantKeys, question);
+
+		if (pipelineSize > 0 && keywordMatchCount == 0
+				&& provider != null) {
+			boolean recencyCapReduced =
+					filtered.size() < pipelineSize / 2;
+			int preRescueSize = filtered.size();
+			if (recencyCapReduced && filtered.size() == 1) {
+				String normalizedQ = stripQueryStopwords(question);
+				String embQ = buildEmbeddingQuery(normalizedQ);
+				float[] qVec = provider.embedQuery(
+						queryPrefix + embQ);
+				filtered = conceptNameRescueRecords(filtered,
+						allRecords, provider, qVec, question);
+			}
+			boolean rescueExpanded =
+					filtered.size() > preRescueSize;
+			if (!rescueExpanded && recencyCapReduced
+					&& filtered.size() >= 3
+					&& filtered.size() <= 10) {
+				String normalizedQ = stripQueryStopwords(question);
+				filtered = applyPostCapConceptFilter(filtered,
+						provider, normalizedQ, queryPrefix);
+			}
+		}
+
+		return groupByConcept(filtered);
+	}
+
+	/**
 	 * Groups records by concept key, preserving the original order within each group.
 	 * Groups appear in the order their first record is encountered. For example,
 	 * interleaved [BP, Weight, BP, Temp, Weight] becomes [BP, BP, Weight, Weight, Temp].
@@ -676,43 +732,17 @@ public class LlmInferenceService implements ChartSearchService {
 			Set<String> relevantKeys, int pipelineSize,
 			int keywordMatchCount) {
 		List<SerializedRecord> allRecords = recordLoader.loadAll(patient);
-		List<SerializedRecord> filtered = filterAndCap(allRecords, relevantKeys, question);
+
+		List<SerializedRecord> filtered = postRetrievalPipeline(
+				allRecords, relevantKeys, question,
+				pipelineSize, keywordMatchCount,
+				embeddingProvider, getQueryPrefix());
 
 		log.debug("Pre-filtered {} records to {} using {}",
 				allRecords.size(), filtered.size(),
 				isHybridPipeline() ? "Hybrid" :
 						isElasticsearchPipeline() ? "Elasticsearch" :
 								isLucenePipeline() ? "Lucene" : "embeddings");
-
-		// Post-cap concept-name rescue and precision filter
-		// (same logic as the static findRelevantRecords path).
-		if (pipelineSize > 0 && keywordMatchCount == 0
-				&& embeddingProvider != null) {
-			boolean recencyCapReduced =
-					filtered.size() < pipelineSize / 2;
-			int preRescueSize = filtered.size();
-			if (recencyCapReduced && filtered.size() == 1) {
-				String normalizedQ = stripQueryStopwords(question);
-				String embQ = buildEmbeddingQuery(normalizedQ);
-				float[] qVec = embeddingProvider.embedQuery(
-						getQueryPrefix() + embQ);
-				filtered = conceptNameRescueRecords(filtered,
-						allRecords, embeddingProvider, qVec,
-						question);
-			}
-			boolean rescueExpanded =
-					filtered.size() > preRescueSize;
-			if (!rescueExpanded && recencyCapReduced
-					&& filtered.size() >= 3
-					&& filtered.size() <= 10) {
-				String normalizedQ = stripQueryStopwords(question);
-				filtered = applyPostCapConceptFilter(filtered,
-						embeddingProvider, normalizedQ,
-						getQueryPrefix());
-			}
-		}
-
-		filtered = groupByConcept(filtered);
 
 		return chartSerializer.serialize(patient, filtered);
 	}
@@ -1199,50 +1229,14 @@ public class LlmInferenceService implements ChartSearchService {
 			relevantKeys.add(ChartSearchAiUtils.resourceKey(
 					ce.getResourceType(), ce.getResourceId()));
 		}
-		List<SerializedRecord> filtered = filterAndCap(allRecords, relevantKeys, question);
-		log.warn("findRelevantRecords: {} embeddings -> {} keys -> {} filtered records (keys={})",
-				similar.size(), relevantKeys.size(), filtered.size(), relevantKeys);
 
-		// Concept-name rescue: when the recency cap reduces the set
-		// to 1-2 records for a zero-keyword query, related concepts
-		// may have been lost (e.g. "Height" for "BMI" when only
-		// "Weight" survived). Scan all records' concept names,
-		// score them against the query, and rescue missing concepts
-		// that score highly.
-		boolean recencyCapReduced = filtered.size() < similar.size() / 2;
-		int preRescueSize = filtered.size();
-		if (recencyCapReduced && fsResult.keywordMatchCount == 0
-				&& filtered.size() == 1) {
-			String normalizedQ = stripQueryStopwords(question);
-			String embQ = buildEmbeddingQuery(normalizedQ);
-			float[] qVec = provider.embedQuery(
-					ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX
-					+ embQ);
-			filtered = conceptNameRescueRecords(filtered, allRecords,
-					provider, qVec, question);
-		}
-		boolean rescueExpanded = filtered.size() > preRescueSize;
+		log.warn("findRelevantRecords: {} embeddings -> {} keys",
+				similar.size(), relevantKeys.size());
 
-		// Post-cap concept-name precision filter: when a recency cap
-		// (e.g. "latest BMI") drastically reduces the result set,
-		// irrelevant concepts from the same time period can survive
-		// because the pre-cap gate used permissive all-dataset stats.
-		// Re-check the small capped set using candidate-only mean-std.
-		// Only fires when: (1) the cap actually reduced the set
-		// significantly (>50%), (2) no keywords matched, (3) the
-		// final set is small enough, and (4) rescue didn't just
-		// expand the set (rescue already did concept-name scoring).
-		boolean recencyCapApplied = filtered.size() < similar.size() / 2;
-		if (!rescueExpanded && recencyCapApplied
-				&& fsResult.keywordMatchCount == 0
-				&& filtered.size() >= 3 && filtered.size() <= 10) {
-			String normalizedQuery = stripQueryStopwords(question);
-			filtered = applyPostCapConceptFilter(filtered, provider,
-					normalizedQuery,
-					ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX);
-		}
-
-		return groupByConcept(filtered);
+		return postRetrievalPipeline(allRecords, relevantKeys, question,
+				similar.size(), fsResult.keywordMatchCount,
+				provider,
+				ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX);
 	}
 
 	/**
