@@ -415,22 +415,24 @@ public class EnrichedRetrievalEvalTest {
 			boolean hasBP = false;
 			boolean hasWeight = false;
 			boolean hasTemperature = false;
+			List<String> other = new ArrayList<>();
 			for (int idx : result) {
 				if (idx < DATASETS[ds].length) {
 					String text = DATASETS[ds][idx];
 					details.append("\n  [").append(idx).append("] ")
 							.append(text);
-					if (text.toLowerCase().contains("blood pressure")
+					String lower = text.toLowerCase();
+					if (lower.contains("blood pressure")
 							|| text.contains("Systolic")
 							|| text.contains("Diastolic")) {
 						hasBP = true;
-					}
-					if (text.contains("Weight")) {
+					} else if (text.contains("Weight")) {
 						hasWeight = true;
-					}
-					if (text.contains("Temperature")
-							|| text.contains("temperature")) {
+					} else if (text.contains("Temperature")
+							|| lower.contains("temperature")) {
 						hasTemperature = true;
+					} else {
+						other.add("[" + idx + "] " + text);
 					}
 				}
 			}
@@ -445,6 +447,10 @@ public class EnrichedRetrievalEvalTest {
 			assertTrue(hasTemperature,
 					DATASET_NAMES[ds] + ": should return Temperature"
 					+ " records, got:" + details);
+			assertTrue(other.isEmpty(),
+					DATASET_NAMES[ds] + ": should return ONLY BP, Weight"
+					+ ", and Temperature, but also got:\n  "
+					+ String.join("\n  ", other));
 		}
 	}
 
