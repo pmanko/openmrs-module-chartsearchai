@@ -407,14 +407,14 @@ public class EnrichedRetrievalEvalTest {
 				"Skipping: embedding model not found");
 
 		String query = "How have this patient's blood pressure, weight, "
-				+ "and temperature trended across their last 2 visits?";
+				+ "and temperature trended across their last 3 visits?";
 
 		for (int ds = 0; ds < DATASETS.length; ds++) {
 			List<Integer> result = runQuery(query, ds);
 			StringBuilder details = new StringBuilder();
-			boolean hasBP = false;
-			boolean hasWeight = false;
-			boolean hasTemperature = false;
+			int bpCount = 0;
+			int weightCount = 0;
+			int temperatureCount = 0;
 			List<String> other = new ArrayList<>();
 			for (int idx : result) {
 				if (idx < DATASETS[ds].length) {
@@ -425,28 +425,35 @@ public class EnrichedRetrievalEvalTest {
 					if (lower.contains("blood pressure")
 							|| text.contains("Systolic")
 							|| text.contains("Diastolic")) {
-						hasBP = true;
+						bpCount++;
 					} else if (text.contains("Weight")) {
-						hasWeight = true;
+						weightCount++;
 					} else if (text.contains("Temperature")
 							|| lower.contains("temperature")) {
-						hasTemperature = true;
+						temperatureCount++;
 					} else {
 						other.add("[" + idx + "] " + text);
 					}
 				}
 			}
-			log.warn("[{}] multi-concept vitals returned {} records:{}",
-					DATASET_NAMES[ds], result.size(), details);
-			assertTrue(hasBP,
-					DATASET_NAMES[ds] + ": should return blood pressure"
-					+ " records, got:" + details);
-			assertTrue(hasWeight,
-					DATASET_NAMES[ds] + ": should return Weight records"
-					+ ", got:" + details);
-			assertTrue(hasTemperature,
-					DATASET_NAMES[ds] + ": should return Temperature"
-					+ " records, got:" + details);
+			log.warn("[{}] multi-concept vitals returned {} records "
+					+ "(BP={}, Weight={}, Temp={}):{}", DATASET_NAMES[ds],
+					result.size(), bpCount, weightCount,
+					temperatureCount, details);
+			// "last 3 visits" should return at least 3 records per
+			// concept (systolic+diastolic count separately for BP).
+			assertTrue(bpCount >= 3,
+					DATASET_NAMES[ds] + ": should return at least 3 BP"
+					+ " records for 3 visits, got " + bpCount
+					+ ":" + details);
+			assertTrue(weightCount >= 3,
+					DATASET_NAMES[ds] + ": should return at least 3"
+					+ " Weight records for 3 visits, got "
+					+ weightCount + ":" + details);
+			assertTrue(temperatureCount >= 3,
+					DATASET_NAMES[ds] + ": should return at least 3"
+					+ " Temperature records for 3 visits, got "
+					+ temperatureCount + ":" + details);
 			assertTrue(other.isEmpty(),
 					DATASET_NAMES[ds] + ": should return ONLY BP, Weight"
 					+ ", and Temperature, but also got:\n  "
