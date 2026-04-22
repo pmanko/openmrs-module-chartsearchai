@@ -462,6 +462,34 @@ public class EnrichedRetrievalEvalTest {
 	}
 
 	@Test
+	public void allergies_shouldReturnAllergyRecords() {
+		ensureInitialized();
+		Assumptions.assumeTrue(provider != null,
+				"Skipping: embedding model not found");
+
+		// FULL dataset has a Beef allergy at index 4.
+		// Other datasets may have allergy records too.
+		List<Integer> result = runQuery("any allergies?", 0);
+		StringBuilder details = new StringBuilder();
+		boolean hasAllergy = false;
+		for (int idx : result) {
+			if (idx < DATASETS[0].length) {
+				String text = DATASETS[0][idx];
+				details.append("\n  [").append(idx).append("] ")
+						.append(text);
+				if (text.startsWith("Patient allergy:")) {
+					hasAllergy = true;
+				}
+			}
+		}
+		log.warn("[FULL] 'any allergies?' returned {} records:{}",
+				result.size(), details);
+		assertTrue(hasAllergy,
+				"FULL: 'any allergies?' should return allergy records"
+				+ ", got:" + details);
+	}
+
+	@Test
 	public void longHbQuery_shouldReturnSameAsShortQuery() {
 		ensureInitialized();
 		Assumptions.assumeTrue(provider != null,
