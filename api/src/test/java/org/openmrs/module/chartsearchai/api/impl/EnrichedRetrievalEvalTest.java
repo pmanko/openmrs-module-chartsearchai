@@ -591,6 +591,39 @@ public class EnrichedRetrievalEvalTest {
 	}
 
 	@Test
+	public void allergies_shouldReturnEmptyForPatientWithNoAllergies() {
+		ensureInitialized();
+		Assumptions.assumeTrue(provider != null,
+				"Skipping: embedding model not found");
+
+		// THIRD dataset (index 2) has no allergy records.
+		// The pipeline should return empty, not 30+ irrelevant
+		// obs/conditions/diagnoses.
+		String[] queries = {
+			"any allergies?",
+			"does the patient have any allergies",
+			"Does this patient have any recorded allergies that "
+				+ "conflict with their current drug orders?",
+		};
+		for (String query : queries) {
+			List<Integer> result = runQuery(query, 2);
+			StringBuilder details = new StringBuilder();
+			for (int idx : result) {
+				if (idx < DATASETS[2].length) {
+					details.append("\n  [").append(idx).append("] ")
+							.append(DATASETS[2][idx]);
+				}
+			}
+			log.warn("[THIRD] '{}' returned {} records:{}",
+					query, result.size(), details);
+			assertTrue(result.isEmpty(),
+					"THIRD dataset has no allergy records — '"
+					+ query + "' should return empty, got "
+					+ result.size() + " results:" + details);
+		}
+	}
+
+	@Test
 	public void longHbQuery_shouldReturnSameAsShortQuery() {
 		ensureInitialized();
 		Assumptions.assumeTrue(provider != null,

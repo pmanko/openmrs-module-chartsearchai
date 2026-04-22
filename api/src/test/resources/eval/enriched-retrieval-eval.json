@@ -1039,8 +1039,8 @@
   }, {
     "query" : "What is the patient allergic to?",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 156, 157 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "When were each of this patient's active conditions first recorded, and have any resolved or escalated?",
     "datasetIndex" : 2,
@@ -1049,8 +1049,8 @@
   }, {
     "query" : "allergies",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 156, 157 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "allergies and current medications",
     "datasetIndex" : 2,
@@ -1074,8 +1074,8 @@
   }, {
     "query" : "any allergies?",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 156, 157 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "any blood problems?",
     "datasetIndex" : 2,
@@ -1229,13 +1229,13 @@
   }, {
     "query" : "does the patient have any allergies",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 156, 157 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "does the patient have any allergies?",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 156, 157 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "does the patient have cancer?",
     "datasetIndex" : 2,
@@ -1334,8 +1334,8 @@
   }, {
     "query" : "list all allergies",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 156, 157 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "liver problems",
     "datasetIndex" : 2,
@@ -1524,8 +1524,8 @@
   }, {
     "query" : "What is the patient allergic to?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 1,
-    "resultIndices" : [ 64 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "When were each of this patient's active conditions first recorded, and have any resolved or escalated?",
     "datasetIndex" : 3,
@@ -2009,8 +2009,8 @@
   }, {
     "query" : "What is the patient allergic to?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 1,
-    "resultIndices" : [ 64 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "When were each of this patient's active conditions first recorded, and have any resolved or escalated?",
     "datasetIndex" : 4,

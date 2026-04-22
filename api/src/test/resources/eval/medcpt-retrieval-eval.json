@@ -519,8 +519,8 @@
   }, {
     "query" : "I want to review the patient's complete medication history including dosages",
     "datasetIndex" : 1,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 55, 57 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "TB",
     "datasetIndex" : 1,
@@ -970,7 +970,7 @@
     "query" : "what tests have been ordered for this patient",
     "datasetIndex" : 1,
     "expectedMinRecords" : 1,
-    "resultIndices" : [ 57 ]
+    "resultIndices" : [ 14 ]
   }, {
     "query" : "Any family history of cancer?",
     "datasetIndex" : 2,
@@ -1039,8 +1039,8 @@
   }, {
     "query" : "What is the patient allergic to?",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 156, 157 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "When were each of this patient's active conditions first recorded, and have any resolved or escalated?",
     "datasetIndex" : 2,
@@ -1049,8 +1049,8 @@
   }, {
     "query" : "allergies",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 156, 157 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "allergies and current medications",
     "datasetIndex" : 2,
@@ -1074,8 +1074,8 @@
   }, {
     "query" : "any allergies?",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 156, 157 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "any blood problems?",
     "datasetIndex" : 2,
@@ -1229,13 +1229,13 @@
   }, {
     "query" : "does the patient have any allergies",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 156, 157 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "does the patient have any allergies?",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 156, 157 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "does the patient have cancer?",
     "datasetIndex" : 2,
@@ -1334,8 +1334,8 @@
   }, {
     "query" : "list all allergies",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 156, 157 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "liver problems",
     "datasetIndex" : 2,
@@ -1489,8 +1489,8 @@
   }, {
     "query" : "I want to review the patient's complete medication history including dosages",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 47, 48, 51, 52, 121, 124 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "TB",
     "datasetIndex" : 3,
@@ -1539,8 +1539,8 @@
   }, {
     "query" : "allergies and current medications",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 1,
-    "resultIndices" : [ 64 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "anaemia",
     "datasetIndex" : 3,
@@ -1614,8 +1614,8 @@
   }, {
     "query" : "any prescriptions?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 4,
-    "resultIndices" : [ 47, 51, 121, 124 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "any sexually transmitted disease?",
     "datasetIndex" : 3,
@@ -1794,8 +1794,8 @@
   }, {
     "query" : "is the patient on any medications?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 47, 121 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "is the patient tired?",
     "datasetIndex" : 3,
@@ -1934,8 +1934,8 @@
   }, {
     "query" : "what medications is the patient on?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 47, 121 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "what tests have been ordered for this patient",
     "datasetIndex" : 3,
@@ -1974,8 +1974,8 @@
   }, {
     "query" : "I want to review the patient's complete medication history including dosages",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 6,
-    "resultIndices" : [ 47, 48, 51, 52, 121, 124 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "TB",
     "datasetIndex" : 4,
@@ -2024,8 +2024,8 @@
   }, {
     "query" : "allergies and current medications",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 1,
-    "resultIndices" : [ 64 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "anaemia",
     "datasetIndex" : 4,
@@ -2099,8 +2099,8 @@
   }, {
     "query" : "any prescriptions?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 4,
-    "resultIndices" : [ 47, 51, 121, 124 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "any sexually transmitted disease?",
     "datasetIndex" : 4,
@@ -2279,8 +2279,8 @@
   }, {
     "query" : "is the patient on any medications?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 47, 121 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "is the patient tired?",
     "datasetIndex" : 4,
@@ -2419,8 +2419,8 @@
   }, {
     "query" : "what medications is the patient on?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 47, 121 ]
+    "expectedMinRecords" : 0,
+    "resultIndices" : [ ]
   }, {
     "query" : "what tests have been ordered for this patient",
     "datasetIndex" : 4,

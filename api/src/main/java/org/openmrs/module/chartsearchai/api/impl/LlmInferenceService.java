@@ -1241,16 +1241,17 @@ public class LlmInferenceService implements ChartSearchService {
 		// the case where a few wrong-type records leak through on semantic
 		// similarity alone (e.g. "CRITICALLY_HIGH" obs for "active
 		// conditions") without over-filtering mixed-type result sets.
+		int typeMatchCount = -1;
 		if (!typeIndicatorTerms.isEmpty()
 				&& pipelineResult != null && !pipelineResult.isEmpty()) {
-			int matchCount = 0;
+			typeMatchCount = 0;
 			for (ChartEmbedding ce : pipelineResult) {
 				if (matchesTypeIndicator(ce, typeIndicatorTerms)) {
-					matchCount++;
+					typeMatchCount++;
 				}
 			}
-			if (matchCount > 0
-					&& matchCount > pipelineResult.size() * 2 / 3) {
+			if (typeMatchCount > 0
+					&& typeMatchCount > pipelineResult.size() * 2 / 3) {
 				int beforeFilter = pipelineResult.size();
 				List<ChartEmbedding> filtered = new ArrayList<>();
 				for (ChartEmbedding ce : pipelineResult) {
@@ -1276,13 +1277,15 @@ public class LlmInferenceService implements ChartSearchService {
 		// all vitals look equally relevant. Re-ranking by concept
 		// name adds precision by comparing each concept name directly
 		// against the query embedding.
+		boolean noTypeMatch = !typeIndicatorTerms.isEmpty()
+				&& typeMatchCount == 0;
 		if (pipelineResult != null && !pipelineResult.isEmpty()
 				&& keywordMatchCount == 0 && queryTerms.length > 0) {
 			List<ChartEmbedding> preGateCandidates = pipelineResult;
 			int beforeRerank = pipelineResult.size();
 			pipelineResult = rerankByConceptName(pipelineResult,
 					embeddings, validCount, queryVector, provider,
-					noiseProfile, profiledConfig);
+					noiseProfile, profiledConfig, noTypeMatch);
 			if (pipelineResult.size() != beforeRerank) {
 				StringBuilder kept = new StringBuilder();
 				for (ChartEmbedding ce : pipelineResult) {
@@ -1315,15 +1318,68 @@ public class LlmInferenceService implements ChartSearchService {
 							rescued.size(), typeIndicatorTerms);
 				}
 			}
+
 		}
 
-		// Type-indicator full-scan rescue: when the pipeline returns
-		// empty but type indicators exist, the indicated record type
-		// may have scored below the pipeline's gap threshold (e.g.
-		// "Patient allergy: Beef" scores lower than conditions for
-		// "allergies" because MedCPT embeds "Beef" far from
-		// "allergies"). Scan ALL embeddings for records matching the
-		// indicated type.
+		// No-type-match check: when type indicators are present but
+		// ALL pipeline results are wrong type AND no records of the
+		// indicated type exist in the dataset, the patient has no
+		// records of the queried type. Return empty ONLY when the
+		// pipeline results' body text also doesn't mention any type
+		// indicator term — this distinguishes pure semantic overlap
+		// (Asthma ↔ allergies: body says "Condition: Asthma", no
+		// mention of "allergy") from cross-type relevance (Fetishism
+		// obs with "Medication adjusted": body mentions "medication",
+		// so it IS about medications despite the wrong prefix).
+		if (noTypeMatch
+				&& pipelineResult != null
+				&& !pipelineResult.isEmpty()) {
+			// Check if any result's body text mentions a type
+			// indicator term — if so, the records are cross-type
+			// relevant and should be kept.
+			boolean bodyMentionsType = false;
+			for (ChartEmbedding ce : pipelineResult) {
+				String body = (ce.getTextContent() != null
+						? ce.getTextContent() : "").toLowerCase();
+				String[] bodyWords = body.split("\\s+");
+				for (String term : typeIndicatorTerms) {
+					if (termMatchesText(term, body, bodyWords)) {
+						bodyMentionsType = true;
+						break;
+					}
+				}
+				if (bodyMentionsType) break;
+			}
+			if (!bodyMentionsType) {
+				List<ChartEmbedding> typeMatching =
+						new ArrayList<>();
+				for (int i = 0; i < validCount; i++) {
+					if (matchesTypeIndicator(embeddings[i],
+							typeIndicatorTerms)) {
+						typeMatching.add(embeddings[i]);
+					}
+				}
+				if (typeMatching.isEmpty()) {
+					log.warn("No-type-match empty: {} wrong-type "
+							+ "results, 0 type-matching in "
+							+ "dataset — returning empty for {}",
+							pipelineResult.size(),
+							typeIndicatorTerms);
+					pipelineResult = Collections.emptyList();
+				} else if (typeMatching.size()
+						<= ChartSearchAiConstants
+								.ADAPTIVE_MIN_RECORDS) {
+					log.warn("No-type-match replacement: "
+							+ "replacing {} wrong-type with "
+							+ "{} type-matching records for {}",
+							pipelineResult.size(),
+							typeMatching.size(),
+							typeIndicatorTerms);
+					pipelineResult = typeMatching;
+				}
+			}
+		}
+
 		// Type-indicator full-scan rescue: when the pipeline returns
 		// empty but type indicators exist, scan ALL embeddings for
 		// records matching the indicated type. Only rescue when the
@@ -2662,6 +2718,23 @@ public class LlmInferenceService implements ChartSearchService {
 			float[] queryVector, EmbeddingProvider provider,
 			ModelNoiseProfile noiseProfile,
 			PipelineConfig config) {
+		return rerankByConceptName(candidates, allEmbeddings, allCount,
+				queryVector, provider, noiseProfile, config, false);
+	}
+
+	/**
+	 * @param forceGate when true, skip the small-result bypass so the
+	 *        z-score outlier gate always runs. Used when type indicators
+	 *        are present but zero pipeline results match the indicated
+	 *        type — the z-score gate uses ALL concept names (not just
+	 *        candidates) so it is statistically valid even for small sets.
+	 */
+	static List<ChartEmbedding> rerankByConceptName(
+			List<ChartEmbedding> candidates,
+			ChartEmbedding[] allEmbeddings, int allCount,
+			float[] queryVector, EmbeddingProvider provider,
+			ModelNoiseProfile noiseProfile,
+			PipelineConfig config, boolean forceGate) {
 		// Group candidates by concept name
 		Map<String, List<ChartEmbedding>> byConcept =
 				new java.util.LinkedHashMap<String, List<ChartEmbedding>>();
@@ -2704,11 +2777,15 @@ public class LlmInferenceService implements ChartSearchService {
 		// single-encoder models (L6-v2, minCandidates=10) need
 		// larger sets AND at least 3 candidate concepts because
 		// their z-scores for vocabulary-mismatch queries are
-		// unreliable.
-		if (candidates.size()
-				< config.conceptNameGateMinCandidates
+		// unreliable. Bypassed when forceGate is true (e.g.
+		// type indicators present but zero results match the
+		// indicated type — the z-score gate uses the full
+		// concept-name distribution so it remains valid).
+		if (!forceGate
+				&& (candidates.size()
+						< config.conceptNameGateMinCandidates
 				|| byConcept.size()
-				< config.conceptNameGateMinCandidates) {
+						< config.conceptNameGateMinCandidates)) {
 			return candidates;
 		}
 
