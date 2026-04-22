@@ -2184,7 +2184,7 @@ public class LlmInferenceService implements ChartSearchService {
 					}
 				}
 			}
-			if (conceptMatchCount >= 3 && bestRecord != null) {
+			if (conceptMatchCount >= 1 && bestRecord != null) {
 				String cn = ConceptNameUtil.extractConceptName(
 						bestRecord.getText());
 				rescuedConcepts.add(cn);
