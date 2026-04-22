@@ -24,6 +24,11 @@ import org.springframework.stereotype.Component;
  * <p>Example with substitution: {@code "Dispensed: Metformin 500mg. Status: Completed.
  * Status reason: Out of stock. Substituted: Generic equivalent.
  * Substitution reason: Cost. Handed over: 2024-06-15"}</p>
+ *
+ * <p><b>Date handling:</b> The handed-over date is included as
+ * {@code "Handed over: <date>"} because it is clinically significant —
+ * it records when the patient actually received the medication. It also
+ * serves as the record timestamp in {@link PatientRecordLoader}.
  */
 @Component
 public class MedicationDispenseTextSerializer implements ClinicalTextSerializer<MedicationDispense> {

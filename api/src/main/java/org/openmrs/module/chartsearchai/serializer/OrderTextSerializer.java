@@ -30,6 +30,11 @@ import org.springframework.stereotype.Component;
  *
  * <p>Example output for a service/test/referral order: {@code "Order: X-Ray Chest. Laterality:
  * LEFT. Clinical history: Persistent cough for 3 weeks. Action: NEW. Urgency: STAT"}</p>
+ *
+ * <p><b>Date handling:</b> The activation date is excluded (it serves as the record
+ * timestamp in {@link PatientRecordLoader}). The stop date is included as
+ * {@code "Stopped: <date>"} because it is clinically significant — it indicates
+ * when the order was discontinued.
  */
 @Component
 public class OrderTextSerializer implements ClinicalTextSerializer<Order> {

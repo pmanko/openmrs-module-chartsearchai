@@ -19,6 +19,11 @@ import org.springframework.stereotype.Component;
  *
  * <p>Example output: {@code "Condition: Type 2 Diabetes Mellitus. Status: ACTIVE. Verification:
  * CONFIRMED"}</p>
+ *
+ * <p><b>Date handling:</b> The onset date is excluded (it serves as the record
+ * timestamp in {@link PatientRecordLoader}). The end/resolution date is included
+ * as {@code "Resolved: <date>"} because it is clinically significant — it tells
+ * the LLM whether a condition is still active.
  */
 @Component
 public class ConditionTextSerializer implements ClinicalTextSerializer<Condition> {

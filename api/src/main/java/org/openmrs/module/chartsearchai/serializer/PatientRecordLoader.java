@@ -37,6 +37,13 @@ import org.springframework.stereotype.Component;
  * Loads and serializes all clinical records for a patient. Provides a single point for
  * record iteration logic shared by {@code PatientChartSerializer} and
  * {@code EmbeddingIndexer}.
+ *
+ * <p>Each record's {@code date} field is the <b>record timestamp</b> — the
+ * most clinically relevant date for sorting and citation purposes (e.g.
+ * obs datetime for observations, onset date for conditions, activation date
+ * for orders). This date is <em>not</em> included in the serialized text;
+ * it is added later by {@link PatientChartSerializer} as a citation label.
+ * See {@link ClinicalTextSerializer} for the full date handling policy.
  */
 @Component
 public class PatientRecordLoader {
@@ -82,6 +89,7 @@ public class PatientRecordLoader {
 			}
 			String text = obsSerializer.toText(obs);
 			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_OBS, obs.getObsId(), seenKeys)) {
+				// Record timestamp: when the observation was recorded
 				Date date = obs.getObsDatetime() != null ? obs.getObsDatetime() : obs.getDateCreated();
 				// Category hints from the Obs concept (e.g. Temperature
 				// → "Vital signs" set). If the Obs concept has no set
@@ -103,6 +111,9 @@ public class PatientRecordLoader {
 		for (Condition condition : Context.getConditionService().getAllConditions(patient)) {
 			String text = conditionSerializer.toText(condition);
 			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_CONDITION, condition.getConditionId(), seenKeys)) {
+				// Record timestamp: onset date (not in serialized text — see
+				// ConditionTextSerializer). End date is clinically significant
+				// and IS included in the text as "Resolved: <date>".
 				Date date = condition.getOnsetDate() != null ? condition.getOnsetDate() : condition.getDateCreated();
 				List<String> hints = ChartSearchAiUtils.extractCategoryHints(
 						condition.getCondition() != null ? condition.getCondition().getCoded() : null);
@@ -111,7 +122,7 @@ public class PatientRecordLoader {
 			}
 		}
 
-		// Allergies
+		// Allergies (no clinically significant dates — only record timestamp)
 		for (Allergy allergy : Context.getPatientService().getAllergies(patient)) {
 			String text = allergySerializer.toText(allergy);
 			if (addIfValid(text, ChartSearchAiConstants.RESOURCE_TYPE_ALLERGY, allergy.getAllergyId(), seenKeys)) {
@@ -136,7 +147,9 @@ public class PatientRecordLoader {
 			}
 		}
 
-		// Orders (skip voided — getAllOrdersByPatient includes voided orders)
+		// Orders (skip voided — getAllOrdersByPatient includes voided orders).
+		// Record timestamp: activation date. Stop date is clinically
+		// significant and IS included in the text as "Stopped: <date>".
 		for (Order order : Context.getOrderService().getAllOrdersByPatient(patient)) {
 			if (Boolean.TRUE.equals(order.getVoided())) {
 				continue;
@@ -149,7 +162,9 @@ public class PatientRecordLoader {
 			}
 		}
 
-		// Program enrollments
+		// Program enrollments. Record timestamp: enrollment date.
+		// Both enrollment and completion dates are clinically significant
+		// and ARE included in the text.
 		for (PatientProgram pp : Context.getProgramWorkflowService()
 				.getPatientPrograms(patient, null, null, null, null, null, false)) {
 			String text = programSerializer.toText(pp);
@@ -162,7 +177,9 @@ public class PatientRecordLoader {
 			}
 		}
 
-		// Medication dispenses
+		// Medication dispenses. Record timestamp: date handed over.
+		// The handed-over date is also clinically significant and IS
+		// included in the text.
 		MedicationDispenseCriteria dispenseCriteria = new MedicationDispenseCriteria();
 		dispenseCriteria.setPatient(patient);
 		for (MedicationDispense dispense : Context.getMedicationDispenseService()

@@ -20,6 +20,11 @@ import org.springframework.stereotype.Component;
  *
  * <p>Example output: {@code "Systolic Blood Pressure: 120 mmHg (ABNORMAL).
  * Note: Taken after exercise"}</p>
+ *
+ * <p><b>Date handling:</b> The obs datetime is excluded (it serves as the record
+ * timestamp in {@link PatientRecordLoader}). Date-typed obs values
+ * ({@code valueDatetime}) are included because they are clinical data, not
+ * metadata — e.g. {@code "Date of Symptom Onset: 2024-02-10"}.
  */
 @Component
 public class ObsTextSerializer implements ClinicalTextSerializer<Obs> {

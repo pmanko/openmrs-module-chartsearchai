@@ -26,6 +26,13 @@ import org.springframework.stereotype.Component;
  * Each record is prefixed with a sequential number (e.g. [1]) to minimize
  * token usage. The mapping from number back to resource type and ID is returned
  * alongside the text.
+ *
+ * <p>This class adds record timestamps as parenthetical citation labels
+ * (e.g. {@code "(2024-01-15)"}) before each record's text. These timestamps
+ * are <em>not</em> part of the embedding text produced by
+ * {@link ClinicalTextSerializer} — they are metadata for the LLM to reason
+ * about chronology. See {@link ClinicalTextSerializer} for the full date
+ * handling policy.
  */
 @Component
 public class PatientChartSerializer {

@@ -20,6 +20,11 @@ import org.springframework.stereotype.Component;
  *
  * <p>Example output: {@code "Program: HIV Treatment. Enrolled: 2024-01-15. Status: Active.
  * Current state: On ART"}</p>
+ *
+ * <p><b>Date handling:</b> Both the enrollment date and completion date are
+ * included in the text because they are clinically significant — they define
+ * the program timeline. The enrollment date also serves as the record
+ * timestamp in {@link PatientRecordLoader}.
  */
 @Component
 public class PatientProgramTextSerializer implements ClinicalTextSerializer<PatientProgram> {
