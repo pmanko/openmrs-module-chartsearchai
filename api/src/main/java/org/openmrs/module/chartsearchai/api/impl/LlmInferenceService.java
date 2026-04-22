@@ -366,6 +366,20 @@ public class LlmInferenceService implements ChartSearchService {
 					provider, question, queryPrefix);
 		}
 
+		// Step 4: Weak-match cleanup for multi-concept queries.
+		// When a record's concept name matches fewer query terms
+		// than another record matching the same term, it's a weak
+		// match (e.g. "Blood Oxygen Saturation" matches only
+		// "blood", while "Systolic Blood Pressure" matches both
+		// "blood" and "pressure"). Drop weak matches.
+		if (question.contains(",") && !filtered.isEmpty()) {
+			String normalizedQ = stripQueryStopwords(question);
+			String[] qTerms = extractQueryTerms(normalizedQ);
+			if (qTerms.length > 1) {
+				filtered = dropWeakMatches(filtered, qTerms);
+			}
+		}
+
 		return groupByConcept(filtered);
 	}
 
@@ -2127,6 +2141,90 @@ public class LlmInferenceService implements ChartSearchService {
 	 * record for each missing concept by checking which query terms
 	 * appear in concept names of allRecords but not in the results.
 	 */
+	/**
+	 * Drops records whose concept name is a weak match for the query.
+	 * A weak match is one where the concept name matches fewer query
+	 * terms than another record's concept name for the same term.
+	 * E.g. "Blood Oxygen Saturation" matches only "blood" (1 term),
+	 * while "Systolic Blood Pressure" matches "blood" + "pressure"
+	 * (2 terms). SpO2 is weaker and gets dropped.
+	 */
+	static List<SerializedRecord> dropWeakMatches(
+			List<SerializedRecord> records, String[] queryTerms) {
+		// Score each unique concept name by how many query terms it matches
+		Map<String, Integer> conceptTermCount = new HashMap<>();
+		for (SerializedRecord r : records) {
+			String cn = ConceptNameUtil.extractConceptName(r.getText());
+			if (cn == null) continue;
+			if (conceptTermCount.containsKey(cn)) continue;
+			String lowerCn = cn.toLowerCase();
+			String[] cnWords = lowerCn.split("\\s+");
+			int count = 0;
+			for (String term : queryTerms) {
+				if (termMatchesText(term, lowerCn, cnWords)) {
+					count++;
+				}
+			}
+			conceptTermCount.put(cn, count);
+		}
+
+		// For each query term, find the max term count among concepts
+		// that match it
+		Map<String, Integer> termMaxCount = new HashMap<>();
+		for (Map.Entry<String, Integer> entry
+				: conceptTermCount.entrySet()) {
+			String lowerCn = entry.getKey().toLowerCase();
+			String[] cnWords = lowerCn.split("\\s+");
+			for (String term : queryTerms) {
+				if (termMatchesText(term, lowerCn, cnWords)) {
+					Integer prev = termMaxCount.get(term);
+					if (prev == null || entry.getValue() > prev) {
+						termMaxCount.put(term, entry.getValue());
+					}
+				}
+			}
+		}
+
+		// Drop records whose concept matches a term but with fewer
+		// total term matches than the best record for that term
+		List<SerializedRecord> result = new ArrayList<>();
+		for (SerializedRecord r : records) {
+			String cn = ConceptNameUtil.extractConceptName(r.getText());
+			if (cn == null) {
+				result.add(r);
+				continue;
+			}
+			Integer myCount = conceptTermCount.get(cn);
+			if (myCount == null || myCount == 0) {
+				result.add(r);
+				continue;
+			}
+			// Check if this concept is the best for at least one
+			// of the terms it matches
+			String lowerCn = cn.toLowerCase();
+			String[] cnWords = lowerCn.split("\\s+");
+			boolean bestForSomeTerm = false;
+			for (String term : queryTerms) {
+				if (termMatchesText(term, lowerCn, cnWords)) {
+					Integer max = termMaxCount.get(term);
+					if (max != null && myCount >= max) {
+						bestForSomeTerm = true;
+						break;
+					}
+				}
+			}
+			if (bestForSomeTerm) {
+				result.add(r);
+			}
+		}
+
+		if (result.size() < records.size()) {
+			log.warn("Weak-match cleanup: {} -> {}", records.size(),
+					result.size());
+		}
+		return result.isEmpty() ? records : result;
+	}
+
 	static List<SerializedRecord> multiConceptRescue(
 			List<SerializedRecord> filtered,
 			List<SerializedRecord> allRecords,
