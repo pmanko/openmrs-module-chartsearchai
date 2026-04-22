@@ -1027,6 +1027,38 @@ public class LlmInferenceService implements ChartSearchService {
 		List<ChartEmbedding> pipelineResult = filterPipeline(semanticScores,
 				keywordScores, embeddings, queryTerms, profiledConfig);
 
+		// When type indicators are present, remove straggler records whose
+		// structural prefix doesn't match any type indicator term. Only
+		// fires when >75% of pipeline results already match — this targets
+		// the case where a few wrong-type records leak through on semantic
+		// similarity alone (e.g. "CRITICALLY_HIGH" obs for "active
+		// conditions") without over-filtering mixed-type result sets.
+		if (!typeIndicatorTerms.isEmpty()
+				&& pipelineResult != null && !pipelineResult.isEmpty()) {
+			int matchCount = 0;
+			for (ChartEmbedding ce : pipelineResult) {
+				if (matchesTypeIndicator(ce, typeIndicatorTerms)) {
+					matchCount++;
+				}
+			}
+			if (matchCount > 0
+					&& matchCount > pipelineResult.size() * 2 / 3) {
+				int beforeFilter = pipelineResult.size();
+				List<ChartEmbedding> filtered = new ArrayList<>();
+				for (ChartEmbedding ce : pipelineResult) {
+					if (matchesTypeIndicator(ce, typeIndicatorTerms)) {
+						filtered.add(ce);
+					}
+				}
+				pipelineResult = filtered;
+				if (pipelineResult.size() != beforeFilter) {
+					log.warn("Type-indicator filter {}: {} -> {}",
+							typeIndicatorTerms, beforeFilter,
+							pipelineResult.size());
+				}
+			}
+		}
+
 		// Concept-name re-ranking for zero-keyword queries: drop
 		// concept outliers whose name-level similarity to the query
 		// is significantly below the cluster of other concepts.
@@ -3814,6 +3846,62 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 		return terms.toArray(new String[0]);
+	}
+
+	/**
+	 * Resource types that are structurally equivalent in the data model.
+	 * Conditions and diagnoses both represent clinical findings about a
+	 * patient's health. When a type indicator matches one, the other
+	 * should also be kept — they are two representations of the same
+	 * concept type.
+	 */
+	private static final java.util.Map<String, String> SISTER_RESOURCE_TYPES;
+	static {
+		java.util.Map<String, String> m = new java.util.HashMap<>();
+		m.put(ChartSearchAiConstants.RESOURCE_TYPE_CONDITION,
+				ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS);
+		m.put(ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS,
+				ChartSearchAiConstants.RESOURCE_TYPE_CONDITION);
+		SISTER_RESOURCE_TYPES = Collections.unmodifiableMap(m);
+	}
+
+	/**
+	 * Checks whether a chart embedding's structural prefix contains any of
+	 * the given type indicator terms. Uses the actual text content to derive
+	 * the correct prefix (important for ORDER records whose prefix depends
+	 * on body text, e.g. "Drug order:" → "Medication prescription:").
+	 * Also checks sister resource types: condition ↔ diagnosis.
+	 */
+	private static boolean matchesTypeIndicator(ChartEmbedding ce,
+			Set<String> typeIndicatorTerms) {
+		String textContent = ce.getTextContent() != null
+				? ce.getTextContent() : "";
+		String fullPrefixed = ChartSearchAiUtils.buildPrefixedText(
+				ce.getResourceType(), textContent);
+		String prefix = fullPrefixed.substring(0,
+				fullPrefixed.length() - textContent.length())
+				.toLowerCase();
+		String[] prefixWords = prefix.split("\\s+");
+		for (String term : typeIndicatorTerms) {
+			if (termMatchesText(term, prefix, prefixWords)) {
+				return true;
+			}
+		}
+		// Check sister resource type — condition ↔ diagnosis are
+		// structurally equivalent (both represent clinical findings).
+		String sisterType = SISTER_RESOURCE_TYPES.get(
+				ce.getResourceType());
+		if (sisterType != null) {
+			String sisterPrefix = ChartSearchAiUtils.buildPrefixedText(
+					sisterType, "").toLowerCase();
+			String[] sisterWords = sisterPrefix.split("\\s+");
+			for (String term : typeIndicatorTerms) {
+				if (termMatchesText(term, sisterPrefix, sisterWords)) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/**

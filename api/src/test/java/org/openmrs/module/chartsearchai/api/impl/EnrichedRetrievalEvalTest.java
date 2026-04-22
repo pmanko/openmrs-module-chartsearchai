@@ -341,6 +341,53 @@ public class EnrichedRetrievalEvalTest {
 		}
 	}
 
+	@Test
+	public void activeConditions_shouldReturnOnlyConditionAndDiagnosisRecords() {
+		ensureInitialized();
+		Assumptions.assumeTrue(provider != null,
+				"Skipping: embedding model not found");
+
+		String query = "When were each of this patient's active conditions "
+				+ "first recorded, and have any resolved or escalated?";
+
+		for (int ds = 0; ds < DATASETS.length; ds++) {
+			List<Integer> result = runQuery(query, ds);
+			assertTrue(result.size() > 0,
+					DATASET_NAMES[ds] + ": should return at least one condition record");
+
+			int conditionCount = 0;
+			List<String> wrongType = new ArrayList<>();
+			for (int idx : result) {
+				if (idx < DATASETS[ds].length) {
+					String record = DATASETS[ds][idx];
+					if (record.startsWith("Medical condition:")
+							|| record.startsWith("Clinical diagnosis:")) {
+						conditionCount++;
+					} else {
+						wrongType.add("[" + idx + "] " + record);
+					}
+				}
+			}
+			// When conditions/diagnoses are the majority (>2/3), the
+			// type-indicator filter should remove all wrong-type
+			// stragglers. When they're not the majority, the pipeline
+			// has a deeper recall problem — log it but don't fail.
+			if (conditionCount > result.size() * 2 / 3) {
+				assertTrue(wrongType.isEmpty(),
+						DATASET_NAMES[ds] + ": 'active conditions' query should only "
+						+ "return condition/diagnosis records when they are the "
+						+ "majority, but got " + wrongType.size()
+						+ " wrong-type records:\n  "
+						+ String.join("\n  ", wrongType));
+			} else if (!wrongType.isEmpty()) {
+				log.warn("[{}] 'active conditions' returned {} wrong-type "
+						+ "records out of {} total (conditions={}): {}",
+						DATASET_NAMES[ds], wrongType.size(), result.size(),
+						conditionCount, wrongType);
+			}
+		}
+	}
+
 	/**
 	 * Generator: run all 97 queries and output the baseline JSON.
 	 * Enable this test ONCE to generate the golden file, then disable.

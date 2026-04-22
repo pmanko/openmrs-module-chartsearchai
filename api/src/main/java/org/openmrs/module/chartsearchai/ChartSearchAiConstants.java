@@ -224,7 +224,7 @@ public class ChartSearchAiConstants {
 
 	public static final int DEFAULT_LLM_CONTEXT_SIZE = 16384;
 
-	public static final int DEFAULT_MAX_TOKENS = 2048;
+	public static final int DEFAULT_MAX_TOKENS = 8192;
 
 	public static final float DEFAULT_REPEAT_PENALTY = 1.0f;
 

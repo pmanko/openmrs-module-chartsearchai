@@ -46,7 +46,9 @@ public class LlmProvider {
 			+ "Include ALL relevant records in your answer — never omit any for brevity. "
 			+ "Cite EVERY record you reference by its number in brackets (e.g. [1], [3]). "
 			+ "Respond with ONLY a JSON object with an \"answer\" string and a \"citations\" array "
-			+ "listing every record number you cited.\n\n"
+			+ "listing every record number you cited.\n"
+			+ "Use plain text only in the answer — no markdown, no bullet markers like * or -, "
+			+ "no headers. Use numbered lines or simple newlines to structure lists.\n\n"
 			+ "If no records are relevant, name what is missing.\n"
 			+ "Your answer must not vary based on the punctuation or phrasing of the query "
 			+ "— focus only on its semantic meaning.\n\n"
@@ -278,10 +280,29 @@ public class LlmProvider {
 
 	private static final Pattern SLASH_CITATION = Pattern.compile("\\[(\\d+(?:/\\d+)+)\\]");
 
+	/** Matches the JSON "answer" value — captures the string content (may be truncated). */
+	private static final Pattern ANSWER_VALUE = Pattern.compile(
+			"\"answer\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"?");
+
+	/** Matches a bare integer inside a citations array. */
+	private static final Pattern CITATION_NUMBER = Pattern.compile("(?:^|[,\\[])\\s*(\\d+)");
+
 	static LlmResponse extractResponse(String response) {
 		String trimmed = response.trim();
 		if (trimmed.isEmpty()) {
 			return new LlmResponse(trimmed, Collections.emptyList());
+		}
+
+		// Strip markdown code fences that some models (e.g. Gemma) wrap
+		// around JSON output: ```json\n{...}\n``` or ```\n{...}\n```
+		if (trimmed.startsWith("```")) {
+			int firstNewline = trimmed.indexOf('\n');
+			if (firstNewline > 0) {
+				trimmed = trimmed.substring(firstNewline + 1);
+			}
+			if (trimmed.endsWith("```")) {
+				trimmed = trimmed.substring(0, trimmed.length() - 3).trim();
+			}
 		}
 
 		try {
@@ -302,8 +323,37 @@ public class LlmProvider {
 			}
 		}
 		catch (IOException e) {
-			log.warn("LLM response did not contain expected JSON format, returning raw response");
+			log.warn("LLM response did not parse as JSON (possibly truncated), "
+					+ "attempting regex extraction");
 		}
+
+		// Fallback: extract the answer value using regex when the JSON is
+		// malformed or truncated (e.g. LLM ran out of output tokens before
+		// closing the citations array). This mirrors what
+		// AnswerExtractingConsumer does for streaming.
+		Matcher answerMatcher = ANSWER_VALUE.matcher(trimmed);
+		if (answerMatcher.find()) {
+			String raw = answerMatcher.group(1);
+			// Unescape JSON string escapes
+			String answer = raw.replace("\\n", "\n")
+					.replace("\\t", "\t")
+					.replace("\\\"", "\"")
+					.replace("\\\\/", "/")
+					.replace("\\\\", "\\");
+			answer = normalizeSlashCitations(answer.trim());
+			// Try to extract citations from whatever was produced
+			List<Integer> citations = new ArrayList<>();
+			int citationsStart = trimmed.indexOf("\"citations\"");
+			if (citationsStart >= 0) {
+				Matcher numMatcher = CITATION_NUMBER.matcher(
+						trimmed.substring(citationsStart));
+				while (numMatcher.find()) {
+					citations.add(Integer.parseInt(numMatcher.group(1)));
+				}
+			}
+			return new LlmResponse(answer, citations);
+		}
+
 		return new LlmResponse(trimmed, Collections.emptyList());
 	}
 

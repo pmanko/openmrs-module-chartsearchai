@@ -299,8 +299,8 @@
   }, {
     "query" : "has this patient ever been diagnosed with any sexually transmitted infections",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 8,
-    "resultIndices" : [ 39, 51, 61, 69, 71, 90, 110, 118 ]
+    "expectedMinRecords" : 6,
+    "resultIndices" : [ 39, 51, 61, 69, 71, 110 ]
   }, {
     "query" : "has this patient had a sexually transmitted disease?",
     "datasetIndex" : 0,
@@ -559,8 +559,8 @@
   }, {
     "query" : "When were each of this patient's active conditions first recorded, and have any resolved or escalated?",
     "datasetIndex" : 1,
-    "expectedMinRecords" : 14,
-    "resultIndices" : [ 1, 2, 5, 16, 17, 29, 30, 31, 35, 44, 52, 55, 56, 65 ]
+    "expectedMinRecords" : 10,
+    "resultIndices" : [ 1, 2, 16, 17, 29, 30, 31, 44, 55, 56 ]
   }, {
     "query" : "allergies",
     "datasetIndex" : 1,
@@ -1269,8 +1269,8 @@
   }, {
     "query" : "has this patient ever been diagnosed with any sexually transmitted infections",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 9,
-    "resultIndices" : [ 2, 3, 4, 5, 23, 24, 118, 119, 148 ]
+    "expectedMinRecords" : 8,
+    "resultIndices" : [ 2, 3, 4, 5, 23, 24, 118, 119 ]
   }, {
     "query" : "has this patient had a sexually transmitted disease?",
     "datasetIndex" : 2,

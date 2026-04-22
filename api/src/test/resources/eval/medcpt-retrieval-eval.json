@@ -1529,8 +1529,8 @@
   }, {
     "query" : "When were each of this patient's active conditions first recorded, and have any resolved or escalated?",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 43,
-    "resultIndices" : [ 2, 3, 9, 12, 17, 18, 19, 22, 29, 33, 34, 42, 43, 46, 47, 48, 49, 51, 60, 63, 64, 66, 73, 76, 77, 86, 90, 91, 92, 93, 104, 107, 108, 117, 120, 121, 122, 132, 136, 137, 146, 150, 158 ]
+    "expectedMinRecords" : 30,
+    "resultIndices" : [ 2, 3, 17, 18, 19, 22, 33, 34, 46, 47, 48, 49, 51, 63, 64, 66, 76, 77, 90, 91, 92, 93, 107, 108, 120, 121, 122, 136, 137, 150 ]
   }, {
     "query" : "allergies",
     "datasetIndex" : 3,
@@ -2014,8 +2014,8 @@
   }, {
     "query" : "When were each of this patient's active conditions first recorded, and have any resolved or escalated?",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 41,
-    "resultIndices" : [ 2, 3, 12, 17, 18, 19, 22, 29, 33, 34, 43, 46, 47, 48, 49, 51, 60, 63, 64, 66, 73, 76, 77, 86, 90, 91, 92, 93, 104, 107, 108, 117, 120, 121, 122, 132, 136, 137, 146, 150, 158 ]
+    "expectedMinRecords" : 30,
+    "resultIndices" : [ 2, 3, 17, 18, 19, 22, 33, 34, 46, 47, 48, 49, 51, 63, 64, 66, 76, 77, 90, 91, 92, 93, 107, 108, 120, 121, 122, 136, 137, 150 ]
   }, {
     "query" : "allergies",
     "datasetIndex" : 4,
