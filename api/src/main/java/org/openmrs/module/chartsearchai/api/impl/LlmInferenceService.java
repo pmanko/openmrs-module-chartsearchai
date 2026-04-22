@@ -361,15 +361,15 @@ public class LlmInferenceService implements ChartSearchService {
 	private PatientChart buildChartWithEmbeddings(Patient patient, String question) {
 		// findSimilar returns null when no embeddings exist (needs indexing),
 		// or an empty list when embeddings exist but nothing matched the query.
-		List<ChartEmbedding> similar = findSimilar(patient, question);
+		FindSimilarResult fsResult = findSimilarResult(patient, question);
 
-		if (similar == null) {
+		if (fsResult == null || fsResult.records == null) {
 			log.info("No embeddings found for patient [id={}], indexing now", patient.getPatientId());
 			try {
 				embeddingIndexer.indexPatient(patient);
 				// Invalidate cached noise profile — embeddings have changed
 				invalidateNoiseProfileCache(patient);
-				similar = findSimilar(patient, question);
+				fsResult = findSimilarResult(patient, question);
 			}
 			catch (Exception e) {
 				log.error("Failed to index patient [id={}], falling back to full chart",
@@ -377,10 +377,12 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
-		if (similar == null) {
+		if (fsResult == null || fsResult.records == null) {
 			log.debug("Still no embeddings after indexing attempt, falling back to full chart");
 			return chartSerializer.serialize(patient);
 		}
+
+		List<ChartEmbedding> similar = fsResult.records;
 
 		if (similar.isEmpty()) {
 			log.debug("No records matched the query '{}' for patient [id={}], returning empty chart",
@@ -396,7 +398,8 @@ public class LlmInferenceService implements ChartSearchService {
 		log.warn("findSimilar returned {} records for query '{}' patient [id={}]: {}",
 				similar.size(), question, patient.getPatientId(), relevantKeys);
 
-		return filterAndSerialize(patient, question, relevantKeys);
+		return filterAndSerialize(patient, question, relevantKeys,
+				similar.size(), fsResult.keywordMatchCount);
 	}
 
 	private PatientChart buildChartWithLucene(Patient patient, String question) {
@@ -666,6 +669,12 @@ public class LlmInferenceService implements ChartSearchService {
 
 	private PatientChart filterAndSerialize(Patient patient, String question,
 			Set<String> relevantKeys) {
+		return filterAndSerialize(patient, question, relevantKeys, -1, -1);
+	}
+
+	private PatientChart filterAndSerialize(Patient patient, String question,
+			Set<String> relevantKeys, int pipelineSize,
+			int keywordMatchCount) {
 		List<SerializedRecord> allRecords = recordLoader.loadAll(patient);
 		List<SerializedRecord> filtered = filterAndCap(allRecords, relevantKeys, question);
 
@@ -674,6 +683,34 @@ public class LlmInferenceService implements ChartSearchService {
 				isHybridPipeline() ? "Hybrid" :
 						isElasticsearchPipeline() ? "Elasticsearch" :
 								isLucenePipeline() ? "Lucene" : "embeddings");
+
+		// Post-cap concept-name rescue and precision filter
+		// (same logic as the static findRelevantRecords path).
+		if (pipelineSize > 0 && keywordMatchCount == 0
+				&& embeddingProvider != null) {
+			boolean recencyCapReduced =
+					filtered.size() < pipelineSize / 2;
+			int preRescueSize = filtered.size();
+			if (recencyCapReduced && filtered.size() == 1) {
+				String normalizedQ = stripQueryStopwords(question);
+				String embQ = buildEmbeddingQuery(normalizedQ);
+				float[] qVec = embeddingProvider.embedQuery(
+						getQueryPrefix() + embQ);
+				filtered = conceptNameRescueRecords(filtered,
+						allRecords, embeddingProvider, qVec,
+						question);
+			}
+			boolean rescueExpanded =
+					filtered.size() > preRescueSize;
+			if (!rescueExpanded && recencyCapReduced
+					&& filtered.size() >= 3
+					&& filtered.size() <= 10) {
+				String normalizedQ = stripQueryStopwords(question);
+				filtered = applyPostCapConceptFilter(filtered,
+						embeddingProvider, normalizedQ,
+						getQueryPrefix());
+			}
+		}
 
 		filtered = groupByConcept(filtered);
 
@@ -839,6 +876,11 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	List<ChartEmbedding> findSimilar(Patient patient, String question) {
+		FindSimilarResult result = findSimilarResult(patient, question);
+		return result != null ? result.records : null;
+	}
+
+	FindSimilarResult findSimilarResult(Patient patient, String question) {
 		List<ChartEmbedding> allEmbeddings = dao.getByPatient(patient);
 		if (allEmbeddings.isEmpty()) {
 			return null;
@@ -900,7 +942,7 @@ public class LlmInferenceService implements ChartSearchService {
 				}
 				noiseProfileCache.put(cacheKey, result.noiseProfile);
 			}
-			return result.records;
+			return result;
 		}
 		catch (Exception e) {
 			log.debug("Embedding provider not available, falling back to full chart", e);
