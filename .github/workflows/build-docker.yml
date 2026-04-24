@@ -11,7 +11,7 @@ on:
 
 env:
   IMAGE: openmrs/openmrs-reference-application-3
-  DOCKER_IMAGE_TAG: 'nightly'
+  DOCKER_IMAGE_TAG: 'nightly-chartsearch'
   DOCKER_IMAGE_PLATFORMS: linux/amd64,linux/arm64
 
 concurrency:
