@@ -1,0 +1,36 @@
+name: Deploy to Server
+
+on:
+  workflow_dispatch:
+    inputs:
+      reset:
+        description: 'Fully resets the ChartSearchAI instance'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'openmrs' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success') }}
+    environment:
+      name: chartsearchai
+      url: https://chartsearchai.openmrs.org/openmrs/spa
+    steps:
+      - name: Deploy via scoped SSH
+        env:
+          DEPLOY_COMMAND: ${{ inputs.reset && '/opt/deploy.sh emr-3-ai --destroy-volumes --no-health-check' || '/opt/deploy.sh emr-3-ai --no-health-check' }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -t ed25519 ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=yes \
+            deploy@${{ secrets.SERVER_HOST }} \
+            "$DEPLOY_COMMAND"
