@@ -1267,12 +1267,14 @@ public class LlmInferenceService implements ChartSearchService {
 			String coreQuery2 = String.join(" ", coreTerms2);
 			float[] coreVector2 = provider.embedQuery(
 					queryPrefix + coreQuery2);
+			double[] coreSem2 = new double[validCount];
 			double maxCoreSem = 0;
 			double sumCoreSem = 0;
 			double sumCoreSemSq = 0;
 			for (int i = 0; i < validCount; i++) {
 				double sim = cosineSimilarity(coreVector2,
 						embeddings[i].getEmbeddingVector());
+				coreSem2[i] = sim;
 				if (sim > maxCoreSem) maxCoreSem = sim;
 				sumCoreSem += sim;
 				sumCoreSemSq += sim * sim;
@@ -1285,11 +1287,8 @@ public class LlmInferenceService implements ChartSearchService {
 									- meanCore * meanCore))
 					: 0;
 			if (maxCoreSem - maxFullSem > stdCore) {
-				double[] coreSem2 = new double[validCount];
 				double[] coreKw2 = new double[validCount];
 				for (int i = 0; i < validCount; i++) {
-					coreSem2[i] = cosineSimilarity(coreVector2,
-							embeddings[i].getEmbeddingVector());
 					String body = ConceptNameUtil.stripSynonyms(
 							embeddings[i].getTextContent());
 					String kwText =
