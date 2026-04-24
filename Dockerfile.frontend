@@ -1,45 +1,25 @@
-FROM --platform=$BUILDPLATFORM node:20-alpine AS base-spa
+# Build the Chart Search AI ESM from source
+FROM --platform=$BUILDPLATFORM node:24-alpine AS chartsearchai-esm
+
+RUN apk add --no-cache git
+RUN corepack enable
+ARG CACHE_BUST
+RUN git clone --depth 1 https://github.com/openmrs/openmrs-esm-chartsearchai.git /esm
+
+WORKDIR /esm
+RUN yarn install --immutable && yarn build && yarn pack
+
+FROM --platform=$BUILDPLATFORM node:24-alpine AS build-spa
 
 RUN npm install --global openmrs@next
 
 COPY spa-build-config.json /app/spa-build-config.json
-RUN cd /app && openmrs assemble --mode config --config spa-build-config.json
+COPY --from=chartsearchai-esm /esm/package.tgz /chartsearch/package.tgz
+WORKDIR /app
 
-# Build the Chart Search AI ESM from source
-FROM --platform=$BUILDPLATFORM node:20-alpine AS chartsearchai-esm
-
-RUN apk add --no-cache git
-RUN corepack enable
-RUN git clone --depth 1 https://github.com/openmrs/openmrs-esm-chartsearchai.git /esm
-WORKDIR /esm
-RUN yarn install --immutable && yarn build
-
-# Combine the base SPA with the Chart Search AI ESM
-FROM --platform=$BUILDPLATFORM node:20-alpine AS final-spa
-
-COPY --from=base-spa /app/dist /app/dist
-COPY --from=chartsearchai-esm /esm/dist /app/dist/openmrs-esm-chartsearchai-app-1.0.0
-COPY --from=chartsearchai-esm /esm/src/routes.json /tmp/routes.json
-
-# Patch importmap.json and routes.registry.json
-RUN cd /app/dist && \
-    node -e " \
-      const fs = require('fs'); \
-      const im = JSON.parse(fs.readFileSync('importmap.json', 'utf8')); \
-      im.imports['@openmrs/esm-chartsearchai-app'] = \
-        './openmrs-esm-chartsearchai-app-1.0.0/openmrs-esm-chartsearchai-app.js'; \
-      fs.writeFileSync('importmap.json', JSON.stringify(im, null, 2)); \
-    " && \
-    node -e " \
-      const fs = require('fs'); \
-      const registry = JSON.parse(fs.readFileSync('routes.registry.json', 'utf8')); \
-      const routes = JSON.parse(fs.readFileSync('/tmp/routes.json', 'utf8')); \
-      routes.version = '1.0.0'; \
-      registry['@openmrs/esm-chartsearchai-app'] = routes; \
-      fs.writeFileSync('routes.registry.json', JSON.stringify(registry, null, 2)); \
-    "
+RUN openmrs assemble --mode config --config spa-build-config.json
 
 # Use the official O3 frontend image as the base — it has the correct
 # index.html (with SPA bootstrap), nginx config, and env var substitution.
 FROM openmrs/openmrs-reference-application-3-frontend:nightly
-COPY --from=final-spa /app/dist /usr/share/nginx/html
+COPY --from=build-spa /app/dist /usr/share/nginx/html

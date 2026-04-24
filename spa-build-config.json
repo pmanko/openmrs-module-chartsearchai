@@ -6,6 +6,7 @@
     "@openmrs/esm-appointments-app": "next",
     "@openmrs/esm-bed-management-app": "next",
     "@openmrs/esm-billing-app": "next",
+    "@openmrs/esm-chartsearchai-app": "file:///chartsearch/package.tgz",
     "@openmrs/esm-cohort-builder-app": "next",
     "@openmrs/esm-devtools-app": "next",
     "@openmrs/esm-dispensing-app": "next",
