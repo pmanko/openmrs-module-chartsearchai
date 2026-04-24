@@ -3,6 +3,11 @@ name: Build Frontend
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'CLAUDE.md'
+      - 'README.md'
+  workflow_dispatch:
 
 env:
   IMAGE: openmrs/openmrs-reference-application-3
