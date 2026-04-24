@@ -2300,8 +2300,9 @@
     {
       "query": "What are this patient's HB results over time, and are values moving toward or away from the normal range?",
       "datasetIndex": 2,
-      "expectedMinRecords": 12,
+      "expectedMinRecords": 14,
       "resultIndices": [
+        0,
         28,
         31,
         39,
@@ -2309,6 +2310,7 @@
         62,
         78,
         98,
+        103,
         123,
         134,
         141,
@@ -3475,8 +3477,9 @@
     {
       "query": "What are this patient's HB results over time, and are values moving toward or away from the normal range?",
       "datasetIndex": 3,
-      "expectedMinRecords": 17,
+      "expectedMinRecords": 18,
       "resultIndices": [
+        0,
         12,
         26,
         40,

@@ -1245,6 +1245,99 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
+		// Dilution rescue: long queries (>3 terms) may dilute the
+		// embedding by averaging specific terms ("hb") with generic
+		// ones ("time", "normal", "range"). Embed the first 2 terms
+		// as a focused query and check if the improvement in max
+		// similarity exceeds 1 standard deviation of the focused
+		// score distribution — a statistically significant signal
+		// gain that indicates the full query lost a concept to
+		// dilution. If so, run the focused pipeline and merge small,
+		// disjoint results back in.
+		if (pipelineResult != null && !pipelineResult.isEmpty()
+				&& queryTerms.length > 3) {
+			double maxFullSem = 0;
+			for (int i = 0; i < validCount; i++) {
+				if (semanticScores[i] > maxFullSem) {
+					maxFullSem = semanticScores[i];
+				}
+			}
+			String[] coreTerms2 = java.util.Arrays.copyOf(
+					queryTerms, Math.min(2, queryTerms.length));
+			String coreQuery2 = String.join(" ", coreTerms2);
+			float[] coreVector2 = provider.embedQuery(
+					queryPrefix + coreQuery2);
+			double maxCoreSem = 0;
+			double sumCoreSem = 0;
+			double sumCoreSemSq = 0;
+			for (int i = 0; i < validCount; i++) {
+				double sim = cosineSimilarity(coreVector2,
+						embeddings[i].getEmbeddingVector());
+				if (sim > maxCoreSem) maxCoreSem = sim;
+				sumCoreSem += sim;
+				sumCoreSemSq += sim * sim;
+			}
+			double meanCore = validCount > 0
+					? sumCoreSem / validCount : 0;
+			double stdCore = validCount > 1
+					? Math.sqrt(Math.max(0,
+							sumCoreSemSq / validCount
+									- meanCore * meanCore))
+					: 0;
+			if (maxCoreSem - maxFullSem > stdCore) {
+				double[] coreSem2 = new double[validCount];
+				double[] coreKw2 = new double[validCount];
+				for (int i = 0; i < validCount; i++) {
+					coreSem2[i] = cosineSimilarity(coreVector2,
+							embeddings[i].getEmbeddingVector());
+					String body = ConceptNameUtil.stripSynonyms(
+							embeddings[i].getTextContent());
+					String kwText =
+							ChartSearchAiUtils.buildPrefixedText(
+									embeddings[i].getResourceType(),
+									body);
+					coreKw2[i] = computeKeywordScore(
+							coreTerms2, kwText);
+				}
+				int[] mergeGapCutoff = new int[1];
+				List<ChartEmbedding> mergeResult = filterPipeline(
+						coreSem2, coreKw2, embeddings, coreTerms2,
+						coreTerms2.length, profiledConfig,
+						mergeGapCutoff);
+				if (mergeResult != null
+						&& !mergeResult.isEmpty()
+						&& mergeResult.size()
+								<= ChartSearchAiConstants
+										.ADAPTIVE_MIN_RECORDS) {
+					Set<ChartEmbedding> existing =
+							Collections.newSetFromMap(
+									new IdentityHashMap<
+											ChartEmbedding,
+											Boolean>());
+					existing.addAll(pipelineResult);
+					boolean anyOverlap = false;
+					for (ChartEmbedding ce : mergeResult) {
+						if (existing.contains(ce)) {
+							anyOverlap = true;
+							break;
+						}
+					}
+					if (!anyOverlap) {
+						List<ChartEmbedding> merged =
+								new ArrayList<>(pipelineResult);
+						merged.addAll(mergeResult);
+						log.warn("Dilution rescue: merged {}"
+								+ " focused results into {} "
+								+ "pipeline results for '{}'",
+								mergeResult.size(),
+								pipelineResult.size(),
+								coreQuery2);
+						pipelineResult = merged;
+					}
+				}
+			}
+		}
+
 		// When type indicators are present, remove straggler records whose
 		// structural prefix doesn't match any type indicator term. Only
 		// fires when >75% of pipeline results already match — this targets
