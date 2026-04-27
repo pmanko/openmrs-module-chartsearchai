@@ -24,7 +24,7 @@ fi
 
 # LLM model (MedGemma 1.5 4B Q4_K_M, ~2.5GB)
 # Save with the filename the module's default config expects
-LLM_FILE="$MODEL_DIR/medgemma-1.5-4b-it.Q4_K_M.gguf"
+LLM_FILE="$MODEL_DIR/medgemma-1.5-4b-it-Q4_K_M.gguf"
 HF_LLM="https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF/resolve/main/medgemma-1.5-4b-it-Q4_K_M.gguf"
 
 if [ ! -f "$LLM_FILE" ]; then
