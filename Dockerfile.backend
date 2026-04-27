@@ -27,7 +27,7 @@ COPY --from=openmrs-dist /usr/local/tomcat /usr/local/tomcat
 COPY --from=builder /build/omod/target/chartsearchai-*.omod /openmrs/distribution/openmrs_modules/
 COPY --chmod=755 backend-init.sh /usr/local/bin/backend-init.sh
 
-RUN mkdir -p /openmrs/data && chown -R 1001:0 /openmrs /usr/local/tomcat
+RUN mkdir -p /openmrs/data && chown -R 1001:1001 /openmrs /usr/local/tomcat
 USER 1001
 
 EXPOSE 8080

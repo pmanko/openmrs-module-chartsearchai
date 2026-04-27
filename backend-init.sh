@@ -34,6 +34,6 @@ if [ ! -f "$LLM_FILE" ]; then
   DOWNLOADED_FILE=1
 fi
 
-test $DOWNLOADED_FILE -eq 1 && chown -R 1001:0 "$MODEL_DIR"
+test $DOWNLOADED_FILE -eq 1 && chown -R 1001:1001 "$MODEL_DIR"
 
 exec /openmrs/startup.sh
