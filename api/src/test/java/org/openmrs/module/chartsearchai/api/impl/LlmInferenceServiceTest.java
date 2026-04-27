@@ -27,6 +27,7 @@ import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
+import org.openmrs.module.chartsearchai.api.impl.LlmInferenceService.PipelineConfig;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 
 public class LlmInferenceServiceTest {
@@ -948,6 +949,78 @@ public class LlmInferenceServiceTest {
 		cal.set(year, month - 1, day, 0, 0, 0);
 		cal.set(Calendar.MILLISECOND, 0);
 		return cal.getTime();
+	}
+
+	@Test
+	public void buildEffectiveConfig_shouldPreserveModelSpecificFieldsForMedCpt() {
+		// MedCPT's medcptDefaults() intentionally sets gapSaturationThreshold=0.0
+		// (gate disabled — medical embeddings produce meaningful similarity for
+		// adjacent topics, so a saturated gap doesn't imply no signal). The
+		// effective config used by production must preserve that value, not
+		// silently fall back to the L6-v2 default of 0.95.
+		PipelineConfig medcpt = PipelineConfig.forModel("medcpt");
+		assertEquals(0.0, medcpt.gapSaturationThreshold, 1e-9,
+				"medcptDefaults must keep gap-saturation gate disabled");
+
+		PipelineConfig effective = LlmInferenceService.buildEffectiveConfig(
+				medcpt,
+				ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
+				ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
+				ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
+				ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
+				ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO,
+				null);
+
+		assertEquals(medcpt.gapSaturationThreshold,
+				effective.gapSaturationThreshold, 1e-9,
+				"gapSaturationThreshold must propagate from MedCPT defaults");
+		assertEquals(medcpt.conceptFloorMargin,
+				effective.conceptFloorMargin, 1e-9,
+				"conceptFloorMargin must propagate from MedCPT defaults");
+	}
+
+	@Test
+	public void buildEffectiveConfig_shouldPreserveDefaultsForL6V2() {
+		// L6-v2 defaults() has gapSaturationThreshold=0.95 and
+		// conceptFloorMargin=0.85. Verify that the build path doesn't drift
+		// these for the default model either.
+		PipelineConfig l6 = PipelineConfig.defaults();
+
+		PipelineConfig effective = LlmInferenceService.buildEffectiveConfig(
+				l6,
+				ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
+				ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
+				ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
+				ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
+				ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO,
+				null);
+
+		assertEquals(0.95, effective.gapSaturationThreshold, 1e-9);
+		assertEquals(0.85, effective.conceptFloorMargin, 1e-9);
+	}
+
+	@Test
+	public void buildEffectiveConfig_shouldApplyGlobalPropertyOverrides() {
+		// When an admin customizes a GP value (i.e., it differs from the
+		// L6-v2 default), the override wins over the model-specific default.
+		// Use MedCPT base so the override has something distinct to override.
+		PipelineConfig medcpt = PipelineConfig.forModel("medcpt");
+		double customSimRatio = 0.50; // far from L6-v2 default 0.80
+
+		PipelineConfig effective = LlmInferenceService.buildEffectiveConfig(
+				medcpt,
+				ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
+				ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
+				ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
+				ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
+				customSimRatio,
+				null);
+
+		assertEquals(customSimRatio, effective.similarityRatio, 1e-9,
+				"customized similarity ratio GP must override the model default");
+		// Non-overridden, non-GP fields still come from the model defaults
+		assertEquals(medcpt.gapSaturationThreshold,
+				effective.gapSaturationThreshold, 1e-9);
 	}
 
 }

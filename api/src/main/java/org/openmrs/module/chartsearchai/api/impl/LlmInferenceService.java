@@ -965,26 +965,10 @@ public class LlmInferenceService implements ChartSearchService {
 		// Use model-specific defaults, but allow global property overrides
 		// when an admin has explicitly customized them (i.e., the GP value
 		// differs from the L6-v2 default that ships as the initial value).
-		PipelineConfig config = new PipelineConfig(
-				overrideIfCustomized(getKeywordWeight(),
-						ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
-						baseConfig.keywordWeight),
-				overrideIfCustomized(getScoreGapMultiplier(),
-						ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
-						baseConfig.scoreGapMultiplier),
-				overrideIfCustomized(getMinScoreGap(),
-						ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
-						baseConfig.minScoreGap),
-				overrideIfCustomized(getGapValidationCosineThreshold(),
-						ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
-						baseConfig.gapValidationCosineThreshold),
-				overrideIfCustomized(getSimilarityRatio(),
-						ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO,
-						baseConfig.similarityRatio),
-				cachedProfile != null ? cachedProfile
-						: ModelNoiseProfile.conservativeDefault(),
-				baseConfig.floorRescueMinZScore,
-				baseConfig.conceptNameGateMinCandidates);
+		PipelineConfig config = buildEffectiveConfig(baseConfig,
+				getKeywordWeight(), getScoreGapMultiplier(),
+				getMinScoreGap(), getGapValidationCosineThreshold(),
+				getSimilarityRatio(), cachedProfile);
 		log.warn("Model identity={}, config: kwWeight={}, gapMult={}, "
 				+ "minGap={}, gapCosThresh={}, simRatio={}, floorZScore={}",
 				modelIdentity, config.keywordWeight, config.scoreGapMultiplier,
@@ -4728,6 +4712,43 @@ public class LlmInferenceService implements ChartSearchService {
 			return gpValue;
 		}
 		return modelDefault;
+	}
+
+	/**
+	 * Builds the per-search effective {@link PipelineConfig} by overlaying
+	 * any explicitly-customized global property values on top of the
+	 * model-specific defaults in {@code baseConfig}. Every model-specific
+	 * field of {@code baseConfig} that is not exposed as a global property
+	 * (e.g. {@code conceptFloorMargin}, {@code gapSaturationThreshold})
+	 * must be passed through unchanged, so that compressed-distribution
+	 * models (e.g. MedCPT) don't silently fall back to L6-v2 floor values.
+	 */
+	static PipelineConfig buildEffectiveConfig(PipelineConfig baseConfig,
+			double gpKeywordWeight, double gpScoreGapMultiplier,
+			double gpMinScoreGap, double gpGapValidationCosineThreshold,
+			double gpSimilarityRatio, ModelNoiseProfile cachedProfile) {
+		return new PipelineConfig(
+				overrideIfCustomized(gpKeywordWeight,
+						ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
+						baseConfig.keywordWeight),
+				overrideIfCustomized(gpScoreGapMultiplier,
+						ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
+						baseConfig.scoreGapMultiplier),
+				overrideIfCustomized(gpMinScoreGap,
+						ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
+						baseConfig.minScoreGap),
+				overrideIfCustomized(gpGapValidationCosineThreshold,
+						ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
+						baseConfig.gapValidationCosineThreshold),
+				overrideIfCustomized(gpSimilarityRatio,
+						ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO,
+						baseConfig.similarityRatio),
+				cachedProfile != null ? cachedProfile
+						: ModelNoiseProfile.conservativeDefault(),
+				baseConfig.floorRescueMinZScore,
+				baseConfig.conceptNameGateMinCandidates,
+				baseConfig.conceptFloorMargin,
+				baseConfig.gapSaturationThreshold);
 	}
 
 	private static String getQueryPrefix() {
