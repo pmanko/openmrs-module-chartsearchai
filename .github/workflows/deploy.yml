@@ -23,7 +23,7 @@ jobs:
     steps:
       - name: Deploy via scoped SSH
         env:
-          DEPLOY_COMMAND: ${{ inputs.reset && '/opt/deploy.sh emr-3-ai --destroy-volumes --no-health-check' || '/opt/deploy.sh emr-3-ai --no-health-check' }}
+          DEPLOY_COMMAND: ${{ inputs.reset && 'deploy emr-3-ai --destroy-volumes --no-health-check' || 'deploy emr-3-ai --no-health-check' }}
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
