@@ -6,17 +6,20 @@ mkdir -p "$MODEL_DIR"
 ONNX_FILE="$MODEL_DIR/model.onnx"
 VOCAB_FILE="$MODEL_DIR/vocab.txt"
 HF_EMBED="https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main"
+DOWNLOADED_FILE=0
 
 if [ ! -f "$ONNX_FILE" ]; then
   echo "Downloading all-MiniLM-L6-v2 ONNX model (~86MB)..."
   curl -fsSL -o "$ONNX_FILE" "$HF_EMBED/onnx/model.onnx"
   echo "Embedding model downloaded."
+  DOWNLOADED_FILE=1
 fi
 
 if [ ! -f "$VOCAB_FILE" ]; then
   echo "Downloading all-MiniLM-L6-v2 vocab..."
   curl -fsSL -o "$VOCAB_FILE" "$HF_EMBED/vocab.txt"
   echo "Vocab downloaded."
+  DOWNLOADED_FILE=1
 fi
 
 # LLM model (MedGemma 1.5 4B Q4_K_M, ~2.5GB)
@@ -28,6 +31,9 @@ if [ ! -f "$LLM_FILE" ]; then
   echo "Downloading MedGemma 1.5 4B Q4_K_M (~2.5GB) — this may take a few minutes..."
   curl -fsSL -o "$LLM_FILE" "$HF_LLM"
   echo "LLM model downloaded."
+  DOWNLOADED_FILE=1
 fi
+
+test $DOWNLOADED_FILE -eq 1 && chown -R 1001:0 "$MODEL_DIR"
 
 exec /openmrs/startup.sh
