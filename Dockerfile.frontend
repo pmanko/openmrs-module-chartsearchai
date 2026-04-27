@@ -11,7 +11,7 @@ RUN yarn install --immutable && yarn build && yarn pack
 
 FROM --platform=$BUILDPLATFORM node:24-alpine AS build-spa
 
-RUN npm install --global openmrs@next
+RUN npm install --legacy-peer-deps --global openmrs@next
 
 COPY spa-build-config.json /app/spa-build-config.json
 COPY --from=chartsearchai-esm /esm/package.tgz /chartsearch/package.tgz
