@@ -123,6 +123,27 @@ public class ChartSearchAiConstants {
 	 * coherence outlier detection. */
 	public static final double COHERENCE_ADAPTIVE_GAP_RATIO = 0.20;
 
+	/** Corpus size above which the selective-keyword rescue extends from
+	 * the absolute floor of {@link #ADAPTIVE_MIN_RECORDS} to a fractional
+	 * threshold. Smaller charts (typical synthetic eval datasets ~150
+	 * records) keep the absolute rule because their partial-keyword
+	 * fractions overlap with the eval-empty cases that the rescue must
+	 * not block. Larger charts (live patients with many concept entries)
+	 * have more headroom: a "selective" keyword set at 6/462 is 1.3 %,
+	 * which is meaningfully smaller than what eval cases produce, so a
+	 * larger absolute count still represents a rare keyword anchor. */
+	public static final int LARGE_CORPUS_SELECTIVE_RESCUE_MIN = 200;
+
+	/** Fraction-of-corpus threshold for the selective-keyword rescue on
+	 * large charts (corpus &gt; {@link #LARGE_CORPUS_SELECTIVE_RESCUE_MIN}).
+	 * Records matching a keyword that appears in &le; this fraction of
+	 * the corpus are considered selective enough to rescue from the
+	 * partial-match semantic floor. Calibrated to catch Richard-class
+	 * broad queries (musculoskeletal injuries: 6/462 = 1.3 %; tests
+	 * ordered: 24/462 = 5.2 %) without affecting smaller eval datasets
+	 * (which the size gate excludes). */
+	public static final double LARGE_CORPUS_SELECTIVE_KW_FRACTION = 0.06;
+
 	/** Maximum number of keyword terms a query can have for the concept-
 	 * similarity expansion to consider it. Longer queries are typically
 	 * multi-concept and unsafe to collapse onto a single chart concept's

@@ -1900,16 +1900,31 @@ public class LlmInferenceService implements ChartSearchService {
 						config.noiseProfile.noiseMean
 								- config.noiseProfile.noiseStd);
 				// Selective-keyword exception: when the refined
-				// set is very small (≤ ADAPTIVE_MIN_RECORDS), the
+				// set is very small relative to the corpus, the
 				// keyword match is highly selective — only a
-				// handful of records in the entire dataset contain
-				// the matching term. Keep ONLY the keyword-matched
-				// records and skip the refinement expansion path.
-				// Expansion into compressed score spaces (e.g.
-				// MedCPT) would flood non-keyword records; the
-				// keyword evidence is the sole structural signal.
+				// handful of records contain the matching term.
+				// Keep ONLY the keyword-matched records and skip
+				// the refinement expansion path. Expansion into
+				// compressed score spaces (e.g. MedCPT) would flood
+				// non-keyword records; the keyword evidence is the
+				// sole structural signal. The absolute floor
+				// (ADAPTIVE_MIN_RECORDS) handles small charts; on
+				// large charts (corpus >
+				// LARGE_CORPUS_SELECTIVE_RESCUE_MIN) the gate
+				// extends to a fractional threshold so a 6/462
+				// match (1.3 %) still counts as selective even
+				// though it exceeds the absolute floor of 2.
+				int selectiveKwMaxRecords =
+						ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS;
+				if (scored.size()
+						> ChartSearchAiConstants.LARGE_CORPUS_SELECTIVE_RESCUE_MIN) {
+					selectiveKwMaxRecords = Math.max(
+							selectiveKwMaxRecords,
+							(int) Math.ceil(scored.size()
+									* ChartSearchAiConstants.LARGE_CORPUS_SELECTIVE_KW_FRACTION));
+				}
 				boolean selectiveKwMatch = refined.size()
-						<= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS;
+						<= selectiveKwMaxRecords;
 				if (selectiveKwMatch && rMaxKw < bonusThreshold
 						&& rMaxSem < partialKwFloor) {
 					// Keep the keyword-matched records but route
