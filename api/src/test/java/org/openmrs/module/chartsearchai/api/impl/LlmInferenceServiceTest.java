@@ -1023,4 +1023,140 @@ public class LlmInferenceServiceTest {
 				effective.gapSaturationThreshold, 1e-9);
 	}
 
+	/** EmbeddingProvider stub backed by a fixed text→vector map. */
+	private static class FixedSimilarityProvider implements
+			org.openmrs.module.chartsearchai.embedding.EmbeddingProvider {
+		private final java.util.Map<String, float[]> vectors;
+		FixedSimilarityProvider(java.util.Map<String, float[]> vectors) {
+			this.vectors = vectors;
+		}
+		@Override public float[] embed(String text) {
+			return vectors.getOrDefault(text, new float[]{0f, 0f, 0f, 1f});
+		}
+		@Override public float[] embedQuery(String text) {
+			return vectors.getOrDefault(text, new float[]{0f, 0f, 0f, 1f});
+		}
+		@Override public int getDimensions() { return 4; }
+	}
+
+	private static List<ChartEmbedding> recordsForSynonymTest(String... texts) {
+		List<ChartEmbedding> list = new ArrayList<>();
+		for (int i = 0; i < texts.length; i++) {
+			ChartEmbedding ce = new ChartEmbedding();
+			ce.setResourceType("obs");
+			ce.setResourceId(i);
+			ce.setTextContent(texts[i]);
+			byte[] raw = new byte[16];
+			ce.setEmbedding(raw);
+			list.add(ce);
+		}
+		return list;
+	}
+
+	@Test
+	public void expandKwTermsViaConceptSimilarity_shouldReplaceWithCloseConceptName() {
+		// "heart rate" against a chart with the Pulse concept; query
+		// encoder maps the two within ~0.99 cosine. Replacement collapses
+		// kwTerms to ["pulse"] so pulse-obs records get a full keyword
+		// match.
+		java.util.Map<String, float[]> vectors = new java.util.HashMap<>();
+		vectors.put("heart rate",  new float[]{1.00f, 0.10f, 0.00f, 0.00f});
+		vectors.put("Pulse",       new float[]{0.99f, 0.14f, 0.00f, 0.00f});
+		vectors.put("Tuberculosis", new float[]{0.00f, 0.00f, 1.00f, 0.00f});
+		vectors.put("Atherosclerosis", new float[]{0.00f, 0.00f, 0.00f, 1.00f});
+
+		List<ChartEmbedding> records = recordsForSynonymTest(
+				"Vital signs / Finding \u2014 Pulse: 60 beats/min",
+				"Condition: Tuberculosis. Status: ACTIVE",
+				"Condition: Atherosclerosis. Status: ACTIVE");
+		FixedSimilarityProvider provider = new FixedSimilarityProvider(vectors);
+
+		String[] expanded = LlmInferenceService.expandKwTermsViaConceptSimilarity(
+				new String[] {"heart", "rate"},
+				vectors.get("heart rate"),
+				records.toArray(new ChartEmbedding[0]),
+				provider, LlmInferenceService.PipelineConfig.defaults());
+
+		assertEquals(1, expanded.length,
+				"Concept name 'Pulse' is closest to query — kwTerms should "
+				+ "collapse to its single token.");
+		assertEquals("pulse", expanded[0]);
+	}
+
+	@Test
+	public void expandKwTermsViaConceptSimilarity_shouldNotReplaceWhenFullMatchAlreadyExists() {
+		// "blood sugar" against a record containing both terms — keyword
+		// scoring already produces a full match; expansion would narrow.
+		java.util.Map<String, float[]> vectors = new java.util.HashMap<>();
+		vectors.put("blood sugar", new float[]{1.00f, 0.10f, 0.00f, 0.00f});
+		vectors.put("Glucose",     new float[]{0.99f, 0.14f, 0.00f, 0.00f});
+		List<ChartEmbedding> records = recordsForSynonymTest(
+				"Lab \u2014 Blood sugar (Glucose): 95 mg/dL");
+		FixedSimilarityProvider provider = new FixedSimilarityProvider(vectors);
+
+		String[] kwTerms = new String[] {"blood", "sugar"};
+		String[] expanded = LlmInferenceService.expandKwTermsViaConceptSimilarity(
+				kwTerms, vectors.get("blood sugar"),
+				records.toArray(new ChartEmbedding[0]),
+				provider, LlmInferenceService.PipelineConfig.defaults());
+
+		assertTrue(expanded == kwTerms,
+				"Full-match record exists; kwTerms must pass through unchanged.");
+	}
+
+	@Test
+	public void expandKwTermsViaConceptSimilarity_shouldNotReplaceWhenNoConceptIsCloseEnough() {
+		// "any cancer?" on a chart without cancer concepts: similarity
+		// stays below path-(a) threshold and margin below path-(b) →
+		// no expansion, empty result preserved.
+		java.util.Map<String, float[]> vectors = new java.util.HashMap<>();
+		vectors.put("cancer", new float[]{1.00f, 0.00f, 0.00f, 0.00f});
+		vectors.put("Pulse",       new float[]{0.40f, 0.92f, 0.00f, 0.00f});
+		vectors.put("Hypertension", new float[]{0.00f, 0.00f, 1.00f, 0.00f});
+		List<ChartEmbedding> records = recordsForSynonymTest(
+				"Vital signs \u2014 Pulse: 72 bpm",
+				"Condition: Hypertension. Status: ACTIVE");
+		FixedSimilarityProvider provider = new FixedSimilarityProvider(vectors);
+
+		String[] kwTerms = new String[] {"cancer"};
+		String[] expanded = LlmInferenceService.expandKwTermsViaConceptSimilarity(
+				kwTerms, vectors.get("cancer"),
+				records.toArray(new ChartEmbedding[0]),
+				provider, LlmInferenceService.PipelineConfig.defaults());
+
+		assertTrue(expanded == kwTerms,
+				"No concept similar enough → no expansion, preserving "
+				+ "correct empty result for absent topics.");
+	}
+
+	@Test
+	public void expandKwTermsViaConceptSimilarity_shouldNotReplaceWhenTopTwoConceptsClose() {
+		// Multi-concept query: top two concepts within margin. Replacement
+		// would pick one and lose the other.
+		java.util.Map<String, float[]> vectors = new java.util.HashMap<>();
+		vectors.put("blood pressure and pulse",
+				new float[]{1.00f, 0.10f, 0.00f, 0.00f});
+		vectors.put("Systolic blood pressure",
+				new float[]{0.97f, 0.20f, 0.00f, 0.00f});
+		vectors.put("Pulse",
+				new float[]{0.97f, 0.21f, 0.00f, 0.00f});
+		vectors.put("Tuberculosis",
+				new float[]{0.00f, 0.00f, 1.00f, 0.00f});
+		List<ChartEmbedding> records = recordsForSynonymTest(
+				"Vital signs \u2014 Systolic blood pressure: 120 mmHg",
+				"Vital signs \u2014 Pulse: 60 bpm",
+				"Condition: Tuberculosis. Status: ACTIVE");
+		FixedSimilarityProvider provider = new FixedSimilarityProvider(vectors);
+
+		String[] kwTerms = new String[] {"blood", "pressure", "pulse"};
+		String[] expanded = LlmInferenceService.expandKwTermsViaConceptSimilarity(
+				kwTerms, vectors.get("blood pressure and pulse"),
+				records.toArray(new ChartEmbedding[0]),
+				provider, LlmInferenceService.PipelineConfig.defaults());
+
+		assertTrue(expanded == kwTerms,
+				"Top two concepts within margin — multi-concept query, "
+				+ "must not collapse to one synonym.");
+	}
+
 }

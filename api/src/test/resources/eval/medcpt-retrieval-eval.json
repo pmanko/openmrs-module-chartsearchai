@@ -89,8 +89,8 @@
   }, {
     "query" : "anaemia",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 29, 55 ]
+    "expectedMinRecords" : 3,
+      "resultIndices" : [ 29, 55, 72 ]
   }, {
     "query" : "anemia",
     "datasetIndex" : 0,
@@ -144,8 +144,8 @@
   }, {
     "query" : "any history of cancer?",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 11, 88 ]
+    "expectedMinRecords" : 3,
+      "resultIndices" : [ 3, 11, 88 ]
   }, {
     "query" : "any infections?",
     "datasetIndex" : 0,
@@ -409,8 +409,8 @@
   }, {
     "query" : "pulse rate",
     "datasetIndex" : 0,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 11,
+      "resultIndices" : [ 16, 24, 43, 60, 75, 82, 95, 100, 112, 130, 149 ]
   }, {
     "query" : "recent temperature readings",
     "datasetIndex" : 0,
@@ -894,8 +894,8 @@
   }, {
     "query" : "pulse rate",
     "datasetIndex" : 1,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 11,
+      "resultIndices" : [ 8, 9, 23, 24, 26, 38, 39, 49, 50, 62, 63 ]
   }, {
     "query" : "recent temperature readings",
     "datasetIndex" : 1,
@@ -1064,8 +1064,8 @@
   }, {
     "query" : "anemia",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 2,
-    "resultIndices" : [ 93, 94 ]
+    "expectedMinRecords" : 4,
+      "resultIndices" : [ 91, 92, 93, 94 ]
   }, {
     "query" : "any STD?",
     "datasetIndex" : 2,
@@ -1379,8 +1379,8 @@
   }, {
     "query" : "pulse rate",
     "datasetIndex" : 2,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 20,
+      "resultIndices" : [ 9, 10, 28, 29, 39, 40, 59, 60, 78, 79, 98, 99, 123, 124, 134, 135, 141, 142, 152, 153 ]
   }, {
     "query" : "recent temperature readings",
     "datasetIndex" : 2,
@@ -1864,8 +1864,8 @@
   }, {
     "query" : "pulse rate",
     "datasetIndex" : 3,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 22,
+      "resultIndices" : [ 9, 10, 26, 27, 40, 41, 57, 58, 70, 71, 83, 84, 101, 102, 114, 115, 129, 130, 143, 144, 155, 156 ]
   }, {
     "query" : "recent temperature readings",
     "datasetIndex" : 3,
@@ -2349,13 +2349,13 @@
   }, {
     "query" : "pulse rate",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 22,
+      "resultIndices" : [ 9, 10, 26, 27, 40, 41, 57, 58, 70, 71, 83, 84, 101, 102, 114, 115, 129, 130, 143, 144, 155, 156 ]
   }, {
     "query" : "recent temperature readings",
     "datasetIndex" : 4,
-    "expectedMinRecords" : 0,
-    "resultIndices" : [ ]
+    "expectedMinRecords" : 11,
+      "resultIndices" : [ 6, 23, 37, 54, 67, 80, 98, 111, 126, 140, 152 ]
   }, {
     "query" : "signs of infection or inflammation",
     "datasetIndex" : 4,

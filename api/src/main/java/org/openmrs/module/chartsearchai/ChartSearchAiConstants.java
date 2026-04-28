@@ -123,6 +123,24 @@ public class ChartSearchAiConstants {
 	 * coherence outlier detection. */
 	public static final double COHERENCE_ADAPTIVE_GAP_RATIO = 0.20;
 
+	/** Maximum number of keyword terms a query can have for the concept-
+	 * similarity expansion to consider it. Longer queries are typically
+	 * multi-concept and unsafe to collapse onto a single chart concept's
+	 * tokens. */
+	public static final int CONCEPT_EXPANSION_MAX_KW_TERMS = 4;
+
+	/** Minimum length of a kwTerm for it to count as a vocabulary-overlap
+	 * anchor in the moderate-similarity guard. Two-letter tokens (e.g.
+	 * "is", "of") are too generic to discriminate. */
+	public static final int CONCEPT_EXPANSION_MIN_OVERLAP_LENGTH = 3;
+
+	/** Fraction of the corpus above which a concept token is considered
+	 * too common to anchor a keyword search after expansion. A token
+	 * appearing in &gt;20 % of records is generic (e.g. "method" on a
+	 * chart with many frequency obs). Threshold has a floor of 1 so
+	 * very small corpora do not lose every token. */
+	public static final double CONCEPT_EXPANSION_IDF_FRACTION = 0.20;
+
 	/** Reference candidate count for coherence gap ratio calibration.
 	 * {@link #COHERENCE_ADAPTIVE_GAP_RATIO} was calibrated for candidate
 	 * sets of this size. For smaller sets, the gap ratio is scaled up by

@@ -1117,6 +1117,9 @@ public class LlmInferenceService implements ChartSearchService {
 		double[] keywordScores = new double[allEmbeddings.size()];
 		ChartEmbedding[] embeddings = new ChartEmbedding[allEmbeddings.size()];
 		int validCount = 0;
+		// First pass: collect valid records and compute semantic scores.
+		// Keyword scoring is deferred until after concept-similarity
+		// expansion so the (possibly replaced) kwTerms are scored.
 		for (int i = 0; i < allEmbeddings.size(); i++) {
 			ChartEmbedding ce = allEmbeddings.get(i);
 			float[] vector = ce.getEmbeddingVector();
@@ -1125,6 +1128,32 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 			embeddings[validCount] = ce;
 			semanticScores[validCount] = cosineSimilarity(queryVector, vector);
+			validCount++;
+		}
+		if (validCount < embeddings.length) {
+			embeddings = java.util.Arrays.copyOf(embeddings, validCount);
+		}
+		// Concept-similarity expansion: when the query phrasing isn't
+		// in any record but the embedding model recognises a single
+		// patient-chart concept as a near-synonym (e.g. "heart rate"
+		// → "Pulse"), replace kwTerms with the concept's tokens so
+		// keyword scoring can anchor on real record vocabulary. See
+		// expandKwTermsViaConceptSimilarity for the activation rule.
+		String[] expandedKwTerms = expandKwTermsViaConceptSimilarity(
+				kwTerms, queryVector, embeddings, provider, config);
+		if (expandedKwTerms != kwTerms) {
+			kwTerms = expandedKwTerms;
+			// Type-indicator restriction was computed from the original
+			// query terms. After replacement the new terms are concept
+			// names; the user did not literally use type-indicator
+			// vocabulary, so clear the restriction set to keep keyword
+			// matching unconstrained on the replacement tokens.
+			typeIndicatorTerms = new HashSet<String>();
+		}
+		// Second pass: compute keyword scores with the (possibly
+		// expanded) kwTerms.
+		for (int i = 0; i < embeddings.length; i++) {
+			ChartEmbedding ce = embeddings[i];
 			// Strip synonym parentheticals before keyword scoring so
 			// that "(syn. Hemoglobin performed on blood)" doesn't cause
 			// "blood" to match Haemoglobin records. Synonyms stay in the
@@ -1134,17 +1163,15 @@ public class LlmInferenceService implements ChartSearchService {
 			String keywordText = ChartSearchAiUtils.buildPrefixedText(
 					ce.getResourceType(), body);
 			if (typeIndicatorTerms.isEmpty()) {
-				keywordScores[validCount] = computeKeywordScore(
+				keywordScores[i] = computeKeywordScore(
 						kwTerms, keywordText);
 			} else {
-				keywordScores[validCount] = computeKeywordScoreRestricted(
+				keywordScores[i] = computeKeywordScoreRestricted(
 						kwTerms, keywordText, body,
 						typeIndicatorTerms);
 			}
-			validCount++;
 		}
-		if (validCount < embeddings.length) {
-			embeddings = java.util.Arrays.copyOf(embeddings, validCount);
+		if (validCount < semanticScores.length) {
 			semanticScores = java.util.Arrays.copyOf(semanticScores, validCount);
 			keywordScores = java.util.Arrays.copyOf(keywordScores, validCount);
 		}
@@ -4701,6 +4728,217 @@ public class LlmInferenceService implements ChartSearchService {
 		return ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT;
 	}
 
+	private static final Set<String> CONCEPT_EXPANSION_FUNCTION_WORDS =
+			Collections.unmodifiableSet(new HashSet<String>(
+					java.util.Arrays.asList(
+							"of", "to", "and", "or", "the", "a", "an",
+							"in", "on", "for", "with", "by", "as")));
+
+	/**
+	 * Embedding-based query expansion. When the user's query phrasing
+	 * doesn't appear verbatim in any record but a concept name in the
+	 * patient's chart is semantically very close to the query (per the
+	 * embedding model's query encoder), replaces {@code kwTerms} with
+	 * that concept's tokens so keyword scoring can anchor on the
+	 * actual record vocabulary.
+	 *
+	 * <p>Bridges the synonym gap that the OpenMRS concept dictionary
+	 * doesn't capture: e.g. the demo Pulse concept lists "HR" but not
+	 * "heart rate", yet MedCPT's query encoder maps "heart rate" within
+	 * 0.83 cosine of "Pulse". After replacement the partial-match gate
+	 * sees a clean full keyword match and stops rejecting pulse
+	 * records.</p>
+	 *
+	 * <p>Activation rule (all required, designed to avoid breaking
+	 * queries that already work):</p>
+	 * <ol>
+	 *   <li>{@code kwTerms.length} between 1 and
+	 *   {@link ChartSearchAiConstants#CONCEPT_EXPANSION_MAX_KW_TERMS}
+	 *   — longer queries are typically multi-concept and unsafe to
+	 *   collapse to one synonym.</li>
+	 *   <li>No record contains every {@code kwTerms} substring — if a
+	 *   full match is already possible, original keyword scoring is
+	 *   doing the right thing and replacement risks losing it.</li>
+	 *   <li>The closest concept's similarity AND its margin over the
+	 *   second-best concept satisfy one of two model-tuned paths:
+	 *     <ol type="a">
+	 *       <li>Very-high absolute similarity (≥
+	 *       {@code config.conceptExpansionVeryHighMinSim}) AND modest
+	 *       margin (≥ {@code config.conceptExpansionVeryHighMinMargin}
+	 *       above second-best). Catches strong synonym matches.</li>
+	 *       <li>Moderate similarity (≥
+	 *       {@code config.conceptExpansionModerateMinSim}) AND larger
+	 *       margin (≥ {@code config.conceptExpansionModerateMinMargin}).
+	 *       Protects against false expansion when several concepts
+	 *       cluster near the threshold (e.g. "allergies" matching
+	 *       multiple allergy-related concepts).</li>
+	 *     </ol>
+	 *   Multi-concept queries (e.g. "blood pressure and pulse" where SBP
+	 *   and Pulse both score ~0.92) fail both because their top two
+	 *   concepts cluster.</li>
+	 *   <li>The concept's tokens differ from {@code kwTerms} (set
+	 *   inequality) — else expansion is a no-op.</li>
+	 * </ol>
+	 *
+	 * <p>Cost: one query-encoder call per unique concept name in the
+	 * patient's chart (typically 20-40), plus one cosine pass. Returns
+	 * the same reference as {@code kwTerms} when no expansion applies,
+	 * so callers can detect via identity comparison.</p>
+	 */
+	static String[] expandKwTermsViaConceptSimilarity(String[] kwTerms,
+			float[] queryVector, ChartEmbedding[] embeddings,
+			org.openmrs.module.chartsearchai.embedding.EmbeddingProvider provider,
+			PipelineConfig config) {
+		if (kwTerms.length == 0
+				|| kwTerms.length > ChartSearchAiConstants.CONCEPT_EXPANSION_MAX_KW_TERMS
+				|| embeddings == null || embeddings.length == 0
+				|| provider == null || queryVector == null) {
+			return kwTerms;
+		}
+		// Skip when at least one record already contains every kwTerm —
+		// keyword scoring is already finding full matches, replacing
+		// would only narrow what we already capture correctly.
+		for (ChartEmbedding ce : embeddings) {
+			String text = ce.getTextContent();
+			if (text == null) continue;
+			String lower = text.toLowerCase();
+			boolean allFound = true;
+			for (String t : kwTerms) {
+				if (!lower.contains(t)) {
+					allFound = false;
+					break;
+				}
+			}
+			if (allFound) {
+				return kwTerms;
+			}
+		}
+		// Collect unique concept names from the records.
+		Set<String> conceptNames = new java.util.LinkedHashSet<String>();
+		for (ChartEmbedding ce : embeddings) {
+			String name = ConceptNameUtil.extractConceptName(ce.getTextContent());
+			if (name != null) {
+				String trimmed = name.trim();
+				if (!trimmed.isEmpty()) {
+					conceptNames.add(trimmed);
+				}
+			}
+		}
+		if (conceptNames.isEmpty()) {
+			return kwTerms;
+		}
+		// Find the closest concept (by query-encoder cosine) AND track
+		// the second-best score to assess "clear winner" margin.
+		String bestConcept = null;
+		double bestSim = -1;
+		double secondSim = -1;
+		for (String name : conceptNames) {
+			float[] vec;
+			try {
+				vec = provider.embedQuery(name);
+			} catch (Exception e) {
+				continue;
+			}
+			if (vec == null || vec.length != queryVector.length) {
+				continue;
+			}
+			double sim = cosineSimilarity(queryVector, vec);
+			if (sim > bestSim) {
+				secondSim = bestSim;
+				bestSim = sim;
+				bestConcept = name;
+			} else if (sim > secondSim) {
+				secondSim = sim;
+			}
+		}
+		double margin = bestSim - secondSim;
+		boolean veryHighWithModestMargin =
+				bestSim >= config.conceptExpansionVeryHighMinSim
+				&& margin >= config.conceptExpansionVeryHighMinMargin;
+		boolean moderateWithLargeMargin =
+				bestSim >= config.conceptExpansionModerateMinSim
+				&& margin >= config.conceptExpansionModerateMinMargin;
+		if (bestConcept == null
+				|| (!veryHighWithModestMargin && !moderateWithLargeMargin)) {
+			return kwTerms;
+		}
+		// Vocabulary-overlap guard: below the bypass threshold, require
+		// at least one original kwTerm to appear in the concept name.
+		// This blocks "allergies → Asthma" (no shared word, model just
+		// considers them adjacent) while still allowing strong
+		// substring/synonym matches like "anaemia → Anemia",
+		// "pulse rate → Pulse", "depression → Mild depressive episode",
+		// and abbreviations whose similarity exceeds the bypass ("TB →
+		// Tuberculosis"). Without this, queries about absent categories
+		// silently get redirected to topic-adjacent concepts.
+		if (bestSim < config.conceptExpansionVocabBypassThreshold) {
+			String conceptLower = bestConcept.toLowerCase();
+			boolean hasOverlap = false;
+			for (String t : kwTerms) {
+				if (t.length() >= ChartSearchAiConstants.CONCEPT_EXPANSION_MIN_OVERLAP_LENGTH
+						&& conceptLower.contains(t)) {
+					hasOverlap = true;
+					break;
+				}
+			}
+			if (!hasOverlap) {
+				return kwTerms;
+			}
+		}
+		// Tokenise the concept name. Strip non-alphanumerics, drop
+		// single-character tokens that would match almost any text.
+		String[] rawTokens = bestConcept.toLowerCase()
+				.replaceAll("[^a-z0-9 ]+", " ").trim().split("\\s+");
+		// Filter the concept tokens to keep only specific, content-bearing
+		// terms:
+		//  1. Drop English function words (see
+		//     CONCEPT_EXPANSION_FUNCTION_WORDS). These appear in concept
+		//     names like "Method of family planning" but as keyword
+		//     anchors they would match far too many records.
+		//  2. IDF filter: drop tokens whose document frequency exceeds
+		//     CONCEPT_EXPANSION_IDF_FRACTION of the corpus. Threshold
+		//     has a floor of 1 so very small corpora (unit tests) don't
+		//     lose every token.
+		int idfThreshold = Math.max(1, (int) Math.ceil(embeddings.length
+				* ChartSearchAiConstants.CONCEPT_EXPANSION_IDF_FRACTION));
+		List<String> conceptTokens = new ArrayList<String>();
+		for (String t : rawTokens) {
+			if (t.length() < 2) continue;
+			if (CONCEPT_EXPANSION_FUNCTION_WORDS.contains(t)) continue;
+			int df = 0;
+			for (ChartEmbedding ce : embeddings) {
+				String text = ce.getTextContent();
+				if (text != null && text.toLowerCase().contains(t)) {
+					df++;
+				}
+			}
+			if (df > 0 && df <= idfThreshold) {
+				conceptTokens.add(t);
+			}
+		}
+		if (conceptTokens.isEmpty()) {
+			return kwTerms;
+		}
+		// Skip the no-op case: expansion produces the same set as the
+		// original kwTerms. Narrowing — e.g. dropping "rate" from
+		// ["pulse","rate"] down to ["pulse"] — IS a meaningful change
+		// because keyword score for a pulse-only record goes from 1/2
+		// (no bonus) to 1/1 (full bonus), unlocking the gate.
+		Set<String> existing = new HashSet<String>();
+		for (String t : kwTerms) existing.add(t.toLowerCase());
+		Set<String> conceptSet = new HashSet<String>(conceptTokens);
+		if (existing.equals(conceptSet)) {
+			return kwTerms;
+		}
+		log.warn("Concept-similarity expansion: kwTerms {} -> {} "
+				+ "(concept '{}' sim={} margin={})",
+				java.util.Arrays.toString(kwTerms),
+				conceptTokens, bestConcept,
+				String.format("%.4f", bestSim),
+				String.format("%.4f", margin));
+		return conceptTokens.toArray(new String[0]);
+	}
+
 	/**
 	 * Returns the model-specific default unless the admin has explicitly
 	 * customized the global property (i.e., the GP value differs from the
@@ -4748,7 +4986,12 @@ public class LlmInferenceService implements ChartSearchService {
 				baseConfig.floorRescueMinZScore,
 				baseConfig.conceptNameGateMinCandidates,
 				baseConfig.conceptFloorMargin,
-				baseConfig.gapSaturationThreshold);
+				baseConfig.gapSaturationThreshold,
+				baseConfig.conceptExpansionVeryHighMinSim,
+				baseConfig.conceptExpansionVeryHighMinMargin,
+				baseConfig.conceptExpansionModerateMinSim,
+				baseConfig.conceptExpansionModerateMinMargin,
+				baseConfig.conceptExpansionVocabBypassThreshold);
 	}
 
 	private static String getQueryPrefix() {
@@ -5383,6 +5626,29 @@ public class LlmInferenceService implements ChartSearchService {
 		 * to disable (e.g. for MedCPT where medical embeddings
 		 * produce meaningful similarity even for adjacent topics). */
 		final double gapSaturationThreshold;
+		/** Concept-similarity expansion — Path A "very-high
+		 * similarity" gate: bestSim of the closest chart concept
+		 * to the query must reach this absolute threshold for the
+		 * expansion to fire on a modest margin. */
+		final double conceptExpansionVeryHighMinSim;
+		/** Concept-similarity expansion — Path A margin: how far
+		 * the best concept must beat the second-best to trigger
+		 * the very-high path. */
+		final double conceptExpansionVeryHighMinMargin;
+		/** Concept-similarity expansion — Path B "moderate
+		 * similarity" gate: bestSim required when the cluster of
+		 * candidate concepts is well-separated. */
+		final double conceptExpansionModerateMinSim;
+		/** Concept-similarity expansion — Path B margin: required
+		 * separation from the second-best concept on the moderate
+		 * path. Larger than Path A's because moderate similarity
+		 * alone is not enough — the winner must clearly stand out. */
+		final double conceptExpansionModerateMinMargin;
+		/** Concept-similarity expansion vocabulary-overlap bypass:
+		 * when bestSim is at or above this threshold, the
+		 * substring-overlap guard is skipped (the embedding match
+		 * is strong enough to trust without lexical anchoring). */
+		final double conceptExpansionVocabBypassThreshold;
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
 				double minScoreGap, double gapValidationCosineThreshold,
@@ -5391,7 +5657,8 @@ public class LlmInferenceService implements ChartSearchService {
 					gapValidationCosineThreshold, similarityRatio,
 					ModelNoiseProfile.conservativeDefault(),
 					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
-					10, 0.85, 0.95);
+					10, 0.85, 0.95,
+					0.90, 0.07, 0.80, 0.14, 0.92);
 		}
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
@@ -5403,7 +5670,8 @@ public class LlmInferenceService implements ChartSearchService {
 			this(keywordWeight, scoreGapMultiplier, minScoreGap,
 					gapValidationCosineThreshold, similarityRatio,
 					noiseProfile, floorRescueMinZScore,
-					conceptNameGateMinCandidates, 0.85, 0.95);
+					conceptNameGateMinCandidates, 0.85, 0.95,
+					0.90, 0.07, 0.80, 0.14, 0.92);
 		}
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
@@ -5414,6 +5682,27 @@ public class LlmInferenceService implements ChartSearchService {
 				int conceptNameGateMinCandidates,
 				double conceptFloorMargin,
 				double gapSaturationThreshold) {
+			this(keywordWeight, scoreGapMultiplier, minScoreGap,
+					gapValidationCosineThreshold, similarityRatio,
+					noiseProfile, floorRescueMinZScore,
+					conceptNameGateMinCandidates,
+					conceptFloorMargin, gapSaturationThreshold,
+					0.90, 0.07, 0.80, 0.14, 0.92);
+		}
+
+		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
+				double minScoreGap, double gapValidationCosineThreshold,
+				double similarityRatio,
+				ModelNoiseProfile noiseProfile,
+				double floorRescueMinZScore,
+				int conceptNameGateMinCandidates,
+				double conceptFloorMargin,
+				double gapSaturationThreshold,
+				double conceptExpansionVeryHighMinSim,
+				double conceptExpansionVeryHighMinMargin,
+				double conceptExpansionModerateMinSim,
+				double conceptExpansionModerateMinMargin,
+				double conceptExpansionVocabBypassThreshold) {
 			this.keywordWeight = keywordWeight;
 			this.scoreGapMultiplier = scoreGapMultiplier;
 			this.minScoreGap = minScoreGap;
@@ -5425,6 +5714,16 @@ public class LlmInferenceService implements ChartSearchService {
 					conceptNameGateMinCandidates;
 			this.conceptFloorMargin = conceptFloorMargin;
 			this.gapSaturationThreshold = gapSaturationThreshold;
+			this.conceptExpansionVeryHighMinSim =
+					conceptExpansionVeryHighMinSim;
+			this.conceptExpansionVeryHighMinMargin =
+					conceptExpansionVeryHighMinMargin;
+			this.conceptExpansionModerateMinSim =
+					conceptExpansionModerateMinSim;
+			this.conceptExpansionModerateMinMargin =
+					conceptExpansionModerateMinMargin;
+			this.conceptExpansionVocabBypassThreshold =
+					conceptExpansionVocabBypassThreshold;
 		}
 
 		/**
@@ -5445,7 +5744,12 @@ public class LlmInferenceService implements ChartSearchService {
 					floorRescueMinZScore,
 					conceptNameGateMinCandidates,
 					conceptFloorMargin,
-					gapSaturationThreshold);
+					gapSaturationThreshold,
+					conceptExpansionVeryHighMinSim,
+					conceptExpansionVeryHighMinMargin,
+					conceptExpansionModerateMinSim,
+					conceptExpansionModerateMinMargin,
+					conceptExpansionVocabBypassThreshold);
 		}
 
 		/** Returns a config using all default constant values
@@ -5459,7 +5763,8 @@ public class LlmInferenceService implements ChartSearchService {
 					ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO,
 					ModelNoiseProfile.conservativeDefault(),
 					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
-					10, 0.85, 0.95);
+					10, 0.85, 0.95,
+					0.90, 0.07, 0.80, 0.14, 0.92);
 		}
 
 		/**
@@ -5522,7 +5827,8 @@ public class LlmInferenceService implements ChartSearchService {
 					ModelNoiseProfile.conservativeDefault(),
 					1.5,    // floorRescueMinZScore — lower for compressed range
 					10,     // conceptNameGateMinCandidates — same as L6-v2
-					0.85, 0.95);
+					0.85, 0.95,
+					0.90, 0.07, 0.80, 0.14, 0.92);
 		}
 
 		/**
@@ -5567,7 +5873,8 @@ public class LlmInferenceService implements ChartSearchService {
 					ModelNoiseProfile.conservativeDefault(),
 					1.0,
 					ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS,
-					0.85, 0.0);
+					0.85, 0.0,
+					0.90, 0.07, 0.80, 0.14, 0.92);
 		}
 	}
 
