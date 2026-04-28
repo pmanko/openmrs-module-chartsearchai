@@ -20,7 +20,10 @@ jobs:
             platform: Mac
             arch: aarch64
             binary: llama-server
-            cmake_extra: ''
+            # Disable native auto-detect and pin a baseline so the binary runs on
+            # older M-series chips and on virtualised ARM CPUs (e.g. Docker on Mac
+            # doesn't expose every extension the runner's M-series supports).
+            cmake_extra: '-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a'
           - os: macos-14
             platform: Mac
             arch: x86_64
@@ -35,7 +38,10 @@ jobs:
             platform: Linux
             arch: aarch64
             binary: llama-server
-            cmake_extra: ''
+            # GitHub's ARM runners are Neoverse-class with SVE/SVE2; Apple Silicon
+            # under Docker does not expose those. Disable native auto-detect and
+            # pin armv8.2-a so the binary runs on any reasonable aarch64 host.
+            cmake_extra: '-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a'
           - os: windows-2022
             platform: Windows
             arch: x86_64
