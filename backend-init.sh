@@ -1,4 +1,12 @@
 #!/bin/sh
+# When started as root (deployments without a separate init container that
+# chowns the volume), heal pre-Apr-27 root-owned contents and drop to the
+# openmrs user. The application itself always runs as uid 1001.
+if [ "$(id -u)" = "0" ]; then
+  chown -R 1001:1001 /openmrs/data 2>/dev/null || true
+  exec runuser -u openmrs -- "$0" "$@"
+fi
+
 MODEL_DIR="/openmrs/data/chartsearchai"
 mkdir -p "$MODEL_DIR"
 

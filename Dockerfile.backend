@@ -29,8 +29,10 @@ COPY --from=builder /build/omod/target/chartsearchai-*.omod /openmrs/distributio
 COPY --chmod=755 backend-init.sh /usr/local/bin/backend-init.sh
 
 RUN mkdir -p /openmrs/data && chown -R 1001:1001 /openmrs /usr/local/tomcat
-USER 1001
 
+# Entrypoint starts as root so it can heal pre-Apr-27 root-owned volumes
+# (chown -R inside backend-init.sh), then re-execs itself as uid 1001.
+# Final OpenMRS process always runs as the openmrs user.
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/bin/backend-init.sh"]
