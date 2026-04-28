@@ -44,6 +44,7 @@ import org.openmrs.module.chartsearchai.api.ElasticsearchIndexer;
 import org.openmrs.module.chartsearchai.api.HybridRetriever;
 import org.openmrs.module.chartsearchai.api.LuceneIndexer;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
+import org.openmrs.module.chartsearchai.embedding.CrossEncoderProvider;
 import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
 import org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
@@ -1607,8 +1608,127 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 		}
 
+		// Cross-encoder gate: when a cross-encoder is configured, score
+		// each candidate (kept + top semantic neighbors) jointly against
+		// the query. Apply two override decisions on top of the dual-
+		// encoder pipeline:
+		//   - HARD REJECT: drop kept records the cross-encoder rates
+		//     below profiledConfig.crossEncoderHardReject — the model
+		//     is confident the record is unrelated to the query.
+		//   - HARD KEEP: rescue records the dual-encoder pipeline
+		//     dropped that the cross-encoder rates at or above
+		//     profiledConfig.crossEncoderHardKeep — the model is
+		//     confident the record IS related, regardless of upstream
+		//     gate decisions.
+		//
+		// Scope-bounded to top-K semantic neighbors (avoids scoring all
+		// records in the chart). Skipped silently when no cross-encoder
+		// is configured.
+		try {
+			CrossEncoderProvider ceProvider = org.openmrs.api.context.Context
+					.getRegisteredComponent(
+							"chartSearchAi.crossEncoderProvider",
+							CrossEncoderProvider.class);
+			if (ceProvider != null && ceProvider.isAvailable()
+					&& pipelineResult != null) {
+				pipelineResult = applyCrossEncoderGate(pipelineResult,
+						embeddings, validCount, queryVector, question,
+						ceProvider, profiledConfig);
+			}
+		}
+		catch (Exception e) {
+			log.warn("Cross-encoder gate skipped due to error: {}",
+					e.getMessage());
+		}
+
 		return new FindSimilarResult(pipelineResult, noiseProfile,
 				keywordMatchCount);
+	}
+
+	/**
+	 * Applies the cross-encoder relevance gate. Bounds inference cost
+	 * to a top-K window of semantic neighbors (joined with the kept
+	 * pipeline result). Returns a new candidate list with hard-rejects
+	 * dropped and hard-keeps included.
+	 */
+	static List<ChartEmbedding> applyCrossEncoderGate(
+			List<ChartEmbedding> pipelineResult,
+			ChartEmbedding[] embeddings, int validCount,
+			float[] queryVector, String question,
+			CrossEncoderProvider ceProvider,
+			PipelineConfig config) {
+		// Choose the candidate pool: union of kept pipelineResult and
+		// the top-K semantic neighbors. Top-K bounds the rescue path's
+		// inference cost without depending on internal pipeline state.
+		final int topK = 20;
+		java.util.Map<Integer, Double> topByScore =
+				new java.util.LinkedHashMap<Integer, Double>();
+		// First populate with semantic top-K
+		double[] semScores = new double[validCount];
+		Integer[] indices = new Integer[validCount];
+		for (int i = 0; i < validCount; i++) {
+			float[] vec = embeddings[i].getEmbeddingVector();
+			semScores[i] = (vec == null) ? Double.NEGATIVE_INFINITY
+					: ChartSearchAiUtils.cosineSimilarity(queryVector, vec);
+			indices[i] = i;
+		}
+		java.util.Arrays.sort(indices, (a, b) ->
+				Double.compare(semScores[b], semScores[a]));
+		for (int i = 0; i < Math.min(topK, validCount); i++) {
+			int idx = indices[i];
+			topByScore.put(idx, semScores[idx]);
+		}
+		// Mark indices already in pipelineResult so we know which are
+		// "kept" vs "candidate for rescue".
+		java.util.Set<ChartEmbedding> keptSet =
+				new java.util.HashSet<ChartEmbedding>(pipelineResult);
+
+		// Score each candidate with cross-encoder.
+		List<ChartEmbedding> finalList =
+				new java.util.ArrayList<ChartEmbedding>();
+		// Track records dropped from pipelineResult to log clearly.
+		int dropped = 0;
+		int rescued = 0;
+
+		// First pass: kept records — drop only if hard-rejected.
+		for (ChartEmbedding ce : pipelineResult) {
+			String text = ce.getTextContent();
+			if (text == null) {
+				finalList.add(ce);
+				continue;
+			}
+			float score = ceProvider.scorePair(question, text);
+			if (score < config.crossEncoderHardReject) {
+				dropped++;
+			} else {
+				finalList.add(ce);
+			}
+		}
+
+		// Second pass: top-K semantic candidates not yet kept — rescue
+		// only if hard-kept.
+		for (java.util.Map.Entry<Integer, Double> e : topByScore.entrySet()) {
+			ChartEmbedding ce = embeddings[e.getKey()];
+			if (keptSet.contains(ce)) continue;
+			String text = ce.getTextContent();
+			if (text == null) continue;
+			float score = ceProvider.scorePair(question, text);
+			if (score >= config.crossEncoderHardKeep) {
+				finalList.add(ce);
+				rescued++;
+			}
+		}
+
+		if (dropped > 0 || rescued > 0) {
+			log.warn("Cross-encoder gate: dropped {} hard-reject(s), "
+					+ "rescued {} hard-keep(s) (final size {} from "
+					+ "pipeline {}, hardKeep={}, hardReject={})",
+					dropped, rescued, finalList.size(),
+					pipelineResult.size(),
+					String.format("%.2f", config.crossEncoderHardKeep),
+					String.format("%.2f", config.crossEncoderHardReject));
+		}
+		return finalList;
 	}
 
 	/**
@@ -5006,7 +5126,9 @@ public class LlmInferenceService implements ChartSearchService {
 				baseConfig.conceptExpansionVeryHighMinMargin,
 				baseConfig.conceptExpansionModerateMinSim,
 				baseConfig.conceptExpansionModerateMinMargin,
-				baseConfig.conceptExpansionVocabBypassThreshold);
+				baseConfig.conceptExpansionVocabBypassThreshold,
+				baseConfig.crossEncoderHardKeep,
+				baseConfig.crossEncoderHardReject);
 	}
 
 	private static String getQueryPrefix() {
@@ -5664,6 +5786,18 @@ public class LlmInferenceService implements ChartSearchService {
 		 * substring-overlap guard is skipped (the embedding match
 		 * is strong enough to trust without lexical anchoring). */
 		final double conceptExpansionVocabBypassThreshold;
+		/** Cross-encoder hard-keep threshold: candidate records
+		 * scoring at or above this jointly-encoded relevance logit
+		 * are kept regardless of upstream gate decisions — a
+		 * positive override that protects high-confidence matches
+		 * the dual-encoder pipeline might otherwise drop. */
+		final double crossEncoderHardKeep;
+		/** Cross-encoder hard-reject threshold: candidate records
+		 * scoring at or below this jointly-encoded relevance logit
+		 * are dropped — the cross-encoder is confident the
+		 * record is unrelated to the query. Middle scores defer to
+		 * the dual-encoder pipeline's existing decision. */
+		final double crossEncoderHardReject;
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
 				double minScoreGap, double gapValidationCosineThreshold,
@@ -5673,7 +5807,8 @@ public class LlmInferenceService implements ChartSearchService {
 					ModelNoiseProfile.conservativeDefault(),
 					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
 					10, 0.85, 0.95,
-					0.90, 0.07, 0.80, 0.14, 0.92);
+					0.90, 0.07, 0.80, 0.14, 0.92,
+					-3.0, -12.0);
 		}
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
@@ -5686,7 +5821,8 @@ public class LlmInferenceService implements ChartSearchService {
 					gapValidationCosineThreshold, similarityRatio,
 					noiseProfile, floorRescueMinZScore,
 					conceptNameGateMinCandidates, 0.85, 0.95,
-					0.90, 0.07, 0.80, 0.14, 0.92);
+					0.90, 0.07, 0.80, 0.14, 0.92,
+					-3.0, -12.0);
 		}
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
@@ -5702,7 +5838,8 @@ public class LlmInferenceService implements ChartSearchService {
 					noiseProfile, floorRescueMinZScore,
 					conceptNameGateMinCandidates,
 					conceptFloorMargin, gapSaturationThreshold,
-					0.90, 0.07, 0.80, 0.14, 0.92);
+					0.90, 0.07, 0.80, 0.14, 0.92,
+					-3.0, -12.0);
 		}
 
 		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
@@ -5718,6 +5855,34 @@ public class LlmInferenceService implements ChartSearchService {
 				double conceptExpansionModerateMinSim,
 				double conceptExpansionModerateMinMargin,
 				double conceptExpansionVocabBypassThreshold) {
+			this(keywordWeight, scoreGapMultiplier, minScoreGap,
+					gapValidationCosineThreshold, similarityRatio,
+					noiseProfile, floorRescueMinZScore,
+					conceptNameGateMinCandidates,
+					conceptFloorMargin, gapSaturationThreshold,
+					conceptExpansionVeryHighMinSim,
+					conceptExpansionVeryHighMinMargin,
+					conceptExpansionModerateMinSim,
+					conceptExpansionModerateMinMargin,
+					conceptExpansionVocabBypassThreshold,
+					-3.0, -12.0);
+		}
+
+		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
+				double minScoreGap, double gapValidationCosineThreshold,
+				double similarityRatio,
+				ModelNoiseProfile noiseProfile,
+				double floorRescueMinZScore,
+				int conceptNameGateMinCandidates,
+				double conceptFloorMargin,
+				double gapSaturationThreshold,
+				double conceptExpansionVeryHighMinSim,
+				double conceptExpansionVeryHighMinMargin,
+				double conceptExpansionModerateMinSim,
+				double conceptExpansionModerateMinMargin,
+				double conceptExpansionVocabBypassThreshold,
+				double crossEncoderHardKeep,
+				double crossEncoderHardReject) {
 			this.keywordWeight = keywordWeight;
 			this.scoreGapMultiplier = scoreGapMultiplier;
 			this.minScoreGap = minScoreGap;
@@ -5739,6 +5904,8 @@ public class LlmInferenceService implements ChartSearchService {
 					conceptExpansionModerateMinMargin;
 			this.conceptExpansionVocabBypassThreshold =
 					conceptExpansionVocabBypassThreshold;
+			this.crossEncoderHardKeep = crossEncoderHardKeep;
+			this.crossEncoderHardReject = crossEncoderHardReject;
 		}
 
 		/**
@@ -5764,7 +5931,9 @@ public class LlmInferenceService implements ChartSearchService {
 					conceptExpansionVeryHighMinMargin,
 					conceptExpansionModerateMinSim,
 					conceptExpansionModerateMinMargin,
-					conceptExpansionVocabBypassThreshold);
+					conceptExpansionVocabBypassThreshold,
+					crossEncoderHardKeep,
+					crossEncoderHardReject);
 		}
 
 		/** Returns a config using all default constant values

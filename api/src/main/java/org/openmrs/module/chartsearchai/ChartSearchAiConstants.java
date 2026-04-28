@@ -25,6 +25,22 @@ public class ChartSearchAiConstants {
 	 */
 	public static final String GP_EMBEDDING_QUERY_MODEL_FILE_PATH = "chartsearchai.embedding.queryModelFilePath";
 
+	/**
+	 * Optional: path to a cross-encoder ONNX model that scores
+	 * {@code (query, record)} pairs jointly. When set, the retrieval
+	 * pipeline uses cross-encoder scores as a high-precision relevance
+	 * gate after dual-encoder filtering. When unset, the cross-encoder
+	 * stage is skipped and the pipeline falls back to dual-encoder-only
+	 * behaviour.
+	 */
+	public static final String GP_CROSS_ENCODER_MODEL_FILE_PATH = "chartsearchai.crossEncoder.modelFilePath";
+
+	/**
+	 * Vocabulary file (vocab.txt) for the cross-encoder tokenizer.
+	 * Required when {@link #GP_CROSS_ENCODER_MODEL_FILE_PATH} is set.
+	 */
+	public static final String GP_CROSS_ENCODER_VOCAB_FILE_PATH = "chartsearchai.crossEncoder.vocabFilePath";
+
 	public static final String GP_LLM_MODEL_FILE_PATH = "chartsearchai.llm.modelFilePath";
 
 	public static final String GP_EMBEDDING_PRE_FILTER = "chartsearchai.embedding.preFilter";
