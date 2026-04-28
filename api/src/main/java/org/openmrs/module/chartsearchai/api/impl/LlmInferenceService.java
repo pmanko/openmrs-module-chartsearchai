@@ -98,6 +98,10 @@ public class LlmInferenceService implements ChartSearchService {
 	@Autowired
 	private LlmProvider llmProvider;
 
+	@Autowired(required = false)
+	@Qualifier("chartSearchAi.crossEncoderProvider")
+	private CrossEncoderProvider crossEncoderProvider;
+
 	private static final int NOISE_PROFILE_CACHE_MAX_SIZE = 100;
 
 	private final ConcurrentHashMap<String, ModelNoiseProfile> noiseProfileCache =
@@ -987,6 +991,29 @@ public class LlmInferenceService implements ChartSearchService {
 				}
 				noiseProfileCache.put(cacheKey, result.noiseProfile);
 			}
+			// Cross-encoder rerank gate (opt-in via global properties).
+			// Applied here at the instance level so it can use the
+			// autowired CrossEncoderProvider — the static
+			// findSimilarWithProfile pipeline stays pure.
+			if (crossEncoderProvider != null
+					&& crossEncoderProvider.isAvailable()
+					&& result != null && result.records != null) {
+				ChartEmbedding[] embArray = allEmbeddings.toArray(
+						new ChartEmbedding[0]);
+				float[] queryVector = embeddingProvider.embedQuery(
+						getQueryPrefix() + buildEmbeddingQuery(
+								stripQueryStopwords(question)));
+				List<ChartEmbedding> reranked = applyCrossEncoderGate(
+						result.records, embArray, embArray.length,
+						queryVector, question,
+						crossEncoderProvider, config);
+				if (reranked.size() != result.records.size()) {
+					log.warn("Cross-encoder rerank: pipeline {} -> {}",
+							result.records.size(), reranked.size());
+				}
+				result = new FindSimilarResult(reranked,
+						result.noiseProfile, result.keywordMatchCount);
+			}
 			return result;
 		}
 		catch (Exception e) {
@@ -1606,39 +1633,6 @@ public class LlmInferenceService implements ChartSearchService {
 								queryTerms));
 				pipelineResult = Collections.emptyList();
 			}
-		}
-
-		// Cross-encoder gate: when a cross-encoder is configured, score
-		// each candidate (kept + top semantic neighbors) jointly against
-		// the query. Apply two override decisions on top of the dual-
-		// encoder pipeline:
-		//   - HARD REJECT: drop kept records the cross-encoder rates
-		//     below profiledConfig.crossEncoderHardReject — the model
-		//     is confident the record is unrelated to the query.
-		//   - HARD KEEP: rescue records the dual-encoder pipeline
-		//     dropped that the cross-encoder rates at or above
-		//     profiledConfig.crossEncoderHardKeep — the model is
-		//     confident the record IS related, regardless of upstream
-		//     gate decisions.
-		//
-		// Scope-bounded to top-K semantic neighbors (avoids scoring all
-		// records in the chart). Skipped silently when no cross-encoder
-		// is configured.
-		try {
-			CrossEncoderProvider ceProvider = org.openmrs.api.context.Context
-					.getRegisteredComponent(
-							"chartSearchAi.crossEncoderProvider",
-							CrossEncoderProvider.class);
-			if (ceProvider != null && ceProvider.isAvailable()
-					&& pipelineResult != null) {
-				pipelineResult = applyCrossEncoderGate(pipelineResult,
-						embeddings, validCount, queryVector, question,
-						ceProvider, profiledConfig);
-			}
-		}
-		catch (Exception e) {
-			log.warn("Cross-encoder gate skipped due to error: {}",
-					e.getMessage());
 		}
 
 		return new FindSimilarResult(pipelineResult, noiseProfile,
