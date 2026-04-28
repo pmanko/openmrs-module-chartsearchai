@@ -202,6 +202,11 @@ public class LocalLlmEngine implements LlmEngine {
 		command.add("on");
 		command.add("-c");
 		command.add(String.valueOf(getContextSize()));
+		// Disable the model's reasoning channel. Models like Gemma 4 emit a
+		// reasoning_content stream that json_schema does not constrain, which can
+		// burn thousands of output tokens before the JSON answer is produced.
+		command.add("--reasoning-budget");
+		command.add("0");
 		command.add("--log-disable");
 
 		log.info("Starting llama-server on port {} with model {}", serverPort, modelPath);
@@ -306,7 +311,7 @@ public class LocalLlmEngine implements LlmEngine {
 		httpClient = null;
 	}
 
-	private String buildRequestBody(String systemPrompt, String userMessage, boolean stream) {
+	String buildRequestBody(String systemPrompt, String userMessage, boolean stream) {
 		ObjectNode root = MAPPER.createObjectNode();
 		root.put("temperature", 0.0);
 		root.put("max_tokens", ChartSearchAiConstants.DEFAULT_MAX_TOKENS);
@@ -317,9 +322,7 @@ public class LocalLlmEngine implements LlmEngine {
 			root.set("stream_options", streamOptions);
 		}
 
-		ObjectNode responseFormat = MAPPER.createObjectNode();
-		responseFormat.put("type", "json_object");
-		root.set("response_format", responseFormat);
+		root.set("response_format", buildJsonSchemaResponseFormat());
 
 		ArrayNode messages = MAPPER.createArrayNode();
 
@@ -341,6 +344,43 @@ public class LocalLlmEngine implements LlmEngine {
 		catch (IOException e) {
 			throw new APIException("Failed to build request body", e);
 		}
+	}
+
+	// Strict JSON schema for {answer: string, citations: int[]}. Forces the model to emit
+	// a closing brace and stop, instead of looping past a complete answer up to max_tokens.
+	private static ObjectNode buildJsonSchemaResponseFormat() {
+		ObjectNode answerProp = MAPPER.createObjectNode();
+		answerProp.put("type", "string");
+
+		ObjectNode citationItem = MAPPER.createObjectNode();
+		citationItem.put("type", "integer");
+		ObjectNode citationsProp = MAPPER.createObjectNode();
+		citationsProp.put("type", "array");
+		citationsProp.set("items", citationItem);
+
+		ObjectNode properties = MAPPER.createObjectNode();
+		properties.set("answer", answerProp);
+		properties.set("citations", citationsProp);
+
+		ArrayNode required = MAPPER.createArrayNode();
+		required.add("answer");
+		required.add("citations");
+
+		ObjectNode schema = MAPPER.createObjectNode();
+		schema.put("type", "object");
+		schema.set("properties", properties);
+		schema.set("required", required);
+		schema.put("additionalProperties", false);
+
+		ObjectNode jsonSchema = MAPPER.createObjectNode();
+		jsonSchema.put("name", "chart_answer");
+		jsonSchema.put("strict", true);
+		jsonSchema.set("schema", schema);
+
+		ObjectNode responseFormat = MAPPER.createObjectNode();
+		responseFormat.put("type", "json_schema");
+		responseFormat.set("json_schema", jsonSchema);
+		return responseFormat;
 	}
 
 	private InferenceResult parseResponse(String responseBody) throws IOException {
