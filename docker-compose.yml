@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   gateway:
-    image: openmrs/openmrs-reference-application-3-gateway:${TAG:-nightly}
+    image: openmrs/openmrs-reference-application-3-gateway:${TAG:-nightly-chartsearch}
     depends_on:
       - frontend
       - backend
@@ -19,12 +19,25 @@ services:
       API_URL: /openmrs
       SPA_DEFAULT_LOCALE:
 
+  # Heals volumes whose contents were created as root by pre-Apr-27 backend images,
+  # so the post-Apr-27 backend (running as uid 1001) can write to /openmrs/data.
+  # Idempotent — already-correct volumes are unaffected.
+  init-openmrs-data:
+    image: alpine:3
+    user: root
+    volumes:
+      - openmrs-data:/openmrs/data
+    command: ["chown", "-R", "1001:1001", "/openmrs/data"]
+    restart: "no"
+
   backend:
     image: openmrs/openmrs-reference-application-3-backend:${TAG:-nightly-chartsearch}
     build:
       context: .
       dockerfile: Dockerfile.backend
     depends_on:
+      init-openmrs-data:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
     environment:

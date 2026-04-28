@@ -1,5 +1,6 @@
 FROM maven:3.9-eclipse-temurin-11 AS builder
 
+ARG CACHE_BUST
 RUN git clone --depth 1 https://github.com/openmrs/openmrs-module-chartsearchai.git /build
 WORKDIR /build
 RUN mvn clean package -DskipTests -B
