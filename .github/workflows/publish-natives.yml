@@ -29,19 +29,20 @@ jobs:
             arch: x86_64
             binary: llama-server
             cmake_extra: '-DCMAKE_OSX_ARCHITECTURES=x86_64 -DGGML_NATIVE=OFF -DLLAMA_OPENSSL=OFF'
+          # Linux builds use llama.cpp's runtime CPU dispatch — multiple
+          # libggml-cpu-* variants are bundled, and the loader picks the
+          # best variant for the host CPU at startup. Requires shared libs
+          # and dynamic backend loading.
           - os: ubuntu-22.04
             platform: Linux
             arch: x86_64
             binary: llama-server
-            cmake_extra: ''
+            cmake_extra: '-DBUILD_SHARED_LIBS=ON -DGGML_STATIC=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON'
           - os: ubuntu-22.04-arm
             platform: Linux
             arch: aarch64
             binary: llama-server
-            # GitHub's ARM runners are Neoverse-class with SVE/SVE2; Apple Silicon
-            # under Docker does not expose those. Disable native auto-detect and
-            # pin armv8.2-a so the binary runs on any reasonable aarch64 host.
-            cmake_extra: '-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a'
+            cmake_extra: '-DBUILD_SHARED_LIBS=ON -DGGML_STATIC=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON'
           - os: windows-2022
             platform: Windows
             arch: x86_64
@@ -55,7 +56,7 @@ jobs:
           repository: ggml-org/llama.cpp
           ref: ${{ env.LLAMA_VERSION }}
 
-      - name: Build llama-server (static)
+      - name: Build llama-server
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
@@ -65,13 +66,16 @@ jobs:
           cmake --build build --config Release --target llama-server -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
         shell: bash
 
-      - name: Upload binary
+      - name: Upload binary and shared libraries
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}---${{ matrix.arch }}
           path: |
             build/bin/${{ matrix.binary }}
             build/bin/Release/${{ matrix.binary }}
+            build/bin/*.so*
+            build/bin/*.dylib
+            build/bin/Release/*.dll
 
   publish:
     needs: build-native
@@ -91,12 +95,22 @@ jobs:
             name="$(basename "$dir")"
             platform="${name%---*}"
             arch="${name##*---}"
-            mkdir -p "$NATIVES/$platform/$arch"
-            find "$dir" -type f | xargs -I{} cp {} "$NATIVES/$platform/$arch/"
-            chmod +x "$NATIVES/$platform/$arch/"* 2>/dev/null || true
+            target="$NATIVES/$platform/$arch"
+            mkdir -p "$target"
+            find "$dir" -type f | xargs -I{} cp {} "$target/"
+            chmod +x "$target"/* 2>/dev/null || true
+            # libs.txt lists shared libraries that LocalLlmEngine extracts and
+            # places alongside llama-server with LD_LIBRARY_PATH/DYLD_LIBRARY_PATH
+            # set. The binary itself is excluded — only loadable libraries.
+            (cd "$target" && \
+              find . -maxdepth 1 -type f \( -name '*.so' -o -name '*.so.*' \
+                -o -name '*.dylib' -o -name '*.dll' \) -printf '%f\n' \
+                | sort > libs.txt)
           done
           echo "Assembled natives:"
           find "$NATIVES" -type f -exec ls -lh {} \;
+          echo "libs.txt contents:"
+          find "$NATIVES" -name libs.txt -exec sh -c 'echo "=== $1 ==="; cat "$1"' _ {} \;
 
       - name: Set up Java and Maven
         uses: actions/setup-java@v4
