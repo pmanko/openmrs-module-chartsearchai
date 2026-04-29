@@ -67,6 +67,8 @@ public class LocalLlmEngine implements LlmEngine {
 
 	private String loadedModelPath;
 
+	private int loadedContextSize = -1;
+
 	private int serverPort;
 
 	private HttpClient httpClient;
@@ -185,20 +187,35 @@ public class LocalLlmEngine implements LlmEngine {
 
 	private void ensureServerRunning() {
 		String modelPath = resolveModelPath();
+		int currentContextSize = getContextSize();
 
 		if (serverProcess != null && serverProcess.isAlive()
-				&& modelPath.equals(loadedModelPath)) {
+				&& !shouldRestartServer(loadedModelPath, loadedContextSize,
+						modelPath, currentContextSize)) {
 			return;
 		}
 
-		if (serverProcess != null && serverProcess.isAlive()
-				&& !modelPath.equals(loadedModelPath)) {
-			log.info("LLM model path changed from {} to {}, restarting server",
-					loadedModelPath, modelPath);
+		if (serverProcess != null && serverProcess.isAlive()) {
+			log.info("LLM config changed (model {}→{}, ctx {}→{}), restarting server",
+					loadedModelPath, modelPath, loadedContextSize, currentContextSize);
 			stopServer();
 		}
 
 		startServer(modelPath);
+	}
+
+	/**
+	 * Decides whether a running llama-server needs to be restarted because its
+	 * model path or context size differs from the latest configured values.
+	 * Returns false when nothing has been loaded yet — the caller handles the
+	 * initial start in that case.
+	 */
+	static boolean shouldRestartServer(String loadedPath, int loadedCtx,
+			String currentPath, int currentCtx) {
+		if (loadedPath == null) {
+			return false;
+		}
+		return !loadedPath.equals(currentPath) || loadedCtx != currentCtx;
 	}
 
 	private void startServer(String modelPath) {
@@ -257,6 +274,7 @@ public class LocalLlmEngine implements LlmEngine {
 
 			waitForServerReady();
 			loadedModelPath = modelPath;
+			loadedContextSize = getContextSize();
 			log.info("llama-server started successfully on port {}", serverPort);
 		}
 		catch (IOException e) {
@@ -324,6 +342,7 @@ public class LocalLlmEngine implements LlmEngine {
 			}
 			serverProcess = null;
 			loadedModelPath = null;
+			loadedContextSize = -1;
 		}
 		httpClient = null;
 	}

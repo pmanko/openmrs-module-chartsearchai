@@ -116,4 +116,34 @@ public class LocalLlmEngineTest {
 		assertFalse(LocalLlmEngine.isContextOverflowError(""));
 		assertFalse(LocalLlmEngine.isContextOverflowError(null));
 	}
+
+	@Test
+	public void shouldRestartServer_modelPathChanged() {
+		assertTrue(LocalLlmEngine.shouldRestartServer(
+				"old/model.gguf", 16384, "new/model.gguf", 16384),
+				"should restart when model path changes");
+	}
+
+	@Test
+	public void shouldRestartServer_contextSizeChanged() {
+		assertTrue(LocalLlmEngine.shouldRestartServer(
+				"same/model.gguf", 16384, "same/model.gguf", 32768),
+				"should restart when context size changes — admins editing the GP "
+				+ "expect the new value to take effect on the next query");
+	}
+
+	@Test
+	public void shouldRestartServer_nothingChanged() {
+		assertFalse(LocalLlmEngine.shouldRestartServer(
+				"same/model.gguf", 16384, "same/model.gguf", 16384),
+				"no restart needed when both model and context size are unchanged");
+	}
+
+	@Test
+	public void shouldRestartServer_neverLoaded() {
+		assertFalse(LocalLlmEngine.shouldRestartServer(
+				null, -1, "any/model.gguf", 16384),
+				"if no server has loaded yet, the caller handles the initial start; "
+				+ "this helper only decides whether to restart an already-running one");
+	}
 }
