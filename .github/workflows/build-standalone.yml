@@ -160,6 +160,32 @@ jobs:
         working-directory: standalone
         run: mvn org.openmrs.maven.plugins:openmrs-sdk-maven-plugin:setup-sdk -B --settings .github/maven-settings.xml
 
+      # Workaround for upstream openmrs@9.0.3-pre.4342 transitive-dep regression:
+      # @openmrs/esm-styleguide/dist/datepicker imports @react-aria/utils but the
+      # package isn't pulled into the SDK's npx install tree. Pre-stage it at
+      # /tmp/node_modules so webpack's walk-up resolver finds it.
+      #
+      # Use --install-strategy=nested so all transitive deps stay inside
+      # @react-aria/utils/node_modules and nothing (react, react-dom, etc.)
+      # hoists to /tmp/node_modules where it would shadow the npx cache and
+      # break ModuleFederation shared-module resolution.
+      #
+      # The two post-install asserts encode the lessons from prior reverted
+      # attempts: any leak of react/react-dom to /tmp/node_modules silently
+      # broke MFE before, so fail the build loudly if hoisting semantics
+      # change in a future npm.
+      - name: Workaround missing @react-aria/utils dep
+        run: |
+          cd /tmp
+          cat > package.json <<'EOF'
+          {"name":"react-aria-utils-shim","private":true,"dependencies":{"@react-aria/utils":"*"}}
+          EOF
+          npm install --legacy-peer-deps --install-strategy=nested
+          rm -f package.json package-lock.json
+          [ -f /tmp/node_modules/@react-aria/utils/package.json ] || { echo "shim missing"; exit 1; }
+          [ ! -d /tmp/node_modules/react ] || { echo "react leaked to /tmp/node_modules — would break MFE"; exit 1; }
+          [ ! -d /tmp/node_modules/react-dom ] || { echo "react-dom leaked to /tmp/node_modules — would break MFE"; exit 1; }
+
       # Build the standalone distribution (skip Docker init in CI)
       - name: Build standalone distribution
         working-directory: standalone
