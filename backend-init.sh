@@ -27,17 +27,13 @@ if [ ! -f "$VOCAB_FILE" ]; then
   echo "Vocab downloaded."
 fi
 
-# LLM model (MedGemma 1.5 4B Q4_K_M, ~2.5GB)
+# LLM model (Gemma 4 26B MoE Instruct UD-Q4_K_M, ~17GB)
 # Save with the filename the module's default config expects
-LLM_FILE="$MODEL_DIR/medgemma-1.5-4b-it-Q4_K_M.gguf"
-HF_LLM="https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF/resolve/main/medgemma-1.5-4b-it-Q4_K_M.gguf"
-
-# Heal volumes that downloaded the legacy typo'd filename (pre-Apr-27 builds wrote a dot)
-LEGACY_LLM_FILE="$MODEL_DIR/medgemma-1.5-4b-it.Q4_K_M.gguf"
-[ -f "$LEGACY_LLM_FILE" ] && [ ! -f "$LLM_FILE" ] && mv "$LEGACY_LLM_FILE" "$LLM_FILE"
+LLM_FILE="$MODEL_DIR/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
+HF_LLM="https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
 
 if [ ! -f "$LLM_FILE" ]; then
-  echo "Downloading MedGemma 1.5 4B Q4_K_M (~2.5GB) — this may take a few minutes..."
+  echo "Downloading Gemma 4 26B MoE UD-Q4_K_M (~17GB) — this may take a while..."
   curl -fsSL -o "$LLM_FILE" "$HF_LLM"
   echo "LLM model downloaded."
 fi

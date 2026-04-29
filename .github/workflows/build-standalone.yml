@@ -25,7 +25,7 @@ on:
       gguf_model_url:
         description: 'Download URL for the GGUF model file'
         required: false
-        default: 'https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF/resolve/main/medgemma-1.5-4b-it-Q4_K_M.gguf'
+        default: 'https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf'
         type: string
       onnx_model_url:
         description: 'Download URL for the ONNX model file'
@@ -46,7 +46,7 @@ env:
   REFAPP_VERSION: ${{ inputs.refapp_version || '3.7.0-SNAPSHOT' }}
   OPENMRS_VERSION: ${{ inputs.openmrs_version || '2.8.6' }}
   STANDALONE_BRANCH: ${{ inputs.standalone_branch || 'openmrs-emr3' }}
-  GGUF_MODEL_URL: ${{ inputs.gguf_model_url || 'https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF/resolve/main/medgemma-1.5-4b-it-Q4_K_M.gguf' }}
+  GGUF_MODEL_URL: ${{ inputs.gguf_model_url || 'https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf' }}
   ONNX_MODEL_URL: ${{ inputs.onnx_model_url || 'https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx' }}
   VOCAB_URL: ${{ inputs.vocab_url || 'https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt' }}
 

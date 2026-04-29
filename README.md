@@ -8,7 +8,7 @@ For project background, community discussion, and roadmap, see the [wiki project
 
 The standalone download above includes the backend module, frontend ESM, and the following AI models — ready to run:
 
-- **LLM**: [MedGemma 1.5 4B Instruct (Q4_K_M)](https://huggingface.co/mradermacher/medgemma-1.5-4b-it-GGUF) — 2.5 GB, for answering clinical questions
+- **LLM**: [Gemma 4 26B MoE Instruct (UD-Q4_K_M)](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) — 17 GB, for answering clinical questions
 - **Embedding**: [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) — ONNX model + vocab, for semantic search over patient records
 
 ## Table of Contents
@@ -54,7 +54,7 @@ cd openmrs-module-chartsearchai
 docker compose up --build
 ```
 
-No JDK or model downloads needed — the Docker build handles everything. On first start, the embedding model (~86MB) and LLM (~2.5GB) are downloaded automatically from HuggingFace and persisted in a Docker volume.
+No JDK or model downloads needed — the Docker build handles everything. On first start, the embedding model (~86MB) and LLM (~17GB) are downloaded automatically from HuggingFace and persisted in a Docker volume.
 
 First startup takes 15–30 minutes (model downloads + database initialization). Once the logs show that OpenMRS has started, open http://localhost/openmrs/spa (default credentials: `admin` / `Admin123`). Subsequent starts are fast since the data volume persists.
 
@@ -74,7 +74,7 @@ The `.omod` file is in `omod/target/`.
 
 > **Skip this step** if you plan to use a remote LLM (see [LLM engine](#llm-engine) below).
 
-Download MedGemma 1.5 4B (Q4_K_M quantization) in GGUF format (~2.5GB) from [Hugging Face](https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF).
+Download Gemma 4 26B MoE Instruct (UD-Q4_K_M quantization) in GGUF format (~17GB) from [Hugging Face](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF).
 
 Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<openmrs-application-data-directory>/chartsearchai/`). Model paths are resolved relative to this directory for security.
 
@@ -83,12 +83,12 @@ Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<op
 | Model | RAM Needed | Chat Template | Download |
 |-------|-----------|---------------|----------|
 | Llama 3.2 3B | ~6GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) |
-| MedGemma 1.5 4B *(bundled with standalone)* | ~6–8GB total | `gemma` | [GGUF](https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF) |
+| MedGemma 1.5 4B | ~6–8GB total | `gemma` | [GGUF](https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF) |
 | Gemma 4 E4B | ~6–8GB total | `gemma` | [GGUF](https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF) |
 | Llama 3.3 8B | ~10GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF) |
 | Gemma 3 12B | ~12GB total | `gemma` | [GGUF](https://huggingface.co/bartowski/google_gemma-3-12b-it-GGUF) |
 | Mistral Nemo 12B | ~12GB total | `mistral` | [GGUF](https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF) |
-| **Gemma 4 26B MoE** *(recommended for production)* | ~18–22GB total | `gemma` | [GGUF](https://huggingface.co/bartowski/google_gemma-4-26B-A4B-it-GGUF) |
+| **Gemma 4 26B MoE** *(bundled with standalone, recommended for production)* | ~18–22GB total | `gemma` | [GGUF](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) |
 | Gemma 4 31B | ~20–24GB total | `gemma` | [GGUF](https://huggingface.co/bartowski/google_gemma-4-31B-it-GGUF) |
 
 To switch models, update `chartsearchai.llm.modelFilePath` — no rebuild needed. The embedded llama-server detects the model's chat template automatically. See [Evaluated models](#evaluated-models) for a full comparison of all models tested, including size trade-offs and licensing.
@@ -119,7 +119,7 @@ Set these global properties in **Admin > Settings**:
 
 | Property | Description |
 |----------|-------------|
-| `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/gemma-4-26B-A4B-it-Q4_K_M.gguf` |
+| `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf` |
 
 **Remote engine** — set `chartsearchai.llm.engine` to `remote` and configure:
 
@@ -486,7 +486,7 @@ The following models were evaluated for local inference via the embedded llama-s
 | Gemma 3 4B | 4B | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s | gemma |
 | Gemma 3n E4B | E4B (8B total) | ~2.5GB | ~3–5GB | 32K tokens | ~15–25 tok/s | gemma |
 | Gemma 4 E4B | E4B (4.5B eff) | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s | gemma |
-| **MedGemma 1.5 4B** *(default)* | 4B | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s | gemma |
+| MedGemma 1.5 4B | 4B | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s | gemma |
 | MedGemma 4B | 4B | ~2.5GB | ~6–8GB | 128K tokens | ~10–20 tok/s | gemma |
 | Mistral 7B | 7B | ~4GB | ~8GB | 32K tokens | ~10–15 tok/s | mistral |
 | Qwen 2.5 7B | 7B | ~4GB | ~8GB | 128K tokens | ~8–12 tok/s | chatml |
@@ -496,7 +496,7 @@ The following models were evaluated for local inference via the embedded llama-s
 | Mistral Nemo 12B | 12B | ~7GB | ~12GB | 128K tokens | ~4–8 tok/s | mistral |
 | Phi-3-Medium 14B | 14B | ~8GB | ~14GB | 4K tokens | ~3–6 tok/s | phi3 |
 | Qwen 2.5 14B | 14B | ~8GB | ~14GB | 128K tokens | ~3–6 tok/s | chatml |
-| Gemma 4 26B MoE | 26B (3.8B active) | ~15GB | ~18–22GB | 256K tokens | ~3–6 tok/s | gemma |
+| **Gemma 4 26B MoE** *(default)* | 26B (3.8B active) | ~15GB | ~18–22GB | 256K tokens | ~3–6 tok/s | gemma |
 | Gemma 3 27B | 27B | ~16.5GB | ~20–24GB | 128K tokens | ~1–2 tok/s | gemma |
 | MedGemma 27B Text | 27B | ~16.5GB | ~20–24GB | 128K tokens | ~1–2 tok/s | gemma |
 | Gemma 4 31B | 31B | ~18GB | ~22–26GB | 256K tokens | ~1–2 tok/s | gemma |
