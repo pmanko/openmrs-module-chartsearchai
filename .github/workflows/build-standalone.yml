@@ -160,24 +160,6 @@ jobs:
         working-directory: standalone
         run: mvn org.openmrs.maven.plugins:openmrs-sdk-maven-plugin:setup-sdk -B --settings .github/maven-settings.xml
 
-      # Workaround for upstream openmrs@9.0.3-pre.4342 transitive-dep regression:
-      # @openmrs/esm-styleguide/dist/datepicker imports @react-aria/utils but the
-      # package isn't pulled into the npx install tree, breaking `openmrs build`.
-      # The SDK runs `npm exec` under /tmp/openmrs-sdk-node<random>/npm-cache/_npx/...,
-      # so webpack walks UP from there looking for node_modules. Drop ONLY the
-      # @react-aria/utils package files at /tmp/node_modules/@react-aria/utils so
-      # the walk-up finds them — without polluting /tmp/node_modules/ with transitive
-      # deps (e.g. react), which would break webpack ModuleFederation fallback
-      # resolution for shared modules.
-      - name: Workaround missing @react-aria/utils dep
-        run: |
-          mkdir -p /tmp/node_modules/@react-aria/utils
-          cd /tmp/node_modules/@react-aria/utils
-          tarball=$(npm pack @react-aria/utils --silent)
-          tar -xzf "$tarball" --strip-components=1
-          rm "$tarball"
-          ls package.json
-
       # Build the standalone distribution (skip Docker init in CI)
       - name: Build standalone distribution
         working-directory: standalone
