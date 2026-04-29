@@ -160,7 +160,7 @@ public class ChartSearchAiRestController {
 		}
 
 		String preFilter = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
 		boolean preFilterEnabled = !"false".equalsIgnoreCase(preFilter.trim());
 
 		ChartAnswer chartAnswer;
@@ -329,7 +329,7 @@ public class ChartSearchAiRestController {
 		unwrapped.flushBuffer();
 
 		String preFilterProp = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
 		String searchMode = !"false".equalsIgnoreCase(preFilterProp.trim())
 				? "pre-filter" : "full-chart";
 

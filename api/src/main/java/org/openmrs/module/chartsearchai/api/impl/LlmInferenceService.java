@@ -800,8 +800,8 @@ public class LlmInferenceService implements ChartSearchService {
 
 	private boolean usePreFilter() {
 		String mode = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER);
-		return !"false".equalsIgnoreCase(mode != null ? mode.trim() : "");
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
+		return !"false".equalsIgnoreCase(mode.trim());
 	}
 
 	private int getTopK() {

@@ -99,7 +99,7 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 		}
 
 		String preFilter = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "true");
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
 		if (!"false".equalsIgnoreCase(preFilter.trim())) {
 			validateModelFile(ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH,
 					"ONNX embedding");

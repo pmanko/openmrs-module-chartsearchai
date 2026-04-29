@@ -97,7 +97,7 @@ Gemma 4 26B MoE is recommended for production deployments because it follows the
 
 ### 3. Download the embedding model
 
-If embedding pre-filtering is enabled (default), download the all-MiniLM-L6-v2 ONNX model (~90MB) from [Hugging Face](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2). You need both `model.onnx` and `vocab.txt` from the repository.
+If embedding pre-filtering is enabled (`chartsearchai.embedding.preFilter=true`), download the all-MiniLM-L6-v2 ONNX model (~90MB) from [Hugging Face](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2). You need both `model.onnx` and `vocab.txt` from the repository. The default is full-chart mode, which does not require these files.
 
 Place them alongside the LLM model (e.g., `<openmrs-application-data-directory>/chartsearchai/`).
 
@@ -141,7 +141,7 @@ The remote engine works with any server that implements the OpenAI chat completi
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `chartsearchai.embedding.preFilter` | `true` | When `true`, uses the selected retrieval pipeline to narrow patient records to the most relevant ones before sending to the LLM. Set to `false` to send the full chart instead |
+| `chartsearchai.embedding.preFilter` | `false` | When `true`, uses the selected retrieval pipeline to narrow patient records to the most relevant ones before sending to the LLM. The default is `false` (full chart) — pre-filtering is faster on huge charts but can omit records the LLM needs for negative reasoning (e.g. correctly answering "any allergies?" requires having seen the empty allergy section, not just an absence of matches in the filtered set). Enable only when context-window size is the binding constraint |
 | `chartsearchai.retrieval.pipeline` | `embedding` | Selects the retrieval pipeline: `embedding` (default) uses vector similarity via an ONNX model with custom scoring; `lucene` uses Apache Lucene BM25 text search; `hybrid` combines Lucene BM25 and embedding kNN search using Reciprocal Rank Fusion (RRF) — same quality as the Elasticsearch pipeline but with no external services required; `elasticsearch` uses Elasticsearch hybrid search combining BM25 text and kNN vector search via RRF (requires Elasticsearch 8.14+ configured in OpenMRS). All require `preFilter` to be `true`. Records are indexed automatically on first access. Changing this setting takes effect on the next query |
 
 #### Embedding pipeline tuning
@@ -193,7 +193,7 @@ These settings apply when `chartsearchai.retrieval.pipeline` is `embedding` (the
 
 ### 7. Indexing
 
-When `chartsearchai.embedding.preFilter` is `true` (default), patient records are automatically indexed on first chart access for whichever retrieval pipeline is active. Subsequent data changes trigger automatic re-indexing via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, program enrollment, medication dispense, and patient merge operations.
+When `chartsearchai.embedding.preFilter` is `true`, patient records are automatically indexed on first chart access for whichever retrieval pipeline is active. Subsequent data changes trigger automatic re-indexing via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, program enrollment, medication dispense, and patient merge operations. The default (`false`) skips indexing — full-chart mode does not need an embedding index.
 
 **Embedding pipeline** (default): Uses an ONNX embedding model for vector similarity search. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is available in **Admin > Scheduler > Manage Scheduler** to pre-index all patients. The default model is all-MiniLM-L6-v2 (general-purpose, 384 dimensions). Any BERT-based ONNX embedding model can be used as a drop-in replacement by updating `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. Embedding dimensions are auto-detected from the model output, so models with any dimension size work without code changes. After switching models, existing embeddings are incompatible — run the backfill task to re-index all patients with the new model.
 

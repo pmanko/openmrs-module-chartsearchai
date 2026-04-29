@@ -517,7 +517,7 @@ The direct LLM inference approach is more practical for these settings: deploy a
 
 ### Hallucination risk comparison
 
-Both approaches carry hallucination risk, but the failure modes differ. In the current system, these correspond to the `chartsearchai.embedding.preFilter` toggle: `true` (default) uses embedding-based pre-filtering, while `false` sends the full chart to the LLM.
+Both approaches carry hallucination risk, but the failure modes differ. In the current system, these correspond to the `chartsearchai.embedding.preFilter` toggle: `true` uses embedding-based pre-filtering, while `false` (default) sends the full chart to the LLM.
 
 #### Embedding-based pre-filtering hallucinations (`preFilter=true`)
 
@@ -691,11 +691,11 @@ A server running OpenMRS typically uses 1–2GB for the JVM heap. A 4GB machine 
 The module requires sufficient RAM for both the OpenMRS JVM and the LLM model:
 - **Minimum**: ~3–5GB total (1–2GB JVM + ~2–3GB for a Gemma 4 E2B or Gemma 3n E2B model). Usable but with weaker instruction following and reasoning. For 3B models, ~6GB total.
 - **Recommended**: ~6–8GB total for the default MedGemma 1.5 4B model (or Gemma 4 E4B). Upgrade to ~10GB for the 8B model, which provides significantly better general reasoning.
-- The embedding pre-filter (default: enabled) reduces the number of tokens sent to the LLM, which improves both response quality and latency for large patient charts.
+- The embedding pre-filter (opt-in via `chartsearchai.embedding.preFilter=true`) reduces the number of tokens sent to the LLM, which improves latency on huge patient charts at the cost of potentially omitting records the LLM needs for negative reasoning. The default is full-chart.
 
 ### Decision
 
-A single architecture is used: all queries go through the LLM for reasoning and synthesis. An embedding pre-filter (`chartsearchai.embedding.preFilter`, default `true`) narrows the patient chart to the most relevant records before sending them to the LLM (default top 10, configurable via `chartsearchai.embedding.topK`). This solves the "lost in the middle" problem where small LLMs struggle to find relevant information in large contexts. Set to `false` to send the full chart instead.
+A single architecture is used: all queries go through the LLM for reasoning and synthesis. By default the full patient chart is sent to the LLM. An optional embedding pre-filter (`chartsearchai.embedding.preFilter=true`) narrows the chart to the most relevant records (default top 10, configurable via `chartsearchai.embedding.topK`) before sending. Pre-filtering helps the "lost in the middle" problem on small LLMs with large charts, but can omit records the LLM needs for negative reasoning (e.g. "no allergies recorded" requires having seen the empty allergy section, not just an absence of matches). The default was originally `true` and was flipped to `false` after deployment experience showed silent record omission was the worse failure mode — full-chart mode now produces an actionable HTTP 413 response when the chart exceeds the LLM context window, prompting admins to increase `chartsearchai.llm.contextSize`.
 
 Embeddings are indexed on first patient chart access and kept up to date automatically via AOP hooks on data changes. A bulk backfill task is also available for pre-indexing all patients.
 
