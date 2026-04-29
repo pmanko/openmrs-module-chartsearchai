@@ -35,4 +35,10 @@ RUN mkdir -p /openmrs/data && chown -R 1001:1001 /openmrs /usr/local/tomcat
 # Final OpenMRS process always runs as the openmrs user.
 EXPOSE 8080
 
+# Tomcat-reachability probe; see docker-compose.yml for rationale. Repeated
+# here so the healthcheck is honored even if the deploy server's compose file
+# does not carry our healthcheck block.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=15 \
+    CMD curl -fsS -m 5 -o /dev/null http://localhost:8080/openmrs/ || exit 1
+
 ENTRYPOINT ["/usr/local/bin/backend-init.sh"]

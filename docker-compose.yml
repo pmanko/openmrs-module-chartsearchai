@@ -48,12 +48,18 @@ services:
       OMRS_CONFIG_CONNECTION_DATABASE: openmrs
       OMRS_CONFIG_CONNECTION_USERNAME: ${OMRS_DB_USER:-openmrs}
       OMRS_CONFIG_CONNECTION_PASSWORD: ${OMRS_DB_PASSWORD:-openmrs}
+    # Tomcat-reachability probe rather than OpenMRS-fully-started:
+    # /openmrs/health/started returns 503 until Listener.isOpenmrsStarted()
+    # flips, which on first boot can take 10-30 min and overruns the deploy
+    # script's poll window. /openmrs/ goes through StartupFilter and gets a
+    # 302 redirect to /openmrs/initialsetup once Tomcat has deployed the
+    # WAR (~20s in), which curl -f treats as success.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/openmrs/health/started"]
+      test: ["CMD", "curl", "-fsS", "-m", "5", "-o", "/dev/null", "http://localhost:8080/openmrs/"]
       interval: 30s
       timeout: 10s
       retries: 15
-      start_period: 900s
+      start_period: 120s
     volumes:
       - openmrs-data:/openmrs/data
 
