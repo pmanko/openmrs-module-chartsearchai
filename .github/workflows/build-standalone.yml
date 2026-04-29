@@ -161,30 +161,43 @@ jobs:
         run: mvn org.openmrs.maven.plugins:openmrs-sdk-maven-plugin:setup-sdk -B --settings .github/maven-settings.xml
 
       # Workaround for upstream openmrs@9.0.3-pre.4342 transitive-dep regression:
-      # @openmrs/esm-styleguide/dist/datepicker imports @react-aria/utils but the
-      # package isn't pulled into the SDK's npx install tree. Pre-stage it at
-      # /tmp/node_modules so webpack's walk-up resolver finds it.
+      # The SDK invokes `npm exec -- openmrs@9.0.3-pre.4342 build` from standalone/.
+      # When npx installs the CLI fresh, the resulting tree is missing both
+      # @react-aria/utils (imported by @openmrs/esm-styleguide/dist/datepicker)
+      # AND the deps that ModuleFederation shares (react, react-dom, etc.):
+      # rspack walks up from @openmrs/esm-app-shell/rspack.config.js to find
+      # them, but they aren't hoisted into the npx tree.
       #
-      # Use --install-strategy=nested so all transitive deps stay inside
-      # @react-aria/utils/node_modules and nothing (react, react-dom, etc.)
-      # hoists to /tmp/node_modules where it would shadow the npx cache and
-      # break ModuleFederation shared-module resolution.
+      # Pre-installing the CLI locally fixes both at once: `npm exec` detects a
+      # matching local copy at standalone/node_modules/openmrs/ and uses it
+      # instead of npx-installing fresh, so resolution walks up through
+      # standalone/node_modules/ where npm hoists every transitive dep
+      # correctly. Adding @react-aria/utils as a sibling fills the
+      # styleguide's missing import.
       #
-      # The two post-install asserts encode the lessons from prior reverted
-      # attempts: any leak of react/react-dom to /tmp/node_modules silently
-      # broke MFE before, so fail the build loudly if hoisting semantics
-      # change in a future npm.
-      - name: Workaround missing @react-aria/utils dep
+      # Trivially revertible once @openmrs/esm-styleguide republishes with
+      # @react-aria/utils as a real dep AND openmrs CLI's published tree
+      # carries its declared deps end-to-end.
+      - name: Pre-install openmrs CLI + @react-aria/utils alongside standalone
+        working-directory: standalone
         run: |
-          cd /tmp
           cat > package.json <<'EOF'
-          {"name":"react-aria-utils-shim","private":true,"dependencies":{"@react-aria/utils":"*"}}
+          {
+            "name": "openmrs-standalone-spa-deps",
+            "private": true,
+            "dependencies": {
+              "openmrs": "9.0.3-pre.4342",
+              "@react-aria/utils": "*"
+            }
+          }
           EOF
-          npm install --legacy-peer-deps --install-strategy=nested
-          rm -f package.json package-lock.json
-          [ -f /tmp/node_modules/@react-aria/utils/package.json ] || { echo "shim missing"; exit 1; }
-          [ ! -d /tmp/node_modules/react ] || { echo "react leaked to /tmp/node_modules — would break MFE"; exit 1; }
-          [ ! -d /tmp/node_modules/react-dom ] || { echo "react-dom leaked to /tmp/node_modules — would break MFE"; exit 1; }
+          npm install --legacy-peer-deps
+          [ -d node_modules/openmrs ] || { echo "openmrs CLI not installed locally"; exit 1; }
+          [ -d node_modules/react ] || { echo "react not installed (MFE fallback would fail)"; exit 1; }
+          [ -d node_modules/react-dom ] || { echo "react-dom not installed (MFE fallback would fail)"; exit 1; }
+          [ -d node_modules/@react-aria/utils ] || { echo "@react-aria/utils not installed"; exit 1; }
+          INSTALLED_VER=$(node -p "require('./node_modules/openmrs/package.json').version")
+          [ "$INSTALLED_VER" = "9.0.3-pre.4342" ] || { echo "openmrs version mismatch: got $INSTALLED_VER"; exit 1; }
 
       # Build the standalone distribution (skip Docker init in CI)
       - name: Build standalone distribution
