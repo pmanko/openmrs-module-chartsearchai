@@ -28,14 +28,30 @@ if [ ! -f "$VOCAB_FILE" ]; then
 fi
 
 # LLM model (Gemma 4 26B MoE Instruct UD-Q4_K_M, ~17GB)
-# Save with the filename the module's default config expects
+# Save with the filename the module's default config expects.
+# Background the download and resume on container restart via curl -C - so
+# OpenMRS can become healthy without waiting for the 17GB transfer; deploy
+# health-poll loops time out at ~5min, but the actual download takes longer
+# on most networks. Chart search queries return errors until the .partial
+# file is renamed to its final name.
 LLM_FILE="$MODEL_DIR/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
+LLM_PARTIAL="$LLM_FILE.partial"
 HF_LLM="https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
 
 if [ ! -f "$LLM_FILE" ]; then
-  echo "Downloading Gemma 4 26B MoE UD-Q4_K_M (~17GB) — this may take a while..."
-  curl -fsSL -o "$LLM_FILE" "$HF_LLM"
-  echo "LLM model downloaded."
+  if [ -f "$LLM_PARTIAL" ]; then
+    echo "Resuming Gemma 4 26B MoE UD-Q4_K_M download (~17GB) in background..."
+  else
+    echo "Starting Gemma 4 26B MoE UD-Q4_K_M download (~17GB) in background; chart search will be unavailable until it completes..."
+  fi
+  (
+    if curl -fsSL -C - -o "$LLM_PARTIAL" "$HF_LLM"; then
+      mv "$LLM_PARTIAL" "$LLM_FILE"
+      echo "LLM model downloaded."
+    else
+      echo "LLM model download failed; will retry on next container start."
+    fi
+  ) &
 fi
 
 exec /openmrs/startup.sh
