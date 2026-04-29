@@ -96,4 +96,24 @@ public class LocalLlmEngineTest {
 		assertFalse(root.get("stream").asBoolean());
 		assertTrue(root.path("stream_options").isMissingNode());
 	}
+
+	@Test
+	public void isContextOverflowError_shouldDetectLlamaServerOverflow() {
+		// Actual response body llama-server returns when the prompt exceeds -c
+		String body = "{\"error\":{\"code\":400,\"message\":\"request (21953 tokens) "
+				+ "exceeds the available context size (16384 tokens), try increasing it\","
+				+ "\"type\":\"exceed_context_size_error\","
+				+ "\"n_prompt_tokens\":21953,\"n_ctx\":16384}}";
+		assertTrue(LocalLlmEngine.isContextOverflowError(body),
+				"should detect llama-server's exceed_context_size_error");
+	}
+
+	@Test
+	public void isContextOverflowError_shouldReturnFalseForOtherErrors() {
+		assertFalse(LocalLlmEngine.isContextOverflowError(
+				"{\"error\":{\"code\":400,\"message\":\"some other 400\"}}"));
+		assertFalse(LocalLlmEngine.isContextOverflowError("not json at all"));
+		assertFalse(LocalLlmEngine.isContextOverflowError(""));
+		assertFalse(LocalLlmEngine.isContextOverflowError(null));
+	}
 }

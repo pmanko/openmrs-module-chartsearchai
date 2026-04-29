@@ -41,6 +41,7 @@ import org.openmrs.api.APIException;
 import org.openmrs.api.context.Context;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
+import org.openmrs.module.chartsearchai.api.ChartTooLargeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -100,6 +101,13 @@ public class LocalLlmEngine implements LlmEngine {
 			if (response.statusCode() < 200 || response.statusCode() >= 300) {
 				log.error("Local llama-server returned HTTP {}: {}", response.statusCode(),
 						truncate(response.body()));
+				if (response.statusCode() == 400 && isContextOverflowError(response.body())) {
+					throw new ChartTooLargeException(
+							"Patient chart exceeds the LLM context window of "
+									+ getContextSize() + " tokens. Increase "
+									+ ChartSearchAiConstants.GP_LLM_CONTEXT_SIZE
+									+ " or enable embedding pre-filter.");
+				}
 				throw new APIException("Local llama-server returned HTTP " + response.statusCode());
 			}
 
@@ -137,6 +145,13 @@ public class LocalLlmEngine implements LlmEngine {
 				String body = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
 				log.error("Local llama-server returned HTTP {}: {}", response.statusCode(),
 						truncate(body));
+				if (response.statusCode() == 400 && isContextOverflowError(body)) {
+					throw new ChartTooLargeException(
+							"Patient chart exceeds the LLM context window of "
+									+ getContextSize() + " tokens. Increase "
+									+ ChartSearchAiConstants.GP_LLM_CONTEXT_SIZE
+									+ " or enable embedding pre-filter.");
+				}
 				throw new APIException("Local llama-server returned HTTP " + response.statusCode());
 			}
 
@@ -311,6 +326,16 @@ public class LocalLlmEngine implements LlmEngine {
 			loadedModelPath = null;
 		}
 		httpClient = null;
+	}
+
+	/**
+	 * Detects llama-server's distinctive 400 response when the prompt exceeds the
+	 * configured context window. The body looks like
+	 * {@code {"error":{"type":"exceed_context_size_error",...}}} — match on the
+	 * type marker rather than parsing JSON to stay robust to format drift.
+	 */
+	static boolean isContextOverflowError(String responseBody) {
+		return responseBody != null && responseBody.contains("exceed_context_size_error");
 	}
 
 	String buildRequestBody(String systemPrompt, String userMessage, boolean stream) {

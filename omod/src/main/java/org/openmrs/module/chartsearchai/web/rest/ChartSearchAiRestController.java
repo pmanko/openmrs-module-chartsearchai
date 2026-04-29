@@ -32,6 +32,7 @@ import org.slf4j.LoggerFactory;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
+import org.openmrs.module.chartsearchai.api.ChartTooLargeException;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.ChartAnswer;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
 import org.openmrs.module.chartsearchai.api.AuditLogService;
@@ -168,6 +169,14 @@ public class ChartSearchAiRestController {
 			long startTime = System.currentTimeMillis();
 			chartAnswer = chartSearchService.search(patient, question);
 			responseTimeMs = System.currentTimeMillis() - startTime;
+		}
+		catch (ChartTooLargeException e) {
+			log.warn("Chart too large for LLM context for patient [id={}]: {}",
+					patient.getPatientId(), e.getMessage());
+			return new ResponseEntity<Object>(
+					errorResponse("This patient's chart is too large to process. "
+							+ "Contact your administrator to increase the LLM context size."),
+					HttpStatus.PAYLOAD_TOO_LARGE);
 		}
 		catch (IllegalStateException e) {
 			log.error("Chart search configuration error", e);
@@ -380,6 +389,18 @@ public class ChartSearchAiRestController {
 			}
 
 			writeSseEvent(out, "done", new ObjectMapper().writeValueAsString(doneData));
+		}
+		catch (ChartTooLargeException e) {
+			log.warn("Chart too large for LLM context during streaming for patient [id={}]: {}",
+					patient.getPatientId(), e.getMessage());
+			try {
+				writeSseEvent(out, "error",
+						"This patient's chart is too large to process. "
+								+ "Contact your administrator to increase the LLM context size.");
+			}
+			catch (IOException ioe) {
+				log.debug("Could not send too-large error event, client likely disconnected");
+			}
 		}
 		catch (IllegalStateException e) {
 			log.error("Chart search configuration error during streaming", e);

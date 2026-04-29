@@ -261,7 +261,7 @@ public class ChartSearchAiConstants {
 
 	public static final String GP_LLM_CONTEXT_SIZE = "chartsearchai.llm.contextSize";
 
-	public static final int DEFAULT_LLM_CONTEXT_SIZE = 16384;
+	public static final int DEFAULT_LLM_CONTEXT_SIZE = 32768;
 
 	public static final int DEFAULT_MAX_TOKENS = 8192;
 
