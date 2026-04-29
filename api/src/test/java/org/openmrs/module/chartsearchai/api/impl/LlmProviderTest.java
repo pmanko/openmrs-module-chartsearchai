@@ -165,4 +165,26 @@ public class LlmProviderTest {
 				"Repeat penalty must be 1.0 (disabled) to allow complete enumeration");
 	}
 
+	@Test
+	public void extractResponse_shouldNotStackOverflowOnLongTruncatedJson() {
+		// Reproduces the production failure: an LLM answer that hits max_tokens mid-string
+		// produces a long JSON missing its closing quote and brace, sending Jackson into the
+		// regex fallback path. The recursive (?:|)* alternation in ANSWER_VALUE used to blow
+		// the JVM stack on inputs above ~30KB, returning HTTP 500.
+		StringBuilder sb = new StringBuilder("{\"answer\": \"");
+		for (int i = 0; i < 4000; i++) {
+			sb.append("On 2026-01-").append(i % 28 + 1)
+					.append(" the patient had encounter [").append(i).append("]. ");
+		}
+		// no closing quote, no closing brace — this is what we get when the model is cut off
+		String truncated = sb.toString();
+		assertTrue(truncated.length() > 30000,
+				"need a long input to trigger the original stack overflow");
+
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse(truncated);
+		assertTrue(result.getAnswer().startsWith("On 2026-01-1 the patient had encounter [0]"),
+				"should recover the answer prefix from a truncated JSON, got: "
+						+ result.getAnswer().substring(0, Math.min(80, result.getAnswer().length())));
+	}
+
 }

@@ -280,9 +280,14 @@ public class LlmProvider {
 
 	private static final Pattern SLASH_CITATION = Pattern.compile("\\[(\\d+(?:/\\d+)+)\\]");
 
-	/** Matches the JSON "answer" value — captures the string content (may be truncated). */
+	/**
+	 * Matches the JSON "answer" value — captures the string content (may be truncated).
+	 * Possessive quantifiers ({@code ++}) prevent backtracking, so this stays stack-safe
+	 * even on long truncated answers (the regex engine recurses per alternation choice
+	 * point with normal {@code *}).
+	 */
 	private static final Pattern ANSWER_VALUE = Pattern.compile(
-			"\"answer\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"?");
+			"\"answer\"\\s*+:\\s*+\"((?:[^\"\\\\]++|\\\\.)*+)\"?+");
 
 	/** Matches a bare integer inside a citations array. */
 	private static final Pattern CITATION_NUMBER = Pattern.compile("(?:^|[,\\[])\\s*(\\d+)");
@@ -331,27 +336,36 @@ public class LlmProvider {
 		// malformed or truncated (e.g. LLM ran out of output tokens before
 		// closing the citations array). This mirrors what
 		// AnswerExtractingConsumer does for streaming.
-		Matcher answerMatcher = ANSWER_VALUE.matcher(trimmed);
-		if (answerMatcher.find()) {
-			String raw = answerMatcher.group(1);
-			// Unescape JSON string escapes
-			String answer = raw.replace("\\n", "\n")
-					.replace("\\t", "\t")
-					.replace("\\\"", "\"")
-					.replace("\\\\/", "/")
-					.replace("\\\\", "\\");
-			answer = normalizeSlashCitations(answer.trim());
-			// Try to extract citations from whatever was produced
-			List<Integer> citations = new ArrayList<>();
-			int citationsStart = trimmed.indexOf("\"citations\"");
-			if (citationsStart >= 0) {
-				Matcher numMatcher = CITATION_NUMBER.matcher(
-						trimmed.substring(citationsStart));
-				while (numMatcher.find()) {
-					citations.add(Integer.parseInt(numMatcher.group(1)));
+		try {
+			Matcher answerMatcher = ANSWER_VALUE.matcher(trimmed);
+			if (answerMatcher.find()) {
+				String raw = answerMatcher.group(1);
+				// Unescape JSON string escapes
+				String answer = raw.replace("\\n", "\n")
+						.replace("\\t", "\t")
+						.replace("\\\"", "\"")
+						.replace("\\\\/", "/")
+						.replace("\\\\", "\\");
+				answer = normalizeSlashCitations(answer.trim());
+				// Try to extract citations from whatever was produced
+				List<Integer> citations = new ArrayList<>();
+				int citationsStart = trimmed.indexOf("\"citations\"");
+				if (citationsStart >= 0) {
+					Matcher numMatcher = CITATION_NUMBER.matcher(
+							trimmed.substring(citationsStart));
+					while (numMatcher.find()) {
+						citations.add(Integer.parseInt(numMatcher.group(1)));
+					}
 				}
+				return new LlmResponse(answer, citations);
 			}
-			return new LlmResponse(answer, citations);
+		}
+		catch (StackOverflowError e) {
+			// Defensive backstop — the possessive-quantifier regex shouldn't recurse,
+			// but if a future edit reintroduces a recursive alternation we'd rather
+			// return the raw text than 500 the request.
+			log.warn("Regex fallback overflowed the stack on {}-char response; "
+					+ "returning raw text", trimmed.length());
 		}
 
 		return new LlmResponse(trimmed, Collections.emptyList());
