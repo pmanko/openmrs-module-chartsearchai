@@ -203,8 +203,10 @@ public class LocalLlmEngine implements LlmEngine {
 		command.add("-c");
 		command.add(String.valueOf(getContextSize()));
 		// Disable the model's reasoning channel. Models like Gemma 4 emit a
-		// reasoning_content stream that json_schema does not constrain, which can
-		// burn thousands of output tokens before the JSON answer is produced.
+		// reasoning_content stream that json_schema does not constrain, which
+		// can burn thousands of output tokens before the JSON answer. A
+		// sufficiently capable model follows the prompt rules without needing
+		// reasoning as a safety scaffold.
 		command.add("--reasoning-budget");
 		command.add("0");
 		command.add("--log-disable");
