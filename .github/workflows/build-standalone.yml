@@ -163,19 +163,21 @@ jobs:
       # Workaround for upstream openmrs@9.0.3-pre.4342 transitive-dep regression:
       # @openmrs/esm-styleguide/dist/datepicker imports @react-aria/utils but the
       # package isn't pulled into the npx install tree, breaking `openmrs build`.
-      # Pre-install @react-aria/utils in standalone/ and expose it via NODE_PATH
-      # so webpack's resolver can find it during the SDK's frontend build.
+      # The SDK runs `npm exec` under /tmp/openmrs-sdk-node<random>/npm-cache/_npx/...,
+      # so webpack walks UP from there looking for node_modules. Installing the shim
+      # at /tmp/node_modules/ puts it on that walk-up path.
       - name: Workaround missing @react-aria/utils dep
-        working-directory: standalone
         run: |
-          echo '{"name":"chartsearchai-spa-shim","private":true,"dependencies":{"@react-aria/utils":"*"}}' > package.json
+          mkdir -p /tmp/_react-aria-shim && cd /tmp/_react-aria-shim
+          echo '{"name":"react-aria-shim","private":true,"dependencies":{"@react-aria/utils":"*"}}' > package.json
           npm install --legacy-peer-deps
+          mkdir -p /tmp/node_modules
+          cp -r node_modules/* /tmp/node_modules/
+          ls /tmp/node_modules/@react-aria/utils/package.json
 
       # Build the standalone distribution (skip Docker init in CI)
       - name: Build standalone distribution
         working-directory: standalone
-        env:
-          NODE_PATH: ${{ github.workspace }}/standalone/node_modules
         run: |
           mvn package -Pci -B \
             --settings .github/maven-settings.xml \
