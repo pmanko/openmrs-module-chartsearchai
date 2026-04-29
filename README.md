@@ -41,7 +41,9 @@ The standalone download above includes the backend module, frontend ESM, and the
 - Java 11+
 - OpenMRS Platform 2.8.0+
 - Webservices REST module 2.44.0+
-- 6GB+ RAM recommended (for local LLM inference with the default MedGemma 1.5 4B model; not required when using a remote LLM)
+- RAM for local LLM inference (not required when using a remote LLM):
+  - **~24GB+ RAM recommended** for the production-recommended Gemma 4 26B MoE model
+  - **~6–8GB RAM** sufficient for smaller models (MedGemma 1.5 4B, Gemma 4 E4B) on resource-constrained deployments
 - Elasticsearch 8.14+ *(optional, for the hybrid retrieval pipeline; the default embedding and Lucene pipelines require no external services)*
 
 ## Docker
@@ -81,14 +83,17 @@ Place the `.gguf` file inside the OpenMRS application data directory (e.g., `<op
 | Model | RAM Needed | Chat Template | Download |
 |-------|-----------|---------------|----------|
 | Llama 3.2 3B | ~6GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) |
-| **MedGemma 1.5 4B** *(default)* | ~6–8GB total | `gemma` | [GGUF](https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF) |
+| MedGemma 1.5 4B *(bundled with standalone)* | ~6–8GB total | `gemma` | [GGUF](https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF) |
 | Gemma 4 E4B | ~6–8GB total | `gemma` | [GGUF](https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF) |
 | Llama 3.3 8B | ~10GB total | `llama3` | [GGUF](https://huggingface.co/bartowski/Llama-3.3-8B-Instruct-GGUF) |
 | Gemma 3 12B | ~12GB total | `gemma` | [GGUF](https://huggingface.co/bartowski/google_gemma-3-12b-it-GGUF) |
 | Mistral Nemo 12B | ~12GB total | `mistral` | [GGUF](https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF) |
+| **Gemma 4 26B MoE** *(recommended for production)* | ~18–22GB total | `gemma` | [GGUF](https://huggingface.co/bartowski/google_gemma-4-26B-A4B-it-GGUF) |
 | Gemma 4 31B | ~20–24GB total | `gemma` | [GGUF](https://huggingface.co/bartowski/google_gemma-4-31B-it-GGUF) |
 
 To switch models, update `chartsearchai.llm.modelFilePath` — no rebuild needed. The embedded llama-server detects the model's chat template automatically. See [Evaluated models](#evaluated-models) for a full comparison of all models tested, including size trade-offs and licensing.
+
+Gemma 4 26B MoE is recommended for production deployments because it follows the system prompt rules (never infer, cite every record, complete enumeration on list queries) reliably without needing reasoning as a safety scaffold. Smaller models work but trade off either safety or list completeness depending on the query. The MoE architecture activates only ~3.8B parameters per token, so per-token speed is comparable to a 4B dense model despite the 26B total size.
 
 ### 3. Download the embedding model
 
@@ -114,7 +119,7 @@ Set these global properties in **Admin > Settings**:
 
 | Property | Description |
 |----------|-------------|
-| `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/medgemma-1.5-4b-it-Q4_K_M.gguf` |
+| `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file, e.g. `chartsearchai/gemma-4-26B-A4B-it-Q4_K_M.gguf` |
 
 **Remote engine** — set `chartsearchai.llm.engine` to `remote` and configure:
 
