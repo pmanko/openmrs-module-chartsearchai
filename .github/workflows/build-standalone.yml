@@ -160,9 +160,22 @@ jobs:
         working-directory: standalone
         run: mvn org.openmrs.maven.plugins:openmrs-sdk-maven-plugin:setup-sdk -B --settings .github/maven-settings.xml
 
+      # Workaround for upstream openmrs@9.0.3-pre.4342 transitive-dep regression:
+      # @openmrs/esm-styleguide/dist/datepicker imports @react-aria/utils but the
+      # package isn't pulled into the npx install tree, breaking `openmrs build`.
+      # Pre-install @react-aria/utils in standalone/ and expose it via NODE_PATH
+      # so webpack's resolver can find it during the SDK's frontend build.
+      - name: Workaround missing @react-aria/utils dep
+        working-directory: standalone
+        run: |
+          echo '{"name":"chartsearchai-spa-shim","private":true,"dependencies":{"@react-aria/utils":"*"}}' > package.json
+          npm install --legacy-peer-deps
+
       # Build the standalone distribution (skip Docker init in CI)
       - name: Build standalone distribution
         working-directory: standalone
+        env:
+          NODE_PATH: ${{ github.workspace }}/standalone/node_modules
         run: |
           mvn package -Pci -B \
             --settings .github/maven-settings.xml \
