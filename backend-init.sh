@@ -27,22 +27,22 @@ if [ ! -f "$VOCAB_FILE" ]; then
   echo "Vocab downloaded."
 fi
 
-# LLM model (Gemma 4 26B MoE Instruct UD-Q4_K_M, ~17GB)
+# LLM model (Gemma 4 E4B Instruct Q4_K_M, ~5GB)
 # Save with the filename the module's default config expects.
 # Background the download and resume on container restart via curl -C - so
-# OpenMRS can become healthy without waiting for the 17GB transfer; deploy
-# health-poll loops time out at ~5min, but the actual download takes longer
-# on most networks. Chart search queries return errors until the .partial
-# file is renamed to its final name.
-LLM_FILE="$MODEL_DIR/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
+# OpenMRS can become healthy without waiting for the transfer; deploy
+# health-poll loops time out at ~5min, but the actual download can take
+# longer on slow networks. Chart search queries return errors until the
+# .partial file is renamed to its final name.
+LLM_FILE="$MODEL_DIR/gemma-4-E4B-it-Q4_K_M.gguf"
 LLM_PARTIAL="$LLM_FILE.partial"
-HF_LLM="https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
+HF_LLM="https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf"
 
 if [ ! -f "$LLM_FILE" ]; then
   if [ -f "$LLM_PARTIAL" ]; then
-    echo "Resuming Gemma 4 26B MoE UD-Q4_K_M download (~17GB) in background..."
+    echo "Resuming Gemma 4 E4B Q4_K_M download (~5GB) in background..."
   else
-    echo "Starting Gemma 4 26B MoE UD-Q4_K_M download (~17GB) in background; chart search will be unavailable until it completes..."
+    echo "Starting Gemma 4 E4B Q4_K_M download (~5GB) in background; chart search will be unavailable until it completes..."
   fi
   (
     # --speed-time/--speed-limit aborts if avg throughput stays under 1 KB/s
