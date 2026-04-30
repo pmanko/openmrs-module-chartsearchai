@@ -45,7 +45,12 @@ if [ ! -f "$LLM_FILE" ]; then
     echo "Starting Gemma 4 26B MoE UD-Q4_K_M download (~17GB) in background; chart search will be unavailable until it completes..."
   fi
   (
-    if curl -fsSL -C - -o "$LLM_PARTIAL" "$HF_LLM"; then
+    # --speed-time/--speed-limit aborts if avg throughput stays under 1 KB/s
+    # for 60s, so a stalled TCP connection (Hugging Face hangs the socket
+    # without closing it) doesn't leave curl waiting on a dead peer
+    # indefinitely. The script already retries on the next container start
+    # via curl -C -, so a transient abort is self-healing.
+    if curl -fsSL -C - --speed-time 60 --speed-limit 1024 -o "$LLM_PARTIAL" "$HF_LLM"; then
       mv "$LLM_PARTIAL" "$LLM_FILE"
       echo "LLM model downloaded."
     else
