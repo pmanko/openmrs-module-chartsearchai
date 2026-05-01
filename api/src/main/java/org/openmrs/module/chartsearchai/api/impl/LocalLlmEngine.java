@@ -218,30 +218,63 @@ public class LocalLlmEngine implements LlmEngine {
 		return !loadedPath.equals(currentPath) || loadedCtx != currentCtx;
 	}
 
+	/**
+	 * Builds the llama-server argument list. Tuned for chart-search workloads:
+	 * long input prompts (whole patient charts), single-user latency-sensitive
+	 * generation, CPU-bound on the deployment server.
+	 *
+	 * <p>Flag rationale:
+	 * <ul>
+	 *   <li>{@code -ngl 99} — offload all layers to GPU when a GPU build is in use; no-op on CPU build.</li>
+	 *   <li>{@code -fa on} — flash attention; prerequisite for KV cache quantization.</li>
+	 *   <li>{@code --cache-type-k/v q4_0} — quantize KV cache. At 32K ctx and fp16 the KV cache
+	 *       is multiple GB and memory-bandwidth-starves CPU inference.</li>
+	 *   <li>{@code -b 4096 -ub 1024} — large batch sizes for prompt processing. Default 2048/512
+	 *       leaves prompt-processing parallelism on the table for chart-length inputs.</li>
+	 *   <li>{@code -t -tb} — explicit thread count; auto-detect under-uses cores in some
+	 *       container configurations.</li>
+	 *   <li>{@code --reasoning-budget 0} — disable reasoning channel; json_schema does not
+	 *       constrain it and Gemma 4 burns thousands of tokens before the answer.</li>
+	 * </ul>
+	 */
+	static List<String> buildServerCommand(String binaryPath, String modelPath, int port,
+			int contextSize, int threads) {
+		List<String> cmd = new ArrayList<>();
+		cmd.add(binaryPath);
+		cmd.add("-m");
+		cmd.add(modelPath);
+		cmd.add("--port");
+		cmd.add(String.valueOf(port));
+		cmd.add("-ngl");
+		cmd.add("99");
+		cmd.add("-fa");
+		cmd.add("on");
+		cmd.add("-c");
+		cmd.add(String.valueOf(contextSize));
+		cmd.add("--cache-type-k");
+		cmd.add("q4_0");
+		cmd.add("--cache-type-v");
+		cmd.add("q4_0");
+		cmd.add("-b");
+		cmd.add("4096");
+		cmd.add("-ub");
+		cmd.add("1024");
+		cmd.add("-t");
+		cmd.add(String.valueOf(threads));
+		cmd.add("-tb");
+		cmd.add(String.valueOf(threads));
+		cmd.add("--reasoning-budget");
+		cmd.add("0");
+		cmd.add("--log-disable");
+		return cmd;
+	}
+
 	private void startServer(String modelPath) {
 		String serverBinaryPath = resolveServerBinaryPath();
 		serverPort = getServerPort();
 
-		List<String> command = new ArrayList<>();
-		command.add(serverBinaryPath);
-		command.add("-m");
-		command.add(modelPath);
-		command.add("--port");
-		command.add(String.valueOf(serverPort));
-		command.add("-ngl");
-		command.add("99");
-		command.add("-fa");
-		command.add("on");
-		command.add("-c");
-		command.add(String.valueOf(getContextSize()));
-		// Disable the model's reasoning channel. Models like Gemma 4 emit a
-		// reasoning_content stream that json_schema does not constrain, which
-		// can burn thousands of output tokens before the JSON answer. A
-		// sufficiently capable model follows the prompt rules without needing
-		// reasoning as a safety scaffold.
-		command.add("--reasoning-budget");
-		command.add("0");
-		command.add("--log-disable");
+		List<String> command = buildServerCommand(serverBinaryPath, modelPath, serverPort,
+				getContextSize(), Runtime.getRuntime().availableProcessors());
 
 		log.info("Starting llama-server on port {} with model {}", serverPort, modelPath);
 

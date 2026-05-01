@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -145,5 +146,65 @@ public class LocalLlmEngineTest {
 				null, -1, "any/model.gguf", 16384),
 				"if no server has loaded yet, the caller handles the initial start; "
 				+ "this helper only decides whether to restart an already-running one");
+	}
+
+	@Test
+	public void buildServerCommand_shouldIncludeModelAndPort() {
+		List<String> cmd = LocalLlmEngine.buildServerCommand(
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 8);
+
+		assertEquals("/bin/llama-server", cmd.get(0));
+		assertTrue(cmd.contains("-m"));
+		assertEquals("/data/model.gguf", cmd.get(cmd.indexOf("-m") + 1));
+		assertTrue(cmd.contains("--port"));
+		assertEquals("9999", cmd.get(cmd.indexOf("--port") + 1));
+		assertTrue(cmd.contains("-c"));
+		assertEquals("32768", cmd.get(cmd.indexOf("-c") + 1));
+	}
+
+	@Test
+	public void buildServerCommand_shouldEnableFlashAttentionAndDisableReasoning() {
+		List<String> cmd = LocalLlmEngine.buildServerCommand(
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 8);
+
+		assertEquals("on", cmd.get(cmd.indexOf("-fa") + 1),
+				"flash attention is required for KV cache quantization to work correctly");
+		assertEquals("0", cmd.get(cmd.indexOf("--reasoning-budget") + 1),
+				"reasoning channel must stay disabled — burns output tokens before the JSON answer");
+	}
+
+	@Test
+	public void buildServerCommand_shouldQuantizeKvCacheToQ4_0() {
+		List<String> cmd = LocalLlmEngine.buildServerCommand(
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 8);
+
+		assertEquals("q4_0", cmd.get(cmd.indexOf("--cache-type-k") + 1),
+				"KV cache must be q4_0 — fp16 KV at 32K ctx is 4× larger and bandwidth-starves CPU inference");
+		assertEquals("q4_0", cmd.get(cmd.indexOf("--cache-type-v") + 1));
+	}
+
+	@Test
+	public void buildServerCommand_shouldUseLargeBatchForChartPrompts() {
+		List<String> cmd = LocalLlmEngine.buildServerCommand(
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 8);
+
+		int b = Integer.parseInt(cmd.get(cmd.indexOf("-b") + 1));
+		int ub = Integer.parseInt(cmd.get(cmd.indexOf("-ub") + 1));
+		assertTrue(b >= 4096,
+				"chart-search prompts are long (whole patient chart). Default 2048 leaves "
+				+ "prompt-processing parallelism on the table");
+		assertTrue(ub >= 1024 && ub <= b);
+	}
+
+	@Test
+	public void buildServerCommand_shouldSetExplicitThreadCount() {
+		List<String> cmd = LocalLlmEngine.buildServerCommand(
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 6);
+
+		assertEquals("6", cmd.get(cmd.indexOf("-t") + 1),
+				"thread count must be set explicitly so we don't depend on llama-server's auto-detect "
+				+ "which underuses cores in some container configurations");
+		assertEquals("6", cmd.get(cmd.indexOf("-tb") + 1),
+				"batch threads should match generation threads for prompt processing parallelism");
 	}
 }
