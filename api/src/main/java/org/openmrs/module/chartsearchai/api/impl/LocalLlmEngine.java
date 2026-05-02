@@ -490,14 +490,20 @@ public class LocalLlmEngine implements LlmEngine {
 
 		int inputTokens = 0;
 		int outputTokens = 0;
+		int cachedTokens = 0;
 		JsonNode usage = root.get("usage");
 		if (usage != null) {
 			inputTokens = usage.has("prompt_tokens") ? usage.get("prompt_tokens").asInt(0) : 0;
 			outputTokens = usage.has("completion_tokens")
 					? usage.get("completion_tokens").asInt(0) : 0;
+			JsonNode details = usage.get("prompt_tokens_details");
+			if (details != null && details.has("cached_tokens")) {
+				cachedTokens = details.get("cached_tokens").asInt(0);
+			}
 		}
 
-		log.info("LLM token usage: {} input + {} output", inputTokens, outputTokens);
+		log.info("LLM token usage: {} input ({} cached) + {} output",
+				inputTokens, cachedTokens, outputTokens);
 		return new InferenceResult(text, inputTokens, outputTokens);
 	}
 
@@ -506,6 +512,7 @@ public class LocalLlmEngine implements LlmEngine {
 		StringBuilder fullText = new StringBuilder();
 		int inputTokens = 0;
 		int outputTokens = 0;
+		int cachedTokens = 0;
 
 		try (BufferedReader reader = new BufferedReader(
 				new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
@@ -538,6 +545,10 @@ public class LocalLlmEngine implements LlmEngine {
 								? usage.get("prompt_tokens").asInt(0) : 0;
 						outputTokens = usage.has("completion_tokens")
 								? usage.get("completion_tokens").asInt(0) : 0;
+						JsonNode details = usage.get("prompt_tokens_details");
+						if (details != null && details.has("cached_tokens")) {
+							cachedTokens = details.get("cached_tokens").asInt(0);
+						}
 					}
 				}
 				catch (IOException e) {
@@ -547,7 +558,8 @@ public class LocalLlmEngine implements LlmEngine {
 		}
 
 		if (inputTokens > 0 || outputTokens > 0) {
-			log.info("LLM token usage: {} input + {} output", inputTokens, outputTokens);
+			log.info("LLM token usage: {} input ({} cached) + {} output",
+					inputTokens, cachedTokens, outputTokens);
 		}
 		return new InferenceResult(fullText.toString(), inputTokens, outputTokens);
 	}
