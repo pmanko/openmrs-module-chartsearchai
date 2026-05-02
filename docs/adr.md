@@ -862,7 +862,7 @@ When multiple users submit queries simultaneously, requests are serialized:
 
 1. The first request acquires the LLM lock and begins inference.
 2. Subsequent requests queue on the `synchronized` block and wait.
-3. Each request times out after `chartsearchai.llm.timeoutSeconds` (default 120s).
+3. Each request times out after `chartsearchai.llm.timeoutSeconds` (default 300s).
 
 With an 8B model on CPU, a single query typically takes 15–45 seconds. This means roughly **2–3 concurrent users** can be served before requests start timing out. Smaller models (3B) are faster but produce lower quality responses; larger models (12B) have slower inference and reduce concurrency further.
 

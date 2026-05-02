@@ -119,8 +119,8 @@ Question: What lab orders were placed?
 
 	<globalProperty>
 		<property>chartsearchai.llm.timeoutSeconds</property>
-		<defaultValue>120</defaultValue>
-		<description>Maximum number of seconds to wait for the LLM to generate a response before timing out.</description>
+		<defaultValue>300</defaultValue>
+		<description>Maximum number of seconds to wait for the LLM to generate a response before timing out. Default 300s gives cold queries (model load + full-chart prefill + generation) headroom on CPU-only deployments. On GPU or remote-API setups, lower values are reasonable.</description>
 	</globalProperty>
 
 	<globalProperty>

@@ -249,7 +249,7 @@ public class ChartSearchAiConstants {
 
 	public static final String GP_LLM_TIMEOUT_SECONDS = "chartsearchai.llm.timeoutSeconds";
 
-	public static final int DEFAULT_LLM_TIMEOUT_SECONDS = 120;
+	public static final int DEFAULT_LLM_TIMEOUT_SECONDS = 300;
 
 	public static final String GP_LLM_IDLE_TIMEOUT_MINUTES = "chartsearchai.llm.idleTimeoutMinutes";
 
