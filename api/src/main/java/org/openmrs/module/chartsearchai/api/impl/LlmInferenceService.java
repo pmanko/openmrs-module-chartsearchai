@@ -152,7 +152,8 @@ public class LlmInferenceService implements ChartSearchService {
 
 		return new ChartAnswer(response.getAnswer(),
 				extractCitedReferences(response.getCitations(), chart.getMappings()),
-				response.getInputTokens(), response.getOutputTokens());
+				response.getInputTokens(), response.getOutputTokens(),
+				response.getCachedTokens());
 	}
 
 	@Override
@@ -167,7 +168,8 @@ public class LlmInferenceService implements ChartSearchService {
 
 		return new ChartAnswer(response.getAnswer(),
 				extractCitedReferences(response.getCitations(), chart.getMappings()),
-				response.getInputTokens(), response.getOutputTokens());
+				response.getInputTokens(), response.getOutputTokens(),
+				response.getCachedTokens());
 	}
 
 	private static final String NUMBER_GROUP =

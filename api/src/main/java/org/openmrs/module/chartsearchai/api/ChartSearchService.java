@@ -56,17 +56,25 @@ public interface ChartSearchService {
 
 		private final int outputTokens;
 
+		private final int cachedTokens;
+
 		public ChartAnswer(String answer, List<RecordReference> references) {
-			this(answer, references, 0, 0);
+			this(answer, references, 0, 0, 0);
 		}
 
 		public ChartAnswer(String answer, List<RecordReference> references,
 				int inputTokens, int outputTokens) {
+			this(answer, references, inputTokens, outputTokens, 0);
+		}
+
+		public ChartAnswer(String answer, List<RecordReference> references,
+				int inputTokens, int outputTokens, int cachedTokens) {
 			this.answer = answer;
 			this.references = java.util.Collections.unmodifiableList(
 					new java.util.ArrayList<>(references));
 			this.inputTokens = inputTokens;
 			this.outputTokens = outputTokens;
+			this.cachedTokens = cachedTokens;
 		}
 
 		/**
@@ -96,6 +104,14 @@ public interface ChartSearchService {
 		 */
 		public int getOutputTokens() {
 			return outputTokens;
+		}
+
+		/**
+		 * The number of input tokens that were served from llama-server's prompt cache
+		 * (i.e., reused from a prior request's KV) instead of being processed fresh.
+		 */
+		public int getCachedTokens() {
+			return cachedTokens;
 		}
 	}
 

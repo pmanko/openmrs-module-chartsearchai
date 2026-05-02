@@ -504,7 +504,7 @@ public class LocalLlmEngine implements LlmEngine {
 
 		log.info("LLM token usage: {} input ({} cached) + {} output",
 				inputTokens, cachedTokens, outputTokens);
-		return new InferenceResult(text, inputTokens, outputTokens);
+		return new InferenceResult(text, inputTokens, outputTokens, cachedTokens);
 	}
 
 	private InferenceResult parseStreamingResponse(InputStream inputStream,
@@ -561,7 +561,7 @@ public class LocalLlmEngine implements LlmEngine {
 			log.info("LLM token usage: {} input ({} cached) + {} output",
 					inputTokens, cachedTokens, outputTokens);
 		}
-		return new InferenceResult(fullText.toString(), inputTokens, outputTokens);
+		return new InferenceResult(fullText.toString(), inputTokens, outputTokens, cachedTokens);
 	}
 
 	private String getCompletionsUrl() {

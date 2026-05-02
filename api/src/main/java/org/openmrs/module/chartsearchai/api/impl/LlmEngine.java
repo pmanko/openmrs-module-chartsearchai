@@ -62,10 +62,17 @@ public interface LlmEngine {
 
 		private final int outputTokens;
 
+		private final int cachedTokens;
+
 		public InferenceResult(String text, int inputTokens, int outputTokens) {
+			this(text, inputTokens, outputTokens, 0);
+		}
+
+		public InferenceResult(String text, int inputTokens, int outputTokens, int cachedTokens) {
 			this.text = text;
 			this.inputTokens = inputTokens;
 			this.outputTokens = outputTokens;
+			this.cachedTokens = cachedTokens;
 		}
 
 		public String getText() {
@@ -78,6 +85,10 @@ public interface LlmEngine {
 
 		public int getOutputTokens() {
 			return outputTokens;
+		}
+
+		public int getCachedTokens() {
+			return cachedTokens;
 		}
 	}
 }

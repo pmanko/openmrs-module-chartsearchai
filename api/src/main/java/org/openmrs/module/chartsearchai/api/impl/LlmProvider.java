@@ -91,7 +91,8 @@ public class LlmProvider {
 		LlmEngine.InferenceResult result = getActiveEngine().infer(
 				systemPrompt, userMessage, timeoutSeconds);
 
-		return extractResponse(result.getText(), result.getInputTokens(), result.getOutputTokens());
+		return extractResponse(result.getText(), result.getInputTokens(), result.getOutputTokens(),
+				result.getCachedTokens());
 	}
 
 	/**
@@ -119,7 +120,8 @@ public class LlmProvider {
 		LlmEngine.InferenceResult result = getActiveEngine().inferStreaming(
 				systemPrompt, userMessage, timeoutSeconds, filter);
 
-		return extractResponse(result.getText(), result.getInputTokens(), result.getOutputTokens());
+		return extractResponse(result.getText(), result.getInputTokens(), result.getOutputTokens(),
+				result.getCachedTokens());
 	}
 
 	/**
@@ -305,8 +307,14 @@ public class LlmProvider {
 	}
 
 	static LlmResponse extractResponse(String response, int inputTokens, int outputTokens) {
+		return extractResponse(response, inputTokens, outputTokens, 0);
+	}
+
+	static LlmResponse extractResponse(String response, int inputTokens, int outputTokens,
+			int cachedTokens) {
 		LlmResponse parsed = extractResponse(response);
-		return new LlmResponse(parsed.getAnswer(), parsed.getCitations(), inputTokens, outputTokens);
+		return new LlmResponse(parsed.getAnswer(), parsed.getCitations(),
+				inputTokens, outputTokens, cachedTokens);
 	}
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -436,15 +444,23 @@ public class LlmProvider {
 
 		private final int outputTokens;
 
+		private final int cachedTokens;
+
 		LlmResponse(String answer, List<Integer> citations) {
-			this(answer, citations, 0, 0);
+			this(answer, citations, 0, 0, 0);
 		}
 
 		LlmResponse(String answer, List<Integer> citations, int inputTokens, int outputTokens) {
+			this(answer, citations, inputTokens, outputTokens, 0);
+		}
+
+		LlmResponse(String answer, List<Integer> citations, int inputTokens, int outputTokens,
+				int cachedTokens) {
 			this.answer = answer;
 			this.citations = Collections.unmodifiableList(new ArrayList<>(citations));
 			this.inputTokens = inputTokens;
 			this.outputTokens = outputTokens;
+			this.cachedTokens = cachedTokens;
 		}
 
 		String getAnswer() {
@@ -461,6 +477,10 @@ public class LlmProvider {
 
 		int getOutputTokens() {
 			return outputTokens;
+		}
+
+		int getCachedTokens() {
+			return cachedTokens;
 		}
 	}
 
