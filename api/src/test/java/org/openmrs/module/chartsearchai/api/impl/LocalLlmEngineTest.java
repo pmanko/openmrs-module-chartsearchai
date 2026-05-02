@@ -81,6 +81,31 @@ public class LocalLlmEngineTest {
 	}
 
 	@Test
+	public void buildRequestBody_shouldEnablePromptCaching() throws IOException {
+		String body = engine.buildRequestBody("sys", "usr", false);
+		JsonNode root = MAPPER.readTree(body);
+
+		assertTrue(root.get("cache_prompt").asBoolean(),
+				"cache_prompt must be true so llama-server reuses the chart prefix's KV across "
+				+ "successive queries on the same patient — without it, every query reprocesses "
+				+ "the whole chart from scratch");
+	}
+
+	@Test
+	public void buildServerCommand_shouldEnableCrossRequestCacheReuse() {
+		List<String> cmd = LocalLlmEngine.buildServerCommand(
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 8);
+
+		int idx = cmd.indexOf("--cache-reuse");
+		assertTrue(idx >= 0,
+				"--cache-reuse enables fuzzy prefix matching when the prompt prefix shifts "
+				+ "slightly between requests; without it slot-based reuse is brittle");
+		int chunk = Integer.parseInt(cmd.get(idx + 1));
+		assertTrue(chunk >= 64 && chunk <= 1024,
+				"reuse-chunk should be a sensible token granularity, got " + chunk);
+	}
+
+	@Test
 	public void buildRequestBody_shouldEnableUsageWhenStreaming() throws IOException {
 		String body = engine.buildRequestBody("sys", "usr", true);
 		JsonNode root = MAPPER.readTree(body);

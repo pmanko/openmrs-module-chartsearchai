@@ -263,6 +263,12 @@ public class LocalLlmEngine implements LlmEngine {
 		cmd.add(String.valueOf(threads));
 		cmd.add("-tb");
 		cmd.add(String.valueOf(threads));
+		// Enable cross-request prefix-cache matching at 256-token granularity.
+		// Slot-based KV reuse only fires when prompts share an exact byte prefix;
+		// --cache-reuse lets the server salvage a partial match when the prefix
+		// shifts slightly (e.g., a record date format change between queries).
+		cmd.add("--cache-reuse");
+		cmd.add("256");
 		cmd.add("--reasoning-budget");
 		cmd.add("0");
 		cmd.add("--log-disable");
@@ -395,6 +401,14 @@ public class LocalLlmEngine implements LlmEngine {
 		root.put("temperature", 0.0);
 		root.put("max_tokens", ChartSearchAiConstants.DEFAULT_MAX_TOKENS);
 		root.put("stream", stream);
+		// llama.cpp-specific extension. Without it, each request reprocesses the
+		// whole prompt from scratch, so successive queries on the same patient
+		// pay full prefill cost every time. With it set, llama-server reuses
+		// the slot's KV cache for any matching prefix — typically the system
+		// prompt + chart text are byte-identical between queries on one patient,
+		// so only the new question's tokens need processing. Order-of-magnitude
+		// latency win for repeat queries.
+		root.put("cache_prompt", true);
 		if (stream) {
 			ObjectNode streamOptions = MAPPER.createObjectNode();
 			streamOptions.put("include_usage", true);
