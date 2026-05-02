@@ -226,15 +226,6 @@ public class ChartSearchAiRestController {
 		if (auditLog.getAuditLogId() != null) {
 			response.put("questionId", String.valueOf(auditLog.getAuditLogId()));
 		}
-		// Diagnostic — surface llama-server's cache-hit count so we can tell from a
-		// curl response whether the prompt prefix is being reused. Remove after the
-		// cache-engagement story stabilizes.
-		Map<String, Object> debug = new LinkedHashMap<String, Object>();
-		debug.put("inputTokens", chartAnswer.getInputTokens());
-		debug.put("cachedTokens", chartAnswer.getCachedTokens());
-		debug.put("outputTokens", chartAnswer.getOutputTokens());
-		debug.put("responseTimeMs", responseTimeMs);
-		response.put("_debug", debug);
 
 		return new ResponseEntity<Object>(response, HttpStatus.OK);
 	}

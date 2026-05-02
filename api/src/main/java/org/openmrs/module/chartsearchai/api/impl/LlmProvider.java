@@ -86,8 +86,6 @@ public class LlmProvider {
 				+ "\n\nClinician's query: " + question;
 		int timeoutSeconds = getTimeoutSeconds();
 
-		logPromptStability(systemPrompt, userMessage, question);
-
 		LlmEngine.InferenceResult result = getActiveEngine().infer(
 				systemPrompt, userMessage, timeoutSeconds);
 
@@ -115,42 +113,11 @@ public class LlmProvider {
 		// envelope the LLM generates, so the UI sees clean text instead of raw JSON.
 		AnswerExtractingConsumer filter = new AnswerExtractingConsumer(tokenConsumer);
 
-		logPromptStability(systemPrompt, userMessage, question);
-
 		LlmEngine.InferenceResult result = getActiveEngine().inferStreaming(
 				systemPrompt, userMessage, timeoutSeconds, filter);
 
 		return extractResponse(result.getText(), result.getInputTokens(), result.getOutputTokens(),
 				result.getCachedTokens());
-	}
-
-	/**
-	 * DIAGNOSTIC ONLY — log a stable hash of the prompt prefix (system + chart),
-	 * isolated from the question. If two consecutive queries on the same patient
-	 * produce different prefix hashes, llama-server cannot prefix-cache them.
-	 * Logged at WARN so it shows up in the standard server log without DEBUG
-	 * being enabled. Remove after diagnosing.
-	 */
-	private void logPromptStability(String systemPrompt, String userMessage, String question) {
-		try {
-			int qIdx = userMessage.lastIndexOf("Clinician's query: ");
-			String prefix = qIdx > 0 ? userMessage.substring(0, qIdx) : userMessage;
-			java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
-			md.update(systemPrompt.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-			md.update((byte) 0);
-			md.update(prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-			byte[] digest = md.digest();
-			StringBuilder hex = new StringBuilder();
-			for (int i = 0; i < 8 && i < digest.length; i++) {
-				hex.append(String.format("%02x", digest[i]));
-			}
-			log.warn("CACHE-DIAG prefix_hash={} prefix_len={} sys_len={} q={}",
-					hex.toString(), prefix.length(), systemPrompt.length(),
-					question.length() > 60 ? question.substring(0, 60) + "..." : question);
-		}
-		catch (Exception e) {
-			log.warn("CACHE-DIAG hash failed: {}", e.getMessage());
-		}
 	}
 
 	/**
