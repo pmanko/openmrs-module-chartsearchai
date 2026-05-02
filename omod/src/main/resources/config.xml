@@ -63,8 +63,8 @@
 
 	<globalProperty>
 		<property>chartsearchai.embedding.preFilter</property>
-		<defaultValue>true</defaultValue>
-		<description>When true, uses embedding similarity to pre-filter patient records to the most relevant ones before sending to the LLM. Embeddings are indexed on first patient access and kept up to date automatically. Set to false to send the full patient chart to the LLM without any embedding-based filtering. Default: true.</description>
+		<defaultValue>false</defaultValue>
+		<description>When true, uses embedding similarity to pre-filter patient records to the most relevant ones before sending to the LLM. Embeddings are indexed on first patient access and kept up to date automatically. Set to true to enable embedding-based filtering. Default: false — the LLM needs the full chart for negative reasoning ("there are no records of X"), which a similarity pre-filter cannot reliably support.</description>
 	</globalProperty>
 
 	<globalProperty>
