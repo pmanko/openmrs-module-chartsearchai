@@ -33,13 +33,7 @@ jobs:
             platform: Linux
             arch: x86_64
             binary: llama-server
-            # Disable native auto-detect and pin AVX2+FMA+F16C so the binary
-            # runs on any reasonable x86_64 server (anything Haswell-era or
-            # newer, ~2013+). With GGML_NATIVE=ON (the llama.cpp default), the
-            # binary inherits whatever instruction set the GitHub runner has —
-            # often AVX-512 — and either crashes with "Illegal instruction" or
-            # falls back to slow paths on older deploy-server CPUs.
-            cmake_extra: '-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON'
+            cmake_extra: ''
           - os: ubuntu-22.04-arm
             platform: Linux
             arch: aarch64
