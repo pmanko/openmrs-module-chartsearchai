@@ -396,7 +396,7 @@ Examples:
 
 ### Medical imaging data (X-rays, scans, etc.)
 
-The recommended MedGemma 1.5 4B model supports multimodal input (including medical images), but the module currently uses it for text-only inference. Gemma 4 E4B and Gemma 3n E4B also support image and audio input. Larger multimodal variants (e.g. Llama 3.2 11B and 90B) are too large for CPU inference in low-resource settings.
+The default Gemma 4 E4B model and the medical-fine-tuned alternative MedGemma 1.5 4B both support multimodal input (text + images), but the module currently uses them for text-only inference. Gemma 3n E4B also supports image and audio input. Larger multimodal variants (e.g. Llama 3.2 11B and 90B) are too large for CPU inference in low-resource settings.
 
 #### Current approach: rely on text reports
 
@@ -411,7 +411,7 @@ These require either hardware beyond current low-resource constraints or an exte
 - **Cloud API**: Offload image interpretation to a cloud-hosted multimodal model. Introduces external dependency, latency, cost, and data privacy concerns that conflict with the self-contained, offline-capable design goals.
 - **OCR for paper forms**: Convert photos of handwritten or printed paper forms to text at write time. The extracted text then flows through the existing serializer pipeline. This is more feasible than general medical image interpretation and addresses a common need in low-resource settings where paper forms are digitized by photographing them.
 
-Direct image interpretation is deferred to future work. The recommended MedGemma 1.5 4B model now supports multimodal input (medical images + text), and the embedded llama-server already exposes multimodal inference via the OpenAI-compatible chat completions API (using libmtmd under the hood). Both the local and remote engines speak the same chat-completions protocol, so the remaining work is constructing multimodal content arrays (text + base64 image blocks) for complex observations rather than any new transport. See [Planned future work](#planned-future-work) for the implementation outline.
+Direct image interpretation is deferred to future work. The default Gemma 4 E4B model and MedGemma 1.5 4B both support multimodal input (medical images + text), and the embedded llama-server already exposes multimodal inference via the OpenAI-compatible chat completions API (using libmtmd under the hood). Both the local and remote engines speak the same chat-completions protocol, so the remaining work is constructing multimodal content arrays (text + base64 image blocks) for complex observations rather than any new transport. See [Planned future work](#planned-future-work) for the implementation outline.
 
 ### Resource type coverage analysis
 
@@ -567,11 +567,15 @@ As a safety net, any slash-separated citations that small LLMs occasionally prod
 
 See the [Evaluated models](../README.md#evaluated-models) section in the README for the full comparison table of all models tested, including size, RAM, context window, CPU speed, and licensing. The discussion below covers the detailed per-model analysis and trade-offs behind the recommendation.
 
-### Recommended model: MedGemma 1.5 4B
+### Recommended models: Gemma 4 E4B (module default) and Gemma 4 26B MoE (production)
 
-MedGemma 1.5 4B is the default recommendation. Released in January 2026, it is an update to the original MedGemma 4B with improved medical reasoning, medical records interpretation, and medical image interpretation — including new support for high-dimensional imaging (CT, MRI), whole-slide histopathology, and longitudinal analysis of chest X-rays. Built on the Gemma 3 architecture and fine-tuned on clinical text, biomedical literature, medical Q&A, and synthetic EHR data, it is the smallest medical-specialist model in the MedGemma family. Its 128K token context window can hold approximately 6,000 serialized patient records (~15 tokens each), which comfortably accommodates even the largest patient charts. At 4B parameters with Q4_K_M quantization, it is ~2.5GB on disk and requires ~6–8GB total RAM. CPU inference is ~10–20 tok/s, fast enough for interactive use. GGUF quantizations are available from [unsloth/medgemma-1.5-4b-it-GGUF](https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF). Licensed under the [Health AI Developer Foundations Terms of Use](https://developers.google.com/health-ai-developer-foundations/terms) — requires validation before clinical deployment.
+The module ships two recommended choices, sized for different deployment contexts.
 
-The original MedGemma 4B remains available from [unsloth/medgemma-4b-it-GGUF](https://huggingface.co/unsloth/medgemma-4b-it-GGUF) and works identically with the module (same chat template and resource requirements).
+**Gemma 4 E4B Instruct** is the default in `config.xml` (`chartsearchai/gemma-4-E4B-it-Q4_K_M.gguf`) for ordinary module installs. It is part of the Gemma 4 "E" line, which uses Per-Layer Embeddings (PLE) for memory efficiency: ~4.5B effective parameters at runtime, ~2.5GB on disk, ~6–8GB total RAM, ~10–20 tok/s on CPU. The 128K context window holds roughly 6,000 serialized patient records (~15 tokens each), enough for most patient charts. Apache 2.0 licensed. GGUF quantizations are available from [unsloth/gemma-4-E4B-it-GGUF](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF). Picked because it is the smallest model in the Gemma 4 family that follows the system prompt rules (never infer, cite every record) acceptably without a reasoning channel as a safety scaffold, while staying small enough to download on a slow connection (~2.5GB) and run on a modest server.
+
+**Gemma 4 26B MoE Instruct** is bundled with the standalone build and is the recommended upgrade for production hardware (~24GB+ RAM). It is a Mixture-of-Experts model with 26B total parameters but only ~3.8B activated per token, so per-token speed is comparable to a 4B dense model despite the 26B total size. The 256K context window comfortably holds even the largest patient charts. Apache 2.0 licensed. GGUF quantizations are available from [unsloth/gemma-4-26B-A4B-it-GGUF](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF). Picked because among CPU-viable models it has the strongest instruction following on list-completeness and adversarial-question handling, without depending on reasoning tokens.
+
+For deployments that prefer medical-domain fine-tuning, **MedGemma 1.5 4B** (released January 2026) is a strong alternative — built on the Gemma 3 architecture and fine-tuned on clinical text, biomedical literature, medical Q&A, and synthetic EHR data, with native support for medical imaging (CT, MRI, histopathology). At 4B parameters with Q4_K_M, it is ~2.5GB on disk and ~6–8GB total RAM. GGUF quantizations are available from [unsloth/medgemma-1.5-4b-it-GGUF](https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF). Licensed under the [Health AI Developer Foundations Terms of Use](https://developers.google.com/health-ai-developer-foundations/terms) — requires validation before clinical deployment, more restrictive than the Apache 2.0 licensing of Gemma 4. The original MedGemma 4B remains available from [unsloth/medgemma-4b-it-GGUF](https://huggingface.co/unsloth/medgemma-4b-it-GGUF) and works identically with the module (same chat template and resource requirements).
 
 ### Alternative models
 
@@ -676,7 +680,7 @@ A server running OpenMRS typically uses 1–2GB for the JVM heap. A 4GB machine 
 
 The module requires sufficient RAM for both the OpenMRS JVM and the LLM model:
 - **Minimum**: ~3–5GB total (1–2GB JVM + ~2–3GB for a Gemma 4 E2B or Gemma 3n E2B model). Usable but with weaker instruction following and reasoning. For 3B models, ~6GB total.
-- **Recommended**: ~6–8GB total for the default MedGemma 1.5 4B model (or Gemma 4 E4B). Upgrade to ~10GB for the 8B model, which provides significantly better general reasoning.
+- **Recommended**: ~6–8GB total for the default Gemma 4 E4B model (or MedGemma 1.5 4B). Upgrade to ~10GB for the 8B model, which provides significantly better general reasoning, or ~24GB+ for the production-grade Gemma 4 26B MoE bundled with the standalone build.
 - The embedding pre-filter (opt-in via `chartsearchai.embedding.preFilter=true`) reduces the number of tokens sent to the LLM, which improves latency on huge patient charts at the cost of potentially omitting records the LLM needs for negative reasoning. The default is full-chart.
 
 ### Decision
