@@ -22,6 +22,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -982,9 +983,14 @@ public class LlmInferenceService implements ChartSearchService {
 					embeddingProvider, question, getQueryPrefix(), config);
 			if (result.noiseProfile != null) {
 				if (noiseProfileCache.size() >= NOISE_PROFILE_CACHE_MAX_SIZE) {
-					// Evict an arbitrary entry to stay within bounds
-					String first = noiseProfileCache.keys().nextElement();
-					noiseProfileCache.remove(first);
+					// Evict an arbitrary entry to stay within bounds.
+					// Use an iterator with a hasNext() guard so a concurrent
+					// eviction that empties the cache does not throw
+					// NoSuchElementException.
+					Iterator<String> it = noiseProfileCache.keySet().iterator();
+					if (it.hasNext()) {
+						noiseProfileCache.remove(it.next());
+					}
 				}
 				noiseProfileCache.put(cacheKey, result.noiseProfile);
 			}

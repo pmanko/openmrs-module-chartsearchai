@@ -193,8 +193,12 @@ public final class ModelNoiseProfile {
 		double crossStd = Math.sqrt(crossSqSum / crossSims.size());
 		Collections.sort(crossSims);
 		double crossMedian = crossSims.get(crossSims.size() / 2);
+		// Linear-interpolation-with-floor percentile rank. Using
+		// size() * p caps at the maximum element for any size <= 20,
+		// which inflates the noise ceiling on patients with few
+		// distinct concepts.
 		double crossP95 = crossSims.get(
-				(int) (crossSims.size() * 0.95));
+				(int) ((crossSims.size() - 1) * 0.95));
 
 		// Intra-concept statistics
 		double intraMean;
@@ -218,7 +222,8 @@ public final class ModelNoiseProfile {
 			intraStd = Math.sqrt(intraSqSum / intraSims.size());
 		}
 
-		double crossQ1 = crossSims.get(crossSims.size() / 4);
+		double crossQ1 = crossSims.get(
+				(int) ((crossSims.size() - 1) * 0.25));
 
 		return new ModelNoiseProfile(crossMean, crossStd,
 				crossMedian, crossQ1, crossP95,
