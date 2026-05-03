@@ -204,7 +204,7 @@ Store embeddings as `MEDIUMBLOB` in a regular MySQL table (`chartsearchai_embedd
 
 The `UNIQUE KEY (resource_type, resource_id)` constraint prevents duplicate embeddings and enables upsert on re-index.
 
-## CQRS separation
+### CQRS separation
 
 The module applies the CQRS (Command Query Responsibility Segregation) principle in relation to OpenMRS patient data. The transactional store (OpenMRS's normalized relational tables — `obs`, `orders`, `conditions`, etc.) serves clinical workflows and CRUD operations. The query stores are separate, denormalized projections optimized for search:
 
@@ -1214,10 +1214,6 @@ MedCPT's theoretical advantage — medical synonym understanding (e.g. "blood pr
 
 The asymmetric bi-encoder support (separate query/article encoders, CLS pooling, query encoder global properties) was removed to simplify the codebase. The module uses all-MiniLM-L6-v2 with mean pooling as its sole embedding model.
 
-## Known limitations
-
-- **Counting questions**: LLMs are unreliable at precise counting tasks (e.g., "how many weight records in the last 10 years?"). The model may undercount or overcount even when all relevant records are provided. Larger, more capable models perform better at counting but are still not perfectly reliable. This is a fundamental limitation of LLM inference, not a retrieval issue. Questions that require exact counts are better suited to structured queries.
-
 ## Decision 19: Retain all-MiniLM-L6-v2 as the embedding model
 
 **Status: Accepted** (April 2026)
@@ -1444,6 +1440,10 @@ The mechanism that fails: `ConceptService.getConceptsByName(token)` does substri
 **Decision:** runtime query expansion via dictionary lookup is the wrong tool. The right path for STD/infections-style failures is **dictionary-side curation** — adding `concept_set` memberships that link HIV/Syphilis/Zika to a "Sexually transmitted disease" parent concept, the same mechanism the vital-signs fix uses. The `extractCategoryHints` code shipped earlier will then automatically benefit those queries with no further code changes.
 
 All query-expansion code was reverted. The lesson is captured here so future maintainers don't re-litigate.
+
+## Known limitations
+
+- **Counting questions**: LLMs are unreliable at precise counting tasks (e.g., "how many weight records in the last 10 years?"). The model may undercount or overcount even when all relevant records are provided. Larger, more capable models perform better at counting but are still not perfectly reliable. This is a fundamental limitation of LLM inference, not a retrieval issue. Questions that require exact counts are better suited to structured queries.
 
 ## Planned future work
 
