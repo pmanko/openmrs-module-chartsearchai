@@ -75,40 +75,8 @@
 
 	<globalProperty>
 		<property>chartsearchai.llm.systemPrompt</property>
-		<defaultValue>You are a clinical assistant helping a clinician review a patient's chart. Answer ONLY the specific question asked. Use only the patient records below (grouped by type, most recent first within each group). Never infer, assume, or add information not explicitly stated in the records. Include ALL relevant records in your answer — never omit any for brevity. Cite EVERY record you reference by its number in brackets (e.g. [1], [3]). Respond with ONLY a JSON object with an "answer" string and a "citations" array listing every record number you cited.
-
-If no records are relevant, name what is missing. For example:
-{"answer": "There are no records about diabetes in this patient's chart.", "citations": []}
-
-Examples:
-
-Patient records (grouped by type, most recent first within each group):
-Patient: 52-year-old Male
-
-[1] (2024-11-05) Condition: Zarplexia. Status: ACTIVE. Verification: CONFIRMED
-[2] (2024-09-20) Drug order: Venoflax 500mg. Dose: 1.0 Tablet(s) Oral twice daily. Action: NEW. Urgency: ROUTINE
-[3] (2024-08-15) Test — Flobnar level: 12.4 mg/dL (HIGH)
-[4] (2024-06-10) Test — Flobnar level: 9.8 mg/dL
-[5] (2024-05-01) Allergy: Zyphenicol (drug allergen). Severity: Severe. Reactions: Rash
-
-Question: What are the Flobnar levels?
-{"answer": "The Flobnar levels are 12.4 mg/dL (HIGH) on 2024-08-15 [3] and 9.8 mg/dL on 2024-06-10 [4].", "citations": [3, 4]}
-
-Question: What medications is the patient on?
-{"answer": "The patient is on Venoflax 500mg, 1 tablet orally twice daily [2].", "citations": [2]}
-
-Question: Does the patient have any allergies?
-{"answer": "Yes, the patient has a severe allergy to Zyphenicol with a reaction of Rash [5].", "citations": [5]}
-
-Question: How has the Flobnar level trended?
-{"answer": "The Flobnar level increased from 9.8 mg/dL on 2024-06-10 [4] to 12.4 mg/dL (HIGH) on 2024-08-15 [3].", "citations": [4, 3]}
-
-Question: Does the patient have diabetes?
-{"answer": "There are no records about diabetes in this patient's chart.", "citations": []}
-
-Question: What lab orders were placed?
-{"answer": "There are no lab order records in this patient's chart.", "citations": []}</defaultValue>
-		<description>System prompt sent to the LLM before patient records and the question. Customize this to adjust the LLM's behavior, tone, or citation format.</description>
+		<defaultValue></defaultValue>
+		<description>Custom system prompt sent to the LLM before patient records and the question. If empty (the default), the module uses its built-in prompt — which is iterated on alongside the rest of the pipeline and is what the eval suite tests against. Set this only to override the built-in default for this deployment (e.g. to adjust tone, citation format, or add site-specific guidance).</description>
 	</globalProperty>
 
 	<globalProperty>
@@ -127,6 +95,12 @@ Question: What lab orders were placed?
 		<property>chartsearchai.llm.serverPort</property>
 		<defaultValue>18085</defaultValue>
 		<description>Port number for the embedded llama-server when chartsearchai.llm.engine is "local". Change if the default port conflicts with another service.</description>
+	</globalProperty>
+
+	<globalProperty>
+		<property>chartsearchai.llm.contextSize</property>
+		<defaultValue>32768</defaultValue>
+		<description>Context window size in tokens for the embedded llama-server (local engine only). The full system prompt + serialized chart + question must fit within this. Larger values let bigger charts pass through full-chart mode but increase the KV cache memory footprint roughly linearly. Default 32768. Increase if you see "Patient chart exceeds the LLM context window" errors and have headroom for a larger KV cache; reduce on memory-constrained hardware. Only applies when chartsearchai.llm.engine is "local".</description>
 	</globalProperty>
 
 	<globalProperty>
