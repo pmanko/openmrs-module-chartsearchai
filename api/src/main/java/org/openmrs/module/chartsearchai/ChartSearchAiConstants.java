@@ -243,8 +243,6 @@ public class ChartSearchAiConstants {
 
 	public static final String GP_LLM_REMOTE_MODEL_NAME = "chartsearchai.llm.remote.modelName";
 
-	public static final String GP_LLM_CHAT_TEMPLATE = "chartsearchai.llm.chatTemplate";
-
 	public static final String GP_SYSTEM_PROMPT = "chartsearchai.llm.systemPrompt";
 
 	public static final String GP_LLM_TIMEOUT_SECONDS = "chartsearchai.llm.timeoutSeconds";

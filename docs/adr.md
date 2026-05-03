@@ -577,11 +577,11 @@ The original MedGemma 4B remains available from [unsloth/medgemma-4b-it-GGUF](ht
 
 | Model | RAM Needed | Chat Template | Why |
 |-------|-----------|---------------|-----|
-| **Llama 3.2 3B** | ~6GB total | `llama3` | For low-resource deployments where medical-domain fine-tuning is not required. Faster inference but weaker instruction following. Requires changing model path and chat template to `llama3`. |
-| **Llama 3.3 8B** | ~10GB total | `llama3` | Significantly better general reasoning and instruction following than 4B. Recommended when 10GB RAM is available. Requires changing model path and chat template to `llama3`. |
-| **Mistral Nemo 12B** | ~12GB total | `mistral` | Best sub-15B option for clinical Q&A. Strong medical text comprehension and 128K context window. Requires changing model path and chat template to `mistral`. |
+| **Llama 3.2 3B** | ~6GB total | `llama3` | For low-resource deployments where medical-domain fine-tuning is not required. Faster inference but weaker instruction following. Requires changing model path. |
+| **Llama 3.3 8B** | ~10GB total | `llama3` | Significantly better general reasoning and instruction following than 4B. Recommended when 10GB RAM is available. Requires changing model path. |
+| **Mistral Nemo 12B** | ~12GB total | `mistral` | Best sub-15B option for clinical Q&A. Strong medical text comprehension and 128K context window. Requires changing model path. |
 
-These models are from US/EU organizations (Meta and Mistral AI), have strong performance on medical benchmarks, and use chat templates already supported by the module. Switching requires only two global property changes (`modelFilePath` and `chatTemplate`) — no code changes or module rebuild.
+These models are from US/EU organizations (Meta and Mistral AI) and have strong performance on medical benchmarks. Switching requires only one global property change (`modelFilePath`) — llama-server reads the chat template from the GGUF metadata. No code changes or module rebuild.
 
 ### Other alternatives
 
@@ -626,23 +626,9 @@ Inference uses temperature 0.0, a fixed seed, and prompt caching disabled (`setC
 
 Model file paths are resolved relative to the OpenMRS application data directory. Path traversal (`..`) is rejected and the resolved path is verified to stay within the data directory, preventing an admin from accidentally (or maliciously) pointing the module at arbitrary files on the filesystem.
 
-### Chat template configurability
+### Chat template handling
 
-Different GGUF models require different prompt formats. The `chartsearchai.llm.chatTemplate` global property accepts either a **preset name** or a **custom template string**:
-
-| Preset | Format |
-|--------|--------|
-| `llama3` | `<\|begin_of_text\|><\|start_header_id\|>system<\|end_header_id\|>...` |
-| `mistral` | `[INST] {system}\n\n{user} [/INST]` |
-| `phi3` | `<\|system\|>\n{system}<\|end\|>\n<\|user\|>\n{user}<\|end\|>\n<\|assistant\|>\n` |
-| `chatml` | `<\|im_start\|>system\n{system}<\|im_end\|>\n<\|im_start\|>user\n...` |
-| `gemma` (default) | `<start_of_turn>user\n{system}\n\n{user}<end_of_turn>\n<start_of_turn>model\n` |
-
-The property also accepts `auto`, which delegates prompt formatting to the model's built-in GGUF chat template via llama.cpp's `setUseChatTemplate(true)`. This is useful for models whose GGUF file includes a correct chat template — no manual preset selection or custom template needed. If the global property is cleared (empty/null), the code falls back to `auto`.
-
-For models not covered by a preset or `auto`, set the property to a custom template string with `{system}` and `{user}` placeholders. Stop strings are resolved automatically from the preset; custom templates and `auto` use no stop strings (the model's own EOS token terminates generation).
-
-This means switching LLM models requires only two global property changes (`modelFilePath` and `chatTemplate`) — no code changes or module rebuild.
+The embedded llama-server reads each model's chat template from the GGUF metadata (`tokenizer.chat_template`) at load time, so prompts are wrapped in the format the model was trained on without any per-model configuration. Switching to a different GGUF — Gemma, Llama, Mistral, Phi-3, Qwen, or any other modern instruct model — needs only a `chartsearchai.llm.modelFilePath` change; the right turn delimiters and special tokens come along automatically.
 
 ```
 OpenMRS JVM

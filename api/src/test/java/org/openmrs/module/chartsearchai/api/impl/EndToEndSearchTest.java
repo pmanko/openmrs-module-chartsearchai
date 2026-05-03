@@ -394,10 +394,6 @@ public class EndToEndSearchTest extends BaseModuleContextSensitiveTest {
 			// Hard-link LLM model into app data dir and configure the GP
 			llmLink = setupLlmModelPath();
 
-			// Set chat template to chatml (works with most models)
-			Context.getAdministrationService().setGlobalProperty(
-					ChartSearchAiConstants.GP_LLM_CHAT_TEMPLATE, "chatml");
-
 			// Swap both service and indexer to real ONNX provider so
 			// auto-indexing and query embedding use the same real model
 			Object[] originals = swapEmbeddingProviders(embeddingProvider);

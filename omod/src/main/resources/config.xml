@@ -74,12 +74,6 @@
 	</globalProperty>
 
 	<globalProperty>
-		<property>chartsearchai.llm.chatTemplate</property>
-		<defaultValue>gemma</defaultValue>
-		<description>Chat template for formatting prompts sent to the LLM. Use a preset name (llama3, mistral, phi3, chatml, gemma) or a custom template string with {system} and {user} placeholders. Default: gemma.</description>
-	</globalProperty>
-
-	<globalProperty>
 		<property>chartsearchai.llm.systemPrompt</property>
 		<defaultValue>You are a clinical assistant helping a clinician review a patient's chart. Answer ONLY the specific question asked. Use only the patient records below (grouped by type, most recent first within each group). Never infer, assume, or add information not explicitly stated in the records. Include ALL relevant records in your answer — never omit any for brevity. Cite EVERY record you reference by its number in brackets (e.g. [1], [3]). Respond with ONLY a JSON object with an "answer" string and a "citations" array listing every record number you cited.
 
