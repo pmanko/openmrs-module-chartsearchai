@@ -552,7 +552,7 @@ Patient: 45-year-old Male
 [4] (2025-09-15) HbA1c: 8.2%
 ```
 
-The system prompt instructs the LLM to cite record numbers in brackets and respond with a JSON object. A GBNF grammar (`json-answer.gbnf`) constrains the LLM output to the exact format `{"answer": "...", "citations": [1, 2]}`, making it structurally impossible for the LLM to produce malformed citations. The `citations` array is parsed directly as structured data — no regex parsing of free text is needed.
+The system prompt instructs the LLM to cite record numbers in brackets and respond with a JSON object. A strict JSON-schema constraint (`response_format: json_schema`, built by `LocalLlmEngine.buildJsonSchemaResponseFormat()` and enforced by llama-server via a derived GBNF grammar) forces the LLM output to the exact shape `{"answer": "...", "citations": [1, 2]}`, making it structurally impossible for the LLM to produce malformed citations. The `citations` array is parsed directly as structured data — no regex parsing of free text is needed.
 
 Example LLM output:
 ```json
@@ -813,7 +813,7 @@ Requires the `View AI Audit Logs` privilege. All query parameters are optional. 
 
 - **Input validation**: Patient UUID and question are required. Questions are limited to 1000 characters.
 - **Prompt injection defense (two layers)**:
-  1. **GBNF grammar constraint (primary defense)**: The `json-answer.gbnf` grammar structurally constrains the local LLM's output to exactly `{"answer": "...", "citations": [...]}`. Even if a prompt injection succeeds in manipulating the model's reasoning, it cannot produce arbitrary output — the grammar makes it structurally impossible to emit system information, execute instructions, or produce anything other than a JSON answer with citations. This is the primary defense because it operates at the output level regardless of what the model "wants" to say. For the remote engine, `response_format: {"type": "json_object"}` provides a similar (though weaker) constraint.
+  1. **Structured-output constraint (primary defense)**: For the local engine, `LocalLlmEngine.buildJsonSchemaResponseFormat()` sets `response_format: {"type": "json_schema", "strict": true, ...}` declaring the exact `{answer: string, citations: int[]}` shape; llama-server enforces this by deriving a GBNF grammar from the schema internally. For the remote engine, `response_format: {"type": "json_object"}` provides a similar (though weaker — JSON syntactic only, no shape enforcement) constraint. Either way, the LLM cannot emit arbitrary text — even if a prompt injection manipulates the model's reasoning it cannot produce system information, execute instructions, or output anything outside the declared shape. This is the primary defense because it operates at the output level regardless of what the model "wants" to say.
   2. **Input regex filter**: Questions are checked against a regex pattern that rejects common prompt injection phrases (e.g., "ignore previous instructions", "you are now", "system prompt:"). Rejected questions return a 400 error without reaching the LLM.
 - **AI disclaimer**: Every response includes a disclaimer stating the output is AI-generated and not a substitute for clinical judgment.
 - **Answer caching**: An in-memory LRU cache (`ChartSearchServiceRouter`) stores recent answers keyed by `patientUuid::preFilter::pipeline::topK::similarityRatio::keywordWeight::scoreGapMultiplier::minScoreGap::gapValidationCosine::question`. The cache key includes all retrieval parameters so that changing any tuning setting correctly invalidates cached results. Configurable TTL via `chartsearchai.cacheTtlMinutes` (default 0 = disabled). When enabled, identical queries with the same parameters within the TTL window return the cached answer without invoking the LLM. The cache uses an access-ordered `LinkedHashMap` with a fixed maximum size, automatically evicting the least-recently-used entry when the size limit is exceeded. Expired entries are cleaned up periodically (every 10 cache puts) rather than on every access, to avoid scanning the entire cache on each insertion.
@@ -837,26 +837,31 @@ Requires the `View AI Audit Logs` privilege. All query parameters are optional. 
 
 ### Constraint
 
-Both the LLM (llama.cpp via jllama) and the embedding model (ONNX Runtime) use native memory that is **not thread-safe**. To prevent memory corruption:
+Two pieces of native code constrain concurrent inference:
 
-- `LlmProvider.search()` and `searchStreaming()` are `synchronized` — only one LLM inference runs at a time.
-- `OnnxEmbeddingProvider.embed()` is `synchronized` — only one embedding computation runs at a time.
+- **The embedded llama-server subprocess** runs with a single slot by default (via the `LocalLlmEngine` start arguments). Concurrent HTTP requests would serialise on that slot anyway, so we serialise client-side at the engine level for predictable queueing behaviour and to protect `LocalLlmEngine`'s own state (subprocess handle, idle timer, loaded model path).
+- **The ONNX embedding model** runs in-JVM via ONNX Runtime, whose session object is not thread-safe — concurrent `embed()` calls can corrupt native memory.
+
+To prevent corruption and keep behaviour predictable:
+
+- `LocalLlmEngine.infer()` and `inferStreaming()` are `synchronized` — only one local LLM inference runs at a time. (The remote engine has no in-process state and lets the remote server handle concurrency, so its `infer` methods are not synchronised.)
+- `OnnxEmbeddingProvider.embed()` and `embedQuery()` are `synchronized` — only one embedding computation runs at a time.
 
 ### Why `synchronized` instead of other concurrency primitives?
 
-Java's `synchronized` keyword is the simplest correct choice here. A `ReentrantLock` with a bounded queue, a thread pool, or `CompletableFuture` would add complexity without benefit — the fundamental constraint is that the native library allows only one inference at a time, so there is nothing to parallelize. A queue with position feedback (see Future options below) would improve the user experience for waiting requests, but the serialization itself is unavoidable without loading multiple model instances. For v1 targeting small clinics with 1–3 concurrent users, `synchronized` is sufficient and easy to reason about.
+Java's `synchronized` keyword is the simplest correct choice here. A `ReentrantLock` with a bounded queue, a thread pool, or `CompletableFuture` would add complexity without benefit — for the local engine the fundamental constraint is that we run llama-server with one slot, so there is nothing to parallelise without rearchitecting both the subprocess startup and the KV-cache memory budget. A queue with position feedback (see Future options below) would improve the user experience for waiting requests, but the serialisation itself is intentional. For v1 targeting small clinics with 1–3 concurrent users, `synchronized` is sufficient and easy to reason about. Deployments needing higher concurrency on capable hardware can switch to the remote engine and put a multi-slot inference server (vLLM, llama-server with `--parallel`, Ollama) behind it.
 
 ### Impact on concurrent users
 
-When multiple users submit queries simultaneously, requests are serialized:
+When multiple users submit queries simultaneously to the local engine, requests are serialised:
 
-1. The first request acquires the LLM lock and begins inference.
+1. The first request acquires the engine lock and begins inference.
 2. Subsequent requests queue on the `synchronized` block and wait.
 3. Each request times out after `chartsearchai.llm.timeoutSeconds` (default 300s).
 
 With an 8B model on CPU, a single query typically takes 15–45 seconds. This means roughly **2–3 concurrent users** can be served before requests start timing out. Smaller models (3B) are faster but produce lower quality responses; larger models (12B) have slower inference and reduce concurrency further.
 
-Embedding computation is faster (~50–200ms per patient) so the embedding lock is rarely a bottleneck.
+Embedding computation is faster (~50–200ms per patient) so the embedding lock is rarely a bottleneck. The remote engine has no client-side serialisation — concurrency limits are whatever the remote server (vLLM, Ollama, OpenAI) imposes.
 
 ### Existing mitigations
 
