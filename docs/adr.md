@@ -411,7 +411,7 @@ These require either hardware beyond current low-resource constraints or an exte
 - **Cloud API**: Offload image interpretation to a cloud-hosted multimodal model. Introduces external dependency, latency, cost, and data privacy concerns that conflict with the self-contained, offline-capable design goals.
 - **OCR for paper forms**: Convert photos of handwritten or printed paper forms to text at write time. The extracted text then flows through the existing serializer pipeline. This is more feasible than general medical image interpretation and addresses a common need in low-resource settings where paper forms are digitized by photographing them.
 
-Direct image interpretation is deferred to future work. The recommended MedGemma 1.5 4B model now supports multimodal input (medical images + text), and llama-server (llama.cpp's built-in HTTP server) exposes this via an OpenAI-compatible API that the module's remote engine can already call. The main blocker for local (in-process) multimodal inference is that java-llama.cpp does not yet expose multimodal bindings ([issue #34](https://github.com/kherud/java-llama.cpp/issues/34)). In the meantime, running llama-server as a sidecar process and pointing the module's remote engine at it is a viable path. See [Planned future work](#planned-future-work) for the implementation outline.
+Direct image interpretation is deferred to future work. The recommended MedGemma 1.5 4B model now supports multimodal input (medical images + text), and the embedded llama-server already exposes multimodal inference via the OpenAI-compatible chat completions API (using libmtmd under the hood). Both the local and remote engines speak the same chat-completions protocol, so the remaining work is constructing multimodal content arrays (text + base64 image blocks) for complex observations rather than any new transport. See [Planned future work](#planned-future-work) for the implementation outline.
 
 ### Resource type coverage analysis
 
@@ -461,7 +461,7 @@ The current architecture (Decisions 3–9) uses a two-model pipeline: an embeddi
 However, if two conditions are met, this complexity can be eliminated entirely:
 
 1. **The full patient chart fits within the LLM's context window.** A patient with 2000 records, each serialized to ~15 tokens by the `ClinicalTextSerializer`, produces ~30K tokens. Models like Mistral 7B (32K context) and Llama 3.2 3B (128K context) can accommodate this.
-2. **A local LLM is available with acceptable latency.** Quantized models (3B–14B parameters) can run on CPU via [java-llama.cpp](https://github.com/kherud/java-llama.cpp), which provides Java JNI bindings to llama.cpp and is available on Maven (`de.kherud:llama`). The recommended 4B model requires ~6–8GB RAM and produces ~10–20 tokens/sec on CPU. This keeps the module self-contained with no external service dependency.
+2. **A local LLM is available with acceptable latency.** Quantized models (3B–14B parameters) can run on CPU via the embedded [llama-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server), llama.cpp's built-in HTTP server. The module bundles pre-built llama-server binaries for each supported platform and starts a loopback subprocess on demand, so the operator just installs the `.omod` and the `.gguf` — no separate inference service to manage. The recommended 4B model requires ~6–8GB RAM and produces ~10–20 tokens/sec on CPU. This keeps the module self-contained with no external service dependency.
 
 ### Simplified architecture
 
@@ -599,7 +599,7 @@ These models are from US/EU organizations (Meta and Mistral AI) and have strong 
 - **Gemma 4 31B Dense** (Google, April 2026) is the largest and most capable Gemma 4 model. At 31B dense parameters with a 256K context window, it offers the best general reasoning in the Gemma family. Apache 2.0 license. Requires ~22–26GB total RAM. CPU inference is very slow (~1–2 tok/s) — practical only with GPU acceleration. GGUF quantizations are available from [bartowski/google_gemma-4-31B-it-GGUF](https://huggingface.co/bartowski/google_gemma-4-31B-it-GGUF).
 - **MedGemma 27B Text** (Google) is a medical-domain model built on the Gemma 3 architecture, fine-tuned on clinical and biomedical text. At 27B parameters it offers strong medical text comprehension and a 128K token context window. With Q4_K_M quantization it is ~16.5GB on disk and requires ~20–24GB total RAM. CPU inference is very slow (~1–2 tok/s), making it impractical for point-of-care use without a GPU (16–24GB VRAM recommended, where it can reach ~10–20+ tok/s). It uses the `gemma` chat template already supported by the module. Licensed under the [Health AI Developer Foundations Terms of Use](https://developers.google.com/health-ai-developer-foundations/terms), which is more restrictive than Llama's community license — review the terms before deploying. GGUF quantizations are available from [unsloth/medgemma-27b-text-it-GGUF](https://huggingface.co/unsloth/medgemma-27b-text-it-GGUF). Best suited for GPU-equipped deployments where medical-domain accuracy is the top priority.
 
-All models run via java-llama.cpp with Q4_K_M quantization in GGUF format.
+All models run via the embedded llama-server with Q4_K_M quantization in GGUF format.
 
 ### Licensing
 
@@ -613,16 +613,16 @@ The alternative Llama models (3.2 3B, 3.3 8B) are free for both research and com
 
 ### Deployment and memory requirements
 
-The model runs **in-process** inside the OpenMRS JVM via [java-llama.cpp](https://github.com/kherud/java-llama.cpp) JNI bindings. No separate web server, process, or HTTP service is needed. The deployment consists of two files:
+The LLM runs as a `llama-server` subprocess that the OpenMRS JVM starts on the loopback interface and talks to over the OpenAI-compatible chat completions API. The subprocess is bundled with the module: a `llama-server-natives` Maven submodule packages pre-built binaries for each supported platform (mac/linux/windows × arm64/x86_64), and `LocalLlmEngine` extracts the right binary at runtime. From an operator's perspective the deployment is still two files:
 
-1. The `.omod` module file (includes the java-llama.cpp dependency)
+1. The `.omod` module file (includes the bundled llama-server binaries)
 2. The `.gguf` model file (placed in the OpenMRS application data directory)
 
-On module startup, `ChartSearchAiModuleActivator` validates that all configured model files (LLM GGUF, ONNX embedding, WordPiece vocabulary) exist and are readable, logging warnings for any missing files. It also registers the embedding backfill and audit log purge scheduled tasks. On module shutdown, it gracefully closes all native resources — the LLM provider (llama.cpp), ONNX embedding provider, Elasticsearch client, and Lucene index — to prevent native memory leaks.
+On module startup, `ChartSearchAiModuleActivator` validates that all configured model files (LLM GGUF, ONNX embedding, WordPiece vocabulary) exist and are readable, logging warnings for any missing files. It also registers the embedding backfill and audit log purge scheduled tasks. On module shutdown, it shuts down the LLM provider (which terminates the llama-server subprocess and cancels the idle timer), closes the ONNX embedding provider, and disposes of the Elasticsearch and Lucene resources — preventing leftover processes and native memory leaks.
 
-The model path is configured via the `chartsearchai.llm.modelFilePath` global property. The model loads into memory on first query (lazy loading) and is automatically unloaded after a configurable idle period (`chartsearchai.llm.idleTimeoutMinutes`, default 30 minutes) to free RAM. The model is transparently reloaded on the next query. This debounced idle timer uses a single daemon thread with a `ScheduledExecutorService` — after each inference completes, any pending unload is cancelled and a new one is scheduled. Setting the idle timeout to 0 keeps the model loaded indefinitely. If the model path global property is changed, the model is automatically unloaded and the new model is loaded on the next query — no restart required.
+The model path is configured via the `chartsearchai.llm.modelFilePath` global property. The subprocess starts on first query (lazy loading) and is automatically stopped after a configurable idle period (`chartsearchai.llm.idleTimeoutMinutes`, default 30 minutes) to free RAM. The subprocess is transparently restarted on the next query. This debounced idle timer uses a single daemon thread with a `ScheduledExecutorService` — after each inference completes, any pending stop is cancelled and a new one is scheduled. Setting the idle timeout to 0 keeps the subprocess running indefinitely. If the model path global property is changed, `shouldRestartServer` detects the change and the subprocess is restarted with the new model on the next query — no OpenMRS restart required.
 
-Inference uses temperature 0.0, a fixed seed, and prompt caching disabled (`setCachePrompt(false)`) for deterministic output. Prompt caching had to be disabled because llama.cpp's KV cache reuse caused non-deterministic responses — the first query for a given prompt produced a different answer than subsequent identical queries. With caching off, identical inputs always produce identical answers, which is important for clinical trust and for the answer cache to be meaningful.
+Inference uses temperature 0.0 with greedy decoding, which is deterministic at the sampler level for a fixed prompt. KV cache reuse is enabled (`cache_prompt: true` plus `--cache-reuse 256`) so repeat queries on the same patient pay only the new question's prefill cost — typically an order-of-magnitude latency win on follow-up questions, since the system prompt and chart text are byte-identical between turns.
 
 Model file paths are resolved relative to the OpenMRS application data directory. Path traversal (`..`) is rejected and the resolved path is verified to stay within the data directory, preventing an admin from accidentally (or maliciously) pointing the module at arbitrary files on the filesystem.
 
@@ -634,9 +634,9 @@ The embedded llama-server reads each model's chat template from the GGUF metadat
 OpenMRS JVM
   └── chartsearchai module
         └── LlmInferenceService
-              └── java-llama.cpp (JNI)
-                    └── llama.cpp (native C++)
-                          └── loads GGUF file from disk
+              └── LlmProvider → LocalLlmEngine
+                    └── llama-server subprocess (loopback HTTP)
+                          └── llama.cpp (native C++) loading the GGUF
 ```
 
 ### Model size trade-offs
@@ -974,12 +974,12 @@ Do not adopt LangChain or LangChain4j. The module's purpose-built pipeline alrea
 | Embeddings | `OnnxEmbeddingProvider` (in-process ONNX Runtime) |
 | Vector store | Hibernate-backed `chartsearchai_embedding` table |
 | Retrievers | 3 pipelines with z-score gate, gap detection, type-aware expansion |
-| LLM client | `LlmProvider` via java-llama.cpp |
+| LLM client | `LlmProvider` via the embedded llama-server |
 | Output parsing | GBNF grammar constraint + JSON extraction |
 | Prompt templates | System prompt with few-shot clinical examples |
 | RAG chain | `LlmInferenceService.buildChart()` → retrieve → serialize → prompt → infer |
 
-**Why not LangChain (Python)?** Would require a separate process or service, breaking the module's "runs entirely in-process with no external services" deployment model. OpenMRS is a Java ecosystem — adding a Python dependency would significantly complicate deployment for the typical OpenMRS site.
+**Why not LangChain (Python)?** Would require a Python process or service alongside the JVM, complicating deployment beyond the "install the `.omod` plus the `.gguf` model" model. OpenMRS is a Java ecosystem — adding a Python dependency would significantly complicate deployment for the typical OpenMRS site.
 
 **Why not LangChain4j?** Removes the language mismatch, but the module's custom retrieval logic (z-score gating for absent-data detection, adaptive gap detection, type-aware auto-expansion, GBNF constrained decoding) has no equivalent in LangChain4j's standard retrievers. Adopting LangChain4j would mean either losing these features or bypassing its retrieval abstractions entirely and using it only as a thin LLM client wrapper — not worth the dependency. The one feature LangChain4j would simplify — swapping cloud LLM providers via its `ChatLanguageModel` interface — can be achieved more simply by adding a provider interface to the existing `LlmProvider` if that need arises.
 
@@ -989,7 +989,7 @@ Do not adopt LangChain or LangChain4j. The module's purpose-built pipeline alrea
 
 ### Context
 
-The module was originally designed for local-only inference (GGUF models via java-llama.cpp, running in-process). This keeps patient data on the server and eliminates external dependencies. However, some hospitals have:
+The module was originally designed for local-only inference (GGUF models served by the embedded llama-server subprocess). This keeps patient data on the server and eliminates external dependencies. However, some hospitals have:
 
 - **Insufficient hardware** for local inference (8B models need ~10 GB RAM, GPUs improve speed significantly)
 - **Access to self-hosted GPU inference servers** (vLLM, Ollama, text-generation-inference) on a local network, or cloud APIs (OpenAI, Google AI, Anthropic) that provide faster, more capable models
@@ -997,7 +997,7 @@ The module was originally designed for local-only inference (GGUF models via jav
 
 ### Decision
 
-Add an `LlmEngine` interface with two implementations: `LocalLlmEngine` (existing llama.cpp logic) and `RemoteLlmEngine` (calls OpenAI-compatible chat completions APIs). Selection is via the `chartsearchai.llm.engine` global property (`local` or `remote`). Local remains the default.
+Add an `LlmEngine` interface with two implementations: `LocalLlmEngine` (drives the embedded llama-server subprocess) and `RemoteLlmEngine` (calls a remote OpenAI-compatible chat completions API). Selection is via the `chartsearchai.llm.engine` global property (`local` or `remote`). Local remains the default.
 
 **Architecture:**
 
@@ -1012,10 +1012,10 @@ LlmEngine (interface)
 └── inferStreaming(systemPrompt, userMessage, timeout, tokenConsumer) → InferenceResult
 
 LocalLlmEngine (default)
-├── java-llama.cpp JNI, GGUF models
-├── GBNF grammar constraint for JSON output
-├── Chat template formatting (llama3, mistral, phi3, chatml, gemma, auto)
-└── Idle timer for memory management
+├── Bundled llama-server subprocess (loopback HTTP), GGUF models
+├── response_format: json_schema for structured output (GBNF under the hood)
+├── Chat template read from the GGUF's tokenizer.chat_template metadata
+└── Idle timer for subprocess lifecycle
 
 RemoteLlmEngine
 ├── java.net.http.HttpClient (no new dependencies)
@@ -1442,5 +1442,5 @@ All query-expansion code was reverted. The lesson is captured here so future mai
 - **Concept graph traversal**: Complement embedding search with OpenMRS concept relationship traversal to improve retrieval for queries involving related concepts (e.g., finding NSAID allergies when asking about ibuprofen).
 - **Pre-computed summaries**: Cache LLM-generated summaries for common query patterns (e.g., "current medications", "active problems") to reduce inference latency for frequently asked questions.
 - **Agent/tool-use pattern**: Enable multi-step reasoning where the LLM can request additional data or perform follow-up queries. Deferred until local models with reliable tool-use capabilities are available.
-- **Multimodal medical image interpretation**: Extend the pipeline to pass complex observations (X-rays, dermatology photos, ultrasounds, pathology slides, scanned documents) alongside text to multimodal LLMs like MedGemma 1.5 4B. The main changes are: extend `ObsTextSerializer` to handle `ValueComplex` obs, add an optional image field to `SerializedRecord`, and update `LlmProvider`/`RemoteLlmEngine` to construct multimodal content arrays (text + base64 image blocks) for the OpenAI-compatible `/chat/completions` API. The local engine (`LocalLlmEngine`) cannot support this until java-llama.cpp adds multimodal bindings ([issue #34](https://github.com/kherud/java-llama.cpp/issues/34), [issue #103](https://github.com/kherud/java-llama.cpp/issues/103)), but the remote engine already works with llama-server which supports multimodal via libmtmd. No new serializers are needed — complex obs are still observations.
+- **Multimodal medical image interpretation**: Extend the pipeline to pass complex observations (X-rays, dermatology photos, ultrasounds, pathology slides, scanned documents) alongside text to multimodal LLMs like MedGemma 1.5 4B. The main changes are: extend `ObsTextSerializer` to handle `ValueComplex` obs, add an optional image field to `SerializedRecord`, and update `LlmProvider`/`LlmEngine` implementations to construct multimodal content arrays (text + base64 image blocks) for the OpenAI-compatible `/chat/completions` API. Both engines already speak this protocol — the embedded llama-server supports multimodal via libmtmd, and remote backends (vLLM, OpenAI, Anthropic) accept the same content-array format. No new serializers are needed — complex obs are still observations.
 - **Unstructured data / image OCR**: Extract text from photos of paper forms at write time so the content flows through the existing serializer and embedding pipeline.
