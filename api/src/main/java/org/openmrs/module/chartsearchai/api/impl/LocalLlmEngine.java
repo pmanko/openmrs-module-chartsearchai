@@ -221,24 +221,27 @@ public class LocalLlmEngine implements LlmEngine {
 	/**
 	 * Builds the llama-server argument list. Tuned for chart-search workloads:
 	 * long input prompts (whole patient charts), single-user latency-sensitive
-	 * generation, CPU-bound on the deployment server.
+	 * generation.
 	 *
 	 * <p>Flag rationale:
 	 * <ul>
 	 *   <li>{@code -ngl 99} — offload all layers to GPU when a GPU build is in use; no-op on CPU build.</li>
-	 *   <li>{@code -fa on} — flash attention; prerequisite for KV cache quantization.</li>
-	 *   <li>{@code --cache-type-k/v q4_0} — quantize KV cache. At 32K ctx and fp16 the KV cache
-	 *       is multiple GB and memory-bandwidth-starves CPU inference.</li>
+	 *   <li>{@code -fa on} — flash attention; cuts attention compute on long-context chart prompts.</li>
 	 *   <li>{@code -b 4096 -ub 1024} — large batch sizes for prompt processing. Default 2048/512
 	 *       leaves prompt-processing parallelism on the table for chart-length inputs.</li>
-	 *   <li>{@code -t -tb} — explicit thread count; auto-detect under-uses cores in some
-	 *       container configurations.</li>
+	 *   <li>{@code --cache-reuse 256} + {@code cache_prompt=true} (in request body) — reuse the
+	 *       chart prefix's KV cache across successive queries on the same patient.</li>
 	 *   <li>{@code --reasoning-budget 0} — disable reasoning channel; json_schema does not
 	 *       constrain it and Gemma 4 burns thousands of tokens before the answer.</li>
 	 * </ul>
+	 *
+	 * <p>Thread count and KV-cache dtype are left to llama-server's auto-detect. Explicit
+	 * pinning (e.g. {@code -t/--tb}) and KV quantization (e.g. {@code --cache-type-k/v q4_0})
+	 * regress prefill on hosts where logical-core count exceeds physical cores or where the
+	 * backend's native KV path is faster than the dequantize-on-read kernel — both common.
 	 */
 	static List<String> buildServerCommand(String binaryPath, String modelPath, int port,
-			int contextSize, int threads) {
+			int contextSize) {
 		List<String> cmd = new ArrayList<>();
 		cmd.add(binaryPath);
 		cmd.add("-m");
@@ -251,22 +254,10 @@ public class LocalLlmEngine implements LlmEngine {
 		cmd.add("on");
 		cmd.add("-c");
 		cmd.add(String.valueOf(contextSize));
-		cmd.add("--cache-type-k");
-		cmd.add("q4_0");
-		cmd.add("--cache-type-v");
-		cmd.add("q4_0");
 		cmd.add("-b");
 		cmd.add("4096");
 		cmd.add("-ub");
 		cmd.add("1024");
-		cmd.add("-t");
-		cmd.add(String.valueOf(threads));
-		cmd.add("-tb");
-		cmd.add(String.valueOf(threads));
-		// Enable cross-request prefix-cache matching at 256-token granularity.
-		// Slot-based KV reuse only fires when prompts share an exact byte prefix;
-		// --cache-reuse lets the server salvage a partial match when the prefix
-		// shifts slightly (e.g., a record date format change between queries).
 		cmd.add("--cache-reuse");
 		cmd.add("256");
 		cmd.add("--reasoning-budget");
@@ -280,7 +271,7 @@ public class LocalLlmEngine implements LlmEngine {
 		serverPort = getServerPort();
 
 		List<String> command = buildServerCommand(serverBinaryPath, modelPath, serverPort,
-				getContextSize(), Runtime.getRuntime().availableProcessors());
+				getContextSize());
 
 		log.info("Starting llama-server on port {} with model {}", serverPort, modelPath);
 

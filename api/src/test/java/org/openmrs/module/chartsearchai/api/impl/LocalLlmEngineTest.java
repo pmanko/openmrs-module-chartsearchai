@@ -94,7 +94,7 @@ public class LocalLlmEngineTest {
 	@Test
 	public void buildServerCommand_shouldEnableCrossRequestCacheReuse() {
 		List<String> cmd = LocalLlmEngine.buildServerCommand(
-				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 8);
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768);
 
 		int idx = cmd.indexOf("--cache-reuse");
 		assertTrue(idx >= 0,
@@ -176,7 +176,7 @@ public class LocalLlmEngineTest {
 	@Test
 	public void buildServerCommand_shouldIncludeModelAndPort() {
 		List<String> cmd = LocalLlmEngine.buildServerCommand(
-				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 8);
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768);
 
 		assertEquals("/bin/llama-server", cmd.get(0));
 		assertTrue(cmd.contains("-m"));
@@ -190,28 +190,18 @@ public class LocalLlmEngineTest {
 	@Test
 	public void buildServerCommand_shouldEnableFlashAttentionAndDisableReasoning() {
 		List<String> cmd = LocalLlmEngine.buildServerCommand(
-				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 8);
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768);
 
 		assertEquals("on", cmd.get(cmd.indexOf("-fa") + 1),
-				"flash attention is required for KV cache quantization to work correctly");
+				"flash attention cuts attention compute on long-context chart prompts");
 		assertEquals("0", cmd.get(cmd.indexOf("--reasoning-budget") + 1),
 				"reasoning channel must stay disabled — burns output tokens before the JSON answer");
 	}
 
 	@Test
-	public void buildServerCommand_shouldQuantizeKvCacheToQ4_0() {
-		List<String> cmd = LocalLlmEngine.buildServerCommand(
-				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 8);
-
-		assertEquals("q4_0", cmd.get(cmd.indexOf("--cache-type-k") + 1),
-				"KV cache must be q4_0 — fp16 KV at 32K ctx is 4× larger and bandwidth-starves CPU inference");
-		assertEquals("q4_0", cmd.get(cmd.indexOf("--cache-type-v") + 1));
-	}
-
-	@Test
 	public void buildServerCommand_shouldUseLargeBatchForChartPrompts() {
 		List<String> cmd = LocalLlmEngine.buildServerCommand(
-				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 8);
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768);
 
 		int b = Integer.parseInt(cmd.get(cmd.indexOf("-b") + 1));
 		int ub = Integer.parseInt(cmd.get(cmd.indexOf("-ub") + 1));
@@ -222,14 +212,26 @@ public class LocalLlmEngineTest {
 	}
 
 	@Test
-	public void buildServerCommand_shouldSetExplicitThreadCount() {
+	public void buildServerCommand_shouldNotPinThreadCount() {
 		List<String> cmd = LocalLlmEngine.buildServerCommand(
-				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 6);
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768);
 
-		assertEquals("6", cmd.get(cmd.indexOf("-t") + 1),
-				"thread count must be set explicitly so we don't depend on llama-server's auto-detect "
-				+ "which underuses cores in some container configurations");
-		assertEquals("6", cmd.get(cmd.indexOf("-tb") + 1),
-				"batch threads should match generation threads for prompt processing parallelism");
+		assertFalse(cmd.contains("-t"),
+				"thread count must be left to llama-server's auto-detect — pinning to "
+				+ "availableProcessors() pulls SMT siblings or efficiency cores into the work and "
+				+ "regresses prefill on hosts where logical-core count exceeds physical cores");
+		assertFalse(cmd.contains("-tb"));
+	}
+
+	@Test
+	public void buildServerCommand_shouldNotQuantizeKvCache() {
+		List<String> cmd = LocalLlmEngine.buildServerCommand(
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768);
+
+		assertFalse(cmd.contains("--cache-type-k"),
+				"KV cache dtype must be left to llama-server's default — q4_0 with flash attention "
+				+ "adds a dequantize-on-read tax in the attention kernel that costs more than the "
+				+ "memory it saves on backends where KV fits comfortably (Metal, CUDA, sufficient-RAM CPU)");
+		assertFalse(cmd.contains("--cache-type-v"));
 	}
 }
