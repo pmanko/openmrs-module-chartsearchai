@@ -92,6 +92,18 @@ public class LocalLlmEngineTest {
 	}
 
 	@Test
+	public void buildRequestBody_shouldUseGreedySamplerOnly() throws IOException {
+		String body = engine.buildRequestBody("sys", "usr", false);
+		JsonNode root = MAPPER.readTree(body);
+
+		JsonNode samplers = root.get("samplers");
+		assertEquals(1, samplers.size(),
+				"at temperature=0 the decode is greedy; the default 9-sampler chain is wasted "
+				+ "work per token. Pin samplers to [\"temperature\"] to short-circuit it");
+		assertEquals("temperature", samplers.get(0).asText());
+	}
+
+	@Test
 	public void buildServerCommand_shouldEnableCrossRequestCacheReuse() {
 		List<String> cmd = LocalLlmEngine.buildServerCommand(
 				"/bin/llama-server", "/data/model.gguf", 9999, 32768);
@@ -233,5 +245,25 @@ public class LocalLlmEngineTest {
 				+ "adds a dequantize-on-read tax in the attention kernel that costs more than the "
 				+ "memory it saves on backends where KV fits comfortably (Metal, CUDA, sufficient-RAM CPU)");
 		assertFalse(cmd.contains("--cache-type-v"));
+	}
+
+	@Test
+	public void buildServerCommand_shouldUseSingleParallelSlot() {
+		List<String> cmd = LocalLlmEngine.buildServerCommand(
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768);
+
+		assertEquals("1", cmd.get(cmd.indexOf("--parallel") + 1),
+				"chart-search runs one request per process at a time — extra slots only add "
+				+ "LRU-eviction noise that interferes with prefix-cache reuse");
+	}
+
+	@Test
+	public void buildServerCommand_shouldMlockModelWeights() {
+		List<String> cmd = LocalLlmEngine.buildServerCommand(
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768);
+
+		assertTrue(cmd.contains("--mlock"),
+				"--mlock pins model weights in RAM so the OS cannot page them out under memory "
+				+ "pressure, avoiding multi-second stalls when other processes touch RAM");
 	}
 }

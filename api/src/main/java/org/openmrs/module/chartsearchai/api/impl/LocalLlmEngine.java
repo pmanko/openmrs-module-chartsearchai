@@ -227,6 +227,11 @@ public class LocalLlmEngine implements LlmEngine {
 	 * <ul>
 	 *   <li>{@code -ngl 99} — offload all layers to GPU when a GPU build is in use; no-op on CPU build.</li>
 	 *   <li>{@code -fa on} — flash attention; cuts attention compute on long-context chart prompts.</li>
+	 *   <li>{@code --parallel 1} — single decode slot. Chart-search is one request at a time per
+	 *       process; the default 4 slots add LRU eviction noise that interferes with prefix-cache
+	 *       reuse for no benefit.</li>
+	 *   <li>{@code --mlock} — pin model weights in RAM so the OS cannot page them out under
+	 *       memory pressure, avoiding multi-second stalls on a busy host.</li>
 	 *   <li>{@code -b 4096 -ub 1024} — large batch sizes for prompt processing. Default 2048/512
 	 *       leaves prompt-processing parallelism on the table for chart-length inputs.</li>
 	 *   <li>{@code --cache-reuse 256} + {@code cache_prompt=true} (in request body) — reuse the
@@ -254,6 +259,9 @@ public class LocalLlmEngine implements LlmEngine {
 		cmd.add("on");
 		cmd.add("-c");
 		cmd.add(String.valueOf(contextSize));
+		cmd.add("--parallel");
+		cmd.add("1");
+		cmd.add("--mlock");
 		cmd.add("-b");
 		cmd.add("4096");
 		cmd.add("-ub");
@@ -392,6 +400,14 @@ public class LocalLlmEngine implements LlmEngine {
 		root.put("temperature", 0.0);
 		root.put("max_tokens", ChartSearchAiConstants.DEFAULT_MAX_TOKENS);
 		root.put("stream", stream);
+		// At temperature=0 the decode is greedy (argmax). The default sampler chain
+		// (penalties, dry, top_n_sigma, top_k, typ_p, top_p, min_p, xtc, temperature)
+		// runs every one of those samplers per token, but at greedy they're all no-ops
+		// on the OUTPUT — they still consume CPU. Pinning samplers to ["temperature"]
+		// short-circuits the chain to the only one that matters.
+		ArrayNode samplers = MAPPER.createArrayNode();
+		samplers.add("temperature");
+		root.set("samplers", samplers);
 		// llama.cpp-specific extension. Without it, each request reprocesses the
 		// whole prompt from scratch, so successive queries on the same patient
 		// pay full prefill cost every time. With it set, llama-server reuses
