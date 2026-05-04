@@ -73,6 +73,15 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 			return;
 		}
 
+		// Invalidate the chart cache regardless of preFilter — the cache feeds the
+		// !preFilter path, so it needs invalidation precisely when the embedding
+		// re-index does not run.
+		if (isMerge) {
+			invalidateMergedPatients(args);
+		} else {
+			ChartCacheInvalidator.invalidate(patient);
+		}
+
 		String preFilter = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
 		if ("false".equalsIgnoreCase(preFilter.trim())) {
@@ -95,6 +104,14 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 		}
 
 		IndexingHelper.reindexOtherPipelines(patient);
+	}
+
+	private void invalidateMergedPatients(Object[] args) {
+		if (args.length < 2 || !(args[0] instanceof Patient) || !(args[1] instanceof Patient)) {
+			return;
+		}
+		ChartCacheInvalidator.invalidate((Patient) args[0]);
+		ChartCacheInvalidator.invalidate((Patient) args[1]);
 	}
 
 	private void handleMergePatients(Object[] args) {

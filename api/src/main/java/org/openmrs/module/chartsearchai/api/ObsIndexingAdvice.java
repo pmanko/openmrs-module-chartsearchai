@@ -41,14 +41,19 @@ public class ObsIndexingAdvice implements AfterReturningAdvice {
 			return;
 		}
 
-		String preFilter = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
-		if ("false".equalsIgnoreCase(preFilter.trim())) {
+		Patient patient = getPatientFromArgs(returnValue, args);
+		if (patient == null) {
 			return;
 		}
 
-		Patient patient = getPatientFromArgs(returnValue, args);
-		if (patient == null) {
+		// Invalidate the chart cache regardless of preFilter — the cache feeds the
+		// !preFilter path, so it needs invalidation precisely when the embedding
+		// re-index does not run.
+		ChartCacheInvalidator.invalidate(patient);
+
+		String preFilter = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
+		if ("false".equalsIgnoreCase(preFilter.trim())) {
 			return;
 		}
 

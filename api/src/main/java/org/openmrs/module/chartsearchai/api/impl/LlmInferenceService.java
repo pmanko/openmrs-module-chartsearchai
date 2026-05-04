@@ -98,6 +98,10 @@ public class LlmInferenceService implements ChartSearchService {
 	@Autowired
 	private LlmProvider llmProvider;
 
+	@Autowired
+	@Qualifier("chartSearchAi.chartCache")
+	private ChartCache chartCache;
+
 	private static final int NOISE_PROFILE_CACHE_MAX_SIZE = 100;
 
 	private final ConcurrentHashMap<String, ModelNoiseProfile> noiseProfileCache =
@@ -432,7 +436,13 @@ public class LlmInferenceService implements ChartSearchService {
 
 	private PatientChart buildChart(Patient patient, String question) {
 		if (!usePreFilter()) {
-			return chartSerializer.serialize(patient);
+			PatientChart cached = chartCache.get(patient);
+			if (cached != null) {
+				return cached;
+			}
+			PatientChart chart = chartSerializer.serialize(patient);
+			chartCache.put(patient, chart);
+			return chart;
 		}
 
 		if (isHybridPipeline()) {
