@@ -826,10 +826,11 @@ Requires the `View AI Audit Logs` privilege. All query parameters are optional. 
 
 - **Input validation**: Patient UUID and question are required. Questions are limited to 1000 characters.
 - **Prompt injection defense (two layers)**:
-  1. **Structured-output constraint (primary defense)**: For the local engine, `LocalLlmEngine.buildJsonSchemaResponseFormat()` sets `response_format: {"type": "json_schema", "strict": true, ...}` declaring the exact `{answer: string, citations: int[]}` shape; llama-server enforces this by deriving a GBNF grammar from the schema internally. For the remote engine, `response_format: {"type": "json_object"}` provides a similar (though weaker — JSON syntactic only, no shape enforcement) constraint. Either way, the LLM cannot emit arbitrary text — even if a prompt injection manipulates the model's reasoning it cannot produce system information, execute instructions, or output anything outside the declared shape. This is the primary defense because it operates at the output level regardless of what the model "wants" to say.
+  1. **Structured-output constraint (primary defense)**: Both engines send `response_format: {"type": "json_schema", "strict": true, ...}` declaring the exact `{answer: string, citations: int[]}` shape — extracted into the shared `ChartAnswerResponseFormat` helper. The local llama-server enforces it by deriving a GBNF grammar from the schema internally. Remote OpenAI-compatible providers enforce it server-side; this is also what Anthropic's OpenAI-compat endpoint requires (it rejects the older `json_object` form with HTTP 400). Either way, the LLM cannot emit arbitrary text — even if a prompt injection manipulates the model's reasoning it cannot produce system information, execute instructions, or output anything outside the declared shape. This is the primary defense because it operates at the output level regardless of what the model "wants" to say.
   2. **Input regex filter**: Questions are checked against a regex pattern that rejects common prompt injection phrases (e.g., "ignore previous instructions", "you are now", "system prompt:"). Rejected questions return a 400 error without reaching the LLM.
 - **AI disclaimer**: Every response includes a disclaimer stating the output is AI-generated and not a substitute for clinical judgment.
 - **Answer caching**: An in-memory LRU cache (`ChartSearchServiceRouter`) stores recent answers keyed by `patientUuid::preFilter::pipeline::topK::similarityRatio::keywordWeight::scoreGapMultiplier::minScoreGap::gapValidationCosine::question`. The cache key includes all retrieval parameters so that changing any tuning setting correctly invalidates cached results. Configurable TTL via `chartsearchai.cacheTtlMinutes` (default 0 = disabled). When enabled, identical queries with the same parameters within the TTL window return the cached answer without invoking the LLM. The cache uses an access-ordered `LinkedHashMap` with a fixed maximum size, automatically evicting the least-recently-used entry when the size limit is exceeded. Expired entries are cleaned up periodically (every 10 cache puts) rather than on every access, to avoid scanning the entire cache on each insertion.
+- **Serialized chart caching**: A bounded LRU cache (`ChartCache`, max 50 patients) holds the assembled `PatientChart` keyed by patient ID, so consecutive queries on the same patient skip the 300–500 ms of OpenMRS DB roundtrips and Hibernate work that chart serialization costs. Invalidation is event-driven via the existing AOP advice (`ObsIndexingAdvice`, `EncounterIndexingAdvice`, `PatientDataIndexingAdvice`) — any service that mutates the chart evicts the cached entry, so there is no TTL and no risk of stale reads. Per-JVM rather than shared, which is fine for single-tenant standalones and for clustered deployments because each node sees its own AOP path. This cache is independent of the LLM-side prompt-prefix cache (KV cache reuse on llama-server, provider-managed caching on remote): the chart cache shaves DB cost on every query, while the prompt cache shaves prefill cost on follow-up queries against the same patient.
 - **Rate limiting**: Configurable per-user rate limit (`chartsearchai.rateLimitPerMinute`, default 10). Set to 0 to disable.
 - **Database audit logging**: Every query is recorded in the `chartsearchai_audit_log` table with:
   - The authenticated user and patient
@@ -1042,7 +1043,7 @@ LocalLlmEngine (default)
 RemoteLlmEngine
 ├── java.net.http.HttpClient (no new dependencies)
 ├── OpenAI-compatible /chat/completions endpoint
-├── response_format: {"type": "json_object"} for structured output
+├── response_format: json_schema (shared with local engine)
 └── SSE streaming support
 ```
 
@@ -1071,6 +1072,8 @@ RemoteLlmEngine
 | `chartsearchai.llm.remote.modelName` | Global property | Model to request (e.g. `llama3.3` for Ollama, `gpt-4o` for OpenAI) |
 
 **API key storage:** The API key is stored in `openmrs-runtime.properties` (a filesystem file), not in the database. This prevents exposure via the Admin UI, database backups, or SQL queries. This follows the same pattern OpenMRS uses for the database password. The endpoint URL and model name are stored as global properties since they are not secrets.
+
+**Anthropic compatibility:** Anthropic's OpenAI-compat endpoint diverges from the de facto standard in two places that matter for this module: it rejects `response_format: json_object` (HTTP 400), so `RemoteLlmEngine` always emits the strict `json_schema` form (shared with the local engine via `ChartAnswerResponseFormat`); and on Claude Opus 4.7 it rejects `temperature`/`top_p` because Anthropic deprecated those samplers on that model. The engine handles this by sending `top_k: 1` instead — the only greedy-decoding lever Anthropic still accepts on the compat endpoint for Opus 4.7. Other Claude models (Opus 4.5/4.6, Haiku 4.5) and all non-Anthropic providers keep using `temperature: 0`. The branch is keyed on the model identifier, not on the endpoint URL, so users running Opus 4.7 through any OpenAI-compat shim get the same handling.
 
 ### Why only the LLM, not the embedding model?
 

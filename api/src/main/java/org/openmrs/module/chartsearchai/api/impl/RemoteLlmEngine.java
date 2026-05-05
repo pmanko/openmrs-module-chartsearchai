@@ -37,7 +37,7 @@ import org.springframework.stereotype.Component;
  * Remote LLM engine that calls an OpenAI-compatible chat completions API.
  * Supports any server that implements the OpenAI API format, including
  * self-hosted inference servers (vLLM, Ollama, text-generation-inference)
- * and cloud providers (OpenAI, Azure OpenAI, Google AI, Anthropic via proxy).
+ * and cloud providers (OpenAI, Azure OpenAI, Google AI, Anthropic).
  */
 @Component("chartSearchAi.remoteLlmEngine")
 public class RemoteLlmEngine implements LlmEngine {
