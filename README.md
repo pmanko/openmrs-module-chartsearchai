@@ -172,6 +172,7 @@ These settings apply when `chartsearchai.retrieval.pipeline` is `embedding` (the
 | `chartsearchai.llm.timeoutSeconds` | `300` | Maximum seconds to wait for LLM inference before timing out |
 | `chartsearchai.llm.idleTimeoutMinutes` | `30` | *(Local engine only)* Minutes of inactivity after which the embedded llama-server is stopped to free RAM. It is automatically restarted on the next query. Set to `0` to keep it running indefinitely |
 | `chartsearchai.llm.serverPort` | `18085` | *(Local engine only)* Port for the embedded llama-server. Change if the default conflicts with another service |
+| `chartsearchai.warmupEnabled` | `true` | When `true`, opening a patient chart triggers a background warmup that primes the LLM prompt cache (system prompt + serialized chart) so the first AI query on that patient skips the full prefill cost. No-op when `chartsearchai.llm.engine` is `remote` (remote providers manage their own caching) and when `chartsearchai.embedding.preFilter` is `true` (the prompt prefix varies per query, so a chart-only warmup cannot be reused) |
 
 #### Rate limiting and caching
 
@@ -394,6 +395,21 @@ SSE events:
 | `token` | A chunk of the answer text as it is generated |
 | `done` | Final JSON with the complete answer, references (sorted most recent first, with `index`, `resourceType`, `resourceId`, `date`), `questionId`, and disclaimer |
 | `error` | Error message if something goes wrong |
+
+### Warmup
+
+Pre-warms the LLM prompt cache for a patient's chart so the first AI query skips the full prefill cost. The frontend should call this when a patient chart is opened. Returns `202 Accepted` immediately; the warmup runs on a background daemon thread. Requires the **"AI Query Patient Data"** privilege.
+
+```
+POST /ws/rest/v1/chartsearchai/warmup
+Content-Type: application/json
+
+{
+  "patient": "patient-uuid-here"
+}
+```
+
+No-op when `chartsearchai.llm.engine` is `remote` and when `chartsearchai.embedding.preFilter` is `true`. Disable entirely with `chartsearchai.warmupEnabled=false`. Concurrent warmups for different patients are coalesced — only the most recently submitted patient runs, since llama-server processes one request at a time.
 
 ### Feedback
 

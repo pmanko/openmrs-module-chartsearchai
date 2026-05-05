@@ -628,6 +628,8 @@ The model path is configured via the `chartsearchai.llm.modelFilePath` global pr
 
 Inference uses temperature 0.0 with greedy decoding, which is deterministic at the sampler level for a fixed prompt. KV cache reuse is enabled (`cache_prompt: true` plus `--cache-reuse 256`) so repeat queries on the same patient pay only the new question's prefill cost — typically an order-of-magnitude latency win on follow-up questions, since the system prompt and chart text are byte-identical between turns.
 
+The same KV cache also lets the *first* query on a patient be fast: when the chart is opened, the frontend calls `POST /ws/rest/v1/chartsearchai/warmup` and the module sends a fire-and-forget prefill request (system prompt + serialized chart, empty trailing question, `max_tokens=1`) to llama-server. By the time the clinician types their first real question, the chart is already in the KV cache. Gated by `chartsearchai.warmupEnabled` (default `true`). It is a no-op when the engine is remote (remote providers manage their own caching) and when `chartsearchai.embedding.preFilter` is `true` (the prompt prefix varies per query, so there is no stable prefix to prime). Stale-skip logic in `WarmupExecutor` drops queued warmups for patients the user has already navigated away from.
+
 Model file paths are resolved relative to the OpenMRS application data directory. Path traversal (`..`) is rejected and the resolved path is verified to stay within the data directory, preventing an admin from accidentally (or maliciously) pointing the module at arbitrary files on the filesystem.
 
 ### Chat template handling
@@ -787,6 +789,17 @@ Returns a `text/event-stream` with three event types:
 - `error` — an error message if something goes wrong
 
 Both search endpoints return a `questionId` (the audit log row ID as a string) that the frontend uses to submit user feedback.
+
+#### Warmup endpoint
+
+```
+POST /ws/rest/v1/chartsearchai/warmup
+{
+  "patient": "patient-uuid-here"
+}
+```
+
+Pre-warms the LLM prompt cache for a patient's chart so the first AI query on that patient skips full prefill cost. The frontend hits this when a patient chart is opened. Returns `202 Accepted` immediately; the warmup runs on a background daemon thread. Requires the same `AI Query Patient Data` privilege as the search endpoints. No-op when the engine is remote and when `chartsearchai.embedding.preFilter` is `true`. Disabled globally by setting `chartsearchai.warmupEnabled=false`.
 
 #### Feedback endpoint
 
