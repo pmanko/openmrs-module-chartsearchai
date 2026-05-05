@@ -164,6 +164,7 @@ These settings apply when `chartsearchai.retrieval.pipeline` is `embedding` (the
 | `chartsearchai.embedding.queryPrefix` | *(empty)* | Prefix prepended to the user query before embedding. Leave empty for models like all-MiniLM-L6-v2 that were not trained with instruction prefixes. Set to `search_query: ` or `Represent this sentence for searching relevant passages: ` for models that support instruction-aware queries (e.g., BGE) |
 | `chartsearchai.embedding.maxSequenceLength` | `256` | Maximum WordPiece token sequence length for embedding input. Increase when using models that support longer contexts (e.g., 512 for BGE models). Must be between 32 and 8192 |
 | `chartsearchai.embedding.modelFilePath` | — | Required when using the embedding, hybrid, or elasticsearch pipeline. Relative path to the ONNX model file (all-MiniLM-L6-v2), e.g. `chartsearchai/all-MiniLM-L6-v2.onnx`. Not needed for the Lucene pipeline |
+| `chartsearchai.embedding.queryModelFilePath` | *(empty)* | Optional separate query-encoder ONNX model for dual-encoder architectures (e.g. MedCPT). When set, queries are embedded with this model while records use `chartsearchai.embedding.modelFilePath`. Leave empty to use a single encoder for both. Example for MedCPT: `chartsearchai/MedCPT/Query-Encoder/model.onnx` |
 | `chartsearchai.embedding.vocabFilePath` | — | Required when using the embedding, hybrid, or elasticsearch pipeline. Relative path to the WordPiece `vocab.txt` file, e.g. `chartsearchai/vocab.txt`. Not needed for the Lucene pipeline |
 
 #### LLM tuning
@@ -174,6 +175,7 @@ These settings apply when `chartsearchai.retrieval.pipeline` is `embedding` (the
 | `chartsearchai.llm.timeoutSeconds` | `300` | Maximum seconds to wait for LLM inference before timing out |
 | `chartsearchai.llm.idleTimeoutMinutes` | `30` | *(Local engine only)* Minutes of inactivity after which the embedded llama-server is stopped to free RAM. It is automatically restarted on the next query. Set to `0` to keep it running indefinitely |
 | `chartsearchai.llm.serverPort` | `18085` | *(Local engine only)* Port for the embedded llama-server. Change if the default conflicts with another service |
+| `chartsearchai.llm.contextSize` | `32768` | *(Local engine only)* Context window size in tokens for the embedded llama-server. The system prompt + serialized chart + question must fit within this. Larger values let bigger charts pass through full-chart mode but increase the KV cache memory footprint roughly linearly. Increase if you see "Patient chart exceeds the LLM context window" (HTTP 413) and have headroom for a larger KV cache; reduce on memory-constrained hardware |
 | `chartsearchai.warmupEnabled` | `true` | When `true`, opening a patient chart triggers a background warmup that primes the LLM prompt cache (system prompt + serialized chart) so the first AI query on that patient skips the full prefill cost. No-op when `chartsearchai.llm.engine` is `remote` (remote providers manage their own caching) and when `chartsearchai.embedding.preFilter` is `true` (the prompt prefix varies per query, so a chart-only warmup cannot be reused) |
 
 #### Rate limiting and caching
