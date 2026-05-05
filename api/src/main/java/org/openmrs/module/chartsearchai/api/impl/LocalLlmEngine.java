@@ -470,21 +470,8 @@ public class LocalLlmEngine implements LlmEngine {
 			root.set("stream_options", streamOptions);
 		}
 
-		root.set("response_format", buildJsonSchemaResponseFormat());
-
-		ArrayNode messages = MAPPER.createArrayNode();
-
-		ObjectNode systemMsg = MAPPER.createObjectNode();
-		systemMsg.put("role", "system");
-		systemMsg.put("content", systemPrompt);
-		messages.add(systemMsg);
-
-		ObjectNode userMsg = MAPPER.createObjectNode();
-		userMsg.put("role", "user");
-		userMsg.put("content", userMessage);
-		messages.add(userMsg);
-
-		root.set("messages", messages);
+		root.set("response_format", ChartAnswerResponseFormat.build(MAPPER));
+		root.set("messages", ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage));
 
 		try {
 			return MAPPER.writeValueAsString(root);
@@ -492,43 +479,6 @@ public class LocalLlmEngine implements LlmEngine {
 		catch (IOException e) {
 			throw new APIException("Failed to build request body", e);
 		}
-	}
-
-	// Strict JSON schema for {answer: string, citations: int[]}. Forces the model to emit
-	// a closing brace and stop, instead of looping past a complete answer up to max_tokens.
-	private static ObjectNode buildJsonSchemaResponseFormat() {
-		ObjectNode answerProp = MAPPER.createObjectNode();
-		answerProp.put("type", "string");
-
-		ObjectNode citationItem = MAPPER.createObjectNode();
-		citationItem.put("type", "integer");
-		ObjectNode citationsProp = MAPPER.createObjectNode();
-		citationsProp.put("type", "array");
-		citationsProp.set("items", citationItem);
-
-		ObjectNode properties = MAPPER.createObjectNode();
-		properties.set("answer", answerProp);
-		properties.set("citations", citationsProp);
-
-		ArrayNode required = MAPPER.createArrayNode();
-		required.add("answer");
-		required.add("citations");
-
-		ObjectNode schema = MAPPER.createObjectNode();
-		schema.put("type", "object");
-		schema.set("properties", properties);
-		schema.set("required", required);
-		schema.put("additionalProperties", false);
-
-		ObjectNode jsonSchema = MAPPER.createObjectNode();
-		jsonSchema.put("name", "chart_answer");
-		jsonSchema.put("strict", true);
-		jsonSchema.set("schema", schema);
-
-		ObjectNode responseFormat = MAPPER.createObjectNode();
-		responseFormat.put("type", "json_schema");
-		responseFormat.set("json_schema", jsonSchema);
-		return responseFormat;
 	}
 
 	private InferenceResult parseResponse(String responseBody) throws IOException {

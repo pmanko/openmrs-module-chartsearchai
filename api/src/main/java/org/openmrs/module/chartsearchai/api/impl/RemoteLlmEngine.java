@@ -24,7 +24,6 @@ import java.util.function.Consumer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.openmrs.api.APIException;
@@ -158,7 +157,12 @@ public class RemoteLlmEngine implements LlmEngine {
 			boolean stream) {
 		ObjectNode root = MAPPER.createObjectNode();
 		root.put("model", modelName);
-		root.put("temperature", 0.0);
+		// Anthropic's compat endpoint rejects temperature/top_p on Opus 4.7; top_k=1 is the only greedy-decoding lever it still accepts.
+		if (modelName.startsWith("claude-opus-4-7")) {
+			root.put("top_k", 1);
+		} else {
+			root.put("temperature", 0.0);
+		}
 		root.put("max_tokens", ChartSearchAiConstants.DEFAULT_MAX_TOKENS);
 		root.put("stream", stream);
 		if (stream) {
@@ -167,23 +171,8 @@ public class RemoteLlmEngine implements LlmEngine {
 			root.set("stream_options", streamOptions);
 		}
 
-		ObjectNode responseFormat = MAPPER.createObjectNode();
-		responseFormat.put("type", "json_object");
-		root.set("response_format", responseFormat);
-
-		ArrayNode messages = MAPPER.createArrayNode();
-
-		ObjectNode systemMsg = MAPPER.createObjectNode();
-		systemMsg.put("role", "system");
-		systemMsg.put("content", systemPrompt);
-		messages.add(systemMsg);
-
-		ObjectNode userMsg = MAPPER.createObjectNode();
-		userMsg.put("role", "user");
-		userMsg.put("content", userMessage);
-		messages.add(userMsg);
-
-		root.set("messages", messages);
+		root.set("response_format", ChartAnswerResponseFormat.build(MAPPER));
+		root.set("messages", ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage));
 
 		try {
 			return MAPPER.writeValueAsString(root);

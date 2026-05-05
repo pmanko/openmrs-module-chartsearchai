@@ -10,6 +10,7 @@
 package org.openmrs.module.chartsearchai.api.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
@@ -40,7 +41,6 @@ public class RemoteLlmEngineTest {
 		assertEquals("gpt-4o", root.get("model").asText());
 		assertEquals(0.0, root.get("temperature").asDouble());
 		assertEquals(false, root.get("stream").asBoolean());
-		assertEquals("json_object", root.get("response_format").get("type").asText());
 
 		JsonNode messages = root.get("messages");
 		assertEquals(2, messages.size());
@@ -48,6 +48,61 @@ public class RemoteLlmEngineTest {
 		assertEquals("system prompt", messages.get(0).get("content").asText());
 		assertEquals("user", messages.get(1).get("role").asText());
 		assertEquals("user message", messages.get(1).get("content").asText());
+	}
+
+	@Test
+	public void buildRequestBody_shouldOmitTemperatureAndUseTopKForClaudeOpus47()
+			throws IOException {
+		String body = engine.buildRequestBody("sys", "usr", "claude-opus-4-7", false);
+		JsonNode root = MAPPER.readTree(body);
+
+		assertTrue(root.path("temperature").isMissingNode(),
+				"Anthropic's OpenAI-compat endpoint rejects temperature for Claude Opus 4.7 "
+				+ "with HTTP 400. The engine must omit it for this model.");
+		assertEquals(1, root.get("top_k").asInt(),
+				"top_k=1 is greedy decoding — the only determinism lever Anthropic "
+				+ "still accepts on Opus 4.7 via the OpenAI-compat endpoint.");
+	}
+
+	@Test
+	public void buildRequestBody_shouldKeepTemperatureForOpus45And46() throws IOException {
+		for (String model : new String[] { "claude-opus-4-5", "claude-opus-4-6" }) {
+			String body = engine.buildRequestBody("sys", "usr", model, false);
+			JsonNode root = MAPPER.readTree(body);
+
+			assertEquals(0.0, root.get("temperature").asDouble(),
+					"Opus 4.5/4.6 still accept temperature on Anthropic's compat endpoint; "
+					+ "only 4.7 deprecates it. Don't strip temperature for these models.");
+			assertTrue(root.path("top_k").isMissingNode(),
+					"top_k must not be sent for models that accept temperature — "
+					+ "OpenAI rejects it.");
+		}
+	}
+
+	@Test
+	public void buildRequestBody_shouldUseJsonSchemaStrictMode() throws IOException {
+		String body = engine.buildRequestBody("sys", "usr", "claude-haiku-4-5-20251001", false);
+		JsonNode root = MAPPER.readTree(body);
+
+		JsonNode responseFormat = root.get("response_format");
+		assertEquals("json_schema", responseFormat.get("type").asText(),
+				"Remote engine must use json_schema, not json_object — Anthropic's "
+				+ "OpenAI-compatible endpoint rejects json_object with HTTP 400.");
+
+		JsonNode jsonSchema = responseFormat.get("json_schema");
+		assertTrue(jsonSchema.get("strict").asBoolean());
+
+		JsonNode schema = jsonSchema.get("schema");
+		assertEquals("object", schema.get("type").asText());
+		assertFalse(schema.get("additionalProperties").asBoolean());
+
+		JsonNode properties = schema.get("properties");
+		assertEquals("string", properties.get("answer").get("type").asText());
+		assertEquals("array", properties.get("citations").get("type").asText());
+		assertEquals("integer", properties.get("citations").get("items").get("type").asText());
+
+		JsonNode required = schema.get("required");
+		assertEquals(2, required.size());
 	}
 
 	@Test
