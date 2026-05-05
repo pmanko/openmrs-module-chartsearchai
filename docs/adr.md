@@ -1054,7 +1054,7 @@ RemoteLlmEngine
 |---|---|---|
 | `chartsearchai.llm.engine` | Global property | `local` (default) or `remote` |
 | `chartsearchai.llm.remote.endpointUrl` | Global property | Chat completions URL (e.g. `http://localhost:11434/v1/chat/completions` for Ollama, `https://api.openai.com/v1/chat/completions` for OpenAI) |
-| `chartsearchai.llm.remote.apiKey` | Runtime property | Bearer token for authentication |
+| `chartsearchai.llm.remote.apikey` | Runtime property | Bearer token for authentication |
 | `chartsearchai.llm.remote.modelName` | Global property | Model to request (e.g. `llama3.3` for Ollama, `gpt-4o` for OpenAI) |
 
 **API key storage:** The API key is stored in `openmrs-runtime.properties` (a filesystem file), not in the database. This prevents exposure via the Admin UI, database backups, or SQL queries. This follows the same pattern OpenMRS uses for the database password. The endpoint URL and model name are stored as global properties since they are not secrets.
