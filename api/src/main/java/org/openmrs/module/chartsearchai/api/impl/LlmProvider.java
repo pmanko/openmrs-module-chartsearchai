@@ -82,8 +82,7 @@ public class LlmProvider {
 	 */
 	public LlmResponse search(String numberedRecords, String question) {
 		String systemPrompt = getSystemPrompt();
-		String userMessage = "Patient records (most recent first):\n" + normalizeRecords(numberedRecords)
-				+ "\n\nClinician's query: " + question;
+		String userMessage = buildUserMessage(numberedRecords, question);
 		int timeoutSeconds = getTimeoutSeconds();
 
 		LlmEngine.InferenceResult result = getActiveEngine().infer(
@@ -105,8 +104,7 @@ public class LlmProvider {
 	public LlmResponse searchStreaming(String numberedRecords, String question,
 			Consumer<String> tokenConsumer) {
 		String systemPrompt = getSystemPrompt();
-		String userMessage = "Patient records (most recent first):\n" + normalizeRecords(numberedRecords)
-				+ "\n\nClinician's query: " + question;
+		String userMessage = buildUserMessage(numberedRecords, question);
 		int timeoutSeconds = getTimeoutSeconds();
 
 		// Wrap the consumer to extract only the "answer" value from the JSON
@@ -265,6 +263,38 @@ public class LlmProvider {
 				delegate.accept(out.toString());
 			}
 		}
+	}
+
+	/**
+	 * Pre-warm the LLM's prompt cache by sending the same prefix a real query
+	 * would, with an empty trailing question. See {@link #buildUserMessage} for
+	 * the byte-prefix contract that lets llama-server reuse the cached tokens.
+	 */
+	public void warmup(String numberedRecords) {
+		String systemPrompt = getSystemPrompt();
+		String userMessage = buildUserMessage(numberedRecords, "");
+		int timeoutSeconds = getTimeoutSeconds();
+		getActiveEngine().warmup(systemPrompt, userMessage, timeoutSeconds);
+	}
+
+	/**
+	 * Whether the active engine benefits from a warmup call. Callers should skip
+	 * pre-warmup work (chart serialization, etc.) when this returns false.
+	 */
+	public boolean supportsWarmup() {
+		return getActiveEngine().supportsWarmup();
+	}
+
+	/**
+	 * Builds the user-message body sent to the LLM, given the numbered patient
+	 * records and the clinician's query. This is shared between {@link #search},
+	 * {@link #searchStreaming}, and {@link #warmup} so that a warmup with
+	 * {@code question = ""} produces a byte-prefix of every real query — that
+	 * shared prefix is exactly what llama-server's KV cache reuses.
+	 */
+	static String buildUserMessage(String numberedRecords, String question) {
+		return "Patient records (most recent first):\n" + normalizeRecords(numberedRecords)
+				+ "\n\nClinician's query: " + question;
 	}
 
 	private static String normalizeRecords(String numberedRecords) {

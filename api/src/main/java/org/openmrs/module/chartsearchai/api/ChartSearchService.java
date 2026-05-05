@@ -44,6 +44,17 @@ public interface ChartSearchService {
 	ChartAnswer searchStreaming(Patient patient, String question, Consumer<String> tokenConsumer);
 
 	/**
+	 * Pre-warm any patient-specific caches (serialized chart, LLM prompt cache) so the
+	 * first real query on this patient does not pay cold-start cost. Implementations
+	 * that don't support warmup may return immediately. Callers should treat this as
+	 * fire-and-forget — failures must not propagate.
+	 *
+	 * @param patient the patient whose chart to warm up
+	 */
+	default void warmup(Patient patient) {
+	}
+
+	/**
 	 * An answer to a chart search question with source citations.
 	 */
 	class ChartAnswer {

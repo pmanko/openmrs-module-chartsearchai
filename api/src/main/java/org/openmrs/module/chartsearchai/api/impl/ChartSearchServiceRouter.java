@@ -94,6 +94,11 @@ public class ChartSearchServiceRouter implements ChartSearchService {
 		return llmService.searchStreaming(patient, question, tokenConsumer);
 	}
 
+	@Override
+	public void warmup(Patient patient) {
+		llmService.warmup(patient);
+	}
+
 	protected String buildCacheKey(Patient patient, String question) {
 		String preFilter = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");

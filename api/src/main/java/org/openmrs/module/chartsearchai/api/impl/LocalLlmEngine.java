@@ -171,6 +171,48 @@ public class LocalLlmEngine implements LlmEngine {
 	}
 
 	@Override
+	public synchronized void warmup(String systemPrompt, String userMessage, int timeoutSeconds) {
+		ensureServerRunning();
+
+		// max_tokens=1 forces llama-server to do the prompt prefill (loading the system+user
+		// message into the KV cache) without spending time on real generation. The prefix
+		// cached this way is what a real query reuses via cache_prompt=true + --cache-reuse.
+		String requestBody = buildRequestBody(systemPrompt, userMessage, false, 1);
+
+		HttpRequest request = HttpRequest.newBuilder()
+				.uri(URI.create(getCompletionsUrl()))
+				.timeout(Duration.ofSeconds(timeoutSeconds))
+				.header("Content-Type", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
+				.build();
+
+		try {
+			HttpResponse<String> response = getHttpClient().send(request,
+					HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+			if (response.statusCode() < 200 || response.statusCode() >= 300) {
+				log.warn("Warmup returned HTTP {}: {}", response.statusCode(),
+						truncate(response.body()));
+				return;
+			}
+
+			InferenceResult result = parseResponse(response.body());
+			// WARN — visible under OpenMRS's default log4j2 (org.openmrs.* pinned to WARN);
+			// the cached-token count is the only direct evidence the warmup primed the KV.
+			log.warn("Warmup primed KV cache: {} input ({} cached)",
+					result.getInputTokens(), result.getCachedTokens());
+			resetIdleTimer();
+		}
+		catch (IOException e) {
+			log.warn("Warmup failed: {}", e.getMessage());
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			log.debug("Warmup interrupted");
+		}
+	}
+
+	@Override
 	public synchronized void close() {
 		if (idleUnloadFuture != null) {
 			idleUnloadFuture.cancel(false);
@@ -396,9 +438,15 @@ public class LocalLlmEngine implements LlmEngine {
 	}
 
 	String buildRequestBody(String systemPrompt, String userMessage, boolean stream) {
+		return buildRequestBody(systemPrompt, userMessage, stream,
+				ChartSearchAiConstants.DEFAULT_MAX_TOKENS);
+	}
+
+	String buildRequestBody(String systemPrompt, String userMessage, boolean stream,
+			int maxTokens) {
 		ObjectNode root = MAPPER.createObjectNode();
 		root.put("temperature", 0.0);
-		root.put("max_tokens", ChartSearchAiConstants.DEFAULT_MAX_TOKENS);
+		root.put("max_tokens", maxTokens);
 		root.put("stream", stream);
 		// At temperature=0 the decode is greedy (argmax). The default sampler chain
 		// (penalties, dry, top_n_sigma, top_k, typ_p, top_p, min_p, xtc, temperature)

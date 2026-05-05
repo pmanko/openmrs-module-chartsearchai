@@ -275,6 +275,8 @@ public class ChartSearchAiConstants {
 
 	public static final int DEFAULT_CACHE_MAX_SIZE = 100;
 
+	public static final String GP_WARMUP_ENABLED = "chartsearchai.warmupEnabled";
+
 	// Resource type identifiers used in embeddings and citations
 	public static final String RESOURCE_TYPE_OBS = "obs";
 

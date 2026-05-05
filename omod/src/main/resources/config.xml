@@ -122,6 +122,12 @@
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.warmupEnabled</property>
+		<defaultValue>true</defaultValue>
+		<description>When true (default), opening a patient chart triggers a background warmup that primes the LLM prompt cache (system prompt + serialized chart) so the first AI query on that patient skips full prefill cost. The warmup serializes the chart and sends an empty-query prefill request to the local llama-server. Has no effect when chartsearchai.llm.engine is "remote" (remote providers manage their own caching) or when chartsearchai.embedding.preFilter is true (the prompt prefix varies per query, so a chart-only warmup cannot be reused). Set to false to disable.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.embedding.topK</property>
 		<defaultValue>10</defaultValue>
 		<description>Maximum number of records to retrieve via embedding similarity when pre-filtering is enabled. Lower values produce more focused LLM responses; higher values provide more context but may reduce reasoning quality. Default: 10.</description>

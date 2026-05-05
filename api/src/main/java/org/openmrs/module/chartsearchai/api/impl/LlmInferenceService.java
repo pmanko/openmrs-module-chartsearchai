@@ -145,15 +145,7 @@ public class LlmInferenceService implements ChartSearchService {
 	@Override
 	public ChartAnswer search(Patient patient, String question) {
 		PatientChart chart = buildChart(patient, question);
-
-		// When the filter returned no records, pass "(none)"
-		// instead of the demographics-only chart text. This
-		// guides the LLM to produce a query-specific "no records"
-		// response rather than "patient records are missing."
-		String chartText = chart.getMappings().isEmpty()
-				? "(No relevant records found)"
-				: chart.getText();
-		LlmResponse response = llmProvider.search(chartText, question);
+		LlmResponse response = llmProvider.search(chartTextOrPlaceholder(chart), question);
 
 		return new ChartAnswer(response.getAnswer(),
 				extractCitedReferences(response.getCitations(), chart.getMappings()),
@@ -162,14 +154,39 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	@Override
+	public void warmup(Patient patient) {
+		if (!isWarmupEnabled()) {
+			return;
+		}
+		// Skip the upstream chart-serialization cost when the active engine
+		// gains nothing from warmup (e.g. remote APIs that cache themselves).
+		if (!llmProvider.supportsWarmup()) {
+			return;
+		}
+		// Pre-filter pipelines build a different prompt prefix for each query (the
+		// records sent depend on the question), so a chart-only warmup wouldn't match
+		// what a real query produces — the KV cache would not be reused.
+		if (usePreFilter()) {
+			return;
+		}
+		PatientChart chart = buildChart(patient, "");
+		llmProvider.warmup(chartTextOrPlaceholder(chart));
+	}
+
+	/**
+	 * Substitutes a placeholder when the chart has no records, so the LLM produces a
+	 * query-specific "no records" answer instead of one based on demographics alone.
+	 */
+	private static String chartTextOrPlaceholder(PatientChart chart) {
+		return chart.getMappings().isEmpty() ? "(No relevant records found)" : chart.getText();
+	}
+
+	@Override
 	public ChartAnswer searchStreaming(Patient patient, String question,
 			Consumer<String> tokenConsumer) {
 		PatientChart chart = buildChart(patient, question);
-
-		String chartText = chart.getMappings().isEmpty()
-				? "(No relevant records found)"
-				: chart.getText();
-		LlmResponse response = llmProvider.searchStreaming(chartText, question, tokenConsumer);
+		LlmResponse response = llmProvider.searchStreaming(
+				chartTextOrPlaceholder(chart), question, tokenConsumer);
 
 		return new ChartAnswer(response.getAnswer(),
 				extractCitedReferences(response.getCitations(), chart.getMappings()),
@@ -815,6 +832,12 @@ public class LlmInferenceService implements ChartSearchService {
 		String mode = org.openmrs.api.context.Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
 		return !"false".equalsIgnoreCase(mode.trim());
+	}
+
+	static boolean isWarmupEnabled() {
+		String value = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_WARMUP_ENABLED, "true");
+		return !"false".equalsIgnoreCase(value.trim());
 	}
 
 	private int getTopK() {

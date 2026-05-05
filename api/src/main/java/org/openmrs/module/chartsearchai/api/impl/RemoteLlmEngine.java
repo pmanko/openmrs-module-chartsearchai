@@ -133,6 +133,18 @@ public class RemoteLlmEngine implements LlmEngine {
 	}
 
 	@Override
+	public void warmup(String systemPrompt, String userMessage, int timeoutSeconds) {
+		// Remote OpenAI-compatible APIs typically manage their own caching. Issuing
+		// a no-op call here would just incur cost. Local-engine warmup is what closes
+		// the gap; remote engines fall back to whatever caching the provider offers.
+	}
+
+	@Override
+	public boolean supportsWarmup() {
+		return false;
+	}
+
+	@Override
 	public synchronized void close() {
 		httpClient = null;
 	}

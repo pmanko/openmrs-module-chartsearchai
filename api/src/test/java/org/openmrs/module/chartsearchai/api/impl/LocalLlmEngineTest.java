@@ -18,6 +18,7 @@ import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.junit.jupiter.api.Test;
 
@@ -133,6 +134,40 @@ public class LocalLlmEngineTest {
 
 		assertFalse(root.get("stream").asBoolean());
 		assertTrue(root.path("stream_options").isMissingNode());
+	}
+
+	@Test
+	public void buildRequestBody_warmupShouldRequestSingleToken() throws IOException {
+		String body = engine.buildRequestBody("sys", "usr", false, 1);
+		JsonNode root = MAPPER.readTree(body);
+
+		assertEquals(1, root.get("max_tokens").asInt(),
+				"warmup must set max_tokens=1 — llama-server still does the prompt prefill "
+				+ "(seeding the KV cache) but skips real generation, which is the wasted work");
+		assertTrue(root.get("cache_prompt").asBoolean(),
+				"warmup must keep cache_prompt=true so the prefilled tokens stay in the slot's "
+				+ "KV cache for the next real query to reuse via --cache-reuse");
+	}
+
+	@Test
+	public void buildRequestBody_warmupBodyMustMatchInferExceptMaxTokens() throws IOException {
+		// The whole point of warmup is that the system+user prefix llama-server sees during
+		// warmup is byte-identical to what it sees on the next real query — that's how
+		// --cache-reuse 256 reuses the KV. If any field other than max_tokens drifts between
+		// the two paths, the prefix tokens diverge and reuse fails silently. Deep-equal the
+		// full request body minus max_tokens so any new field added to one path but not the
+		// other is caught immediately.
+		ObjectNode inferRoot = (ObjectNode) MAPPER.readTree(
+				engine.buildRequestBody("sys prompt", "user msg", false));
+		ObjectNode warmupRoot = (ObjectNode) MAPPER.readTree(
+				engine.buildRequestBody("sys prompt", "user msg", false, 1));
+
+		inferRoot.remove("max_tokens");
+		warmupRoot.remove("max_tokens");
+
+		assertEquals(inferRoot, warmupRoot,
+				"warmup and infer request bodies must be identical except for max_tokens — "
+				+ "any field that drifts will silently break llama-server's KV cache reuse");
 	}
 
 	@Test

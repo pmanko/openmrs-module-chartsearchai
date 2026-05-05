@@ -41,6 +41,26 @@ public interface LlmEngine {
 			Consumer<String> tokenConsumer);
 
 	/**
+	 * Prime the engine's prompt cache with the given prefix. Implementations that
+	 * don't benefit from warmup (e.g. remote APIs that manage their own caching)
+	 * should return false from {@link #supportsWarmup} so callers can skip the
+	 * upstream chart-serialization cost as well.
+	 *
+	 * @param systemPrompt the system prompt
+	 * @param userMessage the user message (patient records + empty question)
+	 * @param timeoutSeconds maximum wall-clock seconds for the request
+	 */
+	void warmup(String systemPrompt, String userMessage, int timeoutSeconds);
+
+	/**
+	 * Whether this engine benefits from a warmup call. Used by callers to decide
+	 * whether to pay any pre-warmup work (chart serialization, etc.).
+	 */
+	default boolean supportsWarmup() {
+		return true;
+	}
+
+	/**
 	 * Release resources (model, connections) but allow re-initialization on next call.
 	 */
 	void close();

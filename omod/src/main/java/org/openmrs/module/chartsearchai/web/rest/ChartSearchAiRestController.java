@@ -37,6 +37,7 @@ import org.openmrs.module.chartsearchai.api.ChartSearchService.ChartAnswer;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
 import org.openmrs.module.chartsearchai.api.AuditLogService;
 import org.openmrs.module.chartsearchai.api.PatientAccessCheck;
+import org.openmrs.module.chartsearchai.api.impl.WarmupExecutor;
 import org.openmrs.module.chartsearchai.model.ChartSearchAuditLog;
 import org.openmrs.module.webservices.rest.web.RestConstants;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -107,6 +108,10 @@ public class ChartSearchAiRestController {
 	@Qualifier("chartSearchAi.auditLogService")
 	private AuditLogService auditLogService;
 
+	@Autowired
+	@Qualifier("chartSearchAi.warmupExecutor")
+	private WarmupExecutor warmupExecutor;
+
 	@RequestMapping(value = "/search", method = RequestMethod.POST)
 	@ResponseBody
 	public ResponseEntity<Object> search(@RequestBody Map<String, String> body) {
@@ -115,10 +120,13 @@ public class ChartSearchAiRestController {
 		String patientUuid = body.get("patient");
 		String question = body.get("question");
 
-		if (patientUuid == null || patientUuid.trim().isEmpty()) {
+		PatientResolution resolved = resolvePatient(patientUuid);
+		if (resolved.hasError()) {
 			return new ResponseEntity<Object>(
-					errorResponse("patient is required"), HttpStatus.BAD_REQUEST);
+					errorResponse(resolved.errorMessage), resolved.errorStatus);
 		}
+		Patient patient = resolved.patient;
+
 		if (question == null || question.trim().isEmpty()) {
 			return new ResponseEntity<Object>(
 					errorResponse("question is required"), HttpStatus.BAD_REQUEST);
@@ -142,19 +150,7 @@ public class ChartSearchAiRestController {
 					errorResponse(sanitizationError), HttpStatus.BAD_REQUEST);
 		}
 
-		Patient patient = Context.getPatientService().getPatientByUuid(patientUuid);
-		if (patient == null) {
-			return new ResponseEntity<Object>(
-					errorResponse("Patient not found"), HttpStatus.NOT_FOUND);
-		}
-
 		User user = Context.getAuthenticatedUser();
-
-		if (!patientAccessCheck.canAccess(user, patient)) {
-			return new ResponseEntity<Object>(
-					errorResponse("You do not have access to this patient's chart"),
-					HttpStatus.FORBIDDEN);
-		}
 
 		ResponseEntity<Object> rateLimitError = checkRateLimit(user);
 		if (rateLimitError != null) {
@@ -230,6 +226,27 @@ public class ChartSearchAiRestController {
 		}
 
 		return new ResponseEntity<Object>(response, HttpStatus.OK);
+	}
+
+	/**
+	 * Pre-warm the LLM prompt cache for a patient's chart. Called by the frontend
+	 * when a patient chart is opened, so the first AI query on that patient does
+	 * not pay full prefill cost. Returns 202 Accepted immediately; the warmup runs
+	 * on a background daemon thread.
+	 */
+	@RequestMapping(value = "/warmup", method = RequestMethod.POST)
+	@ResponseBody
+	public ResponseEntity<Object> warmup(@RequestBody Map<String, String> body) {
+		Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA);
+
+		PatientResolution resolved = resolvePatient(body.get("patient"));
+		if (resolved.hasError()) {
+			return new ResponseEntity<Object>(
+					errorResponse(resolved.errorMessage), resolved.errorStatus);
+		}
+
+		warmupExecutor.submit(resolved.patient);
+		return new ResponseEntity<Object>(HttpStatus.ACCEPTED);
 	}
 
 	/**
@@ -541,6 +558,53 @@ public class ChartSearchAiRestController {
 		return new ResponseEntity<Object>(
 				errorResponse("Invalid request body. Expected JSON with 'patient' and 'question' fields."),
 				HttpStatus.BAD_REQUEST);
+	}
+
+	/**
+	 * Result of {@link #resolvePatient}. Either {@code patient} is non-null (success),
+	 * or {@code errorStatus} + {@code errorMessage} describe the failure.
+	 */
+	private static final class PatientResolution {
+
+		final Patient patient;
+
+		final HttpStatus errorStatus;
+
+		final String errorMessage;
+
+		private PatientResolution(Patient patient, HttpStatus errorStatus, String errorMessage) {
+			this.patient = patient;
+			this.errorStatus = errorStatus;
+			this.errorMessage = errorMessage;
+		}
+
+		static PatientResolution ok(Patient patient) {
+			return new PatientResolution(patient, null, null);
+		}
+
+		static PatientResolution error(HttpStatus status, String message) {
+			return new PatientResolution(null, status, message);
+		}
+
+		boolean hasError() {
+			return patient == null;
+		}
+	}
+
+	private PatientResolution resolvePatient(String patientUuid) {
+		if (patientUuid == null || patientUuid.trim().isEmpty()) {
+			return PatientResolution.error(HttpStatus.BAD_REQUEST, "patient is required");
+		}
+		Patient patient = Context.getPatientService().getPatientByUuid(patientUuid);
+		if (patient == null) {
+			return PatientResolution.error(HttpStatus.NOT_FOUND, "Patient not found");
+		}
+		User user = Context.getAuthenticatedUser();
+		if (!patientAccessCheck.canAccess(user, patient)) {
+			return PatientResolution.error(HttpStatus.FORBIDDEN,
+					"You do not have access to this patient's chart");
+		}
+		return PatientResolution.ok(patient);
 	}
 
 	private ResponseEntity<Object> checkRateLimit(User user) {
