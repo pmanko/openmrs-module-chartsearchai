@@ -46,13 +46,13 @@
 	<globalProperty>
 		<property>chartsearchai.llm.remote.endpointUrl</property>
 		<defaultValue></defaultValue>
-		<description>URL of the OpenAI-compatible chat completions endpoint. Required when chartsearchai.llm.engine is "remote". Examples: http://localhost:11434/v1/chat/completions (Ollama), http://gpu-server:8000/v1/chat/completions (vLLM), https://api.openai.com/v1/chat/completions (OpenAI), https://generativelanguage.googleapis.com/v1beta/openai/chat/completions (Google AI).</description>
+		<description>URL of the OpenAI-compatible chat completions endpoint. Required when chartsearchai.llm.engine is "remote". Examples: http://localhost:11434/v1/chat/completions (Ollama), http://gpu-server:8000/v1/chat/completions (vLLM), https://api.openai.com/v1/chat/completions (OpenAI), https://api.anthropic.com/v1/chat/completions (Anthropic), https://generativelanguage.googleapis.com/v1beta/openai/chat/completions (Google AI).</description>
 	</globalProperty>
 
 	<globalProperty>
 		<property>chartsearchai.llm.remote.modelName</property>
 		<defaultValue></defaultValue>
-		<description>Model name to request from the remote LLM endpoint. Required when chartsearchai.llm.engine is "remote". Examples: llama3.3 (Ollama), meta-llama/Llama-3.3-8B-Instruct (vLLM), gpt-4o (OpenAI), gemini-2.5-pro (Google AI).</description>
+		<description>Model name to request from the remote LLM endpoint. Required when chartsearchai.llm.engine is "remote". Examples: llama3.3 (Ollama), meta-llama/Llama-3.3-8B-Instruct (vLLM), gpt-4o (OpenAI), claude-opus-4-7 (Anthropic), gemini-2.5-pro (Google AI).</description>
 	</globalProperty>
 
 	<globalProperty>
