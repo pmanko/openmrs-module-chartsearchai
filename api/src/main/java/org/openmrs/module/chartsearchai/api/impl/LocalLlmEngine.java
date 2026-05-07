@@ -14,9 +14,6 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -343,7 +340,7 @@ public class LocalLlmEngine implements LlmEngine {
 	}
 
 	private void startServer(String modelPath) {
-		String serverBinaryPath = resolveServerBinaryPath();
+		String serverBinaryPath = LlamaServerBinary.resolve();
 		serverPort = getServerPort();
 
 		List<String> command = buildServerCommand(serverBinaryPath, modelPath, serverPort,
@@ -611,85 +608,6 @@ public class LocalLlmEngine implements LlmEngine {
 				configuredPath.trim(), ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH);
 	}
 
-	private String resolveServerBinaryPath() {
-		return extractBundledServer();
-	}
-
-	private String extractBundledServer() {
-		String platform = detectPlatform();
-		String arch = detectArch();
-
-		String binaryName = platform.equals("Windows") ? "llama-server.exe" : "llama-server";
-		String resourceDir = "llama-server/" + platform + "/" + arch + "/";
-
-		File appDataDir = new File(
-				org.openmrs.util.OpenmrsUtil.getApplicationDataDirectory());
-		File targetDir = new File(appDataDir, "chartsearchai/bin");
-		File targetFile = new File(targetDir, binaryName);
-
-		if (targetFile.isFile() && targetFile.canExecute()) {
-			log.info("Using existing llama-server at {}", targetFile.getAbsolutePath());
-			return targetFile.getAbsolutePath();
-		}
-
-		try (InputStream is = getClass().getClassLoader().getResourceAsStream(resourceDir + binaryName)) {
-			if (is == null) {
-				throw new IllegalStateException(
-						"No bundled llama-server for " + platform + "/" + arch
-								+ ". Place a compatible llama-server binary at "
-								+ targetFile.getAbsolutePath());
-			}
-
-			targetDir.mkdirs();
-			Files.copy(is, targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-			targetFile.setExecutable(true);
-			log.info("Extracted bundled llama-server to {}", targetFile.getAbsolutePath());
-		}
-		catch (IOException e) {
-			throw new IllegalStateException(
-					"Failed to extract bundled llama-server: " + e.getMessage(), e);
-		}
-
-		extractSharedLibraries(resourceDir, targetDir, platform);
-
-		return targetFile.getAbsolutePath();
-	}
-
-	private void extractSharedLibraries(String resourceDir, File targetDir, String platform) {
-		String libListResource = resourceDir + "libs.txt";
-		try (InputStream libList = getClass().getClassLoader().getResourceAsStream(libListResource)) {
-			if (libList == null) {
-				log.warn("No libs.txt found at {}; shared libraries may be missing", libListResource);
-				return;
-			}
-			try (BufferedReader reader = new BufferedReader(new InputStreamReader(libList, StandardCharsets.UTF_8))) {
-				String libName;
-				while ((libName = reader.readLine()) != null) {
-					libName = libName.trim();
-					if (libName.isEmpty()) {
-						continue;
-					}
-					try (InputStream libStream = getClass().getClassLoader()
-							.getResourceAsStream(resourceDir + libName)) {
-						if (libStream == null) {
-							log.warn("Listed library {} not found in resources", libName);
-							continue;
-						}
-						File libFile = new File(targetDir, libName);
-						Files.copy(libStream, libFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-						if (!platform.equals("Windows")) {
-							libFile.setExecutable(true);
-						}
-						log.debug("Extracted shared library {}", libName);
-					}
-				}
-			}
-		}
-		catch (IOException e) {
-			log.warn("Failed to extract shared libraries: {}", e.getMessage());
-		}
-	}
-
 	int getContextSize() {
 		String value = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_CONTEXT_SIZE);
@@ -777,25 +695,4 @@ public class LocalLlmEngine implements LlmEngine {
 		return text.length() > 500 ? text.substring(0, 500) + "..." : text;
 	}
 
-	static String detectPlatform() {
-		String osName = System.getProperty("os.name", "");
-		if (osName.contains("Windows")) {
-			return "Windows";
-		}
-		if (osName.contains("Mac") || osName.contains("Darwin")) {
-			return "Mac";
-		}
-		return "Linux";
-	}
-
-	static String detectArch() {
-		String osArch = System.getProperty("os.arch", "").toLowerCase();
-		if (osArch.contains("aarch64") || osArch.contains("arm64")) {
-			return "aarch64";
-		}
-		if (osArch.equals("x86") || osArch.equals("i386") || osArch.equals("i686")) {
-			return "x86";
-		}
-		return "x86_64";
-	}
 }
