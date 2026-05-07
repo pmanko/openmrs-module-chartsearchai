@@ -44,7 +44,10 @@ A live demo runs at **https://chartsearchai.openmrs.org** with the standard O3 r
 ![AI Chart Search panel showing an answer with numbered citations on a patient chart](docs/images/ai-chart-search-demo.png)
 
 1. Open https://chartsearchai.openmrs.org and log in (default credentials: `admin` / `Admin123`).
-2. Search for a patient and open their chart.
+2. Click the magnifying-glass icon in the top header and search for **Betty Williams** — she is the reference patient with the most data on the demo (medications, vitals, conditions), so the AI has something to ground its answers in. Open her chart from the dropdown.
+
+   ![Patient search overlay with "Betty" typed and Betty Williams in the result list](docs/images/ai-chart-search-patient-search.png)
+
 3. In the patient banner at the top of the chart, click the AI sparkle icon (tooltip: *Ask AI about this patient*). A chat panel slides in.
 4. Type a clinical question — e.g. *What medications is this patient on?*, *Any allergies?*, *Last 3 blood pressure readings* — and press **Send**, or click the microphone for voice input.
 5. The answer streams in token-by-token. The records the answer is grounded in appear under **References**, numbered to match the inline citations (`[1]`, `[2]`, …). Every response carries the AI-generated disclaimer.
