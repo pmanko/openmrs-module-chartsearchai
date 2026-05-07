@@ -2976,7 +2976,7 @@ final class EmbeddingRankingPipeline {
 				&& keywordMatchCount == 0 && queryTerms.length > 0) {
 			List<ChartEmbedding> preGateCandidates = pipelineResult;
 			int beforeRerank = pipelineResult.size();
-			pipelineResult = LlmInferenceService.rerankByConceptName(pipelineResult,
+			pipelineResult = ConceptRescueAndFilter.rerankByConceptName(pipelineResult,
 					embeddings, validCount, queryVector, provider,
 					noiseProfile, profiledConfig, noTypeMatch);
 			if (pipelineResult.size() != beforeRerank) {
@@ -3211,7 +3211,7 @@ final class EmbeddingRankingPipeline {
 		log.warn("findRelevantRecords: {} embeddings -> {} keys",
 				similar.size(), relevantKeys.size());
 
-		return LlmInferenceService.postRetrievalPipeline(allRecords, relevantKeys, question,
+		return ConceptRescueAndFilter.postRetrievalPipeline(allRecords, relevantKeys, question,
 				similar.size(), fsResult.keywordMatchCount,
 				provider,
 				ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX);
