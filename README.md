@@ -46,7 +46,7 @@ A live demo runs at **https://chartsearchai.openmrs.org** with the standard O3 r
 
    ![Patient search overlay with "Betty" typed and Betty Williams in the result list](docs/images/ai-chart-search-patient-search.png)
 
-3. In the patient banner at the top of the chart, click the AI sparkle icon (tooltip: *Ask AI about this patient*). A chat panel slides in.
+3. Click the floating blue AI sparkle icon in the bottom-right corner of the chart (tooltip: *Ask AI about this patient*). A chat panel slides in.
 4. Type a clinical question — e.g. *What medications is this patient on?*, *Any allergies?*, *Last 3 blood pressure readings* — and press **Send**, or click the microphone for voice input.
 5. The answer streams in token-by-token. The records the answer is grounded in appear under **References**, numbered to match the inline citations (`[1]`, `[2]`, …). Every response carries the AI-generated disclaimer.
 
@@ -57,8 +57,8 @@ A live demo runs at **https://chartsearchai.openmrs.org** with the standard O3 r
 Notes:
 
 - The AI button is only rendered for users with the **AI Query Patient Data** privilege.
-- The launch surface is configurable via the frontend `chatLaunchMode` setting: `floating` (banner button), `workspace` (slide-in workspace), or `both` (default).
-- The first query on a freshly-opened chart can take longer than later ones; opening a chart triggers a background warmup that primes the LLM prompt cache (see `chartsearchai.warmupEnabled`).
+- The launch surface is configurable via the frontend `chatLaunchMode` setting: `floating` (the bottom-right circular button used above), `workspace` (an icon in the top-right workspace strip that opens the chat as a docked workspace), or `both` (default).
+- First-query latency on the demo reflects the remote provider's cold-start. The chart-open prompt-cache warmup (`chartsearchai.warmupEnabled`) is a no-op for remote engines — it only helps local llama-server deployments.
 - The demo currently calls a remote LLM, since the server doesn't yet have the RAM and CPU headroom to comfortably run a local model like Gemma 4 E4B; latency on the demo therefore reflects the remote provider, not local CPU inference.
 
 ## Requirements
