@@ -164,7 +164,7 @@ public class EnrichedRetrievalEvalTest {
 		ensureInitialized();
 		List<SerializedRecord> results = LlmInferenceService.findRelevantRecords(
 				datasetEmbeddings[datasetIndex], datasetRecords[datasetIndex],
-				cachingProvider, query, 100,
+				cachingProvider, query,
 				ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
 				datasetConfigs[datasetIndex]);
 		List<Integer> indices = new ArrayList<>();

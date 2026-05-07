@@ -143,7 +143,7 @@ public class LlmInferenceServiceEvalTest {
 	 * ONNX model combined with keyword scores from the dataset.
 	 * Calls the exact same static production methods as the live system:
 	 * {@link EmbeddingIndexer#buildEmbeddings} for indexing and
-	 * {@link LlmInferenceService#findSimilar(List, EmbeddingProvider, String, int, String, PipelineConfig)}
+	 * {@link LlmInferenceService#findSimilar(List, EmbeddingProvider, String, String, PipelineConfig)}
 	 * for querying — zero simulation.
 	 */
 	private static List<Integer> runRealModelPipeline(String query, int topK) {
@@ -212,7 +212,7 @@ public class LlmInferenceServiceEvalTest {
 
 		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord>
 				results = LlmInferenceService.findRelevantRecords(
-						allEmbeddings, records, sharedProvider, query, topK,
+						allEmbeddings, records, sharedProvider, query,
 						ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
 						configWithNoise);
 
@@ -383,7 +383,7 @@ public class LlmInferenceServiceEvalTest {
 	 * strips the dataset prefix and date to reconstruct the production format,
 	 * Calls the actual production static methods
 	 * {@link org.openmrs.module.chartsearchai.api.EmbeddingIndexer#buildEmbeddings}
-	 * and {@link LlmInferenceService#findSimilar(List, EmbeddingProvider, String, int, String, PipelineConfig)}
+	 * and {@link LlmInferenceService#findSimilar(List, EmbeddingProvider, String, String, PipelineConfig)}
 	 * directly — zero simulation, zero reimplementation.
 	 */
 	@Test

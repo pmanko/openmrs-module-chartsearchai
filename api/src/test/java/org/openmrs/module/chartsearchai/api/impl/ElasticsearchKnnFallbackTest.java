@@ -252,9 +252,9 @@ public class ElasticsearchKnnFallbackTest {
 		java.util.Set<String> pipelineKeys = new java.util.HashSet<String>();
 		List<org.openmrs.module.chartsearchai.model.ChartEmbedding> pipelineFiltered =
 				LlmInferenceService.findSimilar(allEmbeddings, provider,
-						question, topK,
+						question,
 						ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
-						PipelineConfig.defaults());
+						PipelineConfig.defaults()).records;
 		if (pipelineFiltered != null) {
 			for (org.openmrs.module.chartsearchai.model.ChartEmbedding ce : pipelineFiltered) {
 				pipelineKeys.add(org.openmrs.module.chartsearchai.ChartSearchAiUtils

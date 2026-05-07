@@ -118,9 +118,9 @@ public class RetrievalQualityEvalTest {
 	private static List<Integer> retrieveTopK(EvalCase evalCase) {
 		List<ChartEmbedding> results = LlmInferenceService.findSimilar(
 				getAllEmbeddings(), getEmbeddingProvider(),
-				evalCase.getQuestion(), 30,
+				evalCase.getQuestion(),
 				ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
-				PipelineConfig.defaults());
+				PipelineConfig.defaults()).records;
 
 		List<Integer> retrievedIndices = new ArrayList<>();
 		for (ChartEmbedding ce : results) {

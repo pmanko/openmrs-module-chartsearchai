@@ -2628,17 +2628,7 @@ final class EmbeddingRankingPipeline {
 	 * but without DAO or Spring dependencies. Accepts pre-loaded embeddings
 	 * and an embedding provider, making it directly callable from
 	 * integration tests with zero simulation.
-	 *
-	 * @deprecated topK is no longer used by the pipeline. Use the overload without it.
 	 */
-	@Deprecated
-	static List<ChartEmbedding> findSimilar(List<ChartEmbedding> allEmbeddings,
-			EmbeddingProvider provider, String question, int topK,
-			String queryPrefix, PipelineConfig config) {
-		return findSimilarWithProfile(allEmbeddings, provider, question,
-				queryPrefix, config).records;
-	}
-
 	static FindSimilarResult findSimilar(List<ChartEmbedding> allEmbeddings,
 			EmbeddingProvider provider, String question,
 			String queryPrefix, PipelineConfig config) {
@@ -3175,19 +3165,7 @@ final class EmbeddingRankingPipeline {
 	 * {@link LlmInferenceService#postRetrievalPipeline} — the same
 	 * post-retrieval sequence that production's {@code filterAndSerialize}
 	 * runs before handing records to {@code chartSerializer.serialize}.
-	 *
-	 * @deprecated topK is no longer used by the pipeline. Use the overload without it.
 	 */
-	@Deprecated
-	static List<SerializedRecord> findRelevantRecords(
-			List<ChartEmbedding> allEmbeddings,
-			List<SerializedRecord> allRecords,
-			EmbeddingProvider provider, String question, int topK,
-			String queryPrefix, PipelineConfig config) {
-		return findRelevantRecords(allEmbeddings, allRecords, provider,
-				question, queryPrefix, config);
-	}
-
 	static List<SerializedRecord> findRelevantRecords(
 			List<ChartEmbedding> allEmbeddings,
 			List<SerializedRecord> allRecords,

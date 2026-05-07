@@ -269,29 +269,11 @@ public class LlmInferenceService implements ChartSearchService {
 				keywordScores, embeddings, queryTerms, config);
 	}
 
-	@Deprecated
-	static List<ChartEmbedding> findSimilar(List<ChartEmbedding> allEmbeddings,
-			EmbeddingProvider provider, String question, int topK,
-			String queryPrefix, PipelineConfig config) {
-		return EmbeddingRankingPipeline.findSimilar(allEmbeddings, provider,
-				question, topK, queryPrefix, config);
-	}
-
 	static FindSimilarResult findSimilar(List<ChartEmbedding> allEmbeddings,
 			EmbeddingProvider provider, String question,
 			String queryPrefix, PipelineConfig config) {
 		return EmbeddingRankingPipeline.findSimilar(allEmbeddings, provider,
 				question, queryPrefix, config);
-	}
-
-	@Deprecated
-	static List<SerializedRecord> findRelevantRecords(
-			List<ChartEmbedding> allEmbeddings,
-			List<SerializedRecord> allRecords,
-			EmbeddingProvider provider, String question, int topK,
-			String queryPrefix, PipelineConfig config) {
-		return EmbeddingRankingPipeline.findRelevantRecords(allEmbeddings, allRecords,
-				provider, question, topK, queryPrefix, config);
 	}
 
 	static List<SerializedRecord> findRelevantRecords(
