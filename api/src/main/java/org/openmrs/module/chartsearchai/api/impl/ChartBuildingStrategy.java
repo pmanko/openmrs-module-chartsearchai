@@ -250,7 +250,7 @@ class ChartBuildingStrategy {
 
 		List<ChartEmbedding> pipelineFiltered = null;
 		if (!allEmbeddings.isEmpty()) {
-			FindSimilarResult fsResult = EmbeddingRankingPipeline.findSimilar(allEmbeddings,
+			FindSimilarResult fsResult = RetrievalQuery.findSimilar(allEmbeddings,
 					embeddingProvider, question, getQueryPrefix(),
 					new PipelineConfig(getKeywordWeight(),
 							getScoreGapMultiplier(), getMinScoreGap(),
@@ -477,7 +477,7 @@ class ChartBuildingStrategy {
 				config.similarityRatio, config.floorRescueMinZScore);
 
 		try {
-			FindSimilarResult result = EmbeddingRankingPipeline.findSimilar(allEmbeddings,
+			FindSimilarResult result = RetrievalQuery.findSimilar(allEmbeddings,
 					embeddingProvider, question, getQueryPrefix(), config);
 			if (result.noiseProfile != null) {
 				if (noiseProfileCache.size() >= NOISE_PROFILE_CACHE_MAX_SIZE) {

@@ -272,7 +272,7 @@ public class LlmInferenceService implements ChartSearchService {
 	static FindSimilarResult findSimilar(List<ChartEmbedding> allEmbeddings,
 			EmbeddingProvider provider, String question,
 			String queryPrefix, PipelineConfig config) {
-		return EmbeddingRankingPipeline.findSimilar(allEmbeddings, provider,
+		return RetrievalQuery.findSimilar(allEmbeddings, provider,
 				question, queryPrefix, config);
 	}
 
@@ -281,7 +281,7 @@ public class LlmInferenceService implements ChartSearchService {
 			List<SerializedRecord> allRecords,
 			EmbeddingProvider provider, String question,
 			String queryPrefix, PipelineConfig config) {
-		return EmbeddingRankingPipeline.findRelevantRecords(allEmbeddings, allRecords,
+		return RetrievalQuery.findRelevantRecords(allEmbeddings, allRecords,
 				provider, question, queryPrefix, config);
 	}
 }
