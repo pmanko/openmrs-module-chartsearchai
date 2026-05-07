@@ -13,6 +13,7 @@ The standalone download above includes the backend module, frontend ESM, and the
 
 ## Table of Contents
 
+- [Try it on the demo server](#try-it-on-the-demo-server)
 - [Requirements](#requirements)
 - [Docker](#docker)
 - [Setup](#setup)
@@ -35,6 +36,26 @@ The standalone download above includes the backend module, frontend ESM, and the
 - [Evaluated models](#evaluated-models)
 - [Architecture](#architecture)
 - [License](#license)
+
+## Try it on the demo server
+
+A live demo runs at **https://chartsearchai.openmrs.org** with the standard O3 reference patient set, so you can try Chart Search AI without installing anything.
+
+![AI Chart Search panel showing an answer with numbered citations on a patient chart](docs/images/ai-chart-search-demo.png)
+
+1. Open https://chartsearchai.openmrs.org and log in (default credentials: `admin` / `Admin123`).
+2. Search for a patient and open their chart.
+3. In the patient banner at the top of the chart, click the AI sparkle icon (tooltip: *Ask AI about this patient*). A chat panel slides in.
+4. Type a clinical question — e.g. *What medications is this patient on?*, *Any allergies?*, *Last 3 blood pressure readings* — and press **Send**, or click the microphone for voice input.
+5. The answer streams in token-by-token. The records the answer is grounded in appear under **References**, numbered to match the inline citations (`[1]`, `[2]`, …). Every response carries the AI-generated disclaimer.
+6. Optionally rate the answer under **Was this helpful?** with **Helpful** / **Not helpful** and an optional comment. Feedback is recorded in the audit log alongside the question.
+
+Notes:
+
+- The AI button is only rendered for users with the **AI Query Patient Data** privilege.
+- The launch surface is configurable via the frontend `chatLaunchMode` setting: `floating` (banner button), `workspace` (slide-in workspace), or `both` (default).
+- The first query on a freshly-opened chart can take longer than later ones; opening a chart triggers a background warmup that primes the LLM prompt cache (see `chartsearchai.warmupEnabled`).
+- The demo currently calls a remote LLM, since the server doesn't yet have the RAM and CPU headroom to comfortably run a local model like Gemma 4 E4B; latency on the demo therefore reflects the remote provider, not local CPU inference.
 
 ## Requirements
 
