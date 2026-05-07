@@ -120,7 +120,7 @@ public class RetrievalQualityEvalTest {
 				getAllEmbeddings(), getEmbeddingProvider(),
 				evalCase.getQuestion(), 30,
 				ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
-				LlmInferenceService.PipelineConfig.defaults());
+				PipelineConfig.defaults());
 
 		List<Integer> retrievedIndices = new ArrayList<>();
 		for (ChartEmbedding ce : results) {

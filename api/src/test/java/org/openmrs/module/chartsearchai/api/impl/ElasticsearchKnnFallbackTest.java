@@ -254,7 +254,7 @@ public class ElasticsearchKnnFallbackTest {
 				LlmInferenceService.findSimilar(allEmbeddings, provider,
 						question, topK,
 						ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX,
-						LlmInferenceService.PipelineConfig.defaults());
+						PipelineConfig.defaults());
 		if (pipelineFiltered != null) {
 			for (org.openmrs.module.chartsearchai.model.ChartEmbedding ce : pipelineFiltered) {
 				pipelineKeys.add(org.openmrs.module.chartsearchai.ChartSearchAiUtils

@@ -194,74 +194,8 @@ public class LlmInferenceService implements ChartSearchService {
 				response.getCachedTokens());
 	}
 
-	private static final String NUMBER_GROUP =
-			"(\\d+|one|two|three|four|five|six|seven|eight|nine|ten)";
-
-	private static final String KEYWORD_GROUP =
-			"(?:last|latest|past|previous|recent|most recent)";
-
-	private static final Pattern RECENCY_PATTERN = Pattern.compile(
-			KEYWORD_GROUP + "\\s+" + NUMBER_GROUP
-			+ "|" + NUMBER_GROUP + "\\s+" + KEYWORD_GROUP,
-			Pattern.CASE_INSENSITIVE);
-
-	/** Matches a definite-article recency phrase without a number, e.g.
-	 *  "the latest weight" or "the most recent BP". The definite article
-	 *  signals that the user expects a single (the most recent) result,
-	 *  unlike bare "latest vital signs" which is a synonym for "recent".
-	 *  Implies a cap of 1. */
-	private static final Pattern BARE_RECENCY_PATTERN = Pattern.compile(
-			"\\bthe\\s+(?:latest|most recent)\\b", Pattern.CASE_INSENSITIVE);
-
-	private static final Map<String, Integer> WORD_NUMBERS;
-
-	static {
-		Map<String, Integer> m = new HashMap<String, Integer>();
-		m.put("one", 1);
-		m.put("two", 2);
-		m.put("three", 3);
-		m.put("four", 4);
-		m.put("five", 5);
-		m.put("six", 6);
-		m.put("seven", 7);
-		m.put("eight", 8);
-		m.put("nine", 9);
-		m.put("ten", 10);
-		WORD_NUMBERS = Collections.unmodifiableMap(m);
-	}
-
-	/**
-	 * Extracts a numeric recency constraint from the question, e.g. "last 7
-	 * visits" or "latest two weights" returns the number. Supports both
-	 * digits and word numbers (one through ten). A bare recency keyword
-	 * without a number (e.g. "latest weight", "most recent BP") implies 1.
-	 * Returns 0 if no constraint is found.
-	 *
-	 * @param question the raw user question
-	 * @return the recency cap, or 0 if none detected
-	 */
 	static int extractRecencyCap(String question) {
-		Matcher m = RECENCY_PATTERN.matcher(question);
-		if (m.find()) {
-			// Group 1 = keyword-first ("last 7"), group 2 = number-first ("7 most recent")
-			String value = (m.group(1) != null ? m.group(1) : m.group(2)).toLowerCase();
-			Integer wordNum = WORD_NUMBERS.get(value);
-			if (wordNum != null) {
-				return wordNum;
-			}
-			try {
-				int n = Integer.parseInt(value);
-				return n > 0 ? n : 0;
-			}
-			catch (NumberFormatException e) {
-				return 0;
-			}
-		}
-		// Bare recency keyword without a number implies cap of 1.
-		if (BARE_RECENCY_PATTERN.matcher(question).find()) {
-			return 1;
-		}
-		return 0;
+		return QueryPreprocessor.extractRecencyCap(question);
 	}
 
 	/**
@@ -360,7 +294,7 @@ public class LlmInferenceService implements ChartSearchService {
 		if (recencyCapReduced && keywordMatchCount == 0
 				&& provider != null && filtered.size() == 1) {
 			String normalizedQ = stripQueryStopwords(question);
-			String embQ = buildEmbeddingQuery(normalizedQ);
+			String embQ = QueryPreprocessor.buildEmbeddingQuery(normalizedQ);
 			float[] qVec = provider.embedQuery(
 					queryPrefix + embQ);
 			filtered = conceptNameRescueRecords(filtered,
@@ -874,101 +808,8 @@ public class LlmInferenceService implements ChartSearchService {
 		return ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO;
 	}
 
-	private static final Set<String> QUERY_STOPWORDS = loadStopwords("query-stopwords.txt");
-
-	private static Set<String> loadStopwords(String fileName) {
-		// Try the OpenMRS application data directory first so admins can customize
-		// without recompiling. Fall back to the bundled resource.
-		InputStream is = null;
-		boolean fromFile = false;
-		try {
-			File appDataFile = new File(
-					org.openmrs.util.OpenmrsUtil.getApplicationDataDirectory(),
-					"chartsearchai" + File.separator + fileName);
-			if (appDataFile.exists()) {
-				is = new FileInputStream(appDataFile);
-				fromFile = true;
-				log.info("Loading stopwords from {}", appDataFile.getAbsolutePath());
-			}
-		}
-		catch (Exception e) {
-			log.debug("Could not load stopwords from application data directory: {}", e.getMessage());
-		}
-
-		if (is == null) {
-			is = LlmInferenceService.class.getClassLoader().getResourceAsStream(fileName);
-			if (is == null) {
-				log.warn("Stopwords resource not found: {}, query normalization will be disabled", fileName);
-				return Collections.emptySet();
-			}
-		}
-
-		Set<String> words = new HashSet<String>();
-		try (InputStream stream = is) {
-			BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
-			String line;
-			while ((line = reader.readLine()) != null) {
-				String trimmed = line.trim();
-				if (!trimmed.isEmpty() && !trimmed.startsWith("#")) {
-					words.add(trimmed.toLowerCase());
-				}
-			}
-		}
-		catch (IOException e) {
-			log.warn("Failed to load stopwords from {}: {}", fileName, e.getMessage());
-		}
-
-		if (fromFile) {
-			log.info("Loaded {} stopwords from application data directory", words.size());
-		}
-		return Collections.unmodifiableSet(words);
-	}
-
-	/**
-	 * Removes common stopwords before embedding so that queries like
-	 * "any medications?" and "does the patient have any medications?"
-	 * produce the same embedding vector and thus the same retrieval results.
-	 *
-	 * @param question the raw user question
-	 */
 	static String stripQueryStopwords(String question) {
-		String[] words = question.toLowerCase().replaceAll("'s\\b", "").replaceAll("[?!.,;:']", "").trim().split("\\s+");
-		List<String> contentWords = new ArrayList<String>();
-		List<String> allClean = new ArrayList<String>();
-		for (String word : words) {
-			if (!word.isEmpty()) {
-				allClean.add(word);
-				if (!QUERY_STOPWORDS.contains(word)) {
-					contentWords.add(word);
-				}
-			}
-		}
-		if (contentWords.size() >= 2) {
-			StringBuilder sb = new StringBuilder();
-			for (String w : contentWords) {
-				if (sb.length() > 0) {
-					sb.append(" ");
-				}
-				sb.append(w);
-			}
-			return sb.toString();
-		}
-		// Too few content words — preserve all cleaned words so the
-		// embedding model gets enough context. The full sentence
-		// "does the patient have cancer" produces a more specific
-		// embedding than the single word "cancer", helping the model
-		// differentiate cancer-related records from unrelated ones.
-		if (!allClean.isEmpty()) {
-			StringBuilder sb = new StringBuilder();
-			for (String w : allClean) {
-				if (sb.length() > 0) {
-					sb.append(" ");
-				}
-				sb.append(w);
-			}
-			return sb.toString();
-		}
-		return question.toLowerCase().trim();
+		return QueryPreprocessor.stripQueryStopwords(question);
 	}
 
 	List<ChartEmbedding> findSimilar(Patient patient, String question) {
@@ -1001,7 +842,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// Use model-specific defaults, but allow global property overrides
 		// when an admin has explicitly customized them (i.e., the GP value
 		// differs from the L6-v2 default that ships as the initial value).
-		PipelineConfig config = buildEffectiveConfig(baseConfig,
+		PipelineConfig config = PipelineConfig.buildEffective(baseConfig,
 				getKeywordWeight(), getScoreGapMultiplier(),
 				getMinScoreGap(), getGapValidationCosineThreshold(),
 				getSimilarityRatio(), cachedProfile);
@@ -1070,7 +911,7 @@ public class LlmInferenceService implements ChartSearchService {
 			String queryPrefix, PipelineConfig config) {
 		String normalizedQuery = stripQueryStopwords(question);
 		String[] queryTerms = extractQueryTerms(normalizedQuery);
-		String embeddingQuery = buildEmbeddingQuery(normalizedQuery);
+		String embeddingQuery = QueryPreprocessor.buildEmbeddingQuery(normalizedQuery);
 		float[] queryVector = provider.embedQuery(queryPrefix + embeddingQuery);
 
 		// Identify "type indicator" query terms — terms that appear in
@@ -2940,7 +2781,7 @@ public class LlmInferenceService implements ChartSearchService {
 			return records;
 		}
 
-		String embeddingQuery = buildEmbeddingQuery(normalizedQuery);
+		String embeddingQuery = QueryPreprocessor.buildEmbeddingQuery(normalizedQuery);
 		float[] queryVector = provider.embedQuery(
 				queryPrefix + embeddingQuery);
 		double[] candScores = new double[byConcept.size()];
@@ -4995,61 +4836,6 @@ public class LlmInferenceService implements ChartSearchService {
 		return conceptTokens.toArray(new String[0]);
 	}
 
-	/**
-	 * Returns the model-specific default unless the admin has explicitly
-	 * customized the global property (i.e., the GP value differs from the
-	 * L6-v2 default that ships as the initial value).
-	 */
-	private static double overrideIfCustomized(double gpValue,
-			double l6v2Default, double modelDefault) {
-		if (Math.abs(gpValue - l6v2Default) > 1e-9) {
-			return gpValue;
-		}
-		return modelDefault;
-	}
-
-	/**
-	 * Builds the per-search effective {@link PipelineConfig} by overlaying
-	 * any explicitly-customized global property values on top of the
-	 * model-specific defaults in {@code baseConfig}. Every model-specific
-	 * field of {@code baseConfig} that is not exposed as a global property
-	 * (e.g. {@code conceptFloorMargin}, {@code gapSaturationThreshold})
-	 * must be passed through unchanged, so that compressed-distribution
-	 * models (e.g. MedCPT) don't silently fall back to L6-v2 floor values.
-	 */
-	static PipelineConfig buildEffectiveConfig(PipelineConfig baseConfig,
-			double gpKeywordWeight, double gpScoreGapMultiplier,
-			double gpMinScoreGap, double gpGapValidationCosineThreshold,
-			double gpSimilarityRatio, ModelNoiseProfile cachedProfile) {
-		return new PipelineConfig(
-				overrideIfCustomized(gpKeywordWeight,
-						ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
-						baseConfig.keywordWeight),
-				overrideIfCustomized(gpScoreGapMultiplier,
-						ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
-						baseConfig.scoreGapMultiplier),
-				overrideIfCustomized(gpMinScoreGap,
-						ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
-						baseConfig.minScoreGap),
-				overrideIfCustomized(gpGapValidationCosineThreshold,
-						ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
-						baseConfig.gapValidationCosineThreshold),
-				overrideIfCustomized(gpSimilarityRatio,
-						ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO,
-						baseConfig.similarityRatio),
-				cachedProfile != null ? cachedProfile
-						: ModelNoiseProfile.conservativeDefault(),
-				baseConfig.floorRescueMinZScore,
-				baseConfig.conceptNameGateMinCandidates,
-				baseConfig.conceptFloorMargin,
-				baseConfig.gapSaturationThreshold,
-				baseConfig.conceptExpansionVeryHighMinSim,
-				baseConfig.conceptExpansionVeryHighMinMargin,
-				baseConfig.conceptExpansionModerateMinSim,
-				baseConfig.conceptExpansionModerateMinMargin,
-				baseConfig.conceptExpansionVocabBypassThreshold);
-	}
-
 	private static String getQueryPrefix() {
 		String value = org.openmrs.api.context.Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_QUERY_PREFIX);
@@ -5059,57 +4845,12 @@ public class LlmInferenceService implements ChartSearchService {
 		return ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX;
 	}
 
-	/**
-	 * Prepares the full embedding input string from a raw question.
-	 * This is the production pipeline: strip stopwords, build the
-	 * embedding query, and prepend the query prefix. Both production
-	 * code and tests should use this method to ensure consistency.
-	 *
-	 * @param question the raw user question (e.g. "any cancer?")
-	 * @param queryPrefix the prefix to prepend (e.g. "" or "search_query: ")
-	 * @return the text to pass to the embedding provider
-	 */
 	static String prepareEmbeddingInput(String question, String queryPrefix) {
-		String normalized = stripQueryStopwords(question);
-		String embeddingQuery = buildEmbeddingQuery(normalized);
-		return queryPrefix + embeddingQuery;
+		return QueryPreprocessor.prepareEmbeddingInput(question, queryPrefix);
 	}
 
-	/**
-	 * Builds the query string used for embedding by stripping stopwords
-	 * from the normalized query. This removes filler words like "any" or
-	 * "does" that dilute the embedding signal, while keeping all
-	 * non-stopword tokens (including short terms like numbers).
-	 * Falls back to the full normalized query when all words are stopwords.
-	 */
-	private static String buildEmbeddingQuery(String normalizedQuery) {
-		String[] words = normalizedQuery.split("\\s+");
-		StringBuilder sb = new StringBuilder();
-		for (String w : words) {
-			if (!QUERY_STOPWORDS.contains(w.toLowerCase())) {
-				if (sb.length() > 0) {
-					sb.append(" ");
-				}
-				sb.append(w);
-			}
-		}
-		return sb.length() > 0 ? sb.toString() : normalizedQuery;
-	}
-
-	/**
-	 * Extracts content terms from the normalized query for keyword matching.
-	 * Returns lowercased terms with length >= 2 (single-letter terms are too
-	 * ambiguous to be useful for keyword overlap scoring).
-	 */
 	static String[] extractQueryTerms(String normalizedQuery) {
-		String[] allTerms = normalizedQuery.toLowerCase().split("\\s+");
-		List<String> terms = new ArrayList<String>();
-		for (String term : allTerms) {
-			if (term.length() >= 2 && !QUERY_STOPWORDS.contains(term)) {
-				terms.add(term);
-			}
-		}
-		return terms.toArray(new String[0]);
+		return QueryPreprocessor.extractQueryTerms(normalizedQuery);
 	}
 
 	/**
@@ -5651,307 +5392,6 @@ public class LlmInferenceService implements ChartSearchService {
 		return result;
 	}
 
-	/**
-	 * Holds all configurable pipeline parameters, decoupling the filtering
-	 * logic from the OpenMRS Context so the pipeline can be tested without
-	 * a running application server.
-	 */
-	static class PipelineConfig {
-		final double keywordWeight;
-		final double scoreGapMultiplier;
-		final double minScoreGap;
-		final double gapValidationCosineThreshold;
-		final double similarityRatio;
-		final ModelNoiseProfile noiseProfile;
-		/** Minimum z-score for tight-cluster bypass of the
-		 * zero-keyword z-score gate. */
-		final double floorRescueMinZScore;
-		/** Minimum candidate count for the concept-name outlier
-		 * gate to fire. Dual-encoder models (MedCPT) produce
-		 * reliable concept-name z-scores even for small sets;
-		 * single-encoder models (L6-v2) need larger sets. */
-		final int conceptNameGateMinCandidates;
-		/** Margin multiplier for the concept-name floor check.
-		 * The floor check rejects single-concept results whose
-		 * concept-name similarity is below
-		 * absoluteSimilarityFloor * conceptFloorMargin. */
-		final double conceptFloorMargin;
-		/** Gap-saturation threshold: when gapCutoff/validCount
-		 * exceeds this ratio and kwCount=0, embedding scores are
-		 * undifferentiated and results are discarded. Set to 0.0
-		 * to disable (e.g. for MedCPT where medical embeddings
-		 * produce meaningful similarity even for adjacent topics). */
-		final double gapSaturationThreshold;
-		/** Concept-similarity expansion — Path A "very-high
-		 * similarity" gate: bestSim of the closest chart concept
-		 * to the query must reach this absolute threshold for the
-		 * expansion to fire on a modest margin. */
-		final double conceptExpansionVeryHighMinSim;
-		/** Concept-similarity expansion — Path A margin: how far
-		 * the best concept must beat the second-best to trigger
-		 * the very-high path. */
-		final double conceptExpansionVeryHighMinMargin;
-		/** Concept-similarity expansion — Path B "moderate
-		 * similarity" gate: bestSim required when the cluster of
-		 * candidate concepts is well-separated. */
-		final double conceptExpansionModerateMinSim;
-		/** Concept-similarity expansion — Path B margin: required
-		 * separation from the second-best concept on the moderate
-		 * path. Larger than Path A's because moderate similarity
-		 * alone is not enough — the winner must clearly stand out. */
-		final double conceptExpansionModerateMinMargin;
-		/** Concept-similarity expansion vocabulary-overlap bypass:
-		 * when bestSim is at or above this threshold, the
-		 * substring-overlap guard is skipped (the embedding match
-		 * is strong enough to trust without lexical anchoring). */
-		final double conceptExpansionVocabBypassThreshold;
-
-		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
-				double minScoreGap, double gapValidationCosineThreshold,
-				double similarityRatio) {
-			this(keywordWeight, scoreGapMultiplier, minScoreGap,
-					gapValidationCosineThreshold, similarityRatio,
-					ModelNoiseProfile.conservativeDefault(),
-					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
-					10, 0.85, 0.95,
-					0.90, 0.07, 0.80, 0.14, 0.92);
-		}
-
-		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
-				double minScoreGap, double gapValidationCosineThreshold,
-				double similarityRatio,
-				ModelNoiseProfile noiseProfile,
-				double floorRescueMinZScore,
-				int conceptNameGateMinCandidates) {
-			this(keywordWeight, scoreGapMultiplier, minScoreGap,
-					gapValidationCosineThreshold, similarityRatio,
-					noiseProfile, floorRescueMinZScore,
-					conceptNameGateMinCandidates, 0.85, 0.95,
-					0.90, 0.07, 0.80, 0.14, 0.92);
-		}
-
-		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
-				double minScoreGap, double gapValidationCosineThreshold,
-				double similarityRatio,
-				ModelNoiseProfile noiseProfile,
-				double floorRescueMinZScore,
-				int conceptNameGateMinCandidates,
-				double conceptFloorMargin,
-				double gapSaturationThreshold) {
-			this(keywordWeight, scoreGapMultiplier, minScoreGap,
-					gapValidationCosineThreshold, similarityRatio,
-					noiseProfile, floorRescueMinZScore,
-					conceptNameGateMinCandidates,
-					conceptFloorMargin, gapSaturationThreshold,
-					0.90, 0.07, 0.80, 0.14, 0.92);
-		}
-
-		PipelineConfig(double keywordWeight, double scoreGapMultiplier,
-				double minScoreGap, double gapValidationCosineThreshold,
-				double similarityRatio,
-				ModelNoiseProfile noiseProfile,
-				double floorRescueMinZScore,
-				int conceptNameGateMinCandidates,
-				double conceptFloorMargin,
-				double gapSaturationThreshold,
-				double conceptExpansionVeryHighMinSim,
-				double conceptExpansionVeryHighMinMargin,
-				double conceptExpansionModerateMinSim,
-				double conceptExpansionModerateMinMargin,
-				double conceptExpansionVocabBypassThreshold) {
-			this.keywordWeight = keywordWeight;
-			this.scoreGapMultiplier = scoreGapMultiplier;
-			this.minScoreGap = minScoreGap;
-			this.gapValidationCosineThreshold = gapValidationCosineThreshold;
-			this.similarityRatio = similarityRatio;
-			this.noiseProfile = noiseProfile;
-			this.floorRescueMinZScore = floorRescueMinZScore;
-			this.conceptNameGateMinCandidates =
-					conceptNameGateMinCandidates;
-			this.conceptFloorMargin = conceptFloorMargin;
-			this.gapSaturationThreshold = gapSaturationThreshold;
-			this.conceptExpansionVeryHighMinSim =
-					conceptExpansionVeryHighMinSim;
-			this.conceptExpansionVeryHighMinMargin =
-					conceptExpansionVeryHighMinMargin;
-			this.conceptExpansionModerateMinSim =
-					conceptExpansionModerateMinSim;
-			this.conceptExpansionModerateMinMargin =
-					conceptExpansionModerateMinMargin;
-			this.conceptExpansionVocabBypassThreshold =
-					conceptExpansionVocabBypassThreshold;
-		}
-
-		/**
-		 * Returns a copy of this config with only the noise
-		 * profile replaced. All other parameters (including
-		 * model-specific values like conceptNameGateMinCandidates)
-		 * are preserved. Use this instead of constructing a new
-		 * PipelineConfig when updating the noise profile — it
-		 * prevents config drift where new fields are forgotten
-		 * in manual constructor calls.
-		 */
-		PipelineConfig withNoiseProfile(
-				ModelNoiseProfile newNoiseProfile) {
-			return new PipelineConfig(keywordWeight,
-					scoreGapMultiplier, minScoreGap,
-					gapValidationCosineThreshold,
-					similarityRatio, newNoiseProfile,
-					floorRescueMinZScore,
-					conceptNameGateMinCandidates,
-					conceptFloorMargin,
-					gapSaturationThreshold,
-					conceptExpansionVeryHighMinSim,
-					conceptExpansionVeryHighMinMargin,
-					conceptExpansionModerateMinSim,
-					conceptExpansionModerateMinMargin,
-					conceptExpansionVocabBypassThreshold);
-		}
-
-		/** Returns a config using all default constant values
-		 * (tuned for all-MiniLM-L6-v2). */
-		static PipelineConfig defaults() {
-			return new PipelineConfig(
-					ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
-					ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
-					ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
-					ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
-					ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO,
-					ModelNoiseProfile.conservativeDefault(),
-					ChartSearchAiConstants.FLOOR_RESCUE_MIN_Z_SCORE,
-					10, 0.85, 0.95,
-					0.90, 0.07, 0.80, 0.14, 0.92);
-		}
-
-		/**
-		 * Returns a model-specific config based on the model path.
-		 * Falls back to {@link #defaults()} for unrecognized models.
-		 *
-		 * @param modelPath the embedding model file path or directory
-		 *        name (e.g. "pubmedbert-onnx", "/path/to/pubmedbert-onnx/model.onnx")
-		 */
-		static PipelineConfig forModel(String modelPath) {
-			if (modelPath == null) {
-				return defaults();
-			}
-			String lower = modelPath.toLowerCase();
-			if (lower.contains("medcpt")) {
-				return medcptDefaults();
-			}
-			if (lower.contains("medembed")) {
-				return medembedDefaults();
-			}
-			if (lower.contains("pubmedbert")) {
-				return pubmedbertDefaults();
-			}
-			return defaults();
-		}
-
-		/**
-		 * Pipeline defaults for MedEmbed (medical IR fine-tune of
-		 * all-MiniLM-L12-v2). MedEmbed produces higher absolute cosine
-		 * similarities with a compressed score range — noise mean ~0.59
-		 * vs L6-v2's ~0.26. Parameters are adjusted for this tighter
-		 * distribution:
-		 * <ul>
-		 * <li>minScoreGap lowered: meaningful cluster gaps are 0.01–0.05
-		 *     vs L6-v2's 0.05–0.15</li>
-		 * <li>similarityRatio raised: noise mean is close to relevant
-		 *     scores, so the ratio floor must be tighter</li>
-		 * <li>gapValidationCosineThreshold raised: baseline cosines are
-		 *     higher, so gap validation needs a higher bar</li>
-		 * </ul>
-		 */
-		static PipelineConfig medembedDefaults() {
-			// MedEmbed produces compressed score distributions (noise
-			// mean ~0.59 vs L6-v2's ~0.26). Two parameters need to
-			// differ:
-			// - minScoreGap: meaningful cluster gaps are 0.01-0.05
-			//   vs L6-v2's 0.05-0.15
-			// - similarityRatio: noise scores (0.55-0.60) are close
-			//   to relevant scores (0.64-0.65), so the ratio floor
-			//   must be tighter to separate them. At 0.80 (L6-v2
-			//   default), floor = 0.52 which includes all noise.
-			//   At 0.95, floor = 0.61 which separates signal from
-			//   noise while keeping related records.
-			return new PipelineConfig(
-					ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
-					ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
-					0.03,   // minScoreGap — lower for compressed range
-					ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
-					0.95,   // similarityRatio — tighter for compressed range
-					ModelNoiseProfile.conservativeDefault(),
-					1.5,    // floorRescueMinZScore — lower for compressed range
-					10,     // conceptNameGateMinCandidates — same as L6-v2
-					0.85, 0.95,
-					0.90, 0.07, 0.80, 0.14, 0.92);
-		}
-
-		/**
-		 * Pipeline defaults for pubmedbert-onnx / pubmedbert-matryoshka.
-		 * Currently identical to L6-v2 defaults — the data-derived
-		 * {@link ModelNoiseProfile} adapts thresholds automatically.
-		 */
-		static PipelineConfig pubmedbertDefaults() {
-			return defaults();
-		}
-
-		/**
-		 * Pipeline defaults for MedCPT (dual-encoder, PubMedBERT-based).
-		 * MedCPT uses a medical tokenizer that correctly handles
-		 * abbreviations (BMI, STD, COPD) as single tokens. Its score
-		 * distribution characteristics need to be profiled and tuned.
-		 * Starting with L6-v2 defaults; the dynamic
-		 * {@link ModelNoiseProfile} adapts automatically.
-		 */
-		static PipelineConfig medcptDefaults() {
-			// MedCPT (dual-encoder, PubMedBERT-based) produces highly
-			// compressed score distributions (noise mean ~0.67). Signal
-			// is only 3-5% above noise, requiring very tight parameters:
-			// - minScoreGap 0.01: gaps between clusters are 0.005-0.02
-			// - similarityRatio 0.98: floor must be very close to top
-			//   score to exclude noise at 0.669 when signal is at 0.700
-			// - floorRescueMinZScore 1.0: z-scores are compressed too
-			// - conceptNameGateMinCandidates 2: MedCPT's dual-encoder
-			//   query encoder produces reliable concept-name z-scores
-			//   even for small result sets, so the outlier gate can
-			//   fire at 2+ candidates (vs L6-v2's 10+).
-			// - gapSaturationThreshold 0.0: disabled — MedCPT's medical
-			//   embeddings produce meaningful similarity for clinically
-			//   adjacent topics (e.g. COPD → Respiratory rate), so a
-			//   saturated gap doesn't imply no signal.
-			return new PipelineConfig(
-					ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
-					ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
-					0.01,
-					ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD,
-					0.98,
-					ModelNoiseProfile.conservativeDefault(),
-					1.0,
-					ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS,
-					0.85, 0.0,
-					0.90, 0.07, 0.80, 0.14, 0.92);
-		}
-	}
-
-	static class ScoredEmbedding {
-
-		final ChartEmbedding embedding;
-
-		final double score;
-
-		final double keywordScore;
-
-		final double semanticScore;
-
-		ScoredEmbedding(ChartEmbedding embedding, double score, double keywordScore,
-				double semanticScore) {
-			this.embedding = embedding;
-			this.score = score;
-			this.keywordScore = keywordScore;
-			this.semanticScore = semanticScore;
-		}
-	}
 
 	static List<RecordReference> extractCitedReferences(List<Integer> citations,
 			List<RecordMapping> mappings) {

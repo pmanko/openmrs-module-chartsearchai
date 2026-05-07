@@ -27,7 +27,8 @@ import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.model.ChartEmbedding;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
-import org.openmrs.module.chartsearchai.api.impl.LlmInferenceService.PipelineConfig;
+import org.openmrs.module.chartsearchai.api.impl.PipelineConfig;
+import org.openmrs.module.chartsearchai.api.impl.ScoredEmbedding;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 
 public class LlmInferenceServiceTest {
@@ -470,7 +471,7 @@ public class LlmInferenceServiceTest {
 	public void findAdaptiveCutoff_shouldDetectGapInScores() {
 		// Scores: 0.95, 0.93, 0.91, [gap], 0.75, 0.73
 		// The gap from 0.91 to 0.75 (0.16) is much larger than the avg gap so far (0.02)
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(0.95),
 				makeScoredEmbedding(0.93),
 				makeScoredEmbedding(0.91),
@@ -485,7 +486,7 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void findAdaptiveCutoff_shouldReturnAllWhenScoresAreUniform() {
 		// Scores evenly spaced — no outlier gap
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(0.90),
 				makeScoredEmbedding(0.88),
 				makeScoredEmbedding(0.86),
@@ -500,7 +501,7 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void findAdaptiveCutoff_shouldRespectSimilarityFloor() {
 		// 3 records above floor, 2 below
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(0.90),
 				makeScoredEmbedding(0.88),
 				makeScoredEmbedding(0.85),
@@ -515,7 +516,7 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void findAdaptiveCutoff_shouldReturnAllWhenBothAboveFloor() {
 		// Both records above the floor — no gap detection needed with only 2
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(0.90),
 				makeScoredEmbedding(0.50));
 
@@ -526,7 +527,7 @@ public class LlmInferenceServiceTest {
 
 	@Test
 	public void findAdaptiveCutoff_shouldHandleSingleRecord() {
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(0.90));
 
 		int cutoff = LlmInferenceService.findAdaptiveCutoff(scored, 1, 0.70, 2.5, 0.0);
@@ -540,7 +541,7 @@ public class LlmInferenceServiceTest {
 		// guard, this would trigger at i=2 (cutoff=2, only 2 records). With
 		// minRecords=2, the check is deferred past i=1. The large gap at i=2
 		// triggers the cut, yielding 2 records.
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(0.95),
 				makeScoredEmbedding(0.94),
 				makeScoredEmbedding(0.50),
@@ -556,7 +557,7 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void findAdaptiveCutoff_shouldHandleIdenticalScores() {
 		// All scores identical — every gap is 0, no cutoff detected
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(0.85),
 				makeScoredEmbedding(0.85),
 				makeScoredEmbedding(0.85),
@@ -570,7 +571,7 @@ public class LlmInferenceServiceTest {
 	@Test
 	public void findAdaptiveCutoff_shouldDetectGapAfterIdenticalScores() {
 		// 4 identical scores then a drop — gap is infinite relative to avg of 0
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(0.90),
 				makeScoredEmbedding(0.90),
 				makeScoredEmbedding(0.90),
@@ -589,7 +590,7 @@ public class LlmInferenceServiceTest {
 		// The running average includes the 0.10 gap at i=1, giving a realistic
 		// baseline: avgGap = (0.10 + 0.00) / 2 = 0.05, threshold = 0.125.
 		// The 0.01 gap at i=3 is well below this, so no cut.
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(0.95),
 				makeScoredEmbedding(0.85),
 				makeScoredEmbedding(0.85),
@@ -605,7 +606,7 @@ public class LlmInferenceServiceTest {
 	public void findAdaptiveCutoff_shouldRespectHigherMultiplier() {
 		// Same scores as the basic gap test, but with a very high multiplier
 		// that prevents the gap from triggering
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(0.95),
 				makeScoredEmbedding(0.93),
 				makeScoredEmbedding(0.91),
@@ -745,7 +746,7 @@ public class LlmInferenceServiceTest {
 		// Tight cluster: 0.55, 0.54, 0.53, then a 0.07 gap to 0.46, 0.45
 		// Relative to avgGap=0.01, 0.07 is 7x the average (triggers at 2.5x).
 		// But 0.07 < minGap of 0.10, so we should NOT cut.
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(0.55),
 				makeScoredEmbedding(0.54),
 				makeScoredEmbedding(0.53),
@@ -762,7 +763,7 @@ public class LlmInferenceServiceTest {
 	public void findAdaptiveCutoff_shouldCutOnLargeAbsoluteGap() {
 		// Same tight cluster but bigger gap: 0.55, 0.54, 0.53, [0.15 gap], 0.38, 0.37
 		// 0.15 > avgGap*2.5 AND 0.15 > 0.10 → should cut.
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(0.55),
 				makeScoredEmbedding(0.54),
 				makeScoredEmbedding(0.53),
@@ -843,8 +844,8 @@ public class LlmInferenceServiceTest {
 		// net should catch this: scores passed both absolute AND
 		// statistical validation (2x z-score threshold, 2x gap above
 		// floor), so silently dropping them is a patient safety risk.
-		LlmInferenceService.PipelineConfig config =
-				LlmInferenceService.PipelineConfig.defaults();
+		PipelineConfig config =
+				PipelineConfig.defaults();
 		double floor = config.noiseProfile.absoluteSimilarityFloor();
 		double topScore = floor + 2 * config.minScoreGap + 0.05;
 
@@ -904,14 +905,14 @@ public class LlmInferenceServiceTest {
 		// should pass. With zero keyword matches and only 1 record above
 		// floor, the old gate rejected — the fix allows records in the
 		// upper half [floor + gap/2, floor + gap).
-		LlmInferenceService.PipelineConfig config =
-				LlmInferenceService.PipelineConfig.defaults();
+		PipelineConfig config =
+				PipelineConfig.defaults();
 		double floor = config.noiseProfile.absoluteSimilarityFloor();
 		// Score in the upper half of the margin zone: [floor+gap/2, floor+gap)
 		// floor=0.15, gap=0.10, upper half starts at 0.20
 		double maxSemantic = floor + config.minScoreGap * 0.75; // 0.225
 
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbedding(maxSemantic, 0.0, maxSemantic),
 				makeScoredEmbedding(floor - 0.05, 0.0, floor - 0.05),
 				makeScoredEmbedding(floor - 0.10, 0.0, floor - 0.10));
@@ -927,21 +928,21 @@ public class LlmInferenceServiceTest {
 				+ ", floor=" + floor + ")");
 	}
 
-	private static LlmInferenceService.ScoredEmbedding makeScoredEmbedding(double score) {
+	private static ScoredEmbedding makeScoredEmbedding(double score) {
 		return makeScoredEmbedding(score, 0.0, score);
 	}
 
-	private static LlmInferenceService.ScoredEmbedding makeScoredEmbedding(double score,
+	private static ScoredEmbedding makeScoredEmbedding(double score,
 			double keywordScore) {
 		return makeScoredEmbedding(score, keywordScore, score);
 	}
 
-	private static LlmInferenceService.ScoredEmbedding makeScoredEmbedding(double score,
+	private static ScoredEmbedding makeScoredEmbedding(double score,
 			double keywordScore, double semanticScore) {
 		ChartEmbedding ce = new ChartEmbedding();
 		ce.setResourceType("obs");
 		ce.setTextContent("Test — Example: value");
-		return new LlmInferenceService.ScoredEmbedding(ce, score, keywordScore, semanticScore);
+		return new ScoredEmbedding(ce, score, keywordScore, semanticScore);
 	}
 
 	private static Date makeDate(int year, int month, int day) {
@@ -962,7 +963,7 @@ public class LlmInferenceServiceTest {
 		assertEquals(0.0, medcpt.gapSaturationThreshold, 1e-9,
 				"medcptDefaults must keep gap-saturation gate disabled");
 
-		PipelineConfig effective = LlmInferenceService.buildEffectiveConfig(
+		PipelineConfig effective = PipelineConfig.buildEffective(
 				medcpt,
 				ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
 				ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
@@ -986,7 +987,7 @@ public class LlmInferenceServiceTest {
 		// these for the default model either.
 		PipelineConfig l6 = PipelineConfig.defaults();
 
-		PipelineConfig effective = LlmInferenceService.buildEffectiveConfig(
+		PipelineConfig effective = PipelineConfig.buildEffective(
 				l6,
 				ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
 				ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
@@ -1007,7 +1008,7 @@ public class LlmInferenceServiceTest {
 		PipelineConfig medcpt = PipelineConfig.forModel("medcpt");
 		double customSimRatio = 0.50; // far from L6-v2 default 0.80
 
-		PipelineConfig effective = LlmInferenceService.buildEffectiveConfig(
+		PipelineConfig effective = PipelineConfig.buildEffective(
 				medcpt,
 				ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT,
 				ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
@@ -1075,7 +1076,7 @@ public class LlmInferenceServiceTest {
 				new String[] {"heart", "rate"},
 				vectors.get("heart rate"),
 				records.toArray(new ChartEmbedding[0]),
-				provider, LlmInferenceService.PipelineConfig.defaults());
+				provider, PipelineConfig.defaults());
 
 		assertEquals(1, expanded.length,
 				"Concept name 'Pulse' is closest to query — kwTerms should "
@@ -1098,7 +1099,7 @@ public class LlmInferenceServiceTest {
 		String[] expanded = LlmInferenceService.expandKwTermsViaConceptSimilarity(
 				kwTerms, vectors.get("blood sugar"),
 				records.toArray(new ChartEmbedding[0]),
-				provider, LlmInferenceService.PipelineConfig.defaults());
+				provider, PipelineConfig.defaults());
 
 		assertTrue(expanded == kwTerms,
 				"Full-match record exists; kwTerms must pass through unchanged.");
@@ -1122,7 +1123,7 @@ public class LlmInferenceServiceTest {
 		String[] expanded = LlmInferenceService.expandKwTermsViaConceptSimilarity(
 				kwTerms, vectors.get("cancer"),
 				records.toArray(new ChartEmbedding[0]),
-				provider, LlmInferenceService.PipelineConfig.defaults());
+				provider, PipelineConfig.defaults());
 
 		assertTrue(expanded == kwTerms,
 				"No concept similar enough → no expansion, preserving "
@@ -1152,7 +1153,7 @@ public class LlmInferenceServiceTest {
 		String[] expanded = LlmInferenceService.expandKwTermsViaConceptSimilarity(
 				kwTerms, vectors.get("blood pressure and pulse"),
 				records.toArray(new ChartEmbedding[0]),
-				provider, LlmInferenceService.PipelineConfig.defaults());
+				provider, PipelineConfig.defaults());
 
 		assertTrue(expanded == kwTerms,
 				"Top two concepts within margin — multi-concept query, "

@@ -143,7 +143,7 @@ public class LlmInferenceServiceEvalTest {
 	 * ONNX model combined with keyword scores from the dataset.
 	 * Calls the exact same static production methods as the live system:
 	 * {@link EmbeddingIndexer#buildEmbeddings} for indexing and
-	 * {@link LlmInferenceService#findSimilar(List, EmbeddingProvider, String, int, String, LlmInferenceService.PipelineConfig)}
+	 * {@link LlmInferenceService#findSimilar(List, EmbeddingProvider, String, int, String, PipelineConfig)}
 	 * for querying — zero simulation.
 	 */
 	private static List<Integer> runRealModelPipeline(String query, int topK) {
@@ -153,11 +153,11 @@ public class LlmInferenceServiceEvalTest {
 	private static List<Integer> runRealModelPipeline(String query, int topK,
 			String[] dataset) {
 		return runRealModelPipeline(query, topK, dataset,
-				LlmInferenceService.PipelineConfig.forModel(MODEL_DIR));
+				PipelineConfig.forModel(MODEL_DIR));
 	}
 
 	private static List<Integer> runRealModelPipeline(String query, int topK,
-			String[] dataset, LlmInferenceService.PipelineConfig config) {
+			String[] dataset, PipelineConfig config) {
 		return runRealModelPipeline(query, topK, dataset, config, null);
 	}
 
@@ -183,7 +183,7 @@ public class LlmInferenceServiceEvalTest {
 	}
 
 	private static List<Integer> runRealModelPipeline(String query, int topK,
-			String[] dataset, LlmInferenceService.PipelineConfig config,
+			String[] dataset, PipelineConfig config,
 			Map<Integer, List<String>> categoryHintsMap) {
 		String key = cacheKey(dataset, categoryHintsMap);
 
@@ -207,7 +207,7 @@ public class LlmInferenceServiceEvalTest {
 					allEmbeddings.toArray(new ChartEmbedding[0]), sharedProvider);
 			noiseCache.put(key, noise);
 		}
-		LlmInferenceService.PipelineConfig configWithNoise =
+		PipelineConfig configWithNoise =
 				config.withNoiseProfile(noise);
 
 		List<org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord>
@@ -383,7 +383,7 @@ public class LlmInferenceServiceEvalTest {
 	 * strips the dataset prefix and date to reconstruct the production format,
 	 * Calls the actual production static methods
 	 * {@link org.openmrs.module.chartsearchai.api.EmbeddingIndexer#buildEmbeddings}
-	 * and {@link LlmInferenceService#findSimilar(List, EmbeddingProvider, String, int, String, LlmInferenceService.PipelineConfig)}
+	 * and {@link LlmInferenceService#findSimilar(List, EmbeddingProvider, String, int, String, PipelineConfig)}
 	 * directly — zero simulation, zero reimplementation.
 	 */
 	@Test
@@ -923,7 +923,7 @@ public class LlmInferenceServiceEvalTest {
 	// rescueBelowFloor.
 	// --------------------------------------------------------
 
-	private static LlmInferenceService.ScoredEmbedding makeScoredEmbeddingWithVector(
+	private static ScoredEmbedding makeScoredEmbeddingWithVector(
 			double score, double keywordScore, double semanticScore,
 			float[] vector, int id) {
 		ChartEmbedding ce = new ChartEmbedding();
@@ -931,7 +931,7 @@ public class LlmInferenceServiceEvalTest {
 		ce.setTextContent(String.valueOf(id));
 		ce.setEmbeddingId(id);
 		ce.setEmbeddingVector(vector);
-		return new LlmInferenceService.ScoredEmbedding(ce, score, keywordScore, semanticScore);
+		return new ScoredEmbedding(ce, score, keywordScore, semanticScore);
 	}
 
 	@Test
@@ -945,7 +945,7 @@ public class LlmInferenceServiceEvalTest {
 		float[] v5 = { 0.8f, 0.3f, 0.0f };
 		float[] v6 = { 0.75f, 0.35f, 0.0f };
 
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbeddingWithVector(0.50, 0, 0.50, v1, 1),
 				makeScoredEmbeddingWithVector(0.48, 0, 0.48, v2, 2),
 				makeScoredEmbeddingWithVector(0.46, 0, 0.46, v3, 3),
@@ -963,7 +963,7 @@ public class LlmInferenceServiceEvalTest {
 		float[] vA = { 1.0f, 0.0f, 0.0f };
 		float[] vB = { 0.0f, 1.0f, 0.0f };
 
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbeddingWithVector(0.50, 0, 0.50, vA, 1),
 				makeScoredEmbeddingWithVector(0.48, 0, 0.48, vA, 2),
 				makeScoredEmbeddingWithVector(0.46, 0, 0.46, vA, 3),
@@ -978,7 +978,7 @@ public class LlmInferenceServiceEvalTest {
 	@Test
 	public void isGapCoherent_shouldReturnFalseWhenCutoffIsZeroOrBeyondSize() {
 		float[] v = { 1.0f, 0.0f };
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbeddingWithVector(0.50, 0, 0.50, v, 1),
 				makeScoredEmbeddingWithVector(0.40, 0, 0.40, v, 2));
 
@@ -988,7 +988,7 @@ public class LlmInferenceServiceEvalTest {
 
 	@Test
 	public void isGapCoherent_shouldReturnFalseWhenVectorsAreNull() {
-		List<LlmInferenceService.ScoredEmbedding> scored = Arrays.asList(
+		List<ScoredEmbedding> scored = Arrays.asList(
 				makeScoredEmbeddingWithVector(0.50, 0, 0.50, null, 1),
 				makeScoredEmbeddingWithVector(0.48, 0, 0.48, null, 2),
 				makeScoredEmbeddingWithVector(0.30, 0, 0.30, null, 3),
@@ -1006,14 +1006,14 @@ public class LlmInferenceServiceEvalTest {
 		float[] vSimilar = { 0.95f, 0.1f, 0.0f };
 		float[] vOrthogonal = { 0.0f, 1.0f, 0.0f };
 
-		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+		List<ScoredEmbedding> candidates = Arrays.asList(
 				makeScoredEmbeddingWithVector(0.50, 0, 0.50, vA, 1),
 				makeScoredEmbeddingWithVector(0.48, 0, 0.48, vA, 2),
 				makeScoredEmbeddingWithVector(0.30, 0, 0.30, vSimilar, 3),
 				makeScoredEmbeddingWithVector(0.28, 0, 0.28, vSimilar, 4),
 				makeScoredEmbeddingWithVector(0.20, 0, 0.20, vOrthogonal, 5));
 
-		List<LlmInferenceService.ScoredEmbedding> result =
+		List<ScoredEmbedding> result =
 				LlmInferenceService.growCluster(candidates, 2, 0.47);
 
 		assertEquals(4, result.size(),
@@ -1023,11 +1023,11 @@ public class LlmInferenceServiceEvalTest {
 	@Test
 	public void growCluster_shouldReturnAllWhenSeedIsEntireList() {
 		float[] v = { 1.0f, 0.0f };
-		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+		List<ScoredEmbedding> candidates = Arrays.asList(
 				makeScoredEmbeddingWithVector(0.50, 0, 0.50, v, 1),
 				makeScoredEmbeddingWithVector(0.48, 0, 0.48, v, 2));
 
-		List<LlmInferenceService.ScoredEmbedding> result =
+		List<ScoredEmbedding> result =
 				LlmInferenceService.growCluster(candidates, 2, 0.47);
 
 		assertEquals(2, result.size());
@@ -1036,12 +1036,12 @@ public class LlmInferenceServiceEvalTest {
 	@Test
 	public void growCluster_shouldSkipCandidatesWithNullVectors() {
 		float[] v = { 1.0f, 0.0f };
-		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+		List<ScoredEmbedding> candidates = Arrays.asList(
 				makeScoredEmbeddingWithVector(0.50, 0, 0.50, v, 1),
 				makeScoredEmbeddingWithVector(0.48, 0, 0.48, v, 2),
 				makeScoredEmbeddingWithVector(0.30, 0, 0.30, null, 3));
 
-		List<LlmInferenceService.ScoredEmbedding> result =
+		List<ScoredEmbedding> result =
 				LlmInferenceService.growCluster(candidates, 2, 0.47);
 
 		assertEquals(2, result.size(),
@@ -1057,12 +1057,12 @@ public class LlmInferenceServiceEvalTest {
 		float[] vBridge = { 0.7f, 0.7f, 0.0f }; // cos with seed ≈ 0.71, cos with far ≈ 0.71
 		float[] vFar = { 0.0f, 1.0f, 0.0f }; // cos with seed ≈ 0, cos with bridge ≈ 0.71
 
-		List<LlmInferenceService.ScoredEmbedding> candidates = Arrays.asList(
+		List<ScoredEmbedding> candidates = Arrays.asList(
 				makeScoredEmbeddingWithVector(0.50, 0, 0.50, vSeed, 1),
 				makeScoredEmbeddingWithVector(0.40, 0, 0.40, vBridge, 2),
 				makeScoredEmbeddingWithVector(0.30, 0, 0.30, vFar, 3));
 
-		List<LlmInferenceService.ScoredEmbedding> result =
+		List<ScoredEmbedding> result =
 				LlmInferenceService.growCluster(candidates, 1, 0.47);
 
 		assertEquals(3, result.size(),
@@ -1082,14 +1082,14 @@ public class LlmInferenceServiceEvalTest {
 		// Orthogonal — should NOT be rescued
 		float[] vOrthogonal = { 0.0f, 1.0f, 0.0f };
 
-		List<LlmInferenceService.ScoredEmbedding> cluster = new ArrayList<LlmInferenceService.ScoredEmbedding>(
+		List<ScoredEmbedding> cluster = new ArrayList<ScoredEmbedding>(
 				Arrays.asList(
 						makeScoredEmbeddingWithVector(0.50, 0, 0.50, v1, 1),
 						makeScoredEmbeddingWithVector(0.48, 0, 0.48, v2, 2),
 						makeScoredEmbeddingWithVector(0.46, 0, 0.46, v3, 3)));
 
 		// Full scored list includes cluster + below-floor records
-		List<LlmInferenceService.ScoredEmbedding> scored = new ArrayList<LlmInferenceService.ScoredEmbedding>(
+		List<ScoredEmbedding> scored = new ArrayList<ScoredEmbedding>(
 				Arrays.asList(
 						makeScoredEmbeddingWithVector(0.50, 0, 0.50, v1, 1),
 						makeScoredEmbeddingWithVector(0.48, 0, 0.48, v2, 2),
@@ -1097,7 +1097,7 @@ public class LlmInferenceServiceEvalTest {
 						makeScoredEmbeddingWithVector(0.10, 0, 0.10, vSimilar, 4),
 						makeScoredEmbeddingWithVector(0.08, 0, 0.08, vOrthogonal, 5)));
 
-		List<LlmInferenceService.ScoredEmbedding> result =
+		List<ScoredEmbedding> result =
 				LlmInferenceService.rescueBelowFloor(cluster, scored, 3);
 
 		assertEquals(4, result.size(),
@@ -1107,12 +1107,12 @@ public class LlmInferenceServiceEvalTest {
 	@Test
 	public void rescueBelowFloor_shouldReturnUnchangedWhenAdaptiveCutoffBeyondScored() {
 		float[] v = { 1.0f, 0.0f };
-		List<LlmInferenceService.ScoredEmbedding> cluster = Arrays.asList(
+		List<ScoredEmbedding> cluster = Arrays.asList(
 				makeScoredEmbeddingWithVector(0.50, 0, 0.50, v, 1),
 				makeScoredEmbeddingWithVector(0.48, 0, 0.48, v, 2),
 				makeScoredEmbeddingWithVector(0.46, 0, 0.46, v, 3));
 
-		List<LlmInferenceService.ScoredEmbedding> result =
+		List<ScoredEmbedding> result =
 				LlmInferenceService.rescueBelowFloor(cluster, cluster, 3);
 
 		assertEquals(3, result.size(),
@@ -1122,21 +1122,21 @@ public class LlmInferenceServiceEvalTest {
 	@Test
 	public void rescueBelowFloor_shouldNotRescueRecordsAlreadyInCluster() {
 		float[] v = { 1.0f, 0.0f };
-		List<LlmInferenceService.ScoredEmbedding> cluster = new ArrayList<LlmInferenceService.ScoredEmbedding>(
+		List<ScoredEmbedding> cluster = new ArrayList<ScoredEmbedding>(
 				Arrays.asList(
 						makeScoredEmbeddingWithVector(0.50, 0, 0.50, v, 1),
 						makeScoredEmbeddingWithVector(0.48, 0, 0.48, v, 2),
 						makeScoredEmbeddingWithVector(0.46, 0, 0.46, v, 3)));
 
 		// scored contains the same records (same IDs) in the below-floor range
-		List<LlmInferenceService.ScoredEmbedding> scored = new ArrayList<LlmInferenceService.ScoredEmbedding>(
+		List<ScoredEmbedding> scored = new ArrayList<ScoredEmbedding>(
 				Arrays.asList(
 						makeScoredEmbeddingWithVector(0.50, 0, 0.50, v, 1),
 						makeScoredEmbeddingWithVector(0.48, 0, 0.48, v, 2),
 						makeScoredEmbeddingWithVector(0.46, 0, 0.46, v, 3),
 						makeScoredEmbeddingWithVector(0.10, 0, 0.10, v, 1)));
 
-		List<LlmInferenceService.ScoredEmbedding> result =
+		List<ScoredEmbedding> result =
 				LlmInferenceService.rescueBelowFloor(cluster, scored, 3);
 
 		assertEquals(3, result.size(),
@@ -1222,8 +1222,8 @@ public class LlmInferenceServiceEvalTest {
 		org.junit.jupiter.api.Assumptions.assumeTrue(modelFilesExist(),
 				"Skipping: ONNX model files not found at " + MODEL_PATH);
 
-		LlmInferenceService.PipelineConfig noKeywordConfig =
-				new LlmInferenceService.PipelineConfig(
+		PipelineConfig noKeywordConfig =
+				new PipelineConfig(
 						0.0,
 						ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER,
 						ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP,
@@ -3811,7 +3811,7 @@ public class LlmInferenceServiceEvalTest {
 	private static List<Integer> runEnrichedPipeline(String query, int topK,
 			String[] dataset, Map<Integer, List<String>> hints) {
 		return runRealModelPipeline(query, topK, dataset,
-				LlmInferenceService.PipelineConfig.defaults(), hints);
+				PipelineConfig.defaults(), hints);
 	}
 
 	// --- Regression guards: these queries work WITHOUT hints and must
@@ -3979,7 +3979,7 @@ public class LlmInferenceServiceEvalTest {
 		List<Integer> result = runRealModelPipeline(
 				"Calculate BMI from the most recent height and weight",
 				100, FOURTH_PATIENT_DATASET,
-				LlmInferenceService.PipelineConfig.forModel(MODEL_DIR),
+				PipelineConfig.forModel(MODEL_DIR),
 				TestDatasetHelper.FOURTH_DATASET_CATEGORY_HINTS);
 
 		boolean hasHeight = false;

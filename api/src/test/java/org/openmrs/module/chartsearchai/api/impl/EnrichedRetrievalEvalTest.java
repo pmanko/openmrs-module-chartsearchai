@@ -85,7 +85,7 @@ public class EnrichedRetrievalEvalTest {
 
 	private static List<SerializedRecord>[] datasetRecords;
 
-	private static LlmInferenceService.PipelineConfig[] datasetConfigs;
+	private static PipelineConfig[] datasetConfigs;
 
 	private static String activeModel;
 
@@ -141,12 +141,12 @@ public class EnrichedRetrievalEvalTest {
 		}
 
 		cachingProvider = TestDatasetHelper.cachingProvider(provider);
-		LlmInferenceService.PipelineConfig modelConfig =
-				LlmInferenceService.PipelineConfig.forModel(activeModel);
+		PipelineConfig modelConfig =
+				PipelineConfig.forModel(activeModel);
 
 		datasetEmbeddings = new List[DATASETS.length];
 		datasetRecords = new List[DATASETS.length];
-		datasetConfigs = new LlmInferenceService.PipelineConfig[DATASETS.length];
+		datasetConfigs = new PipelineConfig[DATASETS.length];
 		for (int d = 0; d < DATASETS.length; d++) {
 			datasetRecords[d] = TestDatasetHelper.toSerializedRecords(
 					DATASETS[d], DATASET_HINTS[d]);
@@ -535,8 +535,8 @@ public class EnrichedRetrievalEvalTest {
 				records, provider);
 		org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile noise =
 				TestDatasetHelper.buildOrLoadCachedNoiseProfile(embeddings, provider);
-		LlmInferenceService.PipelineConfig config =
-				LlmInferenceService.PipelineConfig.forModel(activeModel)
+		PipelineConfig config =
+				PipelineConfig.forModel(activeModel)
 						.withNoiseProfile(noise);
 
 		List<SerializedRecord> result = LlmInferenceService.findRelevantRecords(
