@@ -51,6 +51,32 @@ import org.springframework.stereotype.Component;
  * model inference. The server is started lazily on first use and automatically
  * stopped after an idle period to free memory. It exposes an
  * OpenAI-compatible chat completions API internally.
+ *
+ * <p>Public methods ({@code infer}, {@code inferStreaming}, {@code warmup},
+ * {@code close}) are {@code synchronized} so that only one call is in flight
+ * at a time. Three reasons:
+ * <ul>
+ *   <li>The subprocess is launched with {@code --parallel 1} (see
+ *       {@link #buildServerCommand}), so concurrent callers would queue inside
+ *       llama-server with no parallelism gain.</li>
+ *   <li>The prefix-cache-reuse strategy ({@code --cache-reuse} +
+ *       {@code cache_prompt=true}, primed by {@link #warmup}) assumes serial
+ *       access on the same chart prefix; interleaved calls with different
+ *       prefixes would thrash the KV cache and erase the warmup gain.</li>
+ *   <li>Subprocess and HTTP-client lifecycle state ({@code serverProcess},
+ *       {@code loadedModelPath}, {@code loadedContextSize}, {@code httpClient},
+ *       {@code idleUnloadFuture}) is shared mutable state that
+ *       {@link #ensureServerRunning} and the idle timer mutate; without the
+ *       monitor, callers could race on start/stop or tear down the
+ *       {@code HttpClient} mid-request.</li>
+ * </ul>
+ * {@link RemoteLlmEngine} does not synchronize {@code infer} for this reason —
+ * the remote endpoint handles concurrency itself and there is no subprocess to
+ * manage.
+ *
+ * <p>See {@code docs/adr.md} &mdash; Decision 12: Concurrency model &mdash;
+ * for the fuller rationale (alternatives considered, impact on concurrent
+ * users, future options).
  */
 @Component("chartSearchAi.localLlmEngine")
 public class LocalLlmEngine implements LlmEngine {
