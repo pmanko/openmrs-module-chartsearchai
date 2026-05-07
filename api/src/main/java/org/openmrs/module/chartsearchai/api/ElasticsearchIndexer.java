@@ -318,54 +318,12 @@ public class ElasticsearchIndexer implements Closeable {
 		}
 	}
 
-	/**
-	 * Builds the OpenSearch search pipeline JSON body for RRF.
-	 */
 	String buildSearchPipelineBody() throws IOException {
-		ObjectNode body = mapper.createObjectNode();
-		ArrayNode processors = body.putArray("phase_results_processors");
-		ObjectNode processor = processors.addObject().putObject("score-ranker-processor");
-		ObjectNode combination = processor.putObject("combination");
-		combination.put("technique", "rrf");
-		combination.put("rank_constant", ChartSearchAiConstants.RRF_RANK_CONSTANT);
-		return mapper.writeValueAsString(body);
+		return ElasticsearchQueryBuilder.buildSearchPipelineBody(mapper);
 	}
 
-	/**
-	 * Builds the index creation JSON with mappings for text (BM25) and
-	 * dense_vector/knn_vector fields, adapting to the detected backend.
-	 */
 	String buildIndexMapping(int dims) throws IOException {
-		ObjectNode body = mapper.createObjectNode();
-
-		if (backendType == BackendType.OPENSEARCH) {
-			body.putObject("settings").put("index.knn", true);
-		}
-
-		ObjectNode mappings = body.putObject("mappings");
-		ObjectNode properties = mappings.putObject("properties");
-
-		properties.putObject(FIELD_PATIENT_ID).put("type", "integer");
-		properties.putObject(FIELD_RESOURCE_TYPE).put("type", "keyword");
-		properties.putObject(FIELD_RESOURCE_ID).put("type", "integer");
-		properties.putObject(FIELD_TEXT).put("type", "text").put("analyzer", "english");
-
-		ObjectNode embeddingField = properties.putObject(FIELD_EMBEDDING);
-		if (backendType == BackendType.OPENSEARCH) {
-			embeddingField.put("type", "knn_vector");
-			embeddingField.put("dimension", dims);
-			ObjectNode method = embeddingField.putObject("method");
-			method.put("name", "hnsw");
-			method.put("space_type", "cosinesimil");
-			method.put("engine", "lucene");
-		} else {
-			embeddingField.put("type", "dense_vector");
-			embeddingField.put("dims", dims);
-			embeddingField.put("index", true);
-			embeddingField.put("similarity", "cosine");
-		}
-
-		return mapper.writeValueAsString(body);
+		return ElasticsearchQueryBuilder.buildIndexMapping(mapper, backendType, dims);
 	}
 
 	/**
@@ -649,110 +607,14 @@ public class ElasticsearchIndexer implements Closeable {
 		return results;
 	}
 
-	/**
-	 * Builds the hybrid search query JSON, adapting to the detected backend.
-	 * Elasticsearch uses the retriever API (ES 8.14+); OpenSearch uses
-	 * a hybrid query with a search pipeline for RRF (OS 2.19+).
-	 */
 	String buildSearchQuery(int patientId, String queryText,
 			float[] queryVector, int maxResults) throws IOException {
-		if (backendType == BackendType.OPENSEARCH) {
-			return buildOpenSearchQuery(patientId, queryText, queryVector, maxResults);
-		}
-		return buildElasticsearchQuery(patientId, queryText, queryVector, maxResults);
+		return ElasticsearchQueryBuilder.buildSearchQuery(mapper, backendType,
+				patientId, queryText, queryVector, maxResults);
 	}
 
-	/**
-	 * Builds the RRF hybrid search query using the Elasticsearch
-	 * retriever API (ES 8.14+).
-	 */
-	private ObjectNode newSearchBody(int maxResults) {
-		ObjectNode body = mapper.createObjectNode();
-		body.put("size", maxResults);
-		ArrayNode source = body.putArray("_source");
-		source.add(FIELD_RESOURCE_TYPE);
-		source.add(FIELD_RESOURCE_ID);
-		source.add(FIELD_EMBEDDING);
-		source.add(FIELD_TEXT);
-		return body;
-	}
-
-	String buildElasticsearchQuery(int patientId, String queryText,
-			float[] queryVector, int maxResults) throws IOException {
-		ObjectNode body = newSearchBody(maxResults);
-
-		ObjectNode retriever = body.putObject("retriever");
-		ObjectNode rrf = retriever.putObject("rrf");
-		rrf.put("rank_window_size", ChartSearchAiConstants.RRF_RANK_WINDOW_SIZE);
-		rrf.put("rank_constant", ChartSearchAiConstants.RRF_RANK_CONSTANT);
-
-		ArrayNode retrievers = rrf.putArray("retrievers");
-
-		// BM25 text retriever
-		ObjectNode bm25Retriever = retrievers.addObject().putObject("standard");
-		ObjectNode bm25Query = bm25Retriever.putObject("query").putObject("bool");
-		bm25Query.putArray("must").addObject()
-				.putObject("match").put(FIELD_TEXT, queryText);
-		bm25Query.putArray("filter").addObject()
-				.putObject("term").put(FIELD_PATIENT_ID, patientId);
-
-		// kNN vector retriever
-		ObjectNode knnRetriever = retrievers.addObject().putObject("knn");
-		knnRetriever.put("field", FIELD_EMBEDDING);
-		ArrayNode qv = knnRetriever.putArray("query_vector");
-		for (float v : queryVector) {
-			qv.add(v);
-		}
-		knnRetriever.put("k", Math.min(maxResults, KNN_NUM_CANDIDATES));
-		knnRetriever.put("num_candidates", KNN_NUM_CANDIDATES);
-		knnRetriever.putObject("filter")
-				.putObject("term").put(FIELD_PATIENT_ID, patientId);
-
-		return mapper.writeValueAsString(body);
-	}
-
-	/**
-	 * Builds the hybrid search query for OpenSearch (OS 2.19+).
-	 * Uses the hybrid query type with BM25 and kNN sub-queries;
-	 * RRF is applied via the search pipeline set on the request.
-	 */
-	String buildOpenSearchQuery(int patientId, String queryText,
-			float[] queryVector, int maxResults) throws IOException {
-		ObjectNode body = newSearchBody(maxResults);
-
-		ObjectNode hybrid = body.putObject("query").putObject("hybrid");
-		ArrayNode queries = hybrid.putArray("queries");
-
-		// BM25 text query
-		ObjectNode bm25Bool = queries.addObject().putObject("bool");
-		bm25Bool.putArray("must").addObject()
-				.putObject("match").put(FIELD_TEXT, queryText);
-		bm25Bool.putArray("filter").addObject()
-				.putObject("term").put(FIELD_PATIENT_ID, patientId);
-
-		// kNN vector query
-		ObjectNode knnOuter = queries.addObject().putObject("knn");
-		ObjectNode knnInner = knnOuter.putObject(FIELD_EMBEDDING);
-		ArrayNode qv = knnInner.putArray("vector");
-		for (float v : queryVector) {
-			qv.add(v);
-		}
-		knnInner.put("k", Math.min(maxResults, KNN_NUM_CANDIDATES));
-		knnInner.putObject("filter")
-				.putObject("term").put(FIELD_PATIENT_ID, patientId);
-
-		return mapper.writeValueAsString(body);
-	}
-
-	/**
-	 * Builds a JSON term query for filtering by patient ID, used by
-	 * {@link #deletePatientIndex} and {@link #hasIndex}.
-	 */
 	private String buildPatientTermQuery(int patientId) throws IOException {
-		ObjectNode root = mapper.createObjectNode();
-		root.putObject("query").putObject("term")
-				.put(FIELD_PATIENT_ID, patientId);
-		return mapper.writeValueAsString(root);
+		return ElasticsearchQueryBuilder.buildPatientTermQuery(mapper, patientId);
 	}
 
 	private String getElasticsearchUri() {
