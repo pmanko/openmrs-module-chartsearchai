@@ -252,7 +252,7 @@ public class LlmInferenceService implements ChartSearchService {
 			double maxSemanticScore, int queryTermCount,
 			int keywordMatchCount, boolean belowFloorRescued,
 			PipelineConfig config) {
-		return EmbeddingRankingPipeline.applySlimMarginGate(scored, maxSemanticScore,
+		return RankingPipelineGates.applySlimMarginGate(scored, maxSemanticScore,
 				queryTermCount, keywordMatchCount, belowFloorRescued, config);
 	}
 
