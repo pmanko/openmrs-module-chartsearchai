@@ -126,7 +126,7 @@ public class LocalLlmEngine implements LlmEngine {
 			if (response.statusCode() < 200 || response.statusCode() >= 300) {
 				log.error("Local llama-server returned HTTP {}: {}", response.statusCode(),
 						truncate(response.body()));
-				if (response.statusCode() == 400 && isContextOverflowError(response.body())) {
+				if (response.statusCode() == 400 && LlmResponseParser.isContextOverflowError(response.body())) {
 					throw new ChartTooLargeException(
 							"Patient chart exceeds the LLM context window of "
 									+ getContextSize() + " tokens. Increase "
@@ -137,7 +137,7 @@ public class LocalLlmEngine implements LlmEngine {
 			}
 
 			resetIdleTimer();
-			return parseResponse(response.body());
+			return LlmResponseParser.parseResponse(response.body(), log);
 		}
 		catch (IOException e) {
 			throw new APIException("Failed to call local llama-server: " + e.getMessage(), e);
@@ -170,7 +170,7 @@ public class LocalLlmEngine implements LlmEngine {
 				String body = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
 				log.error("Local llama-server returned HTTP {}: {}", response.statusCode(),
 						truncate(body));
-				if (response.statusCode() == 400 && isContextOverflowError(body)) {
+				if (response.statusCode() == 400 && LlmResponseParser.isContextOverflowError(body)) {
 					throw new ChartTooLargeException(
 							"Patient chart exceeds the LLM context window of "
 									+ getContextSize() + " tokens. Increase "
@@ -180,7 +180,8 @@ public class LocalLlmEngine implements LlmEngine {
 				throw new APIException("Local llama-server returned HTTP " + response.statusCode());
 			}
 
-			InferenceResult result = parseStreamingResponse(response.body(), tokenConsumer);
+			InferenceResult result = LlmResponseParser.parseStreamingResponse(
+					response.body(), tokenConsumer, log);
 			resetIdleTimer();
 			return result;
 		}
@@ -219,7 +220,7 @@ public class LocalLlmEngine implements LlmEngine {
 				return;
 			}
 
-			InferenceResult result = parseResponse(response.body());
+			InferenceResult result = LlmResponseParser.parseResponse(response.body(), log);
 			// WARN — visible under OpenMRS's default log4j2 (org.openmrs.* pinned to WARN);
 			// the cached-token count is the only direct evidence the warmup primed the KV.
 			log.warn("Warmup primed KV cache: {} input ({} cached)",
@@ -450,14 +451,8 @@ public class LocalLlmEngine implements LlmEngine {
 		httpClient = null;
 	}
 
-	/**
-	 * Detects llama-server's distinctive 400 response when the prompt exceeds the
-	 * configured context window. The body looks like
-	 * {@code {"error":{"type":"exceed_context_size_error",...}}} — match on the
-	 * type marker rather than parsing JSON to stay robust to format drift.
-	 */
 	static boolean isContextOverflowError(String responseBody) {
-		return responseBody != null && responseBody.contains("exceed_context_size_error");
+		return LlmResponseParser.isContextOverflowError(responseBody);
 	}
 
 	String buildRequestBody(String systemPrompt, String userMessage, boolean stream) {
@@ -502,94 +497,6 @@ public class LocalLlmEngine implements LlmEngine {
 		catch (IOException e) {
 			throw new APIException("Failed to build request body", e);
 		}
-	}
-
-	private InferenceResult parseResponse(String responseBody) throws IOException {
-		JsonNode root = MAPPER.readTree(responseBody);
-
-		String text = "";
-		JsonNode choices = root.get("choices");
-		if (choices != null && choices.isArray() && !choices.isEmpty()) {
-			JsonNode message = choices.get(0).get("message");
-			if (message != null && message.has("content")) {
-				text = message.get("content").asText("");
-			}
-		}
-
-		int inputTokens = 0;
-		int outputTokens = 0;
-		int cachedTokens = 0;
-		JsonNode usage = root.get("usage");
-		if (usage != null) {
-			inputTokens = usage.has("prompt_tokens") ? usage.get("prompt_tokens").asInt(0) : 0;
-			outputTokens = usage.has("completion_tokens")
-					? usage.get("completion_tokens").asInt(0) : 0;
-			JsonNode details = usage.get("prompt_tokens_details");
-			if (details != null && details.has("cached_tokens")) {
-				cachedTokens = details.get("cached_tokens").asInt(0);
-			}
-		}
-
-		log.info("LLM token usage: {} input ({} cached) + {} output",
-				inputTokens, cachedTokens, outputTokens);
-		return new InferenceResult(text, inputTokens, outputTokens, cachedTokens);
-	}
-
-	private InferenceResult parseStreamingResponse(InputStream inputStream,
-			Consumer<String> tokenConsumer) throws IOException {
-		StringBuilder fullText = new StringBuilder();
-		int inputTokens = 0;
-		int outputTokens = 0;
-		int cachedTokens = 0;
-
-		try (BufferedReader reader = new BufferedReader(
-				new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
-			String line;
-			while ((line = reader.readLine()) != null) {
-				if (!line.startsWith("data: ")) {
-					continue;
-				}
-				String data = line.substring(6).trim();
-				if ("[DONE]".equals(data)) {
-					break;
-				}
-				try {
-					JsonNode chunk = MAPPER.readTree(data);
-					JsonNode choices = chunk.get("choices");
-					if (choices == null || !choices.isArray() || choices.isEmpty()) {
-						continue;
-					}
-					JsonNode delta = choices.get(0).get("delta");
-					if (delta != null && delta.has("content")) {
-						String content = delta.get("content").asText("");
-						if (!content.isEmpty()) {
-							fullText.append(content);
-							tokenConsumer.accept(content);
-						}
-					}
-					JsonNode usage = chunk.get("usage");
-					if (usage != null) {
-						inputTokens = usage.has("prompt_tokens")
-								? usage.get("prompt_tokens").asInt(0) : 0;
-						outputTokens = usage.has("completion_tokens")
-								? usage.get("completion_tokens").asInt(0) : 0;
-						JsonNode details = usage.get("prompt_tokens_details");
-						if (details != null && details.has("cached_tokens")) {
-							cachedTokens = details.get("cached_tokens").asInt(0);
-						}
-					}
-				}
-				catch (IOException e) {
-					log.debug("Skipping unparseable SSE chunk: {}", data);
-				}
-			}
-		}
-
-		if (inputTokens > 0 || outputTokens > 0) {
-			log.info("LLM token usage: {} input ({} cached) + {} output",
-					inputTokens, cachedTokens, outputTokens);
-		}
-		return new InferenceResult(fullText.toString(), inputTokens, outputTokens, cachedTokens);
 	}
 
 	private String getCompletionsUrl() {

@@ -9,10 +9,8 @@
  */
 package org.openmrs.module.chartsearchai.api.impl;
 
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -22,7 +20,6 @@ import java.time.Duration;
 import java.util.Properties;
 import java.util.function.Consumer;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -183,81 +180,12 @@ public class RemoteLlmEngine implements LlmEngine {
 	}
 
 	InferenceResult parseResponse(String responseBody) throws IOException {
-		JsonNode root = MAPPER.readTree(responseBody);
-
-		String text = "";
-		JsonNode choices = root.get("choices");
-		if (choices != null && choices.isArray() && !choices.isEmpty()) {
-			JsonNode message = choices.get(0).get("message");
-			if (message != null && message.has("content")) {
-				text = message.get("content").asText("");
-			}
-		}
-
-		int inputTokens = 0;
-		int outputTokens = 0;
-		JsonNode usage = root.get("usage");
-		if (usage != null) {
-			inputTokens = usage.has("prompt_tokens") ? usage.get("prompt_tokens").asInt(0) : 0;
-			outputTokens = usage.has("completion_tokens")
-					? usage.get("completion_tokens").asInt(0) : 0;
-			log.info("Remote LLM token usage: {} input + {} output", inputTokens, outputTokens);
-		}
-
-		return new InferenceResult(text, inputTokens, outputTokens);
+		return LlmResponseParser.parseResponse(responseBody, log);
 	}
 
 	InferenceResult parseStreamingResponse(InputStream inputStream,
 			Consumer<String> tokenConsumer) throws IOException {
-		StringBuilder fullText = new StringBuilder();
-		int inputTokens = 0;
-		int outputTokens = 0;
-
-		try (BufferedReader reader = new BufferedReader(
-				new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
-			String line;
-			while ((line = reader.readLine()) != null) {
-				if (!line.startsWith("data: ")) {
-					continue;
-				}
-				String data = line.substring(6).trim();
-				if ("[DONE]".equals(data)) {
-					break;
-				}
-				try {
-					JsonNode chunk = MAPPER.readTree(data);
-					JsonNode choices = chunk.get("choices");
-					if (choices == null || !choices.isArray() || choices.isEmpty()) {
-						continue;
-					}
-					JsonNode delta = choices.get(0).get("delta");
-					if (delta != null && delta.has("content")) {
-						String content = delta.get("content").asText("");
-						if (!content.isEmpty()) {
-							fullText.append(content);
-							tokenConsumer.accept(content);
-						}
-					}
-
-					// Check for usage in the final chunk
-					JsonNode usage = chunk.get("usage");
-					if (usage != null) {
-						inputTokens = usage.has("prompt_tokens")
-								? usage.get("prompt_tokens").asInt(0) : 0;
-						outputTokens = usage.has("completion_tokens")
-								? usage.get("completion_tokens").asInt(0) : 0;
-					}
-				}
-				catch (IOException e) {
-					log.debug("Skipping unparseable SSE chunk: {}", data);
-				}
-			}
-		}
-
-		if (inputTokens > 0 || outputTokens > 0) {
-			log.info("Remote LLM token usage: {} input + {} output", inputTokens, outputTokens);
-		}
-		return new InferenceResult(fullText.toString(), inputTokens, outputTokens);
+		return LlmResponseParser.parseStreamingResponse(inputStream, tokenConsumer, log);
 	}
 
 	private String getRequiredGlobalProperty(String propertyName) {
