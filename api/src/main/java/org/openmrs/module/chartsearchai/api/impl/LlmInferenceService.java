@@ -244,7 +244,7 @@ public class LlmInferenceService implements ChartSearchService {
 	static String[] expandKwTermsViaConceptSimilarity(String[] kwTerms,
 			float[] queryVector, ChartEmbedding[] embeddings,
 			EmbeddingProvider provider, PipelineConfig config) {
-		return EmbeddingRankingPipeline.expandKwTermsViaConceptSimilarity(
+		return ConceptKeywordMatching.expandKwTermsViaConceptSimilarity(
 				kwTerms, queryVector, embeddings, provider, config);
 	}
 
