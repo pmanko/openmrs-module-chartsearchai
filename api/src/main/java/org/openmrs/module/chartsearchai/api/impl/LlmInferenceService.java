@@ -1699,7 +1699,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// combined score reaches the floor, attempt a z-score + cluster-
 		// density rescue. Returns null to short-circuit with an empty
 		// result, or the belowFloorRescued flag to continue.
-		Boolean floorResult = applyFloorGate(scored, maxSemanticScore,
+		Boolean floorResult = EmbeddingRankingPipeline.applyFloorGate(scored, maxSemanticScore,
 				maxBaseScore, queryTermCount, keywordMatchCount, config);
 		if (floorResult == null) {
 			return Collections.emptyList();
@@ -1718,7 +1718,7 @@ public class LlmInferenceService implements ChartSearchService {
 		// matches and the top semantic score isn't a statistical outlier.
 		// Returns null to short-circuit, or {zScore, threshold} that are
 		// reused later by the cluster z-score gate.
-		double[] zScoreState = applyInitialZScoreGate(scored,
+		double[] zScoreState = EmbeddingRankingPipeline.applyInitialZScoreGate(scored,
 				maxSemanticScore, queryTermCount, keywordMatchCount,
 				config.floorRescueMinZScore);
 		if (zScoreState == null) {
@@ -2134,12 +2134,12 @@ public class LlmInferenceService implements ChartSearchService {
 
 		// Phase 1: Outlier removal via coherence gap detection, guarded
 		// by full-keyword-match and compound-keyword-match bypasses.
-		candidates = applyOutlierRemovalPhase1(candidates, queryTerms,
+		candidates = EmbeddingRankingPipeline.applyOutlierRemovalPhase1(candidates, queryTerms,
 				partialKwValidated);
 		// Phase 2: Zero-keyword validation — mean coherence, small-
 		// cluster coherence gate, and cluster z-score gate. Bypassed
 		// when any candidate has keyword evidence.
-		candidates = applyZeroKeywordValidationPhase2(candidates,
+		candidates = EmbeddingRankingPipeline.applyZeroKeywordValidationPhase2(candidates,
 				scored, config, partialKwValidated, belowFloorRescued,
 				firstPassGapDetected, adaptiveCutoff,
 				ratioFloorCandidateCount, initialZScore,
@@ -2288,149 +2288,12 @@ public class LlmInferenceService implements ChartSearchService {
 		return Math.max(semanticCutoff, Math.min(minRecords, aboveFloor));
 	}
 
-	/**
-	 * Floor gate — stage 1 of the filter pipeline.
-	 *
-	 * <p>When the best semantic and combined scores are both below the
-	 * embedding model's absolute similarity floor, the candidate set is
-	 * below the noise boundary. Attempts a z-score + cluster-density
-	 * rescue that recovers vocabulary-mismatch queries (e.g. "how hot
-	 * is the patient?" → Temperature records) where the model correctly
-	 * ranks relevant records first but cosine similarity is inherently
-	 * low.
-	 *
-	 * @return {@code null} if the gate rejects (the caller should return
-	 *         an empty result); otherwise a boxed boolean indicating
-	 *         whether the rescue fired. The caller propagates this as
-	 *         the {@code belowFloorRescued} flag to downstream gates.
-	 */
-	static Boolean applyFloorGate(List<ScoredEmbedding> scored,
-			double maxSemanticScore, double maxBaseScore,
-			int queryTermCount, int keywordMatchCount,
-			PipelineConfig config) {
-		double floorScore = Math.max(maxSemanticScore, maxBaseScore);
-		if (floorScore >= config.noiseProfile.absoluteSimilarityFloor()) {
-			return Boolean.FALSE;
-		}
-		boolean belowFloorRescued = false;
-		if (queryTermCount > 0
-				&& hasStatisticalVariance(scored)
-				&& keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
-			double zScore = computeSemanticZScore(scored, maxSemanticScore);
-			double floorRescueZThreshold =
-					floorRescueGumbelThreshold(scored);
-			if (zScore >= floorRescueZThreshold) {
-				// Verify the signal comes from a genuine cluster,
-				// not an isolated outlier. Count records within a
-				// tight band of the max score — vocabulary-mismatch
-				// queries ("how hot" → Temperature) produce many
-				// records at similar scores, while false positives
-				// ("TB" on a TB-free dataset) only have 1-2 outlier
-				// conditions in that band.
-				// Data-derived parameters:
-				// - band width: 1/uniqueConcepts of the max score
-				// - min cluster: average records per concept
-				Set<String> floorConcepts = new HashSet<String>();
-				for (ScoredEmbedding se : scored) {
-					String cn = ConceptNameUtil
-							.extractConceptName(
-									se.embedding
-											.getTextContent());
-					if (cn != null) {
-						floorConcepts.add(cn);
-					}
-				}
-				int nConcepts = Math.max(2, floorConcepts.size());
-				double densityBand = 1.0 / nConcepts;
-				int minCluster = (int) Math.ceil(
-						(double) scored.size() / nConcepts);
-				double densityFloor = maxSemanticScore
-						* (1 - densityBand);
-				int clusterDensity = 0;
-				for (ScoredEmbedding se : scored) {
-					if (se.semanticScore >= densityFloor) {
-						clusterDensity++;
-					}
-				}
-				belowFloorRescued = clusterDensity >= minCluster;
-				log.warn("Floor gate z-score rescue: zScore={}, "
-						+ "density={} (band={}, floor={}), "
-						+ "minCluster={}, rescued={}",
-						String.format("%.2f", zScore),
-						clusterDensity,
-						String.format("%.4f", densityBand),
-						String.format("%.4f", densityFloor),
-						minCluster,
-						belowFloorRescued);
-			}
-		}
-		if (!belowFloorRescued) {
-			log.debug("Top score {} (semantic={}, combined={}) is below "
-					+ "absolute floor {}, returning empty",
-					String.format("%.4f", floorScore),
-					String.format("%.4f", maxSemanticScore),
-					String.format("%.4f", maxBaseScore),
-					config.noiseProfile.absoluteSimilarityFloor());
-			return null;
-		}
-		return Boolean.TRUE;
-	}
-
-	/**
-	 * Slim-margin gate — stage 2 of the filter pipeline.
-	 *
-	 * <p>When the top semantic score is above the absolute floor but
-	 * within one {@code minScoreGap} of it, with zero keyword matches,
-	 * require at least 2 records above the floor. A single record just
-	 * above the floor (e.g. Rash at 0.29 for "any allergies?" with
-	 * floor 0.26) is likely a coincidental near-miss, not genuine signal.
-	 *
-	 * @return {@code true} to continue, {@code false} to short-circuit
-	 *         with an empty result
-	 */
 	static boolean applySlimMarginGate(List<ScoredEmbedding> scored,
 			double maxSemanticScore, int queryTermCount,
 			int keywordMatchCount, boolean belowFloorRescued,
 			PipelineConfig config) {
-		if (belowFloorRescued || keywordMatchCount != 0 || queryTermCount <= 0) {
-			return true;
-		}
-		double smFloor = config.noiseProfile.absoluteSimilarityFloor();
-		if (maxSemanticScore >= smFloor + config.minScoreGap) {
-			return true;
-		}
-		int aboveFloorCount = 0;
-		for (ScoredEmbedding se : scored) {
-			if (se.semanticScore >= smFloor) {
-				aboveFloorCount++;
-			}
-		}
-		if (aboveFloorCount < 2) {
-			// Allow a single record if its score is in the upper half
-			// of the slim-margin zone [floor + gap/2, floor + gap).
-			// Records barely above the floor are likely noise; records
-			// further above are more likely genuine.
-			if (aboveFloorCount == 1
-					&& maxSemanticScore >= smFloor + config.minScoreGap / 2) {
-				if (log.isDebugEnabled()) {
-					log.debug("Slim-margin gate: single record at {} is in "
-							+ "upper half of margin zone [{}, {}), allowing",
-							String.format("%.4f", maxSemanticScore),
-							String.format("%.4f", smFloor + config.minScoreGap / 2),
-							String.format("%.4f", smFloor + config.minScoreGap));
-				}
-				return true;
-			}
-			log.warn("Slim-margin gate: maxSem={} is within "
-					+ "{} of floor {}, zero keywords, and only "
-					+ "{} record(s) above floor — returning empty",
-					String.format("%.4f", maxSemanticScore),
-					config.minScoreGap,
-					String.format("%.4f", smFloor),
-					aboveFloorCount);
-			return false;
-		}
-		return true;
+		return EmbeddingRankingPipeline.applySlimMarginGate(scored, maxSemanticScore,
+				queryTermCount, keywordMatchCount, belowFloorRescued, config);
 	}
 
 	/**
@@ -2998,46 +2861,6 @@ public class LlmInferenceService implements ChartSearchService {
 		return reranked.isEmpty() ? candidates : reranked;
 	}
 
-	static double[] applyInitialZScoreGate(List<ScoredEmbedding> scored,
-			double maxSemanticScore, int queryTermCount,
-			int keywordMatchCount) {
-		return applyInitialZScoreGate(scored, maxSemanticScore,
-				queryTermCount, keywordMatchCount, -1);
-	}
-
-	static double[] applyInitialZScoreGate(List<ScoredEmbedding> scored,
-			double maxSemanticScore, int queryTermCount,
-			int keywordMatchCount, double maxZScoreThreshold) {
-		double[] result = { -1, -1 };
-		if (queryTermCount <= 0 || !hasStatisticalVariance(scored)) {
-			return result;
-		}
-		if (keywordMatchCount >= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
-			return result;
-		}
-		double zScore = computeSemanticZScore(scored, maxSemanticScore);
-		double threshold = effectiveGumbelThreshold(scored);
-		// Allow model-specific configs to cap the threshold for
-		// compressed-score models where the Gumbel threshold is
-		// too aggressive.
-		if (maxZScoreThreshold > 0 && threshold > maxZScoreThreshold) {
-			threshold = maxZScoreThreshold;
-		}
-		result[0] = zScore;
-		result[1] = threshold;
-		if (zScore < threshold) {
-			log.debug("Only {} keyword match(es) and top semantic "
-					+ "z-score {} is below threshold {}, "
-					+ "returning empty (maxSem={})",
-					keywordMatchCount,
-					String.format("%.2f", zScore),
-					String.format("%.2f", threshold),
-					String.format("%.4f", maxSemanticScore));
-			return null;
-		}
-		return result;
-	}
-
 	/**
 	 * Output of {@link #buildCandidates}: the candidate list plus the
 	 * scalar outputs ({@code minScore}, {@code adaptiveCutoff}) that
@@ -3545,327 +3368,6 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
-	 * Phase 1 (outlier removal) — stage 6 of the filter pipeline.
-	 *
-	 * <p>Removes individual candidates that are topically unrelated to
-	 * the majority via {@link #filterByCoherence}. Skipped when:
-	 * <ul>
-	 *   <li>The partial-keyword semantic-core path already curated the
-	 *       set (would double-filter).</li>
-	 *   <li>Every candidate matches ALL query terms — keyword evidence
-	 *       is conclusive, coherence is redundant.</li>
-	 *   <li>The set is a compound-keyword match — coherence would drop
-	 *       the minority concept cluster (see
-	 *       {@link #isCompoundKeywordMatch}).</li>
-	 * </ul>
-	 *
-	 * <p>At n=3 coherence filtering only fires when scores are tightly
-	 * clustered (min/max ratio ≥ 0.90); a spread at n=3 means the
-	 * minority candidate may be the only correct result.
-	 */
-	static List<ScoredEmbedding> applyOutlierRemovalPhase1(
-			List<ScoredEmbedding> candidates, String[] queryTerms,
-			boolean partialKwValidated) {
-		boolean allFullKeywordMatch = true;
-		for (ScoredEmbedding se : candidates) {
-			if (se.keywordScore < 1.0) {
-				allFullKeywordMatch = false;
-				break;
-			}
-		}
-		boolean isCompoundKeywordMatch = isCompoundKeywordMatch(
-				candidates, queryTerms);
-		double bonusThreshold = queryTerms.length == 0 ? 1.0
-				: (double) Math.min(2, queryTerms.length) / queryTerms.length;
-		if (!partialKwValidated && !allFullKeywordMatch
-				&& !isCompoundKeywordMatch
-				&& candidates.size() >= 4) {
-			return EmbeddingRankingPipeline.preserveUniqueCoverage(candidates,
-					EmbeddingRankingPipeline.filterByCoherence(candidates), queryTerms,
-					bonusThreshold);
-		}
-		if (!partialKwValidated && !allFullKeywordMatch
-				&& !isCompoundKeywordMatch
-				&& candidates.size() == 3) {
-			double topSemantic = candidates.get(0).semanticScore;
-			for (ScoredEmbedding se : candidates) {
-				if (se.semanticScore > topSemantic) {
-					topSemantic = se.semanticScore;
-				}
-			}
-			double lowestSemantic = candidates.get(0).semanticScore;
-			for (ScoredEmbedding se : candidates) {
-				if (se.semanticScore < lowestSemantic) {
-					lowestSemantic = se.semanticScore;
-				}
-			}
-			if (topSemantic > 0 && lowestSemantic / topSemantic >= 0.90) {
-				return EmbeddingRankingPipeline.preserveUniqueCoverage(candidates,
-						EmbeddingRankingPipeline.filterByCoherence(candidates), queryTerms,
-						bonusThreshold);
-			}
-		}
-		return candidates;
-	}
-
-	/**
-	 * Phase 2 (zero-keyword validation) — stage 7 of the filter pipeline.
-	 *
-	 * <p>When no surviving candidate has keyword support, the result set
-	 * is purely semantic and must pass two orthogonal confidence checks
-	 * (mean coherence and cluster z-score) plus a small-cluster
-	 * coherence gate and a single-candidate structural gate. Candidates
-	 * with any keyword match bypass this phase entirely.
-	 *
-	 * <p>The z-score gate is skipped when tight-cluster evidence already
-	 * validated signal — captured via {@code belowFloorRescued},
-	 * {@code firstPassGapDetected} vs concept count, or the ratio-floor
-	 * tight-cluster signal.
-	 */
-	static List<ScoredEmbedding> applyZeroKeywordValidationPhase2(
-			List<ScoredEmbedding> candidates,
-			List<ScoredEmbedding> scored, PipelineConfig config,
-			boolean partialKwValidated, boolean belowFloorRescued,
-			boolean firstPassGapDetected, int adaptiveCutoff,
-			int ratioFloorCandidateCount, double initialZScore,
-			double initialZThreshold, double maxSemanticScore) {
-		boolean candidatesHaveKeywords = false;
-		for (ScoredEmbedding se : candidates) {
-			if (se.keywordScore > 0) {
-				candidatesHaveKeywords = true;
-				break;
-			}
-		}
-		if (log.isDebugEnabled()) {
-			StringBuilder sb = new StringBuilder();
-			for (ScoredEmbedding se : candidates) {
-				if (sb.length() > 0) sb.append(", ");
-				sb.append(se.embedding.getResourceType())
-					.append(':').append(se.embedding.getResourceId())
-					.append(" sem=").append(String.format("%.4f", se.semanticScore))
-					.append(" kw=").append(String.format("%.4f", se.keywordScore));
-			}
-			log.debug("Phase 2: candidatesHaveKeywords={}, candidates={}: [{}]",
-					candidatesHaveKeywords, candidates.size(), sb);
-		}
-		log.debug("Phase2 entry: candidates={}, hasKw={}, partialKwValidated={}, belowFloorRescued={}, gapDetected={}, ratioFloorCount={}",
-				candidates.size(), candidatesHaveKeywords, partialKwValidated,
-				belowFloorRescued, firstPassGapDetected, ratioFloorCandidateCount);
-		if (partialKwValidated || candidatesHaveKeywords || candidates.isEmpty()) {
-			return candidates;
-		}
-		if (candidates.size() >= 2) {
-			int preMeanCoherence = candidates.size();
-			candidates = EmbeddingRankingPipeline.filterByMeanCoherence(candidates, config);
-			log.debug("Phase2 meanCoherence: {} → {}", preMeanCoherence, candidates.size());
-		}
-		// Small-cluster coherence gate: for ≤3 zero-keyword
-		// candidates, apply a stricter coherence threshold derived
-		// from the patient's own embedding statistics.
-		if (candidates.size() == 3) {
-			double intraFloor = config.noiseProfile.intraConceptMean
-					- config.noiseProfile.intraConceptStd;
-			double sumCos = 0;
-			int nPairs = 0;
-			for (int ci = 0; ci < candidates.size(); ci++) {
-				float[] vi = candidates.get(ci).embedding.getEmbeddingVector();
-				if (vi == null) {
-					continue;
-				}
-				for (int cj = ci + 1; cj < candidates.size(); cj++) {
-					float[] vj = candidates.get(cj).embedding.getEmbeddingVector();
-					if (vj == null) {
-						continue;
-					}
-					sumCos += ChartSearchAiUtils.cosineSimilarity(vi, vj);
-					nPairs++;
-				}
-			}
-			if (nPairs > 0) {
-				double mc = sumCos / nPairs;
-				if (mc < intraFloor) {
-					// Extract the coherent same-concept pair if one exists.
-					double[] avgCoh = new double[3];
-					for (int ci = 0; ci < 3; ci++) {
-						double s = 0;
-						int cnt = 0;
-						float[] vi = candidates.get(ci).embedding.getEmbeddingVector();
-						if (vi == null) {
-							continue;
-						}
-						for (int cj = 0; cj < 3; cj++) {
-							if (ci == cj) {
-								continue;
-							}
-							float[] vj = candidates.get(cj).embedding.getEmbeddingVector();
-							if (vj == null) {
-								continue;
-							}
-							s += ChartSearchAiUtils.cosineSimilarity(vi, vj);
-							cnt++;
-						}
-						avgCoh[ci] = cnt > 0 ? s / cnt : 0;
-					}
-					int worstIdx = 0;
-					for (int ci = 1; ci < 3; ci++) {
-						if (avgCoh[ci] < avgCoh[worstIdx]) {
-							worstIdx = ci;
-						}
-					}
-					int p1 = -1, p2 = -1;
-					for (int ci = 0; ci < 3; ci++) {
-						if (ci != worstIdx) {
-							if (p1 < 0) {
-								p1 = ci;
-							} else {
-								p2 = ci;
-							}
-						}
-					}
-					float[] v1 = candidates.get(p1).embedding.getEmbeddingVector();
-					float[] v2 = candidates.get(p2).embedding.getEmbeddingVector();
-					double pairCos = (v1 != null && v2 != null)
-							? ChartSearchAiUtils.cosineSimilarity(v1, v2)
-							: 0;
-					String cn1 = ConceptNameUtil.extractConceptName(
-							candidates.get(p1).embedding.getTextContent());
-					String cn2 = ConceptNameUtil.extractConceptName(
-							candidates.get(p2).embedding.getTextContent());
-					boolean sameConcept = cn1 != null && cn1.equals(cn2);
-					if (pairCos >= intraFloor && sameConcept) {
-						List<ScoredEmbedding> pair = new ArrayList<ScoredEmbedding>();
-						pair.add(candidates.get(p1));
-						pair.add(candidates.get(p2));
-						log.debug("Small-cluster gate: removed outlier [{}], kept pair cos={}, concept={}",
-								candidates.get(worstIdx).embedding.getResourceId(),
-								String.format("%.4f", pairCos), cn1);
-						candidates = pair;
-					} else {
-						log.debug("Small-cluster coherence gate: meanCoherence={} < intraFloor={}, returning empty",
-								String.format("%.4f", mc),
-								String.format("%.4f", intraFloor));
-						candidates = Collections.emptyList();
-					}
-				}
-			}
-		}
-		// Tight-cluster detection: the z-score gate is skipped when
-		// structural signals already confirm the cluster.
-		Set<String> tightCheckConcepts = new HashSet<String>();
-		for (ScoredEmbedding se : scored) {
-			String cn = ConceptNameUtil.extractConceptName(se.embedding.getTextContent());
-			if (cn != null) {
-				tightCheckConcepts.add(cn);
-			}
-		}
-		int tightThreshold = tightCheckConcepts.size();
-		// Count distinct concepts in the candidate set entering
-		// Phase 2 — used by the multi-concept umbrella bypass below.
-		Set<String> p2CandidateConcepts = new HashSet<String>();
-		for (ScoredEmbedding se : candidates) {
-			String cn = ConceptNameUtil.extractConceptName(
-					se.embedding.getTextContent());
-			if (cn != null) {
-				p2CandidateConcepts.add(cn);
-			}
-		}
-		// Ratio-floor selectivity guard: the ratio floor must
-		// have been genuinely selective — keeping at most 25% of
-		// all scored records. Compressed-score models (e.g.
-		// MedCPT) have such narrow score ranges that a 0.98
-		// ratio floor can pass 25%+ of records despite no real
-		// match. When the ratio floor isn't selective, the set
-		// is just the upper tail of a smooth noise distribution,
-		// not a genuine cluster.
-		boolean ratioFloorSelective = ratioFloorCandidateCount >= 0
-				&& ratioFloorCandidateCount <= scored.size() / 4;
-		boolean tightClusterDetected = belowFloorRescued
-				|| (firstPassGapDetected && adaptiveCutoff < tightThreshold)
-				|| (ratioFloorSelective
-						&& ratioFloorCandidateCount < tightThreshold
-						&& initialZScore >= config.floorRescueMinZScore
-						&& maxSemanticScore
-						>= config.noiseProfile.absoluteSimilarityFloor()
-								+ config.minScoreGap)
-				// Multi-concept umbrella bypass: when the ratio floor
-				// produced a tight cluster spanning 3+ distinct concepts
-				// AND the initial z-score passed its own gate, the concept
-				// diversity provides the structural confidence that
-				// floorRescueMinZScore provides for single-concept
-				// clusters. The initial gate already validated that the
-				// top semantic score is a genuine outlier; the multi-concept
-				// spread confirms the cluster is not a coincidental
-				// grouping. This rescues broad-category queries like
-				// "vital signs" where the z-score is strong but just
-				// below the 2.0 threshold.
-				|| (ratioFloorSelective
-						&& ratioFloorCandidateCount < tightThreshold
-						&& p2CandidateConcepts.size() >= 3
-						&& initialZThreshold > 0
-						&& initialZScore >= initialZThreshold
-						&& maxSemanticScore
-						>= config.noiseProfile.absoluteSimilarityFloor()
-								+ config.minScoreGap);
-		// Single-candidate structural gate.
-		if (!tightClusterDetected
-				&& candidates.size() == 1
-				&& ratioFloorCandidateCount == 1) {
-			log.debug("Single zero-keyword candidate with no tight-cluster support and ratioFloor=1, returning empty");
-			candidates = Collections.emptyList();
-		}
-		if (!tightClusterDetected && !candidates.isEmpty()
-				&& hasStatisticalVariance(scored)) {
-			double sum = 0;
-			for (ScoredEmbedding se : scored) {
-				sum += se.semanticScore;
-			}
-			double mean = sum / scored.size();
-			double sqSum = 0;
-			for (ScoredEmbedding se : scored) {
-				double d = se.semanticScore - mean;
-				sqSum += d * d;
-			}
-			double std = Math.sqrt(sqSum / scored.size());
-			if (std > 0) {
-				double[] zScores = new double[candidates.size()];
-				for (int i = 0; i < candidates.size(); i++) {
-					zScores[i] = (candidates.get(i).semanticScore - mean) / std;
-				}
-				java.util.Arrays.sort(zScores);
-				double zRepresentative = candidates.size() <= 3
-						? zScores[zScores.length - 1]
-						: zScores[zScores.length / 2];
-				double clusterZThreshold;
-				if (candidates.size() <= 3) {
-					clusterZThreshold = clusterGumbelThreshold(scored);
-				} else {
-					clusterZThreshold = medianGumbelThreshold(scored);
-				}
-				log.debug("Phase2 z-score: mean={}, std={}, z={} ({}), threshold={}, tightCluster={}, candidates={}",
-						String.format("%.4f", mean),
-						String.format("%.4f", std),
-						String.format("%.2f", zRepresentative),
-						candidates.size() <= 3 ? "max" : "median",
-						String.format("%.2f", clusterZThreshold),
-						tightClusterDetected, candidates.size());
-				if (zRepresentative < clusterZThreshold) {
-					if (candidates.size() <= 3
-							&& initialZThreshold > 0
-							&& initialZScore >= initialZThreshold) {
-						log.debug("Phase2: z-score below threshold but initial gate validated, keeping");
-					} else {
-						log.debug("Phase2: REJECTED by z-score gate (z={} < threshold={})",
-								String.format("%.2f", zRepresentative),
-								String.format("%.2f", clusterZThreshold));
-						candidates = Collections.emptyList();
-					}
-				}
-			}
-		}
-		return candidates;
-	}
-
-	/**
 	 * Non-refinement post-processing path — stage 5b of the filter pipeline.
 	 *
 	 * <p>Runs when {@code refinementActivated} is false (no keyword subset
@@ -4173,65 +3675,6 @@ public class LlmInferenceService implements ChartSearchService {
 			return refined;
 		}
 		return candidates;
-	}
-
-	/**
-	 * Detects whether a candidate set is a compound-query match — i.e.
-	 * the union of terms matched across candidates covers every query
-	 * term, yet no single candidate matches all terms. This is the
-	 * structural signature of a multi-concept query like "HIV and CD4
-	 * count" where HIV records match {hiv} and CD4 records match
-	 * {cd4, count}: each concept cluster contributes a complementary
-	 * subset of the query.
-	 *
-	 * <p>Single-concept queries never qualify because their relevant
-	 * records match every query term (single-term queries trivially,
-	 * multi-term queries because all terms describe the same concept).
-	 *
-	 * <p>Used to bypass {@link #filterByCoherence}, which would otherwise
-	 * drop the minority concept cluster as outliers despite keyword
-	 * evidence that those records belong to the queried set.
-	 *
-	 * @param candidates the candidate records
-	 * @param queryTerms the query terms after stopword removal
-	 *        (returns {@code false} if null or empty)
-	 * @return {@code true} if the candidate set collectively covers
-	 *         every query term and no single record does so alone
-	 */
-	static boolean isCompoundKeywordMatch(
-			List<ScoredEmbedding> candidates, String[] queryTerms) {
-		if (queryTerms == null || queryTerms.length < 2) {
-			return false;
-		}
-		Set<String> unionCoverage = new HashSet<String>();
-		boolean anyRecordMatchesAll = false;
-		for (ScoredEmbedding se : candidates) {
-			String text = ChartSearchAiUtils.buildPrefixedText(
-					se.embedding.getResourceType(),
-					ConceptNameUtil.stripSynonyms(
-							se.embedding.getTextContent()))
-					.toLowerCase();
-			String[] words = text.split("\\s+");
-			int matchCount = 0;
-			for (String term : queryTerms) {
-				if (termMatchesText(term, text, words)) {
-					unionCoverage.add(term);
-					matchCount++;
-				}
-			}
-			if (matchCount == queryTerms.length) {
-				anyRecordMatchesAll = true;
-			}
-		}
-		if (anyRecordMatchesAll) {
-			return false;
-		}
-		for (String term : queryTerms) {
-			if (!unionCoverage.contains(term)) {
-				return false;
-			}
-		}
-		return true;
 	}
 
 	private static double getScoreGapMultiplier() {
