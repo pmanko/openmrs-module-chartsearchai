@@ -31,8 +31,8 @@ import org.slf4j.LoggerFactory;
  * outlier removal (phase 1) → zero-keyword validation (phase 2).
  *
  * <p>Coherence helpers ({@code filterByCoherence}, {@code filterByMeanCoherence},
- * {@code preserveUniqueCoverage}) live in {@link EmbeddingRankingPipeline}
- * and are reached via package-private access.</p>
+ * {@code preserveUniqueCoverage}) live in {@link CoherenceFilters} and are
+ * reached via package-private access.</p>
  */
 final class RankingPipelineGates {
 
@@ -233,7 +233,7 @@ final class RankingPipelineGates {
 	 * Phase 1 (outlier removal) — stage 6 of the filter pipeline.
 	 *
 	 * <p>Removes individual candidates that are topically unrelated to
-	 * the majority via {@code EmbeddingRankingPipeline.filterByCoherence}.
+	 * the majority via {@code CoherenceFilters.filterByCoherence}.
 	 * Skipped when the partial-keyword semantic-core path already curated
 	 * the set, every candidate matches ALL query terms, or the set is a
 	 * compound-keyword match (see {@link #isCompoundKeywordMatch}).
@@ -258,8 +258,8 @@ final class RankingPipelineGates {
 		if (!partialKwValidated && !allFullKeywordMatch
 				&& !isCompoundKeywordMatch
 				&& candidates.size() >= 4) {
-			return EmbeddingRankingPipeline.preserveUniqueCoverage(candidates,
-					EmbeddingRankingPipeline.filterByCoherence(candidates), queryTerms,
+			return CoherenceFilters.preserveUniqueCoverage(candidates,
+					CoherenceFilters.filterByCoherence(candidates), queryTerms,
 					bonusThreshold);
 		}
 		if (!partialKwValidated && !allFullKeywordMatch
@@ -278,8 +278,8 @@ final class RankingPipelineGates {
 				}
 			}
 			if (topSemantic > 0 && lowestSemantic / topSemantic >= 0.90) {
-				return EmbeddingRankingPipeline.preserveUniqueCoverage(candidates,
-						EmbeddingRankingPipeline.filterByCoherence(candidates), queryTerms,
+				return CoherenceFilters.preserveUniqueCoverage(candidates,
+						CoherenceFilters.filterByCoherence(candidates), queryTerms,
 						bonusThreshold);
 			}
 		}
@@ -333,7 +333,7 @@ final class RankingPipelineGates {
 		}
 		if (candidates.size() >= 2) {
 			int preMeanCoherence = candidates.size();
-			candidates = EmbeddingRankingPipeline.filterByMeanCoherence(candidates, config);
+			candidates = CoherenceFilters.filterByMeanCoherence(candidates, config);
 			log.debug("Phase2 meanCoherence: {} -> {}", preMeanCoherence, candidates.size());
 		}
 		// Small-cluster coherence gate: for ≤3 zero-keyword candidates,
@@ -532,7 +532,7 @@ final class RankingPipelineGates {
 	 * signature of a multi-concept query like "HIV and CD4 count" where
 	 * HIV records match {hiv} and CD4 records match {cd4, count}.
 	 *
-	 * <p>Used to bypass {@code EmbeddingRankingPipeline.filterByCoherence},
+	 * <p>Used to bypass {@code CoherenceFilters.filterByCoherence},
 	 * which would otherwise drop the minority concept cluster as outliers
 	 * despite keyword evidence that those records belong to the queried
 	 * set.

@@ -228,17 +228,17 @@ public class LlmInferenceService implements ChartSearchService {
 
 	static List<ScoredEmbedding> growCluster(List<ScoredEmbedding> candidates,
 			int seedSize, double cosineThreshold) {
-		return EmbeddingRankingPipeline.growCluster(candidates, seedSize, cosineThreshold);
+		return CoherenceFilters.growCluster(candidates, seedSize, cosineThreshold);
 	}
 
 	static boolean isGapCoherent(List<ScoredEmbedding> scored, int cutoff,
 			double cosineThreshold) {
-		return EmbeddingRankingPipeline.isGapCoherent(scored, cutoff, cosineThreshold);
+		return CoherenceFilters.isGapCoherent(scored, cutoff, cosineThreshold);
 	}
 
 	static List<ScoredEmbedding> rescueBelowFloor(List<ScoredEmbedding> candidates,
 			List<ScoredEmbedding> scored, int adaptiveCutoff) {
-		return EmbeddingRankingPipeline.rescueBelowFloor(candidates, scored, adaptiveCutoff);
+		return CoherenceFilters.rescueBelowFloor(candidates, scored, adaptiveCutoff);
 	}
 
 	static String[] expandKwTermsViaConceptSimilarity(String[] kwTerms,
