@@ -181,7 +181,7 @@ class ChartBuildingStrategy {
 		}
 
 		List<LuceneIndexer.LuceneSearchResult> results = luceneIndexer.search(
-				patient, normalizedQuery, getTopK() * 10);
+				patient, normalizedQuery, PipelineSettings.getTopK() * 10);
 
 		if (results.isEmpty()) {
 			log.debug("Lucene returned no results for query '{}', returning empty chart",
@@ -223,7 +223,7 @@ class ChartBuildingStrategy {
 			return chartSerializer.serialize(patient);
 		}
 
-		String embeddingInput = QueryPreprocessor.prepareEmbeddingInput(question, getQueryPrefix());
+		String embeddingInput = QueryPreprocessor.prepareEmbeddingInput(question, PipelineSettings.getQueryPrefix());
 		float[] queryVector;
 		try {
 			queryVector = embeddingProvider.embedQuery(embeddingInput);
@@ -238,7 +238,7 @@ class ChartBuildingStrategy {
 		// the pure-embedding path would miss.
 		List<ElasticsearchIndexer.ElasticsearchSearchResult> esResults =
 				elasticsearchIndexer.search(patient, normalizedQuery, queryVector,
-						getTopK() * ChartSearchAiConstants.ES_FETCH_MULTIPLIER);
+						PipelineSettings.getTopK() * ChartSearchAiConstants.ES_FETCH_MULTIPLIER);
 
 		// Run the FULL embedding filter pipeline on all patient embeddings
 		// — not just the ES-returned subset. filterPipeline uses adaptive
@@ -251,11 +251,11 @@ class ChartBuildingStrategy {
 		List<ChartEmbedding> pipelineFiltered = null;
 		if (!allEmbeddings.isEmpty()) {
 			FindSimilarResult fsResult = RetrievalQuery.findSimilar(allEmbeddings,
-					embeddingProvider, question, getQueryPrefix(),
-					new PipelineConfig(getKeywordWeight(),
-							getScoreGapMultiplier(), getMinScoreGap(),
-							getGapValidationCosineThreshold(),
-							getSimilarityRatio()));
+					embeddingProvider, question, PipelineSettings.getQueryPrefix(),
+					new PipelineConfig(PipelineSettings.getKeywordWeight(),
+							PipelineSettings.getScoreGapMultiplier(), PipelineSettings.getMinScoreGap(),
+							PipelineSettings.getGapValidationCosineThreshold(),
+							PipelineSettings.getSimilarityRatio()));
 			pipelineFiltered = fsResult.records;
 		}
 
@@ -393,7 +393,7 @@ class ChartBuildingStrategy {
 		Set<String> relevantKeys;
 		try {
 			relevantKeys = hybridRetriever.search(
-					patient, normalizedQuery, getQueryPrefix(), getTopK());
+					patient, normalizedQuery, PipelineSettings.getQueryPrefix(), PipelineSettings.getTopK());
 		}
 		catch (Exception e) {
 			log.error("Hybrid search failed for patient [id={}], falling back to full chart",
@@ -426,7 +426,7 @@ class ChartBuildingStrategy {
 		List<SerializedRecord> filtered = ConceptRescueAndFilter.postRetrievalPipeline(
 				allRecords, relevantKeys, question,
 				pipelineSize, keywordMatchCount,
-				embeddingProvider, getQueryPrefix());
+				embeddingProvider, PipelineSettings.getQueryPrefix());
 
 		log.debug("Pre-filtered {} records to {} using {}",
 				allRecords.size(), filtered.size(),
@@ -467,9 +467,9 @@ class ChartBuildingStrategy {
 		// Use model-specific defaults, but allow global property overrides
 		// when an admin has explicitly customized them.
 		PipelineConfig config = PipelineConfig.buildEffective(baseConfig,
-				getKeywordWeight(), getScoreGapMultiplier(),
-				getMinScoreGap(), getGapValidationCosineThreshold(),
-				getSimilarityRatio(), cachedProfile);
+				PipelineSettings.getKeywordWeight(), PipelineSettings.getScoreGapMultiplier(),
+				PipelineSettings.getMinScoreGap(), PipelineSettings.getGapValidationCosineThreshold(),
+				PipelineSettings.getSimilarityRatio(), cachedProfile);
 		log.warn("Model identity={}, config: kwWeight={}, gapMult={}, "
 				+ "minGap={}, gapCosThresh={}, simRatio={}, floorZScore={}",
 				modelIdentity, config.keywordWeight, config.scoreGapMultiplier,
@@ -478,7 +478,7 @@ class ChartBuildingStrategy {
 
 		try {
 			FindSimilarResult result = RetrievalQuery.findSimilar(allEmbeddings,
-					embeddingProvider, question, getQueryPrefix(), config);
+					embeddingProvider, question, PipelineSettings.getQueryPrefix(), config);
 			if (result.noiseProfile != null) {
 				if (noiseProfileCache.size() >= NOISE_PROFILE_CACHE_MAX_SIZE) {
 					// Evict an arbitrary entry to stay within bounds.
@@ -519,121 +519,6 @@ class ChartBuildingStrategy {
 	}
 
 	boolean usePreFilter() {
-		String mode = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
-		return !"false".equalsIgnoreCase(mode.trim());
-	}
-
-	private int getTopK() {
-		String value = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_TOP_K);
-		if (value != null && !value.trim().isEmpty()) {
-			try {
-				int parsed = Integer.parseInt(value.trim());
-				if (parsed > 0) {
-					return parsed;
-				}
-			}
-			catch (NumberFormatException e) {
-				log.warn("Invalid topK value '{}', using default", value);
-			}
-		}
-		return ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K;
-	}
-
-	private double getSimilarityRatio() {
-		String value = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_SIMILARITY_RATIO);
-		if (value != null && !value.trim().isEmpty()) {
-			try {
-				double parsed = Double.parseDouble(value.trim());
-				if (parsed > 0 && parsed < 1) {
-					return parsed;
-				}
-			}
-			catch (NumberFormatException e) {
-				log.warn("Invalid similarityRatio value '{}', using default", value);
-			}
-		}
-		return ChartSearchAiConstants.DEFAULT_SIMILARITY_RATIO;
-	}
-
-	private static double getScoreGapMultiplier() {
-		String value = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_SCORE_GAP_MULTIPLIER);
-		if (value != null && !value.trim().isEmpty()) {
-			try {
-				double parsed = Double.parseDouble(value.trim());
-				if (parsed > 1) {
-					return parsed;
-				}
-			}
-			catch (NumberFormatException e) {
-				log.warn("Invalid scoreGapMultiplier value '{}', using default", value);
-			}
-		}
-		return ChartSearchAiConstants.DEFAULT_SCORE_GAP_MULTIPLIER;
-	}
-
-	private static double getMinScoreGap() {
-		String value = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_MIN_SCORE_GAP);
-		if (value != null && !value.trim().isEmpty()) {
-			try {
-				double parsed = Double.parseDouble(value.trim());
-				if (parsed >= 0 && parsed <= 1) {
-					return parsed;
-				}
-			}
-			catch (NumberFormatException e) {
-				log.warn("Invalid minScoreGap value '{}', using default", value);
-			}
-		}
-		return ChartSearchAiConstants.DEFAULT_MIN_SCORE_GAP;
-	}
-
-	private static double getGapValidationCosineThreshold() {
-		String value = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(
-						ChartSearchAiConstants.GP_EMBEDDING_GAP_VALIDATION_COSINE_THRESHOLD);
-		if (value != null && !value.trim().isEmpty()) {
-			try {
-				double parsed = Double.parseDouble(value.trim());
-				if (parsed >= 0 && parsed <= 1) {
-					return parsed;
-				}
-			}
-			catch (NumberFormatException e) {
-				log.warn("Invalid gapValidationCosineThreshold value '{}', "
-						+ "using default", value);
-			}
-		}
-		return ChartSearchAiConstants.DEFAULT_GAP_VALIDATION_COSINE_THRESHOLD;
-	}
-
-	private static double getKeywordWeight() {
-		String value = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_KEYWORD_WEIGHT);
-		if (value != null && !value.trim().isEmpty()) {
-			try {
-				double parsed = Double.parseDouble(value.trim());
-				if (parsed >= 0 && parsed <= 1) {
-					return parsed;
-				}
-			}
-			catch (NumberFormatException e) {
-				log.warn("Invalid keywordWeight value '{}', using default", value);
-			}
-		}
-		return ChartSearchAiConstants.DEFAULT_KEYWORD_WEIGHT;
-	}
-
-	private static String getQueryPrefix() {
-		String value = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_QUERY_PREFIX);
-		if (value != null && !value.trim().isEmpty()) {
-			return value;
-		}
-		return ChartSearchAiConstants.DEFAULT_QUERY_EMBEDDING_PREFIX;
+		return PipelineSettings.usePreFilter();
 	}
 }
