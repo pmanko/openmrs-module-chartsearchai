@@ -23,9 +23,6 @@ import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.RESOURCE_T
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.RESOURCE_TYPE_ORDER;
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.RESOURCE_TYPE_PROGRAM;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -34,7 +31,6 @@ import java.util.Set;
 import org.openmrs.Concept;
 import org.openmrs.ConceptSet;
 import org.openmrs.api.context.Context;
-import org.openmrs.util.OpenmrsUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -305,70 +301,7 @@ public class ChartSearchAiUtils {
 	 *         or the file does not exist
 	 */
 	public static String resolveModelPath(String relativePath, String globalPropertyName) {
-		if (relativePath == null || relativePath.trim().isEmpty()) {
-			throw new IllegalStateException(
-					"Model path is not configured: " + globalPropertyName);
-		}
-		if (relativePath.contains("..")) {
-			throw new IllegalStateException(
-					"Model path must not contain '..': " + globalPropertyName);
-		}
-
-		File appDataDir = new File(OpenmrsUtil.getApplicationDataDirectory());
-		File modelFile = new File(appDataDir, relativePath);
-
-		try {
-			String canonicalPath = modelFile.getCanonicalPath();
-			String canonicalDataDir = appDataDir.getCanonicalPath();
-			if (!canonicalPath.startsWith(canonicalDataDir + File.separator)) {
-				throw new IllegalStateException(
-						"Model path must resolve to within the OpenMRS application data directory: "
-								+ globalPropertyName);
-			}
-		}
-		catch (IOException e) {
-			throw new IllegalStateException(
-					"Failed to resolve model path for " + globalPropertyName, e);
-		}
-
-		if (!modelFile.exists()) {
-			throw new IllegalStateException(
-					"Model file not found: " + modelFile.getAbsolutePath()
-							+ ". Set the correct relative path in " + globalPropertyName);
-		}
-
-		removeQuarantineAttribute(modelFile.toPath());
-
-		return modelFile.getAbsolutePath();
-	}
-
-	/**
-	 * Removes the macOS quarantine extended attribute from a file if present.
-	 * Downloaded files on macOS are tagged with {@code com.apple.quarantine},
-	 * which prevents native libraries (e.g. llama.cpp, ONNX Runtime) from
-	 * loading them. Uses the {@code xattr} command because Java's
-	 * {@link UserDefinedFileAttributeView} only covers the {@code user.}
-	 * namespace and cannot access Apple system attributes.
-	 * This is a no-op on non-macOS systems.
-	 */
-	static void removeQuarantineAttribute(Path path) {
-		if (!System.getProperty("os.name", "").toLowerCase().contains("mac")) {
-			return;
-		}
-		try {
-			Process process = new ProcessBuilder(
-					"xattr", "-d", "com.apple.quarantine", path.toString())
-					.redirectErrorStream(true)
-					.start();
-			int exitCode = process.waitFor();
-			if (exitCode == 0) {
-				log.info("Removed macOS quarantine attribute from {}", path);
-			}
-		}
-		catch (IOException | InterruptedException e) {
-			log.warn("Failed to remove macOS quarantine attribute from {}: {}",
-					path, e.getMessage());
-		}
+		return ModelFileResolver.resolveModelPath(relativePath, globalPropertyName);
 	}
 
 	/**
