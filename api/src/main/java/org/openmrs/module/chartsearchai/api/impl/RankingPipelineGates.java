@@ -65,11 +65,11 @@ final class RankingPipelineGates {
 		}
 		boolean belowFloorRescued = false;
 		if (queryTermCount > 0
-				&& SimilarityAndScoringEngine.hasStatisticalVariance(scored)
+				&& ScoreStatistics.hasStatisticalVariance(scored)
 				&& keywordMatchCount < ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
-			double zScore = SimilarityAndScoringEngine.computeSemanticZScore(scored, maxSemanticScore);
+			double zScore = ScoreStatistics.computeSemanticZScore(scored, maxSemanticScore);
 			double floorRescueZThreshold =
-					SimilarityAndScoringEngine.floorRescueGumbelThreshold(scored);
+					ScoreStatistics.floorRescueGumbelThreshold(scored);
 			if (zScore >= floorRescueZThreshold) {
 				// Verify the signal comes from a genuine cluster, not
 				// an isolated outlier. Count records within a tight band
@@ -200,14 +200,14 @@ final class RankingPipelineGates {
 			double maxSemanticScore, int queryTermCount,
 			int keywordMatchCount, double maxZScoreThreshold) {
 		double[] result = { -1, -1 };
-		if (queryTermCount <= 0 || !SimilarityAndScoringEngine.hasStatisticalVariance(scored)) {
+		if (queryTermCount <= 0 || !ScoreStatistics.hasStatisticalVariance(scored)) {
 			return result;
 		}
 		if (keywordMatchCount >= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
 			return result;
 		}
-		double zScore = SimilarityAndScoringEngine.computeSemanticZScore(scored, maxSemanticScore);
-		double threshold = SimilarityAndScoringEngine.effectiveGumbelThreshold(scored);
+		double zScore = ScoreStatistics.computeSemanticZScore(scored, maxSemanticScore);
+		double threshold = ScoreStatistics.effectiveGumbelThreshold(scored);
 		// Allow model-specific configs to cap the threshold for
 		// compressed-score models where the Gumbel threshold is too
 		// aggressive.
@@ -475,7 +475,7 @@ final class RankingPipelineGates {
 			candidates = Collections.emptyList();
 		}
 		if (!tightClusterDetected && !candidates.isEmpty()
-				&& SimilarityAndScoringEngine.hasStatisticalVariance(scored)) {
+				&& ScoreStatistics.hasStatisticalVariance(scored)) {
 			double sum = 0;
 			for (ScoredEmbedding se : scored) {
 				sum += se.semanticScore;
@@ -498,9 +498,9 @@ final class RankingPipelineGates {
 						: zScores[zScores.length / 2];
 				double clusterZThreshold;
 				if (candidates.size() <= 3) {
-					clusterZThreshold = SimilarityAndScoringEngine.clusterGumbelThreshold(scored);
+					clusterZThreshold = ScoreStatistics.clusterGumbelThreshold(scored);
 				} else {
-					clusterZThreshold = SimilarityAndScoringEngine.medianGumbelThreshold(scored);
+					clusterZThreshold = ScoreStatistics.medianGumbelThreshold(scored);
 				}
 				log.debug("Phase2 z-score: mean={}, std={}, z={} ({}), threshold={}, tightCluster={}, candidates={}",
 						String.format("%.4f", mean),

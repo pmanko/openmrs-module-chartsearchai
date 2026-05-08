@@ -550,7 +550,7 @@ final class CoherenceFilters {
 			}
 		}
 		double semanticFloor = maxSemantic
-				* SimilarityAndScoringEngine.refinementSemanticRatio(candidates);
+				* ScoreStatistics.refinementSemanticRatio(candidates);
 
 		List<ScoredEmbedding> filtered = new ArrayList<ScoredEmbedding>();
 		for (ScoredEmbedding se : candidates) {

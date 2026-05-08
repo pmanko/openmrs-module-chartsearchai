@@ -130,8 +130,8 @@ final class RefinementPaths {
 			if (nonKeyword.size() >= ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS) {
 				double maxSemNk = nonKeyword.get(0).semanticScore;
 				double nkMinGap = Math.max(
-						maxSemNk * SimilarityAndScoringEngine.refinementAdaptiveGapRatio(scored),
-						SimilarityAndScoringEngine.secondPassMinGap(scored));
+						maxSemNk * ScoreStatistics.refinementAdaptiveGapRatio(scored),
+						ScoreStatistics.secondPassMinGap(scored));
 				coreCutoff = EmbeddingRankingPipeline.findAdaptiveCutoff(nonKeyword, nonKeyword.size(),
 						config.noiseProfile.absoluteSimilarityFloor(),
 						config.scoreGapMultiplier, nkMinGap);
@@ -309,7 +309,7 @@ final class RefinementPaths {
 						}
 					}
 					double semFloor = maxSemanticKw
-							* SimilarityAndScoringEngine.refinementSemanticRatio(candidates);
+							* ScoreStatistics.refinementSemanticRatio(candidates);
 					List<ScoredEmbedding> filtered = new ArrayList<ScoredEmbedding>();
 					for (ScoredEmbedding se : candidates) {
 						if (se.semanticScore >= semFloor) {
@@ -352,8 +352,8 @@ final class RefinementPaths {
 				}
 			}
 			double adaptiveMinGap = Math.max(
-					maxSemanticRefined * SimilarityAndScoringEngine.refinementAdaptiveGapRatio(scored),
-					SimilarityAndScoringEngine.secondPassMinGap(scored));
+					maxSemanticRefined * ScoreStatistics.refinementAdaptiveGapRatio(scored),
+					ScoreStatistics.secondPassMinGap(scored));
 			int refinedCutoff = EmbeddingRankingPipeline.findAdaptiveCutoff(candidates,
 					candidates.size(), minScore,
 					config.scoreGapMultiplier, adaptiveMinGap);
@@ -361,7 +361,7 @@ final class RefinementPaths {
 				if (CoherenceFilters.isGapCoherent(candidates, refinedCutoff,
 						config.gapValidationCosineThreshold)) {
 					double semanticFloor = maxSemanticRefined
-							* SimilarityAndScoringEngine.refinementSemanticRatio(candidates);
+							* ScoreStatistics.refinementSemanticRatio(candidates);
 					List<ScoredEmbedding> floored = new ArrayList<ScoredEmbedding>();
 					for (ScoredEmbedding se : candidates) {
 						if (se.semanticScore >= semanticFloor) {
@@ -416,7 +416,7 @@ final class RefinementPaths {
 		// distribution's std.
 		int secondCutoff = EmbeddingRankingPipeline.findAdaptiveCutoff(candidates, candidates.size(),
 				minScore, config.scoreGapMultiplier,
-				SimilarityAndScoringEngine.secondPassMinGap(scored));
+				ScoreStatistics.secondPassMinGap(scored));
 		if (secondCutoff < candidates.size()) {
 			if (CoherenceFilters.isGapCoherent(candidates, secondCutoff,
 					config.gapValidationCosineThreshold)) {
