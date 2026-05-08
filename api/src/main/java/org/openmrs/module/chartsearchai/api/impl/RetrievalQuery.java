@@ -393,7 +393,7 @@ final class RetrievalQuery {
 				&& keywordMatchCount == 0 && queryTerms.length > 0) {
 			List<ChartEmbedding> preGateCandidates = pipelineResult;
 			int beforeRerank = pipelineResult.size();
-			pipelineResult = ConceptRescueAndFilter.rerankByConceptName(pipelineResult,
+			pipelineResult = ConceptNameReranker.rerankByConceptName(pipelineResult,
 					embeddings, validCount, queryVector, provider,
 					noiseProfile, profiledConfig, noTypeMatch);
 			if (pipelineResult.size() != beforeRerank) {
