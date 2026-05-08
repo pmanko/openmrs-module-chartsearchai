@@ -9,17 +9,10 @@
  */
 package org.openmrs.module.chartsearchai.api.impl;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Consumer;
-
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.openmrs.api.context.Context;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
@@ -304,131 +297,20 @@ public class LlmProvider {
 	}
 
 	static LlmResponse extractResponse(String response, int inputTokens, int outputTokens) {
-		return extractResponse(response, inputTokens, outputTokens, 0);
+		return LlmAnswerExtractor.extractResponse(response, inputTokens, outputTokens);
 	}
 
 	static LlmResponse extractResponse(String response, int inputTokens, int outputTokens,
 			int cachedTokens) {
-		LlmResponse parsed = extractResponse(response);
-		return new LlmResponse(parsed.getAnswer(), parsed.getCitations(),
-				inputTokens, outputTokens, cachedTokens);
+		return LlmAnswerExtractor.extractResponse(response, inputTokens, outputTokens, cachedTokens);
 	}
 
-	private static final ObjectMapper MAPPER = new ObjectMapper();
-
-	private static final Pattern SLASH_CITATION = Pattern.compile("\\[(\\d+(?:/\\d+)+)\\]");
-
-	/**
-	 * Matches the JSON "answer" value — captures the string content (may be truncated).
-	 * Possessive quantifiers ({@code ++}) prevent backtracking, so this stays stack-safe
-	 * even on long truncated answers (the regex engine recurses per alternation choice
-	 * point with normal {@code *}).
-	 */
-	private static final Pattern ANSWER_VALUE = Pattern.compile(
-			"\"answer\"\\s*+:\\s*+\"((?:[^\"\\\\]++|\\\\.)*+)\"?+");
-
-	/** Matches a bare integer inside a citations array. */
-	private static final Pattern CITATION_NUMBER = Pattern.compile("(?:^|[,\\[])\\s*(\\d+)");
-
 	static LlmResponse extractResponse(String response) {
-		String trimmed = response.trim();
-		if (trimmed.isEmpty()) {
-			return new LlmResponse(trimmed, Collections.emptyList());
-		}
-
-		// Strip markdown code fences that some models (e.g. Gemma) wrap
-		// around JSON output: ```json\n{...}\n``` or ```\n{...}\n```
-		if (trimmed.startsWith("```")) {
-			int firstNewline = trimmed.indexOf('\n');
-			if (firstNewline > 0) {
-				trimmed = trimmed.substring(firstNewline + 1);
-			}
-			if (trimmed.endsWith("```")) {
-				trimmed = trimmed.substring(0, trimmed.length() - 3).trim();
-			}
-		}
-
-		try {
-			JsonNode root = MAPPER.readTree(trimmed);
-			JsonNode answerNode = root.get("answer");
-			if (answerNode != null && answerNode.isTextual()) {
-				String answer = normalizeSlashCitations(answerNode.asText().trim());
-				List<Integer> citations = new ArrayList<>();
-				JsonNode citationsNode = root.get("citations");
-				if (citationsNode != null && citationsNode.isArray()) {
-					for (JsonNode n : citationsNode) {
-						if (n.isInt()) {
-							citations.add(n.asInt());
-						}
-					}
-				}
-				return new LlmResponse(answer, citations);
-			}
-		}
-		catch (IOException e) {
-			log.warn("LLM response did not parse as JSON (possibly truncated), "
-					+ "attempting regex extraction");
-		}
-
-		// Fallback: extract the answer value using regex when the JSON is
-		// malformed or truncated (e.g. LLM ran out of output tokens before
-		// closing the citations array). This mirrors what
-		// AnswerExtractingConsumer does for streaming.
-		try {
-			Matcher answerMatcher = ANSWER_VALUE.matcher(trimmed);
-			if (answerMatcher.find()) {
-				String raw = answerMatcher.group(1);
-				// Unescape JSON string escapes
-				String answer = raw.replace("\\n", "\n")
-						.replace("\\t", "\t")
-						.replace("\\\"", "\"")
-						.replace("\\\\/", "/")
-						.replace("\\\\", "\\");
-				answer = normalizeSlashCitations(answer.trim());
-				// Try to extract citations from whatever was produced
-				List<Integer> citations = new ArrayList<>();
-				int citationsStart = trimmed.indexOf("\"citations\"");
-				if (citationsStart >= 0) {
-					Matcher numMatcher = CITATION_NUMBER.matcher(
-							trimmed.substring(citationsStart));
-					while (numMatcher.find()) {
-						citations.add(Integer.parseInt(numMatcher.group(1)));
-					}
-				}
-				return new LlmResponse(answer, citations);
-			}
-		}
-		catch (StackOverflowError e) {
-			// Defensive backstop — the possessive-quantifier regex shouldn't recurse,
-			// but if a future edit reintroduces a recursive alternation we'd rather
-			// return the raw text than 500 the request.
-			log.warn("Regex fallback overflowed the stack on {}-char response; "
-					+ "returning raw text", trimmed.length());
-		}
-
-		return new LlmResponse(trimmed, Collections.emptyList());
+		return LlmAnswerExtractor.extractResponse(response);
 	}
 
 	static String normalizeSlashCitations(String text) {
-		Matcher matcher = SLASH_CITATION.matcher(text);
-		if (!matcher.find()) {
-			return text;
-		}
-		StringBuffer sb = new StringBuffer();
-		matcher.reset();
-		while (matcher.find()) {
-			String[] parts = matcher.group(1).split("/");
-			StringBuilder replacement = new StringBuilder();
-			for (int i = 0; i < parts.length; i++) {
-				if (i > 0) {
-					replacement.append(", ");
-				}
-				replacement.append("[").append(parts[i]).append("]");
-			}
-			matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement.toString()));
-		}
-		matcher.appendTail(sb);
-		return sb.toString();
+		return LlmAnswerExtractor.normalizeSlashCitations(text);
 	}
 
 	static class LlmResponse {
