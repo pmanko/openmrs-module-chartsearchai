@@ -457,7 +457,7 @@ public class LocalLlmEngine implements LlmEngine {
 
 	String buildRequestBody(String systemPrompt, String userMessage, boolean stream) {
 		return buildRequestBody(systemPrompt, userMessage, stream,
-				ChartSearchAiConstants.DEFAULT_MAX_TOKENS);
+				ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS);
 	}
 
 	String buildRequestBody(String systemPrompt, String userMessage, boolean stream,

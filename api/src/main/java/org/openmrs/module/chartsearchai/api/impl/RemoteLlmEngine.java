@@ -160,7 +160,7 @@ public class RemoteLlmEngine implements LlmEngine {
 		} else {
 			root.put("temperature", 0.0);
 		}
-		root.put("max_tokens", ChartSearchAiConstants.DEFAULT_MAX_TOKENS);
+		root.put("max_tokens", ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS);
 		root.put("stream", stream);
 		if (stream) {
 			ObjectNode streamOptions = MAPPER.createObjectNode();
