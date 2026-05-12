@@ -15,7 +15,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.Arrays;
 
 import org.junit.jupiter.api.Test;
-import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 
 /**
  * Pure unit tests for {@link LlmProvider} response parsing and configuration logic.
@@ -157,12 +156,6 @@ public class LlmProviderTest {
 		String response = "{\"answer\": \"The patient has HIV/AIDS [1] and nausea/vomiting [2].\", \"citations\": [1, 2]}";
 		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
 		assertEquals("The patient has HIV/AIDS [1] and nausea/vomiting [2].", result.getAnswer());
-	}
-
-	@Test
-	public void defaultRepeatPenalty_shouldBeDisabledToAllowFullEnumeration() {
-		assertEquals(1.0f, ChartSearchAiConstants.DEFAULT_REPEAT_PENALTY,
-				"Repeat penalty must be 1.0 (disabled) to allow complete enumeration");
 	}
 
 	@Test

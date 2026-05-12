@@ -263,8 +263,6 @@ public class ChartSearchAiConstants {
 
 	public static final int DEFAULT_LLM_MAX_OUTPUT_TOKENS = 4096;
 
-	public static final float DEFAULT_REPEAT_PENALTY = 1.0f;
-
 	public static final String GP_RATE_LIMIT_PER_MINUTE = "chartsearchai.rateLimitPerMinute";
 
 	public static final int DEFAULT_RATE_LIMIT_PER_MINUTE = 10;
