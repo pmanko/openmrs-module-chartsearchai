@@ -480,16 +480,19 @@ public class LocalLlmEngine implements LlmEngine {
 		samplers.add("temperature");
 		root.set("samplers", samplers);
 		// DRY parameters tuned for extractive QA over patient charts: penalize
-		// n-gram repeats of length >= 4 (catastrophic loops are 5+ token sequences
-		// like ", Ovarian cyst, Zika virus disease, Haemoglobin: 15.8 g/dL (HIGH),"
-		// repeated hundreds of times). At allowed_length=2 the penalty fires on
-		// 2-token date prefixes like "2026-02" present in the chart context,
-		// forcing the model to fabricate dates like 2027-02-27 or insert spaces
-		// inside dates ("20 27-02-27") to dodge the penalty. allowed_length=4
-		// catches the long loops while leaving date and identifier n-grams alone.
+		// n-gram repeats of length >= 8. Catastrophic loops observed in the
+		// 14-model benchmark were all 10+ token sequences ("Ovarian cyst, Zika
+		// virus disease, Haemoglobin: 15.8 g/dL (HIGH)," is ~18 tokens; "On
+		// 2024-02-28, the patient had a high temperature" is 15+). At
+		// allowed_length=4 the penalty fired on 4-7 token date n-grams in the
+		// chart context (e.g. "on 2023-05-04 [") and forced the model to drift
+		// to neighboring digits (2023-05-04 -> 2023-05-03, 2026-02-28 ->
+		// 2026-02-18) or switch scripts to dodge ("Serum potassium" -> "Serum
+		// पोटेशियम"). allowed_length=8 keeps the loop-catching margin while
+		// letting date and identifier n-grams pass through unchanged.
 		root.put("dry_multiplier", 0.8);
 		root.put("dry_base", 1.75);
-		root.put("dry_allowed_length", 4);
+		root.put("dry_allowed_length", 8);
 		root.put("dry_penalty_last_n", -1);
 		// llama.cpp-specific extension. Without it, each request reprocesses the
 		// whole prompt from scratch, so successive queries on the same patient

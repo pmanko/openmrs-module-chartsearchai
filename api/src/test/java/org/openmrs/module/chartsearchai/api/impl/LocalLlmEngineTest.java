@@ -106,11 +106,12 @@ public class LocalLlmEngineTest {
 		assertEquals("dry", samplers.get(0).asText());
 		assertEquals("temperature", samplers.get(1).asText());
 
-		assertEquals(4, root.get("dry_allowed_length").asInt(),
-				"dry_allowed_length=4 only penalizes n-gram repeats of 4+ tokens. Shorter "
-				+ "values (2-3) catch legitimate date prefixes like \"2026-02\" in the chart "
-				+ "context and force the model to fabricate dates or insert space tokens "
-				+ "inside dates to dodge the penalty");
+		assertEquals(8, root.get("dry_allowed_length").asInt(),
+				"dry_allowed_length=8 catches the 10+ token catastrophic loops the small "
+				+ "models exhibit on chart search while leaving 4-7 token date n-grams "
+				+ "like \"on 2023-05-04 [\" alone. Lower values (e.g. 4) penalize the "
+				+ "model for emitting dates that appear repeatedly in chart context, "
+				+ "causing digit drift (2023-05-04 -> 2023-05-03) and script-switching");
 		assertEquals(-1, root.get("dry_penalty_last_n").asInt(),
 				"dry_penalty_last_n=-1 looks at the full sequence for repeats, so a loop "
 				+ "started near the prompt end is still caught after generation grows past "
