@@ -10,6 +10,7 @@
 package org.openmrs.module.chartsearchai.api.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
@@ -42,6 +43,18 @@ public class LlmProviderTest {
 				"System prompt must instruct LLM to include ALL relevant records");
 		assertTrue(LlmProvider.DEFAULT_SYSTEM_PROMPT.contains("never omit"),
 				"System prompt must explicitly tell LLM not to omit records for brevity");
+	}
+
+	@Test
+	public void defaultSystemPrompt_shouldDescribeRecordOrderingAccurately() {
+		// PatientRecordLoader sorts records by date descending (nullsLast) and
+		// nothing else — there is no per-type grouping pass. The prompt must
+		// describe this accurately so the LLM's mental model of the input
+		// matches the actual structure.
+		assertTrue(LlmProvider.DEFAULT_SYSTEM_PROMPT.contains("most recent first"),
+				"System prompt must describe records as sorted most recent first");
+		assertFalse(LlmProvider.DEFAULT_SYSTEM_PROMPT.contains("grouped by type"),
+				"System prompt must not claim records are grouped by type — they are not");
 	}
 
 	@Test

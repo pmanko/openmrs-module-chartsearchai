@@ -34,7 +34,7 @@ public class LlmProvider {
 
 	static final String DEFAULT_SYSTEM_PROMPT = "You are a clinical assistant helping a clinician "
 			+ "review a patient's chart. Answer ONLY the specific query. "
-			+ "Use only the patient records below (grouped by type, most recent first within each group). "
+			+ "Use only the patient records below (sorted most recent first). "
 			+ "Never infer, assume, or add information not explicitly stated in the records. "
 			+ "Include ALL relevant records in your answer — never omit any for brevity. "
 			+ "Cite EVERY record you reference by its number in brackets (e.g. [1], [3]). "
