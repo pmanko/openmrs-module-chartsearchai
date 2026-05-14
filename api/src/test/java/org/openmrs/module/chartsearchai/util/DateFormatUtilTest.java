@@ -10,8 +10,10 @@
 package org.openmrs.module.chartsearchai.util;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.LocalDate;
 import java.util.Calendar;
 import java.util.Date;
 
@@ -39,5 +41,16 @@ public class DateFormatUtilTest {
 		Date epoch = new Date(0);
 		String result = DateFormatUtil.formatDate(epoch);
 		assertTrue(result.matches("\\d{4}-\\d{2}-\\d{2}"));
+	}
+
+	@Test
+	public void toLegacyDate_shouldReturnNullForNull() {
+		assertNull(DateFormatUtil.toLegacyDate(null));
+	}
+
+	@Test
+	public void toLegacyDate_shouldRoundTripThroughFormatDateInAnyJvmZone() {
+		LocalDate date = LocalDate.of(2024, 1, 15);
+		assertEquals("2024-01-15", DateFormatUtil.formatDate(DateFormatUtil.toLegacyDate(date)));
 	}
 }

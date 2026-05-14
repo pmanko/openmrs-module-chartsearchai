@@ -51,6 +51,23 @@ final class PipelineSettings {
 		return ChartSearchAiConstants.DEFAULT_RETRIEVAL_TOP_K;
 	}
 
+	static int getQueryStoreTopK() {
+		String value = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_QUERYSTORE_TOP_K);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				int parsed = Integer.parseInt(value.trim());
+				if (parsed > 0) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid queryStoreTopK value '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_QUERYSTORE_TOP_K;
+	}
+
 	static double getSimilarityRatio() {
 		String value = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_SIMILARITY_RATIO);

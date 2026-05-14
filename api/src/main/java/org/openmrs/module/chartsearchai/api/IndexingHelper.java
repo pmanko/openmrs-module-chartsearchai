@@ -11,6 +11,7 @@ package org.openmrs.module.chartsearchai.api;
 
 import org.openmrs.Patient;
 import org.openmrs.api.context.Context;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,6 +24,13 @@ import org.slf4j.LoggerFactory;
 final class IndexingHelper {
 
 	private static final Logger log = LoggerFactory.getLogger(IndexingHelper.class);
+
+	/** When the querystore migration flag is on, querystore owns indexing
+	 *  and chartsearchai's AOP + backfill become no-ops to avoid double
+	 *  indexing. */
+	static boolean isDisabledByQueryStore() {
+		return ChartSearchAiUtils.isQueryStoreEnabled();
+	}
 
 	static void reindexOtherPipelines(Patient patient) {
 		if (patient == null) {

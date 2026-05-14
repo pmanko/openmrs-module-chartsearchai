@@ -198,6 +198,14 @@ public class ChartSearchAiConstants {
 
 	public static final String PIPELINE_HYBRID = "hybrid";
 
+	public static final String GP_QUERYSTORE_ENABLED = "chartsearchai.querystore.enabled";
+
+	/** Separate from {@link #GP_EMBEDDING_TOP_K} so the querystore path
+	 *  can be tuned independently of the legacy pipelines. */
+	public static final String GP_QUERYSTORE_TOP_K = "chartsearchai.querystore.topK";
+
+	public static final int DEFAULT_QUERYSTORE_TOP_K = 30;
+
 	/** Fetch multiplier for the Elasticsearch pipeline. The ES pipeline
 	 * requests {@code topK * ES_FETCH_MULTIPLIER} results from the search
 	 * engine, then passes all of them through the filter pipeline. This

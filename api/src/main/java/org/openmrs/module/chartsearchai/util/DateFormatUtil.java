@@ -9,7 +9,9 @@
  */
 package org.openmrs.module.chartsearchai.util;
 
+import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Date;
 
@@ -28,5 +30,12 @@ public final class DateFormatUtil {
 			return "unknown";
 		}
 		return date.toInstant().atZone(ZoneId.of("UTC")).toLocalDate().format(DATE_FORMAT);
+	}
+
+	public static Date toLegacyDate(LocalDate date) {
+		if (date == null) {
+			return null;
+		}
+		return Date.from(date.atStartOfDay(ZoneOffset.UTC).toInstant());
 	}
 }

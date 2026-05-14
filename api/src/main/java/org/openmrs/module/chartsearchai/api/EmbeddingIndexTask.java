@@ -56,6 +56,11 @@ public class EmbeddingIndexTask extends AbstractTask {
 	}
 
 	private void doExecute() {
+		if (IndexingHelper.isDisabledByQueryStore()) {
+			log.info("QueryStore migration flag is on, skipping chartsearchai backfill");
+			return;
+		}
+
 		String preFilter = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
 		if ("false".equalsIgnoreCase(preFilter.trim())) {

@@ -13,6 +13,7 @@ import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.ADAPTIVE_M
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.COHERENCE_ADAPTIVE_GAP_RATIO;
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.COHERENCE_REFERENCE_N;
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.COHERENCE_SAME_TOPIC_FLOOR;
+import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.GP_QUERYSTORE_ENABLED;
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.PIPELINE_HYBRID;
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.PIPELINE_LUCENE;
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.RESOURCE_TYPE_ALLERGY;
@@ -469,6 +470,12 @@ public class ChartSearchAiUtils {
 		String trimmed = pipeline.trim();
 		return PIPELINE_LUCENE.equalsIgnoreCase(trimmed)
 				|| PIPELINE_HYBRID.equalsIgnoreCase(trimmed);
+	}
+
+	public static boolean isQueryStoreEnabled() {
+		String value = org.openmrs.api.context.Context.getAdministrationService()
+				.getGlobalProperty(GP_QUERYSTORE_ENABLED, "false");
+		return "true".equalsIgnoreCase(value.trim());
 	}
 
 	private ChartSearchAiUtils() {

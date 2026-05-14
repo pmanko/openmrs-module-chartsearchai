@@ -83,6 +83,10 @@ class ChartBuildingStrategy {
 	@Qualifier("chartSearchAi.chartCache")
 	private ChartCache chartCache;
 
+	@Autowired
+	@Qualifier("chartSearchAi.queryStoreChartBuilder")
+	private QueryStoreChartBuilder queryStoreChartBuilder;
+
 	private final ConcurrentHashMap<String, ModelNoiseProfile> noiseProfileCache =
 			new ConcurrentHashMap<String, ModelNoiseProfile>();
 
@@ -96,6 +100,10 @@ class ChartBuildingStrategy {
 	}
 
 	PatientChart buildChart(Patient patient, String question) {
+		if (ChartSearchAiUtils.isQueryStoreEnabled()) {
+			return queryStoreChartBuilder.build(patient, question);
+		}
+
 		if (!usePreFilter()) {
 			PatientChart cached = chartCache.get(patient);
 			if (cached != null) {

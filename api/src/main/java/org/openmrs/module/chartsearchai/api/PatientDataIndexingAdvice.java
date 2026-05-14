@@ -82,6 +82,10 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 			ChartCacheInvalidator.invalidate(patient);
 		}
 
+		if (IndexingHelper.isDisabledByQueryStore()) {
+			return;
+		}
+
 		String preFilter = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
 		if ("false".equalsIgnoreCase(preFilter.trim())) {
