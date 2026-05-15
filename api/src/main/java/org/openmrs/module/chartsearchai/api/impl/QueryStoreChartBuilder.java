@@ -59,9 +59,10 @@ class QueryStoreChartBuilder {
 			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
 
+		String preprocessedQuestion = QueryPreprocessor.stripQueryStopwords(question);
 		List<QueryDocument> hits;
 		try {
-			hits = queryStore.searchByPatient(patient.getUuid(), question,
+			hits = queryStore.searchByPatient(patient.getUuid(), preprocessedQuestion,
 					PipelineSettings.getQueryStoreTopK());
 		}
 		catch (RuntimeException e) {
