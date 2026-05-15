@@ -138,6 +138,18 @@
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.querystore.enabled</property>
+		<defaultValue>false</defaultValue>
+		<description>Master switch for the querystore-backed retrieval path. When true, chartsearchai delegates retrieval to openmrs-module-querystore via QueryStoreService.searchByPatient and sends the top-K results to the LLM, bypassing chartsearchai's embedding pipelines. Requires the querystore module to be installed; if absent, the flag-on path degrades to an empty chart. Also suppresses chartsearchai's AOP indexing and the EmbeddingIndexTask backfill to avoid double-indexing (chart cache invalidation still runs). Default: false. See chartsearchai.querystore.topK for the result cap.</description>
+	</globalProperty>
+
+	<globalProperty>
+		<property>chartsearchai.querystore.topK</property>
+		<defaultValue>30</defaultValue>
+		<description>Number of top results to request from the querystore when chartsearchai.querystore.enabled is true. Separate from chartsearchai.embedding.topK so the querystore path can be tuned independently of the legacy pipelines. Default: 30.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.embedding.similarityRatio</property>
 		<defaultValue>0.80</defaultValue>
 		<description>Minimum similarity score as a fraction of the top result's score. Records scoring below this ratio are excluded even if within the topK limit. For example, 0.80 means a record must have at least 80% of the best match's similarity score. Lower values include more records; higher values are more selective. Must be between 0 and 1. Default: 0.80.</description>
