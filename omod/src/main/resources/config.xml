@@ -16,6 +16,10 @@
 		<require_module version="2.44.0">org.openmrs.module.webservices.rest</require_module>
 	</require_modules>
 
+	<aware_of_modules>
+		<aware_of_module>org.openmrs.module.querystore</aware_of_module>
+	</aware_of_modules>
+
 	<!-- Module Activator -->
 	<activator>org.openmrs.module.chartsearchai.ChartSearchAiModuleActivator</activator>
 
