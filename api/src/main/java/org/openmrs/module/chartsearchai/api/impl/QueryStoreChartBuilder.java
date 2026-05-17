@@ -9,6 +9,8 @@
  */
 package org.openmrs.module.chartsearchai.api.impl;
 
+import java.lang.reflect.Method;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -22,31 +24,24 @@ import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
 import org.openmrs.module.chartsearchai.util.DateFormatUtil;
-import org.openmrs.module.querystore.api.QueryStoreService;
-import org.openmrs.module.querystore.model.QueryDocument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
- * Bridge to the querystore module's read API. Resolves the service lazily via
- * {@link Context#getService(Class)} so chartsearchai still starts when the
- * querystore omod isn't installed — lookup failure surfaces as an empty chart,
- * same outcome as a search returning no hits.
+ * Bridge to the querystore module's read API. Resolved reflectively so
+ * chartsearchai compiles and starts without the querystore-api jar on the
+ * classpath; absence surfaces as an empty chart, same outcome as a search
+ * returning no hits.
  *
- * <p>Always fetches the full patient chart via
- * {@link QueryStoreService#getPatientChart(String)} so the chart bytes sent to
- * the LLM are a function of the patient only — that's the property
- * llama-server's KV-cache reuse needs in order to skip ~99% of the prefill on
- * subsequent queries for the same patient. When
+ * <p>Always fetches the full patient chart via querystore's getPatientChart API
+ * so the chart bytes sent to the LLM are a function of the patient only —
+ * that's the property llama-server's KV-cache reuse needs in order to skip most
+ * of the prefill on subsequent queries for the same patient. When
  * {@code chartsearchai.embedding.preFilter=true} and the question is non-blank,
- * additionally calls {@link QueryStoreService#searchByPatient(String, String, int)}
- * to obtain a relevance ranking, then renders those hits as a short
- * "Records ranked by similarity to the query: ..." focus-hint line in the LLM prompt
- * (handled in {@code LlmProvider.buildUserMessage} via the
- * {@link PatientChart#getFocusIndices()} payload). The hint biases the LLM's
- * attention without removing records the LLM needs for negative reasoning.
+ * additionally calls querystore's searchByPatient API to obtain a relevance
+ * ranking, then renders those hits as a short focus-hint line in the LLM prompt.
  *
  * <p>The {@code protected resolve*} methods and the package-private
  * {@link #setChartSerializer} are test seams, not an extension point.
@@ -56,6 +51,10 @@ import org.springframework.stereotype.Component;
 class QueryStoreChartBuilder {
 
 	private static final Logger log = LoggerFactory.getLogger(QueryStoreChartBuilder.class);
+
+	private static final String QUERY_STORE_SERVICE_CLASS = "org.openmrs.module.querystore.api.QueryStoreService";
+
+	private static final String QUERY_DOCUMENT_CLASS = "org.openmrs.module.querystore.model.QueryDocument";
 
 	// Mode labels emitted in the [timing] querystoreBuild log lines so ops dashboards can
 	// distinguish the two dispatch shapes. preFilter mode does the extra searchByPatient
@@ -75,8 +74,7 @@ class QueryStoreChartBuilder {
 
 	/** Test seam: production wires {@link PatientChartSerializer} via {@link Autowired}.
 	 *  Package-private so {@code QueryStoreChartBuilderTest} can inject a real serializer
-	 *  without bringing up Spring; matches the {@code resolveX()} method-override seam
-	 *  pattern used for {@link QueryStoreService} and topK. */
+	 *  without bringing up Spring; matches the {@code resolveX()} method-override seam. */
 	void setChartSerializer(PatientChartSerializer chartSerializer) {
 		this.chartSerializer = chartSerializer;
 	}
@@ -92,7 +90,7 @@ class QueryStoreChartBuilder {
 			log.info("[timing] querystoreBuild patient={} mode={} hits=0 focusHits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=skipped",
 					patient == null ? null : patient.getPatientId(),
 					MODE_UNKNOWN, System.currentTimeMillis() - buildStart);
-			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
+			return emptyChart(patient);
 		}
 
 		boolean usePreFilter = resolveUsePreFilter();
@@ -100,40 +98,48 @@ class QueryStoreChartBuilder {
 		// dispatch (extra searchByPatient call) from plain fullChart dispatch.
 		String mode = usePreFilter ? MODE_PRE_FILTER : MODE_FULL_CHART;
 
-		QueryStoreService queryStore;
+		Class<?> serviceClass;
 		try {
-			queryStore = resolveQueryStoreService();
+			serviceClass = resolveQueryStoreServiceClass();
+		}
+		catch (ClassNotFoundException e) {
+			log.warn("chartsearchai.querystore.enabled=true but QueryStoreService class is unavailable — "
+					+ "install openmrs-module-querystore or set chartsearchai.querystore.enabled=false. "
+					+ "Returning empty chart.");
+			log.info("[timing] querystoreBuild patient={} mode={} hits=0 focusHits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=unavailable",
+					patient.getPatientId(), mode, System.currentTimeMillis() - buildStart);
+			return emptyChart(patient);
+		}
+
+		Object queryStore;
+		try {
+			queryStore = resolveQueryStoreService(serviceClass);
 		}
 		catch (APIException | LinkageError e) {
-			// LinkageError covers NoClassDefFoundError when the querystore-api jar
-			// is absent at runtime — the QueryStoreService.class literal forces
-			// JVM linkage, which APIException doesn't catch.
-			// WARN (not INFO): default org.openmrs.* log level is WARN, and a misconfigured
-			// querystore.enabled=true silently produces empty-chart LLM responses if this
-			// fires. Operators need this to surface, with an actionable next step.
 			log.warn("chartsearchai.querystore.enabled=true but QueryStoreService is unavailable — "
 					+ "install openmrs-module-querystore or set chartsearchai.querystore.enabled=false. "
 					+ "Returning empty chart.");
 			log.info("[timing] querystoreBuild patient={} mode={} hits=0 focusHits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=unavailable",
 					patient.getPatientId(), mode, System.currentTimeMillis() - buildStart);
-			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
+			return emptyChart(patient);
 		}
 
 		// Full chart first — this is what the LLM sees and what determines the KV-cache
 		// prefix. Always called regardless of mode so the chart bytes are a function of
 		// the patient only.
 		long rpcStart = System.currentTimeMillis();
-		List<QueryDocument> chartDocs;
+		List<?> chartDocs;
 		try {
-			chartDocs = queryStore.getPatientChart(patient.getUuid());
+			Method getPatientChart = serviceClass.getMethod("getPatientChart", String.class);
+			chartDocs = (List<?>) getPatientChart.invoke(queryStore, patient.getUuid());
 		}
-		catch (RuntimeException e) {
+		catch (ReflectiveOperationException | RuntimeException e) {
 			log.error("QueryStore.getPatientChart failed for patient [uuid={}]", patient.getUuid(), e);
 			long failMs = System.currentTimeMillis() - rpcStart;
 			log.info("[timing] querystoreBuild patient={} mode={} hits=0 focusHits=0 rpcMs={} serializeMs=0 totalMs={} outcome=error errorClass={}",
 					patient.getPatientId(), mode, failMs, System.currentTimeMillis() - buildStart,
 					e.getClass().getSimpleName());
-			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
+			return emptyChart(patient);
 		}
 
 		// Focus hint: only in preFilter mode, only with a non-blank question (searchByPatient
@@ -145,12 +151,14 @@ class QueryStoreChartBuilder {
 			try {
 				String preprocessedQuestion = QueryPreprocessor.stripQueryStopwords(question);
 				int topK = resolveQueryStoreTopK();
-				List<QueryDocument> hits = queryStore.searchByPatient(patient.getUuid(),
-						preprocessedQuestion, topK);
+				Method searchByPatient = serviceClass.getMethod(
+						"searchByPatient", String.class, String.class, int.class);
+				List<?> hits = (List<?>) searchByPatient.invoke(queryStore,
+						patient.getUuid(), preprocessedQuestion, topK);
 				focusUuids = collectFocusUuids(hits);
 				focusHits = focusUuids.size();
 			}
-			catch (RuntimeException e) {
+			catch (ReflectiveOperationException | RuntimeException e) {
 				// Focus-hint failure must not block the LLM call — the full chart is already
 				// fetched and is usable on its own (equivalent to fullChart mode). Log + fall
 				// through with empty focus.
@@ -173,14 +181,23 @@ class QueryStoreChartBuilder {
 	/** Collects {@code resource_uuid}s from a hit list, skipping nulls and malformed docs.
 	 *  These uuids are mapped to 1-based chart indices in {@code PatientChartSerializer.serialize}
 	 *  to render the LLM-facing focus hint. */
-	private Set<String> collectFocusUuids(List<QueryDocument> hits) {
+	private Set<String> collectFocusUuids(List<?> hits) {
 		if (hits == null || hits.isEmpty()) {
 			return Collections.<String>emptySet();
 		}
+		QueryDocumentAccess access;
+		try {
+			access = QueryDocumentAccess.resolve();
+		}
+		catch (ReflectiveOperationException e) {
+			log.error("QueryDocument accessors not resolvable (querystore-api shape changed?)", e);
+			return Collections.<String>emptySet();
+		}
 		Set<String> uuids = new HashSet<String>(hits.size() * 2);
-		for (QueryDocument doc : hits) {
-			if (doc != null && doc.getResourceUuid() != null) {
-				uuids.add(doc.getResourceUuid());
+		for (Object doc : hits) {
+			String resourceUuid = access.resourceUuid(doc, log);
+			if (resourceUuid != null) {
+				uuids.add(resourceUuid);
 			}
 		}
 		return uuids;
@@ -189,31 +206,40 @@ class QueryStoreChartBuilder {
 	/** Converts a querystore hit list into the chartsearchai serializer's input shape,
 	 *  dropping null and malformed docs with a WARN so operators can spot upstream
 	 *  serialization regressions without losing the rest of the chart. */
-	private List<SerializedRecord> toSerializedRecords(List<QueryDocument> docs) {
+	private List<SerializedRecord> toSerializedRecords(List<?> docs) {
 		if (docs == null || docs.isEmpty()) {
 			return Collections.<SerializedRecord>emptyList();
 		}
+		QueryDocumentAccess access;
+		try {
+			access = QueryDocumentAccess.resolve();
+		}
+		catch (ReflectiveOperationException e) {
+			log.error("QueryDocument accessors not resolvable (querystore-api shape changed?)", e);
+			return Collections.<SerializedRecord>emptyList();
+		}
 		List<SerializedRecord> out = new ArrayList<SerializedRecord>(docs.size());
-		for (QueryDocument doc : docs) {
+		for (Object doc : docs) {
 			if (doc == null) {
 				log.warn("Skipping null QueryDocument");
 				continue;
 			}
-			if (doc.getResourceType() == null || doc.getResourceUuid() == null) {
-				log.warn("Skipping malformed QueryDocument: type={} uuid={}",
-						doc.getResourceType(), doc.getResourceUuid());
-				continue;
+			SerializedRecord record = access.toSerializedRecord(doc, log);
+			if (record != null) {
+				out.add(record);
 			}
-			String text = doc.getText() == null ? "" : doc.getText();
-			out.add(new SerializedRecord(doc.getResourceType(), doc.getResourceUuid(),
-					text, DateFormatUtil.toLegacyDate(doc.getDate())));
 		}
 		return out;
 	}
 
+	/** Seam for tests: production resolves via reflection. */
+	protected Class<?> resolveQueryStoreServiceClass() throws ClassNotFoundException {
+		return Class.forName(QUERY_STORE_SERVICE_CLASS);
+	}
+
 	/** Seam for tests: production resolves via the OpenMRS context. */
-	protected QueryStoreService resolveQueryStoreService() {
-		return Context.getService(QueryStoreService.class);
+	protected Object resolveQueryStoreService(Class<?> serviceClass) {
+		return Context.getService(serviceClass);
 	}
 
 	/** Seam for tests: production reads the global property. */
@@ -224,5 +250,74 @@ class QueryStoreChartBuilder {
 	/** Seam for tests: production reads the global property. */
 	protected boolean resolveUsePreFilter() {
 		return PipelineSettings.usePreFilter();
+	}
+
+	private PatientChart emptyChart(Patient patient) {
+		return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
+	}
+
+	/**
+	 * Cached reflective accessors over {@code QueryDocument} methods. Looked
+	 * up once per build invocation (the resolution result isn't cached at
+	 * class level since the querystore-api jar may not be on the classpath
+	 * at chartsearchai start-up).
+	 */
+	private static final class QueryDocumentAccess {
+
+		private final Method getResourceType;
+
+		private final Method getResourceUuid;
+
+		private final Method getText;
+
+		private final Method getDate;
+
+		private QueryDocumentAccess(Method getResourceType, Method getResourceUuid,
+				Method getText, Method getDate) {
+			this.getResourceType = getResourceType;
+			this.getResourceUuid = getResourceUuid;
+			this.getText = getText;
+			this.getDate = getDate;
+		}
+
+		static QueryDocumentAccess resolve() throws ReflectiveOperationException {
+			Class<?> docClass = Class.forName(QUERY_DOCUMENT_CLASS);
+			return new QueryDocumentAccess(
+					docClass.getMethod("getResourceType"),
+					docClass.getMethod("getResourceUuid"),
+					docClass.getMethod("getText"),
+					docClass.getMethod("getDate"));
+		}
+
+		String resourceUuid(Object doc, Logger log) {
+			try {
+				return (String) getResourceUuid.invoke(doc);
+			}
+			catch (ReflectiveOperationException e) {
+				log.error("Failed to read QueryDocument resourceUuid", e);
+				return null;
+			}
+		}
+
+		SerializedRecord toSerializedRecord(Object doc, Logger log) {
+			try {
+				String resourceType = (String) getResourceType.invoke(doc);
+				String resourceUuid = (String) getResourceUuid.invoke(doc);
+				if (resourceType == null || resourceUuid == null) {
+					log.warn("Skipping malformed QueryDocument: type={} uuid={}",
+							resourceType, resourceUuid);
+					return null;
+				}
+				Object textObj = getText.invoke(doc);
+				String text = textObj == null ? "" : (String) textObj;
+				LocalDate date = (LocalDate) getDate.invoke(doc);
+				return new SerializedRecord(resourceType, resourceUuid, text,
+						DateFormatUtil.toLegacyDate(date));
+			}
+			catch (ReflectiveOperationException e) {
+				log.error("Failed to read QueryDocument fields", e);
+				return null;
+			}
+		}
 	}
 }
