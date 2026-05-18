@@ -108,18 +108,26 @@ public class LocalLlmEngine implements LlmEngine {
 	@Override
 	public synchronized InferenceResult infer(String systemPrompt, String userMessage,
 			int timeoutSeconds) {
+		return infer(ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage), timeoutSeconds);
+	}
+
+	@Override
+	public synchronized InferenceResult infer(ArrayNode messages, int timeoutSeconds) {
 		ensureServerRunning();
-		return postForResult(buildRequestBody(systemPrompt, userMessage, false), timeoutSeconds);
+		String requestBody = buildRequestBody(messages, false,
+				ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS);
+		return postForResult(requestBody, timeoutSeconds);
 	}
 
 	@Override
 	public synchronized InferenceResult infer(String systemPrompt, String userMessage,
 			int timeoutSeconds, ObjectNode responseFormat) {
 		ensureServerRunning();
-		String requestBody = responseFormat == null
-				? buildRequestBody(systemPrompt, userMessage, false)
-				: buildRequestBody(systemPrompt, userMessage, false,
-						ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS, responseFormat);
+		String requestBody = buildRequestBody(
+				ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage), false,
+				ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS,
+				responseFormat != null ? responseFormat
+						: ChartAnswerResponseFormat.build(MAPPER, resolveReasoningMaxChars()));
 		return postForResult(requestBody, timeoutSeconds);
 	}
 
@@ -168,9 +176,17 @@ public class LocalLlmEngine implements LlmEngine {
 	@Override
 	public synchronized InferenceResult inferStreaming(String systemPrompt, String userMessage,
 			int timeoutSeconds, Consumer<String> tokenConsumer) {
+		return inferStreaming(ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage),
+				timeoutSeconds, tokenConsumer);
+	}
+
+	@Override
+	public synchronized InferenceResult inferStreaming(ArrayNode messages, int timeoutSeconds,
+			Consumer<String> tokenConsumer) {
 		ensureServerRunning();
 
-		String requestBody = buildRequestBody(systemPrompt, userMessage, true);
+		String requestBody = buildRequestBody(messages, true,
+				ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS);
 
 		HttpRequest request = HttpRequest.newBuilder()
 				.uri(URI.create(getCompletionsUrl()))
@@ -491,7 +507,12 @@ public class LocalLlmEngine implements LlmEngine {
 
 	String buildRequestBody(String systemPrompt, String userMessage, boolean stream,
 			int maxTokens) {
-		return buildRequestBody(systemPrompt, userMessage, stream, maxTokens,
+		return buildRequestBody(ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage),
+				stream, maxTokens);
+	}
+
+	String buildRequestBody(ArrayNode messages, boolean stream, int maxTokens) {
+		return buildRequestBody(messages, stream, maxTokens,
 				ChartAnswerResponseFormat.build(MAPPER, resolveReasoningMaxChars()));
 	}
 
@@ -501,14 +522,14 @@ public class LocalLlmEngine implements LlmEngine {
 	}
 
 	/**
-	 * As {@link #buildRequestBody(String, String, boolean, int)} but with a caller-supplied
+	 * As {@link #buildRequestBody(ArrayNode, boolean, int)} but with a caller-supplied
 	 * {@code response_format} (e.g. the verdict-only {@link EntailmentBatchResponseFormat}) in
 	 * place of the default chart-answer schema. Every other field — temperature, the pinned
 	 * sampler chain, DRY penalties, {@code cache_prompt} — is identical, so KV-cache reuse and
 	 * decoding behaviour are unchanged.
 	 */
-	String buildRequestBody(String systemPrompt, String userMessage, boolean stream,
-			int maxTokens, ObjectNode responseFormat) {
+	String buildRequestBody(ArrayNode messages, boolean stream, int maxTokens,
+			ObjectNode responseFormat) {
 		ObjectNode root = MAPPER.createObjectNode();
 		root.put("temperature", 0.0);
 		root.put("max_tokens", maxTokens);
@@ -556,7 +577,7 @@ public class LocalLlmEngine implements LlmEngine {
 		}
 
 		root.set("response_format", responseFormat);
-		root.set("messages", ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage));
+		root.set("messages", messages);
 
 		try {
 			return MAPPER.writeValueAsString(root);

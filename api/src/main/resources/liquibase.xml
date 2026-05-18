@@ -105,4 +105,146 @@
 		</createIndex>
 	</changeSet>
 
+	<changeSet id="chartsearchai-003" author="openmrs">
+		<comment>Add feedback columns (rating and comment) to chartsearchai_audit_log</comment>
+		<addColumn tableName="chartsearchai_audit_log">
+			<column name="rating" type="varchar(10)"/>
+			<column name="feedback_comment" type="text"/>
+		</addColumn>
+	</changeSet>
+
+	<changeSet id="chartsearchai-004" author="openmrs">
+		<comment>Add token_count column to chartsearchai_audit_log for tracking LLM token usage per request</comment>
+		<addColumn tableName="chartsearchai_audit_log">
+			<column name="token_count" type="int"/>
+		</addColumn>
+	</changeSet>
+
+	<changeSet id="chartsearchai-005" author="openmrs">
+		<comment>Split token_count into separate input_tokens and output_tokens columns for accurate cost tracking</comment>
+		<addColumn tableName="chartsearchai_audit_log">
+			<column name="input_tokens" type="int"/>
+			<column name="output_tokens" type="int"/>
+		</addColumn>
+		<dropColumn tableName="chartsearchai_audit_log" columnName="token_count"/>
+	</changeSet>
+
+	<changeSet id="chartsearchai-006" author="openmrs">
+		<comment>
+			An earlier config.xml default pointed at "medgemma-1.5-4b-it.Q4_K_M.gguf" (dot before Q4_K_M).
+			OpenMRS only inserts a GP default when the row is missing; it never overwrites an existing
+			value. So instances that started up against the old default are stuck with a path that does
+			not match the canonical filename ("medgemma-1.5-4b-it-Q4_K_M.gguf", with hyphen) used by
+			the upstream GGUF release and by the in-image download script. Migrate that one stale value
+			only — leave any custom user-set path alone.
+		</comment>
+		<update tableName="global_property">
+			<column name="property_value" value="chartsearchai/medgemma-1.5-4b-it-Q4_K_M.gguf"/>
+			<where>property = 'chartsearchai.llm.modelFilePath'
+				AND property_value = 'chartsearchai/medgemma-1.5-4b-it.Q4_K_M.gguf'</where>
+		</update>
+	</changeSet>
+
+	<changeSet id="chartsearchai-007" author="openmrs">
+		<comment>
+			Multi-turn chat history. Two tables — a session header and the message rows.
+			Existing chartsearchai_audit_log is intentionally untouched: it remains the
+			regulatory audit-of-record (long retention). chartsearchai_chat_message holds
+			conversation content (shorter clinical-utility retention) and links to the
+			audit row via a nullable assistant-side FK.
+
+			Columns reserved for future capability without future migrations:
+			  - chat_message.parent_message_id  → branching / regenerate-answer
+			  - chat_message.is_summary         → context-window summarization
+			  - chat_message.finish_reason      → honest partial-stream / abort rows
+			  - chat_session.title              → LLM-generated thread titles
+			  - chat_session.status             → idle-close policy (POC default: persistent)
+		</comment>
+		<createTable tableName="chartsearchai_chat_session">
+			<column name="session_id" type="int" autoIncrement="true">
+				<constraints primaryKey="true" nullable="false"/>
+			</column>
+			<column name="uuid" type="char(38)">
+				<constraints nullable="false" unique="true"
+						uniqueConstraintName="uk_chartsearchai_chat_session_uuid"/>
+			</column>
+			<column name="patient_id" type="int">
+				<constraints nullable="false"/>
+			</column>
+			<column name="user_id" type="int">
+				<constraints nullable="false"/>
+			</column>
+			<column name="started_at" type="datetime">
+				<constraints nullable="false"/>
+			</column>
+			<column name="last_activity_at" type="datetime">
+				<constraints nullable="false"/>
+			</column>
+			<column name="ended_at" type="datetime"/>
+			<column name="title" type="varchar(200)"/>
+			<column name="status" type="varchar(20)" defaultValue="active">
+				<constraints nullable="false"/>
+			</column>
+		</createTable>
+		<addForeignKeyConstraint baseTableName="chartsearchai_chat_session" baseColumnNames="patient_id"
+				referencedTableName="patient" referencedColumnNames="patient_id"
+				constraintName="fk_chartsearchai_chat_session_patient"/>
+		<addForeignKeyConstraint baseTableName="chartsearchai_chat_session" baseColumnNames="user_id"
+				referencedTableName="users" referencedColumnNames="user_id"
+				constraintName="fk_chartsearchai_chat_session_user"/>
+		<createIndex tableName="chartsearchai_chat_session" indexName="idx_chartsearchai_chat_session_lookup">
+			<column name="patient_id"/>
+			<column name="user_id"/>
+			<column name="last_activity_at"/>
+		</createIndex>
+
+		<createTable tableName="chartsearchai_chat_message">
+			<column name="message_id" type="int" autoIncrement="true">
+				<constraints primaryKey="true" nullable="false"/>
+			</column>
+			<column name="uuid" type="char(38)">
+				<constraints nullable="false" unique="true"
+						uniqueConstraintName="uk_chartsearchai_chat_message_uuid"/>
+			</column>
+			<column name="session_id" type="int">
+				<constraints nullable="false"/>
+			</column>
+			<column name="parent_message_id" type="int"/>
+			<column name="ordinal" type="int">
+				<constraints nullable="false"/>
+			</column>
+			<column name="role" type="varchar(16)">
+				<constraints nullable="false"/>
+			</column>
+			<column name="content" type="mediumtext">
+				<constraints nullable="false"/>
+			</column>
+			<column name="created_at" type="datetime">
+				<constraints nullable="false"/>
+			</column>
+			<column name="audit_log_id" type="int"/>
+			<column name="input_tokens" type="int"/>
+			<column name="output_tokens" type="int"/>
+			<column name="is_summary" type="boolean" defaultValueBoolean="false">
+				<constraints nullable="false"/>
+			</column>
+			<column name="finish_reason" type="varchar(20)"/>
+		</createTable>
+		<addForeignKeyConstraint baseTableName="chartsearchai_chat_message" baseColumnNames="session_id"
+				referencedTableName="chartsearchai_chat_session" referencedColumnNames="session_id"
+				constraintName="fk_chartsearchai_chat_message_session"/>
+		<addForeignKeyConstraint baseTableName="chartsearchai_chat_message" baseColumnNames="parent_message_id"
+				referencedTableName="chartsearchai_chat_message" referencedColumnNames="message_id"
+				constraintName="fk_chartsearchai_chat_message_parent"/>
+		<addForeignKeyConstraint baseTableName="chartsearchai_chat_message" baseColumnNames="audit_log_id"
+				referencedTableName="chartsearchai_audit_log" referencedColumnNames="audit_log_id"
+				constraintName="fk_chartsearchai_chat_message_audit"/>
+		<addUniqueConstraint tableName="chartsearchai_chat_message" columnNames="session_id,ordinal"
+				constraintName="uk_chartsearchai_chat_message_ordinal"/>
+		<createIndex tableName="chartsearchai_chat_message" indexName="idx_chartsearchai_chat_message_session">
+			<column name="session_id"/>
+			<column name="created_at"/>
+		</createIndex>
+	</changeSet>
+
 </databaseChangeLog>

@@ -18,10 +18,12 @@ import java.util.function.Consumer;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.openmrs.api.context.Context;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.model.ChatMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -572,6 +574,65 @@ public class LlmProvider {
 					expectedCount);
 		}
 		return verdicts;
+	}
+
+	/**
+	 * Multi-turn variant: assembles {@code [system, ...priorTurns..., currentUser]}
+	 * with drop-oldest budget trimming via {@link ChatMessages#fromTurns} and
+	 * hands the prebuilt array to the engine.
+	 *
+	 * <p>Note: only the CURRENT user message carries the patient chart. Prior
+	 * user turns store just the original question text (not chart+question), so
+	 * the chart never appears twice in the message array and stale chart copies
+	 * never confuse the LLM if data changed between turns.
+	 */
+	public LlmResponse chat(String numberedRecords, List<ChatMessage> priorTurns, String question) {
+		String systemPrompt = getSystemPrompt();
+		String userMessage = buildUserMessage(numberedRecords, question);
+		int maxTokens = getMaxContextTokens();
+		ArrayNode messages = ChatMessages.fromTurns(MAPPER, systemPrompt, priorTurns, userMessage, maxTokens);
+		LlmEngine.InferenceResult result = getActiveEngine().infer(messages, getTimeoutSeconds());
+		return extractResponse(result.getText(), result.getInputTokens(), result.getOutputTokens(),
+				result.getCachedTokens());
+	}
+
+	/**
+	 * Streaming multi-turn variant. Same assembly contract as
+	 * {@link #chat(String, List, String)}; tokenConsumer receives unwrapped
+	 * answer text via {@link AnswerExtractingConsumer}.
+	 */
+	public LlmResponse chatStreaming(String numberedRecords, List<ChatMessage> priorTurns,
+			String question, Consumer<String> tokenConsumer) {
+		String systemPrompt = getSystemPrompt();
+		String userMessage = buildUserMessage(numberedRecords, question);
+		int maxTokens = getMaxContextTokens();
+		ArrayNode messages = ChatMessages.fromTurns(MAPPER, systemPrompt, priorTurns, userMessage, maxTokens);
+
+		AnswerExtractingConsumer filter = new AnswerExtractingConsumer(tokenConsumer);
+
+		LlmEngine.InferenceResult result = getActiveEngine().inferStreaming(
+				messages, getTimeoutSeconds(), filter);
+
+		return extractResponse(result.getText(), result.getInputTokens(), result.getOutputTokens(),
+				result.getCachedTokens());
+	}
+
+	protected int getMaxContextTokens() {
+		String value = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_CHAT_MAX_CONTEXT_TOKENS);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				int parsed = Integer.parseInt(value.trim());
+				if (parsed > 0) {
+					return parsed;
+				}
+				log.warn("chartsearchai.chat.maxContextTokens must be positive, got '{}', using default", parsed);
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid chartsearchai.chat.maxContextTokens '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_CHAT_MAX_CONTEXT_TOKENS;
 	}
 
 	/**

@@ -239,6 +239,14 @@ public class ChartSearchAiConstants {
 
 	public static final int DEFAULT_AUDIT_LOG_RETENTION_DAYS = 90;
 
+	public static final String GP_CHAT_MAX_CONTEXT_TOKENS = "chartsearchai.chat.maxContextTokens";
+
+	public static final int DEFAULT_CHAT_MAX_CONTEXT_TOKENS = 6000;
+
+	public static final String GP_CHAT_RETENTION_DAYS = "chartsearchai.chat.retentionDays";
+
+	public static final int DEFAULT_CHAT_RETENTION_DAYS = 90;
+
 	public static final String GP_LLM_ENGINE = "chartsearchai.llm.engine";
 
 	public static final String LLM_ENGINE_LOCAL = "local";

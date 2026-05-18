@@ -21,6 +21,7 @@ import java.util.Properties;
 import java.util.function.Consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.openmrs.api.APIException;
@@ -58,7 +59,50 @@ public class RemoteLlmEngine implements LlmEngine {
 		String apiKey = getOptionalRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
 		String modelName = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
 
-		String requestBody = buildRequestBody(systemPrompt, userMessage, modelName, false, responseFormat);
+		String requestBody = buildRequestBody(systemPrompt, userMessage, modelName, false,
+				responseFormat);
+
+		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+				.uri(URI.create(endpointUrl))
+				.timeout(Duration.ofSeconds(timeoutSeconds))
+				.header("Content-Type", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8));
+		if (apiKey != null) {
+			requestBuilder.header("Authorization", "Bearer " + apiKey);
+		}
+		HttpRequest request = requestBuilder.build();
+
+		try {
+			HttpResponse<String> response = getHttpClient().send(request,
+					HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+			if (response.statusCode() < 200 || response.statusCode() >= 300) {
+				log.error("Remote LLM API returned HTTP {}: {}", response.statusCode(),
+						truncateForLog(response.body()));
+				throw new APIException("Remote LLM API returned HTTP " + response.statusCode()
+						+ ". Check the endpoint URL and model name in the "
+						+ "chartsearchai.llm.remote.* global properties, and the API key "
+						+ "in openmrs-runtime.properties.");
+			}
+
+			return parseResponse(response.body());
+		}
+		catch (IOException e) {
+			throw new APIException("Failed to call remote LLM API: " + e.getMessage(), e);
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new APIException("Remote LLM API call was interrupted", e);
+		}
+	}
+
+	@Override
+	public InferenceResult infer(ArrayNode messages, int timeoutSeconds) {
+		String endpointUrl = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
+		String apiKey = getOptionalRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
+		String modelName = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
+
+		String requestBody = buildRequestBody(messages, modelName, false);
 
 		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
 				.uri(URI.create(endpointUrl))
@@ -97,11 +141,18 @@ public class RemoteLlmEngine implements LlmEngine {
 	@Override
 	public InferenceResult inferStreaming(String systemPrompt, String userMessage,
 			int timeoutSeconds, Consumer<String> tokenConsumer) {
+		return inferStreaming(ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage),
+				timeoutSeconds, tokenConsumer);
+	}
+
+	@Override
+	public InferenceResult inferStreaming(ArrayNode messages, int timeoutSeconds,
+			Consumer<String> tokenConsumer) {
 		String endpointUrl = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
 		String apiKey = getOptionalRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
 		String modelName = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
 
-		String requestBody = buildRequestBody(systemPrompt, userMessage, modelName, true);
+		String requestBody = buildRequestBody(messages, modelName, true);
 
 		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
 				.uri(URI.create(endpointUrl))
@@ -159,7 +210,13 @@ public class RemoteLlmEngine implements LlmEngine {
 
 	String buildRequestBody(String systemPrompt, String userMessage, String modelName,
 			boolean stream) {
-		return buildRequestBody(systemPrompt, userMessage, modelName, stream, null);
+		return buildRequestBody(ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage),
+				modelName, stream);
+	}
+
+	String buildRequestBody(ArrayNode messages, String modelName, boolean stream) {
+		return buildRequestBody(messages, modelName, stream,
+				ChartAnswerResponseFormat.build(MAPPER, resolveReasoningMaxChars()));
 	}
 
 	/**
@@ -169,6 +226,14 @@ public class RemoteLlmEngine implements LlmEngine {
 	 */
 	String buildRequestBody(String systemPrompt, String userMessage, String modelName,
 			boolean stream, ObjectNode responseFormat) {
+		return buildRequestBody(ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage),
+				modelName, stream,
+				responseFormat != null ? responseFormat
+						: ChartAnswerResponseFormat.build(MAPPER, resolveReasoningMaxChars()));
+	}
+
+	String buildRequestBody(ArrayNode messages, String modelName, boolean stream,
+			ObjectNode responseFormat) {
 		ObjectNode root = MAPPER.createObjectNode();
 		root.put("model", modelName);
 		// Anthropic's compat endpoint rejects temperature/top_p on Opus 4.7; top_k=1 is the only greedy-decoding lever it still accepts.
@@ -185,10 +250,8 @@ public class RemoteLlmEngine implements LlmEngine {
 			root.set("stream_options", streamOptions);
 		}
 
-		root.set("response_format",
-				responseFormat != null ? responseFormat
-						: ChartAnswerResponseFormat.build(MAPPER, resolveReasoningMaxChars()));
-		root.set("messages", ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage));
+		root.set("response_format", responseFormat);
+		root.set("messages", messages);
 
 		try {
 			return MAPPER.writeValueAsString(root);
