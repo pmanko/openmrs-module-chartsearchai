@@ -360,17 +360,41 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
-	 * Multi-turn chat: same chart-building + citation-extraction path as
-	 * {@link #search}, but threads the conversation history through
-	 * {@link LlmProvider#chat}. Persistence of session/messages is the
-	 * caller's responsibility (handled by ChatServiceImpl).
+	 * Build the full, retrieval-free patient chart that the chat path uses
+	 * as its frozen session prefix. Bypasses {@code chartsearchai.embedding.preFilter}
+	 * deliberately — chat needs byte-stability across turns so the LLM's
+	 * prompt cache can hit, which pre-filter's query-dependent chart breaks.
+	 *
+	 * <p>Returned text is the LLM-ready envelope: "Patient records (most
+	 * recent first):\n<numbered records>". Stored on
+	 * {@code chat_session.chart_snapshot} by {@link ChatServiceImpl}.
 	 */
-	public ChartAnswer chat(Patient patient, List<ChatMessage> priorTurns, String question) {
-		PatientChart chart = chartBuildingStrategy.buildChart(patient, question);
-		LlmResponse response = llmProvider.chat(chartTextOrPlaceholder(chart), priorTurns, question);
+	public PatientChart buildSessionChart(Patient patient) {
+		PatientChart chart = chartBuildingStrategy.buildChartUnfiltered(patient);
+		String envelope = "Patient records (most recent first):\n"
+				+ (chart.getText() == null || chart.getText().trim().isEmpty()
+						? "This patient has no records." : chart.getText().stripTrailing());
+		return new PatientChart(envelope, chart.getMappings());
+	}
+
+	/**
+	 * Multi-turn chat using a frozen session-scoped chart envelope. The
+	 * envelope and mappings are passed in (by the {@link ChatServiceImpl},
+	 * sourced from {@code chat_session.chart_snapshot} +
+	 * {@code chart_mappings_json}), so consecutive turns of one session
+	 * send the byte-identical chart prefix and the LLM's prompt cache
+	 * hits on follow-ups.
+	 *
+	 * <p>The {@code question} is the raw clinician text — assembleChat
+	 * places it as the trailing user message, separate from the chart
+	 * envelope.
+	 */
+	public ChartAnswer chat(String chartEnvelope, List<RecordMapping> mappings,
+			List<ChatMessage> priorTurns, String question) {
+		LlmResponse response = llmProvider.chat(chartEnvelope, priorTurns, question);
 
 		return new ChartAnswer(response.getAnswer(),
-				extractCitedReferences(response.getCitations(), chart.getMappings()),
+				extractCitedReferences(response.getCitations(), mappings),
 				response.getInputTokens(), response.getOutputTokens(),
 				response.getCachedTokens());
 	}
@@ -378,14 +402,13 @@ public class LlmInferenceService implements ChartSearchService {
 	/**
 	 * Streaming variant of {@link #chat}.
 	 */
-	public ChartAnswer chatStreaming(Patient patient, List<ChatMessage> priorTurns,
-			String question, Consumer<String> tokenConsumer) {
-		PatientChart chart = chartBuildingStrategy.buildChart(patient, question);
+	public ChartAnswer chatStreaming(String chartEnvelope, List<RecordMapping> mappings,
+			List<ChatMessage> priorTurns, String question, Consumer<String> tokenConsumer) {
 		LlmResponse response = llmProvider.chatStreaming(
-				chartTextOrPlaceholder(chart), priorTurns, question, tokenConsumer);
+				chartEnvelope, priorTurns, question, tokenConsumer);
 
 		return new ChartAnswer(response.getAnswer(),
-				extractCitedReferences(response.getCitations(), chart.getMappings()),
+				extractCitedReferences(response.getCitations(), mappings),
 				response.getInputTokens(), response.getOutputTokens(),
 				response.getCachedTokens());
 	}

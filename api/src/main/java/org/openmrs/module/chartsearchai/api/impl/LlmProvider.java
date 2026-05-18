@@ -607,11 +607,31 @@ public class LlmProvider {
 	 * the chart never appears twice in the message array and stale chart copies
 	 * never confuse the LLM if data changed between turns.
 	 */
-	public LlmResponse chat(String numberedRecords, List<ChatMessage> priorTurns, String question) {
+	/**
+	 * Multi-turn chat assembly using the stable system+chart prefix design
+	 * ({@link ChatMessages#assembleChat}). The {@code chartEnvelope} is the
+	 * frozen-per-session bytes (typically "Patient records (most recent
+	 * first):\n<numbered records>") and stays byte-identical across all
+	 * turns; the {@code question} is just the raw clinician text; priors
+	 * carry user/assistant pairs (no chart bytes inside).
+	 *
+	 * <p>This produces:
+	 * <pre>
+	 *   [system, user(chartEnvelope), ...priors..., user(question)]
+	 * </pre>
+	 * which hits the LLM server's prompt cache on every follow-up because
+	 * the first two messages are byte-identical across turns of a session.
+	 */
+	public LlmResponse chat(String chartEnvelope, List<ChatMessage> priorTurns, String question) {
 		String systemPrompt = getSystemPrompt();
-		String userMessage = buildUserMessage(numberedRecords, question);
 		int maxTokens = getMaxContextTokens();
-		ArrayNode messages = ChatMessages.fromTurns(MAPPER, systemPrompt, priorTurns, userMessage, maxTokens);
+		int responseReserve = ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS;
+		ArrayNode messages = ChatMessages.assembleChat(
+				MAPPER, systemPrompt, chartEnvelope, priorTurns, question, maxTokens, responseReserve);
+		int includedPriors = messages.size() - 3; // size minus [system, chart_user, current_user]
+		log.warn("chat: priors available={}, included={}, chart_chars={}, budget={} tokens",
+				priorTurns == null ? 0 : priorTurns.size(), Math.max(0, includedPriors),
+				chartEnvelope == null ? 0 : chartEnvelope.length(), maxTokens);
 		LlmEngine.InferenceResult result = getActiveEngine().infer(messages, getTimeoutSeconds());
 		return extractResponse(result.getText(), result.getInputTokens(), result.getOutputTokens(),
 				result.getCachedTokens());
@@ -622,12 +642,17 @@ public class LlmProvider {
 	 * {@link #chat(String, List, String)}; tokenConsumer receives unwrapped
 	 * answer text via {@link AnswerExtractingConsumer}.
 	 */
-	public LlmResponse chatStreaming(String numberedRecords, List<ChatMessage> priorTurns,
+	public LlmResponse chatStreaming(String chartEnvelope, List<ChatMessage> priorTurns,
 			String question, Consumer<String> tokenConsumer) {
 		String systemPrompt = getSystemPrompt();
-		String userMessage = buildUserMessage(numberedRecords, question);
 		int maxTokens = getMaxContextTokens();
-		ArrayNode messages = ChatMessages.fromTurns(MAPPER, systemPrompt, priorTurns, userMessage, maxTokens);
+		int responseReserve = ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS;
+		ArrayNode messages = ChatMessages.assembleChat(
+				MAPPER, systemPrompt, chartEnvelope, priorTurns, question, maxTokens, responseReserve);
+		int includedPriors = messages.size() - 3;
+		log.warn("chatStreaming: priors available={}, included={}, chart_chars={}, budget={} tokens",
+				priorTurns == null ? 0 : priorTurns.size(), Math.max(0, includedPriors),
+				chartEnvelope == null ? 0 : chartEnvelope.length(), maxTokens);
 
 		AnswerExtractingConsumer filter = new AnswerExtractingConsumer(tokenConsumer);
 

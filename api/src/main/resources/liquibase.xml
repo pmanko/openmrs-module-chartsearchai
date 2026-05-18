@@ -246,4 +246,28 @@
 			<column name="created_at"/>
 		</createIndex>
 	</changeSet>
+	<changeSet id="chartsearchai-008" author="openmrs">
+		<comment>
+			Add the per-session frozen chart snapshot. Multi-turn chat needs a
+			byte-stable patient-chart prefix across every turn of a session so
+			the LLM's prompt cache hits (Anthropic / OpenAI / llama.cpp all
+			converge on "static content at top, variable at end" for caching).
+			Today the chart sits in the variable-tail current-user message and
+			is rebuilt per question; this makes the cache miss and, more
+			importantly, prevents the LLM from seeing any prior turns when the
+			chart alone fills the budget.
+
+			The snapshot is taken once on session create (full chart, bypassing
+			usePreFilter — chat ignores the pre-filter setting). It's also
+			rewritten when the operator clicks "New chat" (closeAndStartNew).
+			chart_mappings_json carries the citation lookup table so [N] in the
+			LLM's answer can be resolved to a record uuid without rebuilding
+			the chart at every turn.
+		</comment>
+		<addColumn tableName="chartsearchai_chat_session">
+			<column name="chart_snapshot" type="mediumtext"/>
+			<column name="chart_mappings_json" type="mediumtext"/>
+			<column name="chart_built_at" type="datetime"/>
+		</addColumn>
+	</changeSet>
 </databaseChangeLog>
