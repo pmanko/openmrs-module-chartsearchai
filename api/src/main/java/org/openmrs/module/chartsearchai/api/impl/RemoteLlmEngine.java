@@ -21,6 +21,7 @@ import java.util.Properties;
 import java.util.function.Consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.openmrs.api.APIException;
@@ -54,11 +55,17 @@ public class RemoteLlmEngine implements LlmEngine {
 	@Override
 	public InferenceResult infer(String systemPrompt, String userMessage, int timeoutSeconds,
 			ObjectNode responseFormat) {
+		return infer(ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage), timeoutSeconds);
+	}
+
+	@Override
+	public InferenceResult infer(ArrayNode messages, int timeoutSeconds) {
 		String endpointUrl = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
 		String apiKey = getOptionalRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
 		String modelName = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
 
 		String requestBody = buildRequestBody(systemPrompt, userMessage, modelName, false, responseFormat);
+		String requestBody = buildRequestBody(messages, modelName, false);
 
 		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
 				.uri(URI.create(endpointUrl))
@@ -97,11 +104,18 @@ public class RemoteLlmEngine implements LlmEngine {
 	@Override
 	public InferenceResult inferStreaming(String systemPrompt, String userMessage,
 			int timeoutSeconds, Consumer<String> tokenConsumer) {
+		return inferStreaming(ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage),
+				timeoutSeconds, tokenConsumer);
+	}
+
+	@Override
+	public InferenceResult inferStreaming(ArrayNode messages, int timeoutSeconds,
+			Consumer<String> tokenConsumer) {
 		String endpointUrl = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
 		String apiKey = getOptionalRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
 		String modelName = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
 
-		String requestBody = buildRequestBody(systemPrompt, userMessage, modelName, true);
+		String requestBody = buildRequestBody(messages, modelName, true);
 
 		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
 				.uri(URI.create(endpointUrl))
@@ -169,6 +183,11 @@ public class RemoteLlmEngine implements LlmEngine {
 	 */
 	String buildRequestBody(String systemPrompt, String userMessage, String modelName,
 			boolean stream, ObjectNode responseFormat) {
+		return buildRequestBody(ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage),
+				modelName, stream);
+	}
+
+	String buildRequestBody(ArrayNode messages, String modelName, boolean stream) {
 		ObjectNode root = MAPPER.createObjectNode();
 		root.put("model", modelName);
 		// Anthropic's compat endpoint rejects temperature/top_p on Opus 4.7; top_k=1 is the only greedy-decoding lever it still accepts.
@@ -189,6 +208,8 @@ public class RemoteLlmEngine implements LlmEngine {
 				responseFormat != null ? responseFormat
 						: ChartAnswerResponseFormat.build(MAPPER, resolveReasoningMaxChars()));
 		root.set("messages", ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage));
+		root.set("response_format", ChartAnswerResponseFormat.build(MAPPER));
+		root.set("messages", messages);
 
 		try {
 			return MAPPER.writeValueAsString(root);

@@ -31,6 +31,7 @@ import org.openmrs.module.chartsearchai.model.ChartEmbedding;
 import org.openmrs.module.chartsearchai.reference.DrugReferenceInjector;
 import org.openmrs.module.chartsearchai.reference.DrugSafetyValidator;
 import org.openmrs.module.chartsearchai.reference.SafetyWarning;
+import org.openmrs.module.chartsearchai.model.ChatMessage;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
@@ -356,6 +357,37 @@ public class LlmInferenceService implements ChartSearchService {
 					buildMs, llmMs, groundMs, buildMs + llmMs + groundMs,
 					inputTokens, cachedTokens, outcome);
 		}
+	}
+
+	/**
+	 * Multi-turn chat: same chart-building + citation-extraction path as
+	 * {@link #search}, but threads the conversation history through
+	 * {@link LlmProvider#chat}. Persistence of session/messages is the
+	 * caller's responsibility (handled by ChatServiceImpl).
+	 */
+	public ChartAnswer chat(Patient patient, List<ChatMessage> priorTurns, String question) {
+		PatientChart chart = chartBuildingStrategy.buildChart(patient, question);
+		LlmResponse response = llmProvider.chat(chartTextOrPlaceholder(chart), priorTurns, question);
+
+		return new ChartAnswer(response.getAnswer(),
+				extractCitedReferences(response.getCitations(), chart.getMappings()),
+				response.getInputTokens(), response.getOutputTokens(),
+				response.getCachedTokens());
+	}
+
+	/**
+	 * Streaming variant of {@link #chat}.
+	 */
+	public ChartAnswer chatStreaming(Patient patient, List<ChatMessage> priorTurns,
+			String question, Consumer<String> tokenConsumer) {
+		PatientChart chart = chartBuildingStrategy.buildChart(patient, question);
+		LlmResponse response = llmProvider.chatStreaming(
+				chartTextOrPlaceholder(chart), priorTurns, question, tokenConsumer);
+
+		return new ChartAnswer(response.getAnswer(),
+				extractCitedReferences(response.getCitations(), chart.getMappings()),
+				response.getInputTokens(), response.getOutputTokens(),
+				response.getCachedTokens());
 	}
 
 	/**
