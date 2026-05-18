@@ -629,7 +629,7 @@ public class LlmProvider {
 		ArrayNode messages = ChatMessages.assembleChat(
 				MAPPER, systemPrompt, chartEnvelope, priorTurns, question, maxTokens, responseReserve);
 		int includedPriors = messages.size() - 3; // size minus [system, chart_user, current_user]
-		log.warn("chat: priors available={}, included={}, chart_chars={}, budget={} tokens",
+		log.debug("chat: priors available={}, included={}, chart_chars={}, budget={} tokens",
 				priorTurns == null ? 0 : priorTurns.size(), Math.max(0, includedPriors),
 				chartEnvelope == null ? 0 : chartEnvelope.length(), maxTokens);
 		LlmEngine.InferenceResult result = getActiveEngine().infer(messages, getTimeoutSeconds());
@@ -650,7 +650,7 @@ public class LlmProvider {
 		ArrayNode messages = ChatMessages.assembleChat(
 				MAPPER, systemPrompt, chartEnvelope, priorTurns, question, maxTokens, responseReserve);
 		int includedPriors = messages.size() - 3;
-		log.warn("chatStreaming: priors available={}, included={}, chart_chars={}, budget={} tokens",
+		log.debug("chatStreaming: priors available={}, included={}, chart_chars={}, budget={} tokens",
 				priorTurns == null ? 0 : priorTurns.size(), Math.max(0, includedPriors),
 				chartEnvelope == null ? 0 : chartEnvelope.length(), maxTokens);
 
