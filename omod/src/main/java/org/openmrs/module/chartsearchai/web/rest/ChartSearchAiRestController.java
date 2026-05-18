@@ -170,6 +170,10 @@ public class ChartSearchAiRestController {
 	@Qualifier("chartSearchAi.chatService")
 	private ChatService chatService;
 
+	@Autowired
+	@Qualifier("chartSearchAi.modelSwitchService")
+	private org.openmrs.module.chartsearchai.api.impl.ModelSwitchService modelSwitchService;
+
 	@RequestMapping(value = "/search", method = RequestMethod.POST)
 	@ResponseBody
 	public ResponseEntity<Object> search(@RequestBody Map<String, String> body) {
@@ -309,6 +313,76 @@ public class ChartSearchAiRestController {
 
 		warmupExecutor.submit(resolved.patient);
 		return new ResponseEntity<Object>(HttpStatus.ACCEPTED);
+	}
+
+	/**
+	 * List the models the active remote endpoint reports via {@code /v1/models},
+	 * alongside the currently-selected model name and active engine.
+	 *
+	 * <p>Returns {@code 503 Service Unavailable} when {@code engine=local}: model
+	 * switching is only meaningful against the remote engine.
+	 *
+	 * <p>Gated by {@code AI Query Patient Data} — same gate as the chat endpoints
+	 * so the picker visibility matches the chat panel visibility.
+	 */
+	@RequestMapping(value = "/models", method = RequestMethod.GET)
+	@ResponseBody
+	public ResponseEntity<Object> listModels() {
+		Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA);
+		org.openmrs.module.chartsearchai.api.impl.ModelSwitchService.ModelListResponse snapshot;
+		try {
+			snapshot = modelSwitchService.listAvailable();
+		}
+		catch (Exception e) {
+			log.warn("Failed to list models: {}", e.getMessage());
+			return new ResponseEntity<Object>(
+					errorResponse("Failed to list models: " + e.getMessage()),
+					HttpStatus.INTERNAL_SERVER_ERROR);
+		}
+		if (!ChartSearchAiConstants.LLM_ENGINE_REMOTE.equalsIgnoreCase(snapshot.getEngine())) {
+			Map<String, Object> body = new LinkedHashMap<String, Object>();
+			body.put("engine", snapshot.getEngine());
+			body.put("error", "Model listing requires the remote engine; active engine is '"
+					+ snapshot.getEngine() + "'.");
+			return new ResponseEntity<Object>(body, HttpStatus.SERVICE_UNAVAILABLE);
+		}
+		Map<String, Object> response = new LinkedHashMap<String, Object>();
+		response.put("engine", snapshot.getEngine());
+		response.put("current", snapshot.getCurrent());
+		response.put("available", snapshot.getAvailable());
+		response.put("endpointUrl", snapshot.getEndpointUrl());
+		return new ResponseEntity<Object>(response, HttpStatus.OK);
+	}
+
+	/**
+	 * Switch the active remote model. Validates the requested name is in the
+	 * live {@code /v1/models} list before writing the GP, so the next chat
+	 * request can't route to a model the endpoint doesn't actually serve.
+	 *
+	 * <p>Body: {@code {"modelName": "<id>"}}. Returns {@code {current}} on
+	 * success, {@code 400} for invalid input, {@code 503} for local engine.
+	 */
+	@RequestMapping(value = "/model", method = RequestMethod.POST)
+	@ResponseBody
+	public ResponseEntity<Object> setModel(@RequestBody Map<String, String> body) {
+		Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA);
+		String requested = body == null ? null : body.get("modelName");
+		try {
+			String now = modelSwitchService.setCurrent(requested);
+			Map<String, Object> response = new LinkedHashMap<String, Object>();
+			response.put("current", now);
+			return new ResponseEntity<Object>(response, HttpStatus.OK);
+		}
+		catch (IllegalArgumentException e) {
+			return new ResponseEntity<Object>(errorResponse(e.getMessage()),
+					HttpStatus.BAD_REQUEST);
+		}
+		catch (org.openmrs.api.APIException e) {
+			// listAvailable throws APIException for local-engine or misconfig.
+			// Surface as 503 so the SPA picker can hide itself cleanly.
+			return new ResponseEntity<Object>(errorResponse(e.getMessage()),
+					HttpStatus.SERVICE_UNAVAILABLE);
+		}
 	}
 
 	/**
