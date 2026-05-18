@@ -101,7 +101,7 @@ public class ChatServiceImpl implements ChatService {
 		String chartEnvelope = session.getChartSnapshot();
 		List<RecordMapping> mappings = deserializeMappings(session.getChartMappingsJson());
 
-		List<ChatMessage> priorTurns = chatDAO.getMessages(session);
+		List<ChatMessage> priorTurns = priorsForLlm(chatDAO.getMessages(session));
 		int nextOrdinal = chatDAO.getLastOrdinal(session) + 1;
 		persistUserMessage(session, question, nextOrdinal);
 
@@ -130,7 +130,7 @@ public class ChatServiceImpl implements ChatService {
 		String chartEnvelope = session.getChartSnapshot();
 		List<RecordMapping> mappings = deserializeMappings(session.getChartMappingsJson());
 
-		List<ChatMessage> priorTurns = chatDAO.getMessages(session);
+		List<ChatMessage> priorTurns = priorsForLlm(chatDAO.getMessages(session));
 		int nextOrdinal = chatDAO.getLastOrdinal(session) + 1;
 		persistUserMessage(session, question, nextOrdinal);
 
@@ -260,13 +260,137 @@ public class ChatServiceImpl implements ChatService {
 		msg.setSession(session);
 		msg.setOrdinal(ordinal);
 		msg.setRole(ChatMessage.ROLE_ASSISTANT);
-		msg.setContent(answer.getAnswer());
+		msg.setContent(serializeAssistantContent(answer));
 		msg.setCreatedAt(new Date());
 		msg.setAuditLog(audit);
 		msg.setInputTokens(answer.getInputTokens());
 		msg.setOutputTokens(answer.getOutputTokens());
 		msg.setFinishReason(finishReason);
 		return chatDAO.saveMessage(msg);
+	}
+
+	/**
+	 * Serialize the assistant response (prose + citations + blocks) to JSON
+	 * for storage on {@code chat_message.content}. The SPA hydration parses
+	 * this JSON back into {@code {answer, blocks}}; LLM replay extracts just
+	 * the prose answer via {@link #extractProseAnswer}.
+	 *
+	 * <p>When blocks is empty, we still store JSON (not plaintext) so the
+	 * hydration parser only has to handle one canonical shape on newly-
+	 * created rows. Legacy plaintext rows from before this iteration are
+	 * detected and handled separately in {@link #extractProseAnswer}.
+	 */
+	private static String serializeAssistantContent(ChartAnswer answer) {
+		Map<String, Object> wire = new LinkedHashMap<>();
+		wire.put("answer", answer.getAnswer());
+		// blocks rendered via the same helper used by the REST controller —
+		// keep wire format identical across persistence and live response so
+		// SPA hydration and SSE done events parse the same way.
+		wire.put("blocks", blocksToWire(answer.getBlocks()));
+		try {
+			return MAPPER.writeValueAsString(wire);
+		}
+		catch (IOException ioe) {
+			// Fail soft: if serialization breaks, fall back to plain prose so
+			// chat continues to function (just without blocks rendering on
+			// hydration). The thrown error would otherwise abort the entire
+			// assistant-message persistence and lose the answer.
+			log.warn("Failed to serialize assistant content to JSON; storing prose only: {}",
+					ioe.getMessage());
+			return answer.getAnswer();
+		}
+	}
+
+	private static List<Map<String, Object>> blocksToWire(List<ResponseBlock> blocks) {
+		List<Map<String, Object>> out = new ArrayList<>();
+		if (blocks == null) {
+			return out;
+		}
+		for (ResponseBlock block : blocks) {
+			Map<String, Object> blockMap = new LinkedHashMap<>();
+			blockMap.put("kind", block.getKind());
+			if (block.getTitle() != null) {
+				blockMap.put("title", block.getTitle());
+			}
+			List<Map<String, Object>> columns = new ArrayList<>();
+			for (ResponseBlock.Column c : block.getColumns()) {
+				Map<String, Object> col = new LinkedHashMap<>();
+				col.put("key", c.getKey());
+				col.put("label", c.getLabel());
+				columns.add(col);
+			}
+			blockMap.put("columns", columns);
+			List<Map<String, Object>> rows = new ArrayList<>();
+			for (ResponseBlock.Row row : block.getRows()) {
+				Map<String, Object> cellsMap = new LinkedHashMap<>();
+				for (Map.Entry<String, ResponseBlock.Cell> entry : row.getCells().entrySet()) {
+					Map<String, Object> cellMap = new LinkedHashMap<>();
+					cellMap.put("text", entry.getValue().getText());
+					cellMap.put("refs", entry.getValue().getRefs());
+					cellsMap.put(entry.getKey(), cellMap);
+				}
+				Map<String, Object> rowMap = new LinkedHashMap<>();
+				rowMap.put("cells", cellsMap);
+				rows.add(rowMap);
+			}
+			blockMap.put("rows", rows);
+			out.add(blockMap);
+		}
+		return out;
+	}
+
+	/**
+	 * Extract the prose-only answer from a stored assistant message content
+	 * for LLM-replay. Handles both shapes:
+	 * <ul>
+	 *   <li>New: {@code {"answer": "<prose>", "blocks": [...]}}</li>
+	 *   <li>Legacy: plain string (rows persisted before this iteration)</li>
+	 * </ul>
+	 * Sending the JSON envelope to the LLM in prior assistant turns confuses
+	 * small models; the prose summary is enough context for follow-ups.
+	 */
+	/**
+	 * Project the persisted prior turns into the shape the LLM should see.
+	 * For assistant rows, replaces the stored JSON envelope with just the
+	 * prose answer (see {@link #extractProseAnswer}). User rows pass
+	 * through unchanged. Returns new transient {@link ChatMessage}
+	 * instances rather than mutating the Hibernate-managed entities — the
+	 * loaded rows are still in the session and a content change would
+	 * persist on flush.
+	 */
+	private static List<ChatMessage> priorsForLlm(List<ChatMessage> raw) {
+		List<ChatMessage> out = new ArrayList<>(raw.size());
+		for (ChatMessage m : raw) {
+			ChatMessage view = new ChatMessage();
+			view.setRole(m.getRole());
+			view.setContent(ChatMessage.ROLE_ASSISTANT.equals(m.getRole())
+					? extractProseAnswer(m.getContent())
+					: m.getContent());
+			view.setOrdinal(m.getOrdinal());
+			out.add(view);
+		}
+		return out;
+	}
+
+	static String extractProseAnswer(String storedContent) {
+		if (storedContent == null || storedContent.isEmpty()) {
+			return storedContent;
+		}
+		String trimmed = storedContent.trim();
+		if (!trimmed.startsWith("{")) {
+			return storedContent;
+		}
+		try {
+			com.fasterxml.jackson.databind.JsonNode root = MAPPER.readTree(trimmed);
+			com.fasterxml.jackson.databind.JsonNode answer = root.get("answer");
+			if (answer != null && answer.isTextual()) {
+				return answer.asText();
+			}
+		}
+		catch (IOException ignored) {
+			// Not JSON or malformed — treat as plaintext.
+		}
+		return storedContent;
 	}
 
 	protected ChatSession touchSession(ChatSession session) {

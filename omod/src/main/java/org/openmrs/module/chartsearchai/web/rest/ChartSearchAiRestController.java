@@ -44,6 +44,7 @@ import org.openmrs.module.chartsearchai.api.AuditLogService;
 import org.openmrs.module.chartsearchai.api.ChatService;
 import org.openmrs.module.chartsearchai.api.ChatService.ChatTurnResult;
 import org.openmrs.module.chartsearchai.api.PatientAccessCheck;
+import org.openmrs.module.chartsearchai.api.impl.ResponseBlock;
 import org.openmrs.module.chartsearchai.api.impl.WarmupExecutor;
 import org.openmrs.module.chartsearchai.model.ChartSearchAuditLog;
 import org.openmrs.module.chartsearchai.model.ChatMessage;
@@ -86,6 +87,50 @@ public class ChartSearchAiRestController {
 
 	private static String formatDate(Date date) {
 		return date != null ? DateFormatUtil.formatDate(date) : null;
+	}
+
+	/**
+	 * Serialize a list of {@link ResponseBlock} into the JSON-Map shape used
+	 * by both the {@code /chat} sync response and the SSE {@code done} event.
+	 * Keeps wire format identical across the two surfaces so the SPA only
+	 * implements one parser.
+	 */
+	private static List<Map<String, Object>> blocksToJson(List<ResponseBlock> blocks) {
+		List<Map<String, Object>> out = new ArrayList<Map<String, Object>>();
+		if (blocks == null) {
+			return out;
+		}
+		for (ResponseBlock block : blocks) {
+			Map<String, Object> blockMap = new LinkedHashMap<String, Object>();
+			blockMap.put("kind", block.getKind());
+			if (block.getTitle() != null) {
+				blockMap.put("title", block.getTitle());
+			}
+			List<Map<String, Object>> columns = new ArrayList<Map<String, Object>>();
+			for (ResponseBlock.Column c : block.getColumns()) {
+				Map<String, Object> col = new LinkedHashMap<String, Object>();
+				col.put("key", c.getKey());
+				col.put("label", c.getLabel());
+				columns.add(col);
+			}
+			blockMap.put("columns", columns);
+			List<Map<String, Object>> rows = new ArrayList<Map<String, Object>>();
+			for (ResponseBlock.Row row : block.getRows()) {
+				Map<String, Object> cellsMap = new LinkedHashMap<String, Object>();
+				for (Map.Entry<String, ResponseBlock.Cell> entry : row.getCells().entrySet()) {
+					Map<String, Object> cellMap = new LinkedHashMap<String, Object>();
+					cellMap.put("text", entry.getValue().getText());
+					cellMap.put("refs", entry.getValue().getRefs());
+					cellsMap.put(entry.getKey(), cellMap);
+				}
+				Map<String, Object> rowMap = new LinkedHashMap<String, Object>();
+				rowMap.put("cells", cellsMap);
+				rows.add(rowMap);
+			}
+			blockMap.put("rows", rows);
+			out.add(blockMap);
+		}
+		return out;
 	}
 
 	// Defense-in-depth: catches common prompt injection phrases. This is a blocklist
@@ -804,6 +849,7 @@ public class ChartSearchAiRestController {
 				refs.add(refMap);
 			}
 			doneData.put("references", refs);
+			doneData.put("blocks", blocksToJson(answer.getBlocks()));
 			doneData.put("session", result.getSessionUuid());
 			doneData.put("messageId", result.getAssistantMessageUuid());
 
@@ -938,6 +984,7 @@ public class ChartSearchAiRestController {
 			refs.add(refMap);
 		}
 		response.put("references", refs);
+		response.put("blocks", blocksToJson(answer.getBlocks()));
 		response.put("session", result.getSessionUuid());
 		response.put("messageId", result.getAssistantMessageUuid());
 
@@ -987,11 +1034,44 @@ public class ChartSearchAiRestController {
 		List<ChatMessage> messages = chatService.getMessages(session);
 
 		List<Map<String, Object>> out = new ArrayList<Map<String, Object>>();
+		ObjectMapper hydrateMapper = new ObjectMapper();
 		for (ChatMessage m : messages) {
 			Map<String, Object> entry = new LinkedHashMap<String, Object>();
 			entry.put("messageId", m.getUuid());
 			entry.put("role", m.getRole());
-			entry.put("content", m.getContent());
+
+			// Assistant rows persist a JSON envelope ({answer, blocks}); user
+			// rows are plaintext. Parse JSON when present, surface prose +
+			// blocks separately so the SPA can rehydrate the same view it
+			// had during streaming. Legacy plaintext rows from before the
+			// tabular iteration fall through with blocks=[].
+			if (ChatMessage.ROLE_ASSISTANT.equals(m.getRole())) {
+				String stored = m.getContent();
+				String prose = stored;
+				List<Object> blocks = new ArrayList<Object>();
+				if (stored != null && stored.trim().startsWith("{")) {
+					try {
+						com.fasterxml.jackson.databind.JsonNode root =
+								hydrateMapper.readTree(stored);
+						com.fasterxml.jackson.databind.JsonNode answerNode = root.get("answer");
+						if (answerNode != null && answerNode.isTextual()) {
+							prose = answerNode.asText();
+						}
+						com.fasterxml.jackson.databind.JsonNode blocksNode = root.get("blocks");
+						if (blocksNode != null && blocksNode.isArray()) {
+							blocks = hydrateMapper.convertValue(blocksNode, List.class);
+						}
+					}
+					catch (IOException ignored) {
+						// Treat as plaintext.
+					}
+				}
+				entry.put("content", prose);
+				entry.put("blocks", blocks);
+			} else {
+				entry.put("content", m.getContent());
+			}
+
 			entry.put("createdAt", m.getCreatedAt() != null ? m.getCreatedAt().getTime() : null);
 			out.add(entry);
 		}
