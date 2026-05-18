@@ -49,6 +49,25 @@ public class ChatSession implements Serializable {
 
 	private String status = STATUS_ACTIVE;
 
+	/**
+	 * Patient chart text snapshot, frozen at session create. Replayed verbatim
+	 * as the first user message on every turn of this session so the LLM's
+	 * prompt cache hits on a stable system+chart prefix. Null only on rows
+	 * created before changeset chartsearchai-008 or when the chart-building
+	 * pipeline returned an empty chart (deferred to lazy build on first chat).
+	 */
+	private String chartSnapshot;
+
+	/**
+	 * JSON-serialized list of {@link org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping}
+	 * captured alongside {@link #chartSnapshot}. Holds index → (resourceType,
+	 * resourceUuid, date) so citations like [57] in the LLM's answer can be
+	 * resolved without rebuilding the chart. Null on legacy rows.
+	 */
+	private String chartMappingsJson;
+
+	private Date chartBuiltAt;
+
 	public Integer getSessionId() {
 		return sessionId;
 	}
@@ -119,5 +138,29 @@ public class ChatSession implements Serializable {
 
 	public void setStatus(String status) {
 		this.status = status;
+	}
+
+	public String getChartSnapshot() {
+		return chartSnapshot;
+	}
+
+	public void setChartSnapshot(String chartSnapshot) {
+		this.chartSnapshot = chartSnapshot;
+	}
+
+	public String getChartMappingsJson() {
+		return chartMappingsJson;
+	}
+
+	public void setChartMappingsJson(String chartMappingsJson) {
+		this.chartMappingsJson = chartMappingsJson;
+	}
+
+	public Date getChartBuiltAt() {
+		return chartBuiltAt;
+	}
+
+	public void setChartBuiltAt(Date chartBuiltAt) {
+		this.chartBuiltAt = chartBuiltAt;
 	}
 }

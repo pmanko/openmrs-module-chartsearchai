@@ -9,9 +9,17 @@
  */
 package org.openmrs.module.chartsearchai.api.impl;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.openmrs.Patient;
 import org.openmrs.User;
@@ -25,6 +33,8 @@ import org.openmrs.module.chartsearchai.api.db.ChatDAO;
 import org.openmrs.module.chartsearchai.model.ChartSearchAuditLog;
 import org.openmrs.module.chartsearchai.model.ChatMessage;
 import org.openmrs.module.chartsearchai.model.ChatSession;
+import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
+import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,6 +48,8 @@ public class ChatServiceImpl implements ChatService {
 	private static final Logger log = LoggerFactory.getLogger(ChatServiceImpl.class);
 
 	private static final String SEARCH_MODE_CHAT = "chat";
+
+	private static final ObjectMapper MAPPER = new ObjectMapper();
 
 	@Autowired
 	private ChatDAO chatDAO;
@@ -85,6 +97,10 @@ public class ChatServiceImpl implements ChatService {
 
 	@Override
 	public ChatTurnResult chat(ChatSession session, String question) {
+		ensureChartSnapshot(session);
+		String chartEnvelope = session.getChartSnapshot();
+		List<RecordMapping> mappings = deserializeMappings(session.getChartMappingsJson());
+
 		List<ChatMessage> priorTurns = chatDAO.getMessages(session);
 		int nextOrdinal = chatDAO.getLastOrdinal(session) + 1;
 		persistUserMessage(session, question, nextOrdinal);
@@ -92,7 +108,7 @@ public class ChatServiceImpl implements ChatService {
 		long startedMs = System.currentTimeMillis();
 		ChartAnswer answer;
 		try {
-			answer = llmInferenceService.chat(session.getPatient(), priorTurns, question);
+			answer = llmInferenceService.chat(chartEnvelope, mappings, priorTurns, question);
 		}
 		catch (RuntimeException e) {
 			touchSession(session);
@@ -110,6 +126,10 @@ public class ChatServiceImpl implements ChatService {
 	@Override
 	public ChatTurnResult chatStreaming(ChatSession session, String question,
 			Consumer<String> tokenConsumer) {
+		ensureChartSnapshot(session);
+		String chartEnvelope = session.getChartSnapshot();
+		List<RecordMapping> mappings = deserializeMappings(session.getChartMappingsJson());
+
 		List<ChatMessage> priorTurns = chatDAO.getMessages(session);
 		int nextOrdinal = chatDAO.getLastOrdinal(session) + 1;
 		persistUserMessage(session, question, nextOrdinal);
@@ -119,7 +139,7 @@ public class ChatServiceImpl implements ChatService {
 		String finishReason = ChatMessage.FINISH_STOP;
 		try {
 			answer = llmInferenceService.chatStreaming(
-					session.getPatient(), priorTurns, question, tokenConsumer);
+					chartEnvelope, mappings, priorTurns, question, tokenConsumer);
 		}
 		catch (RuntimeException e) {
 			finishReason = ChatMessage.FINISH_ABORTED;
@@ -143,7 +163,82 @@ public class ChatServiceImpl implements ChatService {
 		session.setStartedAt(now);
 		session.setLastActivityAt(now);
 		session.setStatus(ChatSession.STATUS_ACTIVE);
+		populateChartSnapshot(session, patient);
 		return chatDAO.saveSession(session);
+	}
+
+	/**
+	 * Backfill chart snapshot for legacy sessions (created before
+	 * chartsearchai-008) on first chat() call. Idempotent.
+	 */
+	protected void ensureChartSnapshot(ChatSession session) {
+		if (session.getChartSnapshot() != null) {
+			return;
+		}
+		populateChartSnapshot(session, session.getPatient());
+		chatDAO.saveSession(session);
+	}
+
+	/**
+	 * Build the full chart for the session's patient (bypassing pre-filter)
+	 * and store envelope + mappings on the session row. The byte-stability
+	 * of envelope across all turns is the load-bearing invariant of the
+	 * chat design — the LLM's prompt cache hits on this prefix.
+	 */
+	protected void populateChartSnapshot(ChatSession session, Patient patient) {
+		PatientChart chart = llmInferenceService.buildSessionChart(patient);
+		session.setChartSnapshot(chart.getText());
+		session.setChartMappingsJson(serializeMappings(chart.getMappings()));
+		session.setChartBuiltAt(new Date());
+	}
+
+	/**
+	 * Serialize {@link RecordMapping} list as JSON with epoch-ms dates so
+	 * the round-trip is locale-free and deterministic. {@code RecordMapping}
+	 * lacks a no-arg ctor so we ser/des via plain Map.
+	 */
+	private static String serializeMappings(List<RecordMapping> mappings) {
+		if (mappings == null || mappings.isEmpty()) {
+			return "[]";
+		}
+		List<Map<String, Object>> wire = new ArrayList<>(mappings.size());
+		for (RecordMapping m : mappings) {
+			Map<String, Object> e = new LinkedHashMap<>();
+			e.put("index", m.getIndex());
+			e.put("resourceType", m.getResourceType());
+			e.put("resourceUuid", m.getResourceUuid());
+			e.put("date", m.getDate() == null ? null : m.getDate().getTime());
+			wire.add(e);
+		}
+		try {
+			return MAPPER.writeValueAsString(wire);
+		}
+		catch (IOException ioe) {
+			throw new APIException("Failed to serialize chart mappings: " + ioe.getMessage(), ioe);
+		}
+	}
+
+	static List<RecordMapping> deserializeMappings(String json) {
+		if (json == null || json.isEmpty() || "[]".equals(json)) {
+			return Collections.emptyList();
+		}
+		try {
+			List<Map<String, Object>> wire = MAPPER.readValue(
+					json, new TypeReference<List<Map<String, Object>>>() {});
+			List<RecordMapping> out = new ArrayList<>(wire.size());
+			for (Map<String, Object> e : wire) {
+				int index = ((Number) e.get("index")).intValue();
+				String type = (String) e.get("resourceType");
+				String uuid = (String) e.get("resourceUuid");
+				Number dateMs = (Number) e.get("date");
+				Date d = dateMs == null ? null : new Date(dateMs.longValue());
+				out.add(new RecordMapping(index, type, uuid, d));
+			}
+			return out;
+		}
+		catch (IOException ioe) {
+			throw new APIException("Failed to deserialize chart mappings: " + ioe.getMessage(), ioe);
+		}
 	}
 
 	protected ChatMessage persistUserMessage(ChatSession session, String content, int ordinal) {
