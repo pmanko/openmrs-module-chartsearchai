@@ -32,31 +32,44 @@ final class ChatMessages {
 	}
 
 	/**
-	 * Build a multi-turn OpenAI-compatible {@code messages[]} array with
-	 * drop-oldest token-budget trimming.
+	 * Assemble a multi-turn OpenAI-compatible {@code messages[]} array with
+	 * the patient chart sitting in the <b>stable prefix position</b>:
 	 *
-	 * <p>The system prompt and the current user message are always emitted.
-	 * Prior turns are walked from newest backward and added in user/assistant
-	 * pairs until either the prior list is exhausted or the next pair would
-	 * exceed {@code maxTokens}. Pairs are kept together so the LLM never sees
-	 * a dangling assistant turn without its preceding user.
+	 * <pre>
+	 *   [system, user(chart), ...prior user/assistant pairs (no chart), user(current question)]
+	 * </pre>
 	 *
-	 * <p>Token counts are estimated as {@code ceil(length / 4)} characters per
-	 * token — sufficient for budget trimming heuristics without taking a hard
-	 * dependency on a model-specific tokenizer.
+	 * <p>This is the cache-friendly shape per Anthropic / OpenAI / llama.cpp
+	 * prompt-caching docs: static content at the top, variable content at
+	 * the end. Provided the caller passes a byte-identical {@code chartText}
+	 * across all turns of a session ({@code chat_session.chart_snapshot}),
+	 * the LLM server's prompt cache will skip re-processing the entire
+	 * chart on follow-ups — only the new question and the (small) prior
+	 * conversation tail get processed fresh.
+	 *
+	 * <p>Trim path: priors are walked newest-backward and dropped in
+	 * user/assistant pairs only when the conversation tail would push past
+	 * the budget. Chart and system are reserved up front; a response budget
+	 * is also reserved so the LLM has room to generate. Token estimation is
+	 * chars/4 — adequate for the budget envelope, since under this design
+	 * the trim path is exercised only by very long conversations.
 	 */
-	static ArrayNode fromTurns(ObjectMapper mapper, String system, List<ChatMessage> prior,
-			String currentUser, int maxTokens) {
+	static ArrayNode assembleChat(ObjectMapper mapper, String system, String chartText,
+			List<ChatMessage> priorTurns, String currentQuestion, int maxContextTokens,
+			int responseReserveTokens) {
 		ArrayNode messages = mapper.createArrayNode();
 		appendMessage(messages, mapper, "system", system);
+		appendMessage(messages, mapper, "user", chartText);
 
-		int remaining = maxTokens - estimateTokens(system) - estimateTokens(currentUser);
+		int reserved = estimateTokens(system) + estimateTokens(chartText)
+				+ estimateTokens(currentQuestion) + Math.max(0, responseReserveTokens);
+		int remaining = maxContextTokens - reserved;
 
 		List<ChatMessage> kept = new ArrayList<>();
-		int i = prior == null ? -1 : prior.size() - 1;
+		int i = priorTurns == null ? -1 : priorTurns.size() - 1;
 		while (i >= 0 && remaining > 0) {
-			ChatMessage last = prior.get(i);
-			ChatMessage secondLast = i >= 1 ? prior.get(i - 1) : null;
+			ChatMessage last = priorTurns.get(i);
+			ChatMessage secondLast = i >= 1 ? priorTurns.get(i - 1) : null;
 
 			int pairCost;
 			int step;
@@ -86,7 +99,7 @@ final class ChatMessages {
 		for (ChatMessage m : kept) {
 			appendMessage(messages, mapper, m.getRole(), m.getContent());
 		}
-		appendMessage(messages, mapper, "user", currentUser);
+		appendMessage(messages, mapper, "user", currentQuestion);
 		return messages;
 	}
 

@@ -27,6 +27,12 @@
 
 		<property name="status" column="status" type="string" length="20" not-null="true"/>
 
+		<property name="chartSnapshot" column="chart_snapshot" type="text"/>
+
+		<property name="chartMappingsJson" column="chart_mappings_json" type="text"/>
+
+		<property name="chartBuiltAt" column="chart_built_at" type="timestamp"/>
+
 	</class>
 
 </hibernate-mapping>
