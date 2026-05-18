@@ -44,8 +44,27 @@ public class LlmProvider {
 			+ "Never infer, assume, or add information not explicitly stated in the records. "
 			+ "Include ALL relevant records in your answer — never omit any for brevity. "
 			+ "Cite EVERY record you reference by its number in brackets (e.g. [1], [3]). "
-			+ "Respond with ONLY a JSON object with an \"answer\" string and a \"citations\" array "
-			+ "listing every record number you cited.\n"
+			+ "Respond with ONLY a JSON object matching the schema: "
+			+ "\"answer\" (string), \"citations\" (array of ints), \"blocks\" (array, may be empty).\n\n"
+			+ "STRUCTURED TABLES — IMPORTANT:\n"
+			+ "If the query asks to LIST, SHOW, ENUMERATE, or TABULATE multiple items (medications, "
+			+ "allergies, lab results, vital signs, problems, diagnoses, encounters, orders, "
+			+ "immunizations, procedures), you MUST emit a \"table\" block in \"blocks\" with "
+			+ "columns + rows. The \"answer\" string gives a brief one-sentence prose summary; "
+			+ "the table carries the structured detail.\n"
+			+ "Table construction rules:\n"
+			+ "  - ONE ROW PER UNIQUE ITEM. \"List medications\" → one row per unique medication "
+			+ "name, NOT one row per prescription record. Repeated record indices for the same "
+			+ "item all go into that single row's cell.refs array.\n"
+			+ "  - Pick semantic columns from the data (e.g. medications → Medication, Dose, "
+			+ "Route, Start date). Do NOT add a \"References\" or \"Citations\" or \"Indices\" "
+			+ "column — record indices belong in each cell's \"refs\" array, NOT in a column.\n"
+			+ "  - Column keys must be unique and must NOT be \"text\" or \"refs\" (those are "
+			+ "reserved cell field names).\n"
+			+ "  - Each row's cells map column key → {\"text\": ..., \"refs\": [record indices]}. "
+			+ "Cells with no citation use refs: [].\n"
+			+ "Only leave \"blocks\" as [] for single-fact answers (e.g. patient age, gender, "
+			+ "yes/no questions).\n\n"
 			+ "Use plain text only in the answer — no markdown, no bullet markers like * or -, "
 			+ "no headers. Use numbered lines or simple newlines to structure lists.\n\n"
 			+ "If no records are relevant, name what is missing.\n"
@@ -59,9 +78,28 @@ public class LlmProvider {
 			+ "[3] (2024-01-20) Fruit delivery: 5 apples\n\n"
 			+ "Clinician's query: How many apples were delivered?\n"
 			+ "{\"answer\": \"12 apples on 2024-03-10 [1] and 5 apples on 2024-01-20 [3].\","
-			+ " \"citations\": [1, 3]}\n\n"
+			+ " \"citations\": [1, 3], \"blocks\": []}\n\n"
+			+ "Clinician's query: Show all fruit deliveries.\n"
+			+ "{\"answer\": \"Three fruit deliveries on record [1][2][3].\","
+			+ " \"citations\": [1, 2, 3], \"blocks\": [{"
+			+ "\"kind\": \"table\", \"title\": \"Fruit deliveries\","
+			+ " \"columns\": [{\"key\":\"date\",\"label\":\"Date\"},"
+			+ "{\"key\":\"fruit\",\"label\":\"Fruit\"},"
+			+ "{\"key\":\"qty\",\"label\":\"Qty\"}],"
+			+ " \"rows\": ["
+			+ "{\"cells\":{\"date\":{\"text\":\"2024-03-10\",\"refs\":[1]},"
+			+ "\"fruit\":{\"text\":\"apples\",\"refs\":[1]},"
+			+ "\"qty\":{\"text\":\"12\",\"refs\":[1]}}},"
+			+ "{\"cells\":{\"date\":{\"text\":\"2024-02-15\",\"refs\":[2]},"
+			+ "\"fruit\":{\"text\":\"oranges\",\"refs\":[2]},"
+			+ "\"qty\":{\"text\":\"8\",\"refs\":[2]}}},"
+			+ "{\"cells\":{\"date\":{\"text\":\"2024-01-20\",\"refs\":[3]},"
+			+ "\"fruit\":{\"text\":\"apples\",\"refs\":[3]},"
+			+ "\"qty\":{\"text\":\"5\",\"refs\":[3]}}}"
+			+ "]}]}\n\n"
 			+ "Clinician's query: Were any bananas delivered?\n"
-			+ "{\"answer\": \"There are no records of banana deliveries.\", \"citations\": []}\n\n"
+			+ "{\"answer\": \"There are no records of banana deliveries.\","
+			+ " \"citations\": [], \"blocks\": []}\n\n"
 			+ "END OF FORMAT DEMONSTRATION. Now answer using ONLY the actual patient records below.";
 
 	@Autowired
@@ -409,6 +447,8 @@ public class LlmProvider {
 
 		private final List<Integer> citations;
 
+		private final List<ResponseBlock> blocks;
+
 		private final int inputTokens;
 
 		private final int outputTokens;
@@ -416,17 +456,25 @@ public class LlmProvider {
 		private final int cachedTokens;
 
 		LlmResponse(String answer, List<Integer> citations) {
-			this(answer, citations, 0, 0, 0);
+			this(answer, citations, Collections.emptyList(), 0, 0, 0);
 		}
 
 		LlmResponse(String answer, List<Integer> citations, int inputTokens, int outputTokens) {
-			this(answer, citations, inputTokens, outputTokens, 0);
+			this(answer, citations, Collections.emptyList(), inputTokens, outputTokens, 0);
 		}
 
 		LlmResponse(String answer, List<Integer> citations, int inputTokens, int outputTokens,
 				int cachedTokens) {
+			this(answer, citations, Collections.emptyList(), inputTokens, outputTokens, cachedTokens);
+		}
+
+		LlmResponse(String answer, List<Integer> citations, List<ResponseBlock> blocks,
+				int inputTokens, int outputTokens, int cachedTokens) {
 			this.answer = answer;
 			this.citations = Collections.unmodifiableList(new ArrayList<>(citations));
+			this.blocks = blocks == null
+					? Collections.emptyList()
+					: Collections.unmodifiableList(new ArrayList<>(blocks));
 			this.inputTokens = inputTokens;
 			this.outputTokens = outputTokens;
 			this.cachedTokens = cachedTokens;
@@ -438,6 +486,10 @@ public class LlmProvider {
 
 		List<Integer> getCitations() {
 			return citations;
+		}
+
+		List<ResponseBlock> getBlocks() {
+			return blocks;
 		}
 
 		int getInputTokens() {
