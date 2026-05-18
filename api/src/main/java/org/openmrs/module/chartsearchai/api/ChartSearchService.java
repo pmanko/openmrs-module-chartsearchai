@@ -158,6 +158,8 @@ public interface ChartSearchService {
 
 		private final List<RecordReference> references;
 
+		private final List<org.openmrs.module.chartsearchai.api.impl.ResponseBlock> blocks;
+
 		private final int inputTokens;
 
 		private final int outputTokens;
@@ -167,12 +169,12 @@ public interface ChartSearchService {
 		private final List<SafetyWarning> safetyWarnings;
 
 		public ChartAnswer(String answer, List<RecordReference> references) {
-			this(answer, references, 0, 0, 0);
+			this(answer, references, java.util.Collections.emptyList(), 0, 0, 0);
 		}
 
 		public ChartAnswer(String answer, List<RecordReference> references,
 				int inputTokens, int outputTokens) {
-			this(answer, references, inputTokens, outputTokens, 0);
+			this(answer, references, java.util.Collections.emptyList(), inputTokens, outputTokens, 0);
 		}
 
 		public ChartAnswer(String answer, List<RecordReference> references,
@@ -184,9 +186,19 @@ public interface ChartSearchService {
 		public ChartAnswer(String answer, List<RecordReference> references,
 				int inputTokens, int outputTokens, int cachedTokens,
 				List<SafetyWarning> safetyWarnings) {
+			this(answer, references, java.util.Collections.emptyList(),
+					inputTokens, outputTokens, cachedTokens);
+		}
+
+		public ChartAnswer(String answer, List<RecordReference> references,
+				List<org.openmrs.module.chartsearchai.api.impl.ResponseBlock> blocks,
+				int inputTokens, int outputTokens, int cachedTokens) {
 			this.answer = answer;
 			this.references = java.util.Collections.unmodifiableList(
 					new java.util.ArrayList<>(references));
+			this.blocks = blocks == null
+					? java.util.Collections.emptyList()
+					: java.util.Collections.unmodifiableList(new java.util.ArrayList<>(blocks));
 			this.inputTokens = inputTokens;
 			this.outputTokens = outputTokens;
 			this.cachedTokens = cachedTokens;
@@ -208,6 +220,14 @@ public interface ChartSearchService {
 		 */
 		public List<RecordReference> getReferences() {
 			return references;
+		}
+
+		/**
+		 * Structured non-prose blocks (tables today; lists/timelines/etc. later)
+		 * the LLM chose to emit. Empty when the answer is prose-only.
+		 */
+		public List<org.openmrs.module.chartsearchai.api.impl.ResponseBlock> getBlocks() {
+			return blocks;
 		}
 
 		/**

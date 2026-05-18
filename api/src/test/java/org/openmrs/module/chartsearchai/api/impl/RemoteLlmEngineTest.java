@@ -101,9 +101,13 @@ public class RemoteLlmEngineTest {
 		assertEquals("string", properties.get("answer").get("type").asText());
 		assertEquals("array", properties.get("citations").get("type").asText());
 		assertEquals("integer", properties.get("citations").get("items").get("type").asText());
+		// `blocks` is the new structured-table channel (always required;
+		// model emits [] when prose-only). See ChartAnswerResponseFormat.
+		assertEquals("array", properties.get("blocks").get("type").asText());
 
 		JsonNode required = schema.get("required");
 		assertEquals(3, required.size(), "reasoning, answer and citations are all required");
+		assertEquals(3, required.size(), "expected answer + citations + blocks required");
 	}
 
 	@Test
