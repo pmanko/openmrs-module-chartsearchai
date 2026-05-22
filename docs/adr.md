@@ -27,6 +27,7 @@ This document captures the architectural decisions made for the Chart Search AI 
 - [Decision 19: Retain all-MiniLM-L6-v2 as the embedding model](#decision-19-retain-all-minilm-l6-v2-as-the-embedding-model)
 - [Decision 20: MedCPT dual-encoder as an alternative embedding model](#decision-20-medcpt-dual-encoder-as-an-alternative-embedding-model)
 - [Decision 21: Concept-name re-ranking for subword-tokenized queries](#decision-21-concept-name-re-ranking-for-subword-tokenized-queries)
+- [Decision 22: e5-base-v2 for the querystore-backed retrieval path](#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path)
 - [Known limitations](#known-limitations)
 - [Planned future work](#planned-future-work)
 
@@ -1456,6 +1457,65 @@ The mechanism that fails: `ConceptService.getConceptsByName(token)` does substri
 **Decision:** runtime query expansion via dictionary lookup is the wrong tool. The right path for STD/infections-style failures is **dictionary-side curation** — adding `concept_set` memberships that link HIV/Syphilis/Zika to a "Sexually transmitted disease" parent concept, the same mechanism the vital-signs fix uses. The `extractCategoryHints` code shipped earlier will then automatically benefit those queries with no further code changes.
 
 All query-expansion code was reverted. The lesson is captured here so future maintainers don't re-litigate.
+
+## Decision 22: e5-base-v2 for the querystore-backed retrieval path
+
+**Status: Accepted** (May 2026)
+
+### Context
+
+Decisions 19–21 cover the chartsearchai-side pre-filter pipeline — `all-MiniLM-L6-v2` + adaptive filtering (similarity ratio, gap detection, z-score gates, concept-name re-ranking) co-evolved against the 485-case eval baseline. That pipeline is **not** what runs when `chartsearchai.querystore.enabled=true` (the recommended deployment).
+
+In the querystore-backed path:
+
+- chartsearchai serializes patient records.
+- [openmrs-module-querystore](https://github.com/openmrs/openmrs-module-querystore) indexes them (Lucene BM25, plus optional ONNX kNN).
+- Querystore returns the top-K candidates per question.
+- The local LLM filters those candidates as part of the answer phase.
+
+No L6-v2-tuned thresholds run at the querystore layer. The "filter" stage is the LLM itself reading the top-K and choosing what to cite.
+
+### Problem
+
+With the LLM doing the filtering, the embedder's job changes. It no longer needs to feed an adaptive filtering pipeline that depends on a specific score-distribution geometry; it just needs to put plausible candidates in the top-K so the LLM can reason over them. The dominant failure mode in this regime is **vocabulary gaps** — clinical records use formal terms ("Cerebrovascular Accident") while users type colloquial ones ("any heart issues?", "any cardiovascular issues?"). If the embedder doesn't cluster these, the top-K never contains the relevant record and the LLM can't recover.
+
+### Evaluation
+
+Three embedders were compared on the demo standalone (Betty Williams and Richard Jones charts, real OpenMRS data) with `chartsearchai.querystore.enabled=true`, `chartsearchai.querystore.topK=30`, and Gemma 4 E4B as the filtering LLM:
+
+| Embedder | Colloquial → clinical bridge | Source | Notes |
+|---|---|---|---|
+| `sentence-transformers/all-MiniLM-L6-v2` | Misses (CVA in chart, "any heart issues?" returns 0 cardiovascular records) | self-contained ONNX | Decision 19's winner for the pre-filter pipeline, but its tighter clusters fail on this question class without the adaptive filtering to compensate |
+| `intfloat/e5-base-v2` (via `Xenova/e5-base-v2`) | **Bridges** ("heart issues" surfaces CVA records the LLM correctly cites) | self-contained ONNX | Empirical winner for the querystore + LLM-as-filter path |
+| `ncbi/MedCPT-*` (dual-encoder) | Refuses to bridge — PubMed-trained clusters pedantically separate colloquial from clinical | dual ONNX | Optimized for PubMed corpus; doesn't generalize to the chart-search user's phrasing |
+
+### Decision
+
+For deployments running `chartsearchai.querystore.enabled=true`, use `intfloat/e5-base-v2` as the querystore embedder. `backend-init.sh` provisions it automatically for Docker deployments; non-Docker installs should download it manually to `<openmrs-application-data-directory>/querystore/`.
+
+### Why this does not contradict Decision 19
+
+Decision 19 evaluated e5-base-v2 on the **chartsearchai-side pre-filter pipeline** with L6-v2-tuned thresholds active (`similarityRatio=0.80`, `minScoreGap=0.10`, `scoreGapMultiplier=2.5`, etc.) and reported 88/259 failures. Those thresholds depend on L6-v2's wider score distribution (IQR ~0.10); e5-base-v2's tighter geometry collapses the signal those thresholds were designed to read, and the failure mode is "ranking, not thresholds" — no parameter retuning recovers a record the model ranks below noise.
+
+In the querystore path none of those thresholds run. There is no `similarityRatio` floor, no gap detection, no z-score gate — the LLM evaluates the top-K directly. The win condition shifts from "is the relevant record ranked above all noise?" to "is the relevant record in the top-K at all?" — and on the colloquial-to-clinical bridge queries that chart-search users actually type, e5-base-v2 surfaces it where L6-v2 doesn't.
+
+Both decisions are correct simultaneously:
+
+- **Decision 19**: `all-MiniLM-L6-v2` wins the chartsearchai-side pre-filter pipeline. *(Still accurate; the legacy path is unchanged.)*
+- **Decision 22**: `intfloat/e5-base-v2` wins the querystore + LLM-as-filter path.
+
+### Source: Xenova mirror, not the canonical repo
+
+Download via `Xenova/e5-base-v2`, which ships a self-contained ONNX export (~440MB). The canonical `intfloat/e5-base-v2/onnx/` directory uses external-data format (a graph file plus a separate `model.onnx_data` weights sidecar). Downloading only the graph produces a ~1MB "successful" file that the ONNX runtime opens but cannot execute, failing late at first inference with a misleading "Not a directory" error — the bug class that caused an earlier `all-MiniLM-L6-v2` provisioning path to silently break when its upstream export format changed. `backend-init.sh` carries a 200MB size guard as the second line of defense.
+
+### Trade-offs
+
+- **+** Colloquial-to-clinical vocabulary bridging that L6-v2 misses and MedCPT refuses.
+- **+** Self-contained ONNX (no sidecar weights file to stage alongside).
+- **+** Single encoder — no separate query-encoder model path needed (contrast with [Decision 20](#decision-20-medcpt-dual-encoder-as-an-alternative-embedding-model)).
+- **−** ~440MB on disk vs L6-v2's ~90MB.
+- **−** Slower per-record embedding than L6-v2 (~5× the parameters: 110M vs 22M). Bounded by querystore's per-patient projection (lazy indexing on chart open), not paid on every query.
+- **−** Quality on this path is judged by end-to-end LLM-answer correctness rather than the recall@K eval baseline that drives Decisions 19–21. A separate eval harness for the LLM-as-filter path is future work.
 
 ## Known limitations
 

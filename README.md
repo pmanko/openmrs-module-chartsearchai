@@ -19,7 +19,7 @@ The standalone download above includes the backend module, frontend ESM, and the
 - [Setup](#setup)
   - [1. Build](#1-build)
   - [2. Download the LLM model](#2-download-the-llm-model-local-mode-only)
-  - [3. Download the embedding model](#3-download-the-embedding-model)
+  - [3. Download the embedding model](#3-download-the-embedding-model-optional-two-variants)
   - [4. Install](#4-install)
   - [5. Configure](#5-configure)
   - [6. Grant privileges](#6-grant-privileges)
@@ -79,7 +79,7 @@ cd openmrs-module-chartsearchai
 docker compose up --build
 ```
 
-No JDK or model downloads needed — the Docker build handles everything. On first start, the embedding model (~86MB) and the default LLM (Gemma 4 E4B, ~5GB) are downloaded automatically from HuggingFace and persisted in a Docker volume.
+No JDK or model downloads needed — the Docker build handles everything. On first start, the e5-base-v2 sentence embedder (~440MB) and the default LLM (Gemma 4 E4B, ~5GB) are downloaded automatically from HuggingFace and persisted in a Docker volume. The embedder is provisioned for the recommended [querystore deployment](#querystore-deployment-recommended) — set `chartsearchai.querystore.enabled=true` and the matching querystore GPs after first start (see that section for the exact wiring).
 
 First startup takes 5–15 minutes (model downloads + database initialization). Once the logs show that OpenMRS has started, open http://localhost/openmrs/spa (default credentials: `admin` / `Admin123`). Subsequent starts are fast since the data volume persists.
 
@@ -122,11 +122,20 @@ To switch models, update `chartsearchai.llm.modelFilePath` — no rebuild needed
 
 Gemma 4 26B MoE is recommended for production deployments because it follows the system prompt rules (never infer, cite every record, complete enumeration on list queries) reliably without needing reasoning as a safety scaffold. Smaller models work but trade off either safety or list completeness depending on the query. The MoE architecture activates only ~3.8B parameters per token, so per-token speed is comparable to a 4B dense model despite the 26B total size.
 
-### 3. Download the embedding model
+### 3. Download the embedding model *(optional, two variants)*
 
-If embedding pre-filtering is enabled (`chartsearchai.embedding.preFilter=true`), download the all-MiniLM-L6-v2 ONNX model (~90MB) from [Hugging Face](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2). You need both `model.onnx` and `vocab.txt` from the repository. The default is full-chart mode, which does not require these files.
+The embedder is only needed when retrieval is pre-filtered. Two configurations use it, with different model choices for different architectural reasons:
 
-Place them alongside the LLM model (e.g., `<openmrs-application-data-directory>/chartsearchai/`).
+**Querystore-backed retrieval (recommended)** — set `chartsearchai.querystore.enabled=true`. The querystore module handles retrieval; the LLM filters the top-K it returns. See [Querystore deployment](#querystore-deployment-recommended) below for the global properties this path expects and [ADR Decision 22](docs/adr.md#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path) for the model rationale. The LLM is still required (see [step 2](#2-download-the-llm-model-local-mode-only) or use a remote engine). Download `intfloat/e5-base-v2` (~440MB):
+
+- ONNX model: https://huggingface.co/Xenova/e5-base-v2/resolve/main/onnx/model.onnx *(self-contained — see [ADR Decision 22](docs/adr.md#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path) for why this source over the canonical `intfloat/e5-base-v2`)*
+- Vocab: https://huggingface.co/Xenova/e5-base-v2/resolve/main/vocab.txt
+
+Place both at `<openmrs-application-data-directory>/querystore/` and wire the global properties documented in [Querystore deployment](#querystore-deployment-recommended) below.
+
+**Chartsearchai-side pre-filter pipeline (legacy)** — set `chartsearchai.embedding.preFilter=true` and leave `chartsearchai.querystore.enabled` at `false`. This pipeline runs chartsearchai's own adaptive filtering stage (similarity ratio, gap detection, z-score gates) whose thresholds are tuned for `all-MiniLM-L6-v2`'s score-distribution geometry. Download both `model.onnx` and `vocab.txt` (~90MB total) from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 and place them at `<openmrs-application-data-directory>/chartsearchai/`. See [ADR Decision 19](docs/adr.md#decision-19-retain-all-minilm-l6-v2-as-the-embedding-model) for why this pipeline retains L6-v2 and [ADR Decision 22](docs/adr.md#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path) for why the querystore path doesn't.
+
+The default — full chart, no retrieval pre-filtering — uses neither embedder and needs no download.
 
 ### 4. Install
 
@@ -165,6 +174,27 @@ chartsearchai.llm.remote.apikey=sk-your-api-key-here
 The remote engine works with any server that implements the OpenAI chat completions API format, including self-hosted inference servers (vLLM, Ollama, text-generation-inference) and cloud providers (OpenAI, Azure OpenAI, Google AI, Anthropic). Self-hosted servers keep patient data on-premise while still benefiting from GPU-accelerated inference. No GGUF model download is needed when using the remote engine.
 
 For Anthropic's OpenAI-compat endpoint, point `chartsearchai.llm.remote.endpointUrl` at it and set `chartsearchai.llm.remote.modelName` to a Claude model identifier (e.g. `claude-opus-4-7`). The module emits Anthropic-compatible request bodies automatically: `response_format: json_schema` (Anthropic's compat endpoint rejects `json_object`) and, on Claude Opus 4.7, `top_k: 1` instead of `temperature` (Anthropic deprecated `temperature`/`top_p` on that model). Other Claude models (Opus 4.5/4.6, Haiku 4.5) keep using `temperature: 0`.
+
+#### Querystore deployment *(recommended)*
+
+When `chartsearchai.querystore.enabled=true`, chartsearchai delegates retrieval to the [openmrs-module-querystore](https://github.com/openmrs/openmrs-module-querystore) module — querystore handles indexing and top-K retrieval, and the local LLM filters the result set. The chartsearchai-side embedding pipeline (`chartsearchai.embedding.preFilter`, similarity ratio, gap detection, z-score gates) is bypassed entirely. This is the path the Docker image (`Dockerfile.backend` + `backend-init.sh`) provisions by default. See [ADR Decision 22](docs/adr.md#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path) for the full architectural narration.
+
+**Deployment checklist:**
+
+1. LLM available — local GGUF ([step 2](#2-download-the-llm-model-local-mode-only)) or remote engine.
+2. e5-base-v2 ONNX + vocab placed at `<openmrs-application-data-directory>/querystore/` ([step 3](#3-download-the-embedding-model-optional-two-variants)).
+3. Global properties set per the table below.
+4. Indexing is lazy on first chart access — no backfill task needed.
+
+| Property | Value | Description |
+|----------|-------|-------------|
+| `chartsearchai.querystore.enabled` | `true` | Route retrieval through the querystore module |
+| `chartsearchai.querystore.topK` | `30` | Number of records querystore returns per query; the LLM then filters them |
+| `querystore.embedding.modelFilePath` | `querystore/model.onnx` | Path to the ONNX embedder, relative to `<openmrs-application-data-directory>`. Querystore ships this with an empty default (the module is model-agnostic), so a fresh install must set it |
+| `querystore.embedding.vocabFilePath` | `querystore/vocab.txt` | Path to the WordPiece vocab, same convention |
+| `querystore.embedding.queryModelFilePath` | *(empty)* | Leave empty for `e5-base-v2`; set only for dual-encoder models like MedCPT |
+
+A follow-up will populate these defaults in the querystore module's `config.xml` so fresh deploys work without manual GP wiring. The GPs are already declared there with empty values, which is why they appear in **Admin > Settings** today; until the defaults land, set them yourself after first start. See [ADR Decision 22](docs/adr.md#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path) for why this path uses `e5-base-v2` instead of the `all-MiniLM-L6-v2` that the chartsearchai-side pipeline retains.
 
 #### Retrieval pipeline
 
@@ -225,9 +255,11 @@ These settings apply when `chartsearchai.retrieval.pipeline` is `embedding` (the
 
 ### 7. Indexing
 
-When `chartsearchai.embedding.preFilter` is `true`, patient records are automatically indexed on first chart access for whichever retrieval pipeline is active. Subsequent data changes trigger automatic re-indexing via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, program enrollment, medication dispense, and patient merge operations. The default (`false`) skips indexing — full-chart mode does not need an embedding index.
+When `chartsearchai.querystore.enabled` is `true` (the recommended deployment), the querystore module performs its own lazy per-patient projection on first chart access and bypasses chartsearchai's own indexing — querystore deployers can stop here and consult the [openmrs-module-querystore](https://github.com/openmrs/openmrs-module-querystore) repo for the indexing details. The rest of this section describes the chartsearchai-side indexing that runs only when querystore is disabled.
 
-**Embedding pipeline** (default): Uses an ONNX embedding model for vector similarity search. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is available in **Admin > Scheduler > Manage Scheduler** to pre-index all patients. The default model is all-MiniLM-L6-v2 (general-purpose, 384 dimensions). Any BERT-based ONNX embedding model can be used as a drop-in replacement by updating `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`. Embedding dimensions are auto-detected from the model output, so models with any dimension size work without code changes. After switching models, existing embeddings are incompatible — run the backfill task to re-index all patients with the new model.
+When `chartsearchai.querystore.enabled` is `false` and `chartsearchai.embedding.preFilter` is `true`, chartsearchai indexes patient records itself on first chart access for whichever retrieval pipeline is active (see the per-pipeline subsections below). Subsequent data changes trigger automatic re-indexing via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, program enrollment, medication dispense, and patient merge operations. With both flags off (the module defaults), indexing is skipped entirely — full-chart mode does not need an embedding index.
+
+**Embedding pipeline** (default for the chartsearchai-side pre-filter path): Uses an ONNX embedding model for vector similarity search. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is available in **Admin > Scheduler > Manage Scheduler** to pre-index all patients. The default model is all-MiniLM-L6-v2 (general-purpose, 384 dimensions); see [ADR Decision 19](docs/adr.md#decision-19-retain-all-minilm-l6-v2-as-the-embedding-model) for why this pipeline retains it. Any BERT-based ONNX embedding model can be used as a drop-in replacement by updating `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`, but the pipeline's threshold constants are tuned to L6-v2's score-distribution geometry — model swaps may require re-tuning (see `PipelineConfig` in the api source for the per-model defaults). Embedding dimensions are auto-detected from the model output, so models with any dimension size work without code changes. After switching models, existing embeddings are incompatible — run the backfill task to re-index all patients with the new model.
 
 **Lucene pipeline** (`chartsearchai.retrieval.pipeline=lucene`): Uses Apache Lucene BM25 text search with English stemming. No ONNX model files are required. The Lucene index is stored at `<openmrs-application-data-directory>/chartsearchai/lucene-index/` and is built automatically on first patient access. This pipeline is simpler to set up (no model download needed) and may be preferred for environments where the ONNX model is unavailable.
 
