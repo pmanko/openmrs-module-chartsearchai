@@ -5,6 +5,18 @@
 		xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
 			http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-2.0.xsd">
 
+	<!--
+		Module is pre-production. Liquibase changesets are consolidated to their canonical
+		end-state rather than preserving the audit trail of historical schema edits. Any
+		instance that already executed a now-removed intermediate changeset retains the
+		corresponding liquibasechangelog row as a harmless orphan; the live schema matches
+		what this file declares because each intermediate's effect is now folded into the
+		surviving changeset's create-time definition.
+
+		When this module ships to production, every changeset below must become immutable —
+		new schema needs come in as new changesets, never as edits to these.
+	-->
+
 	<changeSet id="chartsearchai-001" author="openmrs">
 		<comment>Create chartsearchai_embedding table for storing vector embeddings of clinical records</comment>
 		<createTable tableName="chartsearchai_embedding">
@@ -41,7 +53,12 @@
 	</changeSet>
 
 	<changeSet id="chartsearchai-002" author="openmrs">
-		<comment>Create chartsearchai_audit_log table for recording AI chart search queries</comment>
+		<comment>
+			Create chartsearchai_audit_log table for recording AI chart-search queries. Columns
+			include feedback (rating + comment) and per-request token accounting (input_tokens +
+			output_tokens) — previously layered in via successive changesets that are now
+			collapsed into this create-time definition.
+		</comment>
 		<createTable tableName="chartsearchai_audit_log">
 			<column name="audit_log_id" type="int" autoIncrement="true">
 				<constraints primaryKey="true" nullable="false"/>
@@ -63,6 +80,10 @@
 				<constraints nullable="false"/>
 			</column>
 			<column name="response_time_ms" type="bigint"/>
+			<column name="rating" type="varchar(10)"/>
+			<column name="feedback_comment" type="text"/>
+			<column name="input_tokens" type="int"/>
+			<column name="output_tokens" type="int"/>
 			<column name="date_created" type="datetime">
 				<constraints nullable="false"/>
 			</column>
@@ -85,30 +106,6 @@
 	</changeSet>
 
 	<changeSet id="chartsearchai-003" author="openmrs">
-		<comment>Add feedback columns (rating and comment) to chartsearchai_audit_log</comment>
-		<addColumn tableName="chartsearchai_audit_log">
-			<column name="rating" type="varchar(10)"/>
-			<column name="feedback_comment" type="text"/>
-		</addColumn>
-	</changeSet>
-
-	<changeSet id="chartsearchai-004" author="openmrs">
-		<comment>Add token_count column to chartsearchai_audit_log for tracking LLM token usage per request</comment>
-		<addColumn tableName="chartsearchai_audit_log">
-			<column name="token_count" type="int"/>
-		</addColumn>
-	</changeSet>
-
-	<changeSet id="chartsearchai-005" author="openmrs">
-		<comment>Split token_count into separate input_tokens and output_tokens columns for accurate cost tracking</comment>
-		<addColumn tableName="chartsearchai_audit_log">
-			<column name="input_tokens" type="int"/>
-			<column name="output_tokens" type="int"/>
-		</addColumn>
-		<dropColumn tableName="chartsearchai_audit_log" columnName="token_count"/>
-	</changeSet>
-
-	<changeSet id="chartsearchai-006" author="openmrs">
 		<comment>
 			An earlier config.xml default pointed at "medgemma-1.5-4b-it.Q4_K_M.gguf" (dot before Q4_K_M).
 			OpenMRS only inserts a GP default when the row is missing; it never overwrites an existing
