@@ -79,7 +79,7 @@ cd openmrs-module-chartsearchai
 docker compose up --build
 ```
 
-No JDK or model downloads needed — the Docker build handles everything. On first start, the e5-base-v2 sentence embedder (~440MB) and the default LLM (Gemma 4 E4B, ~5GB) are downloaded automatically from HuggingFace and persisted in a Docker volume. The embedder is provisioned for the recommended [querystore deployment](#querystore-deployment-recommended) — set `chartsearchai.querystore.enabled=true` and the matching querystore GPs after first start (see that section for the exact wiring).
+No JDK or model downloads needed — the Docker build handles everything. On first start, the e5-base-v2 sentence embedder (~440MB), the default LLM (Gemma 4 E4B, ~5GB), and a standby Gemma 4 E2B (~3GB, for operator-driven A/B latency testing via `chartsearchai.llm.modelFilePath`) are downloaded automatically from HuggingFace and persisted in a Docker volume (~8GB total LLM footprint). The embedder is provisioned for the recommended [querystore deployment](#querystore-deployment-recommended) — set `chartsearchai.querystore.enabled=true` and the matching querystore GPs after first start (see that section for the exact wiring).
 
 First startup takes 5–15 minutes (model downloads + database initialization). Once the logs show that OpenMRS has started, open http://localhost/openmrs/spa (default credentials: `admin` / `Admin123`). Subsequent starts are fast since the data volume persists.
 

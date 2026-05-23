@@ -3,7 +3,10 @@
 # volume:
 #   querystore/model.onnx ......... e5-base-v2 sentence embedder (~440MB)
 #   querystore/vocab.txt .......... BERT WordPiece vocab for e5
-#   chartsearchai/<gguf-file> ..... local LLM weights (Gemma 4 E4B, ~5GB)
+#   chartsearchai/<gguf-file> ..... local LLM weights — Gemma 4 E4B (~5GB),
+#                                   with Gemma 4 E2B (~3GB) also pulled so
+#                                   an operator can A/B latency between the
+#                                   two by flipping chartsearchai.llm.modelFilePath
 #
 # Architectural note: chartsearchai delegates retrieval to querystore via
 # `chartsearchai.querystore.enabled=true` (the recommended deployment).
@@ -126,29 +129,73 @@ echo "Vocab ready: $VOCAB_FILE (${VOCAB_BYTES} bytes)."
 # health-poll loops time out at ~5min, but the actual download can take
 # longer on slow networks. Chart search queries return errors until the
 # .partial file is renamed to its final name.
-LLM_FILE="$LLM_DIR/gemma-4-E4B-it-Q4_K_M.gguf"
-LLM_PARTIAL="$LLM_FILE.partial"
-HF_LLM="https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf"
-
-if [ ! -f "$LLM_FILE" ]; then
-  if [ -f "$LLM_PARTIAL" ]; then
-    echo "Resuming Gemma 4 E4B Q4_K_M download (~5GB) in background..."
+# Inner worker: actually performs the download and the .partial→final
+# rename. Receives all required values as positional args so each
+# backgrounded invocation has its own argument snapshot — reading globals
+# from a backgrounded subshell would race with the parent shell's next
+# fetch_llm_in_background call overwriting them.
+_download_llm_file() {
+  _url=$1
+  _partial=$2
+  _target=$3
+  _label=$4
+  # --speed-time/--speed-limit aborts if avg throughput stays under 1 KB/s
+  # for 60s, so a stalled TCP connection (Hugging Face hangs the socket
+  # without closing it) doesn't leave curl waiting on a dead peer
+  # indefinitely. On the next container start (operator-initiated under
+  # the default restart=no policy), curl -C - resumes from .partial.
+  if curl -fsSL -C - --speed-time 60 --speed-limit 1024 -o "$_partial" "$_url"; then
+    mv "$_partial" "$_target"
+    echo "$_label downloaded: $_target"
   else
-    echo "Starting Gemma 4 E4B Q4_K_M download (~5GB) in background; chart search will be unavailable until it completes..."
+    echo "$_label download failed; restart the backend container to retry (curl -C - resumes from the .partial file)."
   fi
-  (
-    # --speed-time/--speed-limit aborts if avg throughput stays under 1 KB/s
-    # for 60s, so a stalled TCP connection (Hugging Face hangs the socket
-    # without closing it) doesn't leave curl waiting on a dead peer
-    # indefinitely. On the next container start (operator-initiated under
-    # the default restart=no policy), curl -C - resumes from .partial.
-    if curl -fsSL -C - --speed-time 60 --speed-limit 1024 -o "$LLM_PARTIAL" "$HF_LLM"; then
-      mv "$LLM_PARTIAL" "$LLM_FILE"
-      echo "LLM model downloaded."
-    else
-      echo "LLM model download failed; restart the backend container to retry (curl -C - resumes from the .partial file)."
-    fi
-  ) &
-fi
+}
+
+# Helper: emit the start/resume log line and background the actual
+# download. $1 url, $2 filename (under $LLM_DIR), $3 human label, $4 size
+# hint, $5 availability-note fragment appended to the log line — callers
+# pass the served-vs-standby wording so the helper itself doesn't encode
+# which model is currently active.
+#
+# Each invocation backgrounds, so two calls run in parallel — total volume
+# need on /openmrs/data is now ~8GB (E4B ~5GB + E2B ~3GB).
+fetch_llm_in_background() {
+  url=$1
+  filename=$2
+  label=$3
+  size_hint=$4
+  availability_note=$5
+  target="$LLM_DIR/$filename"
+  partial="$target.partial"
+  if [ -f "$target" ]; then
+    return
+  fi
+  if [ -f "$partial" ]; then
+    echo "Resuming $label download (${size_hint}) in background${availability_note}..."
+  else
+    echo "Starting $label download (${size_hint}) in background${availability_note}..."
+  fi
+  _download_llm_file "$url" "$partial" "$target" "$label" &
+}
+
+# E4B is the default served model (config.xml defaults
+# chartsearchai.llm.modelFilePath to gemma-4-E4B-it-Q4_K_M.gguf). E2B is
+# provisioned alongside as a standby so an operator can A/B latency by
+# flipping the GP between the two filenames and waiting for llama-server's
+# idle-restart to pick up the new weights — no redeploy required.
+fetch_llm_in_background \
+  "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf" \
+  "gemma-4-E4B-it-Q4_K_M.gguf" \
+  "Gemma 4 E4B Q4_K_M" \
+  "~5GB" \
+  "; chart search will be unavailable until it completes"
+
+fetch_llm_in_background \
+  "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf" \
+  "gemma-4-E2B-it-Q4_K_M.gguf" \
+  "Gemma 4 E2B Q4_K_M" \
+  "~3GB" \
+  " (standby model — chart search keeps using the currently-served weights)"
 
 exec /openmrs/startup.sh
