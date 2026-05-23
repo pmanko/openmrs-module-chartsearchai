@@ -120,6 +120,15 @@ Place whichever `.gguf` you choose inside the OpenMRS application data directory
 
 To switch models, update `chartsearchai.llm.modelFilePath` — no rebuild needed. The embedded llama-server detects the model's chat template automatically. See [Evaluated models](#evaluated-models) for a full comparison of all models tested, including size trade-offs and licensing.
 
+**Measured E4B vs E2B latency (CPU-only inference on the `chartsearchai.openmrs.org` demo, single patient, single question, ~1855-token serialized chart):**
+
+| Model | Cold query (model loaded, fresh prompt) | Warm query (identical prompt re-asked, llama.cpp KV-cache reuse) |
+|-------|------------------------------------------|------------------------------------------------------------------|
+| Gemma 4 E4B | ~194 s | not measured (KV-cache reuse would help here too, just less in relative terms) |
+| Gemma 4 E2B | ~63 s | ~8.5 s |
+
+Swapping the served model from E4B to E2B cut cold-query latency by ~3× on this CPU-only deployment. The warm number reflects llama.cpp reusing the prompt's KV cache when an identical question is re-issued; diverse production traffic only partially benefits (the chart prefix reuses, the per-question suffix re-prefills). Quality also diverges on the same prompt: E4B cited 2 `condition` resources, E2B cited 3 `diagnosis` resources with additional metadata in the answer text. A single observation isn't a quality verdict — run the [Evals](#evals) suite before promoting E2B as the served default.
+
 Gemma 4 26B MoE is recommended for production deployments because it follows the system prompt rules (never infer, cite every record, complete enumeration on list queries) reliably without needing reasoning as a safety scaffold. Smaller models work but trade off either safety or list completeness depending on the query. The MoE architecture activates only ~3.8B parameters per token, so per-token speed is comparable to a 4B dense model despite the 26B total size.
 
 ### 3. Download the embedding model *(optional, two variants)*
