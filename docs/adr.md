@@ -1231,6 +1231,24 @@ MedCPT's theoretical advantage — medical synonym understanding (e.g. "blood pr
 
 The asymmetric bi-encoder support (separate query/article encoders, CLS pooling, query encoder global properties) was removed to simplify the codebase. The module uses all-MiniLM-L6-v2 with mean pooling as its sole embedding model.
 
+### Re-evaluation on the querystore path (May 2026)
+
+After the querystore migration (Decision 22) routed retrieval through `openmrs-module-querystore` with `e5-base-v2` as the first-stage embedder, the cross-encoder rerank question was revisited. Three additional experiments ran against the locked widened 7-query rubric:
+
+| Experiment | Setup | Mean P@5 | Δ vs no-rerank | Outcome |
+|---|---|---|---|---|
+| Exp 1' (2026-05-16) | MedCPT-Cross-Encoder over querystore | 0.743 | −0.171 | Reverted, not committed |
+| Exp 2 (2026-05-17) | MedCPT bi-encoder as querystore embedder | 0.743 | −0.171 | Reverted, not committed |
+| Exp 3 (2026-05-25) | BGE-reranker-v2-m3 INT8 over querystore + e5 | 0.571 | +0.057 | Reverted, not committed |
+
+(Exp 3's no-rerank baseline measured 0.514 on the current smoke patient, vs the 0.914 in the original Decision 18 benchmark — same rubric, different patient data, since the standalone's demo patient has many "Enteroviral"/"Gonococcal"/"Zika virus" records that don't match the `\b...` word-boundary rubric.)
+
+**Conclusion from Exp 3:** BGE-reranker-v2-m3 was the first cross-encoder to deliver a positive Δ on this corpus, but the gain (+0.057) is narrow, concentrated in a single query (infections rose 0/5 → 5/5 by surfacing `Temperature (c)` obs records from rank 31–60), and offset by regressions on cancer (−0.40) and kidney (−0.20) where the CE promoted surface-similar but category-wrong records (`Self-accusation`, `Melaena`, `Wasting syndrome` — the same surface-match failure mode that destroyed Exp 1 and Exp 1'). Doubling the candidate pool (`fetchMultiplier` 2 → 4, scoring 120 pairs instead of 60) gave **identical** results, confirming the limit is BGE's representation space, not first-stage recall: the kidney `Serum creatinine` record is already in the candidate pool, BGE just doesn't rank it as relevant to "kidney problems".
+
+**Why generic-RAG rerank advice doesn't transfer to this corpus.** Standard RAG guidance ("rerank improves relevance, especially for huge corpora") assumes a setup we don't have: (1) huge corpus (10M+ docs vs our ~30–120 candidates per patient query), (2) weak first stage with high recall but noisy precision (vs our e5-base-v2 + BM25 hybrid that already concentrates the semantic signal), and (3) factoid queries with lexical overlap to relevant passages (vs our broad-category clinical queries like "any kidney problems?" that require domain knowledge like `creatinine = kidney function` which no generic CE carries). Generic CEs trained on web Q-passage pairs (MS-MARCO MiniLM, BGE) lack the clinical equivalences; clinical CEs trained on PubMed (MedCPT) carry article-co-occurrence priors that conflate categories ("Disorder of nervous system" promoted on psychiatric queries). Both failure modes show up in our data; both are structural, not tunable.
+
+**Net status (May 2026): cross-encoder code is NOT in the tree.** The Exp 3 BGE prototype was implemented end-to-end (a `CrossEncoderReranker` Spring `@Component` wired into `QueryStoreChartBuilder`, four `chartsearchai.querystore.rerank.*` global properties, a `ai.djl.huggingface:tokenizers:0.30.0` dependency for XLM-R SentencePiece tokenization, an INT8 BGE-reranker-v2-m3 ONNX in the standalone's `appdata/chartsearchai/bge-reranker-v2-m3/`), benchmarked against the locked 7-query rubric, then reverted on the user's call because the +0.057 mean P@5 gain does not justify the 3–6 second per-query latency cost and the user-visible regressions on the cancer and kidney queries. No commits were merged. Future work that would unlock real rerank gains on this corpus lives at the indexing layer — injecting concept-set category hints into `QueryDocument.text` so the CE has explicit category signal for records that are otherwise semantically opaque (bare lab values, unmodified condition names) — not in swapping CE models. If a future contributor wonders why this module doesn't have rerank when the RAG literature recommends it: we tried four times, the gain ceiling is narrow for this clinical-retrieval setup over a strong hybrid first-stage, and the implementation-then-revert workflow is captured here so the next attempt can pick up from this baseline rather than rediscover it.
+
 ## Decision 19: Retain all-MiniLM-L6-v2 as the embedding model
 
 **Status: Accepted** (April 2026)
