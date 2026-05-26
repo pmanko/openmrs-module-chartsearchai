@@ -51,6 +51,20 @@ class QueryStoreChartBuilder {
 
 	private static final Logger log = LoggerFactory.getLogger(QueryStoreChartBuilder.class);
 
+	// Mode labels emitted in the [timing] querystoreBuild log lines so ops dashboards can
+	// distinguish the two dispatch shapes (their hits and rpcMs distributions differ by
+	// 1-2 orders of magnitude). Kept as compile-time constants so a typo on any future log
+	// line — there will be more sites as the slice's logging contract gets reused — surfaces
+	// at compile time rather than as a silently-dropped grep.
+	static final String MODE_PRE_FILTER = "preFilter";
+
+	static final String MODE_FULL_CHART = "fullChart";
+
+	// Mode label for the input-error path (null patient / null uuid), which fires BEFORE
+	// resolveUsePreFilter() and so cannot honestly label the dispatch. Kept distinct from
+	// the two real modes so dashboards bucket input errors separately.
+	static final String MODE_UNKNOWN = "unknown";
+
 	@Autowired
 	private PatientChartSerializer chartSerializer;
 
@@ -67,20 +81,28 @@ class QueryStoreChartBuilder {
 		// Hard-error guards apply in both modes: null patient or null uuid can't reach either
 		// querystore method without NPE.
 		if (patient == null || patient.getUuid() == null) {
-			log.info("[timing] querystoreBuild patient={} hits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=skipped",
+			// mode=unknown — the dispatch isn't determined yet (resolveUsePreFilter() runs
+			// below). Emitting an explicit label keeps the timing log shape uniform so a
+			// dashboard grepping for mode= doesn't undercount input-error events.
+			log.info("[timing] querystoreBuild patient={} mode={} hits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=skipped",
 					patient == null ? null : patient.getPatientId(),
-					System.currentTimeMillis() - buildStart);
+					MODE_UNKNOWN, System.currentTimeMillis() - buildStart);
 			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
 
 		boolean usePreFilter = resolveUsePreFilter();
+		// {@code mode} labels each [timing] log line below so operators can distinguish the two
+		// dispatch shapes without correlating against the preFilter GP value at the time —
+		// Decision 15's full-chart mode has materially different {@code hits} and {@code rpcMs}
+		// distributions, and a single grep should be enough to tell the modes apart.
+		String mode = usePreFilter ? MODE_PRE_FILTER : MODE_FULL_CHART;
 		// Blank-question short-circuit only fires in preFilter mode: searchByPatient with an
 		// empty query is spurious (no ranking signal, wasted RPC). The full-chart path
 		// (getPatientChart) ignores the question entirely — a blank question still produces
 		// the patient's full indexed chart, which is exactly what the LLM consumer wants.
 		if (usePreFilter && (question == null || question.trim().isEmpty())) {
-			log.info("[timing] querystoreBuild patient={} hits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=skipped",
-					patient.getPatientId(), System.currentTimeMillis() - buildStart);
+			log.info("[timing] querystoreBuild patient={} mode={} hits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=skipped",
+					patient.getPatientId(), mode, System.currentTimeMillis() - buildStart);
 			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
 
@@ -98,8 +120,8 @@ class QueryStoreChartBuilder {
 			log.warn("chartsearchai.querystore.enabled=true but QueryStoreService is unavailable — "
 					+ "install openmrs-module-querystore or set chartsearchai.querystore.enabled=false. "
 					+ "Returning empty chart.");
-			log.info("[timing] querystoreBuild patient={} hits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=unavailable",
-					patient.getPatientId(), System.currentTimeMillis() - buildStart);
+			log.info("[timing] querystoreBuild patient={} mode={} hits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=unavailable",
+					patient.getPatientId(), mode, System.currentTimeMillis() - buildStart);
 			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
 
@@ -124,8 +146,15 @@ class QueryStoreChartBuilder {
 		catch (RuntimeException e) {
 			log.error("QueryStore retrieval failed for patient [uuid={}]", patient.getUuid(), e);
 			long failMs = System.currentTimeMillis() - rpcStart;
-			log.info("[timing] querystoreBuild patient={} hits=0 rpcMs={} serializeMs=0 totalMs={} outcome=error",
-					patient.getPatientId(), failMs, System.currentTimeMillis() - buildStart);
+			// {@code errorClass} discriminates between backend-side exceptions
+			// ({@code IllegalStateException} thrown by the per-tier backends on RPC failure,
+			// {@code APIException} from authorization or service-context issues) and code-bug
+			// exceptions ({@code NullPointerException} from a malformed QueryDocument, etc.).
+			// Without it, dashboards that bucket "why are charts empty?" cannot distinguish
+			// "querystore backend is down" from "chartsearchai has a regression."
+			log.info("[timing] querystoreBuild patient={} mode={} hits=0 rpcMs={} serializeMs=0 totalMs={} outcome=error errorClass={}",
+					patient.getPatientId(), mode, failMs, System.currentTimeMillis() - buildStart,
+					e.getClass().getSimpleName());
 			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
 		long rpcMs = System.currentTimeMillis() - rpcStart;
@@ -165,8 +194,8 @@ class QueryStoreChartBuilder {
 		// this number; a large gap means time is going to query preprocessing or service
 		// resolution, both pre-rpcStart.
 		long totalMs = System.currentTimeMillis() - buildStart;
-		log.info("[timing] querystoreBuild patient={} hits={} rpcMs={} serializeMs={} totalMs={} outcome=ok",
-				patient.getPatientId(), records.size(), rpcMs, serializeMs, totalMs);
+		log.info("[timing] querystoreBuild patient={} mode={} hits={} rpcMs={} serializeMs={} totalMs={} outcome=ok",
+				patient.getPatientId(), mode, records.size(), rpcMs, serializeMs, totalMs);
 		return chart;
 	}
 

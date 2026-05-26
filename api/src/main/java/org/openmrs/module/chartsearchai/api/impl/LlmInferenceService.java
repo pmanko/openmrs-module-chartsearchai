@@ -201,7 +201,12 @@ public class LlmInferenceService implements ChartSearchService {
 	 * extend this helper (and {@link LlmInferenceServiceWarmupTest}) — do not branch at
 	 * the {@code warmup()} call site, which would split the decision across two places.
 	 */
+	@SuppressWarnings("unused")
 	static boolean shouldRunWarmup(boolean preFilterEnabled, boolean queryStoreEnabled) {
+		// queryStoreEnabled is preserved in the signature per the Javadoc above (call-site
+		// decoupling, future-mode extension point). @SuppressWarnings locks intent at the
+		// compiler level so a static-analysis "drop unused params" pass surfaces the
+		// retention rationale before silently breaking the seam.
 		return !preFilterEnabled;
 	}
 

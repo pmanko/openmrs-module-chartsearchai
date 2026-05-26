@@ -196,6 +196,27 @@ public class QueryStoreChartBuilderTest {
 	}
 
 	@Test
+	public void build_shouldStillSkipNullUuid_whenPreFilterIsFalse() {
+		// Symmetric coverage for the null-uuid guard in the preFilter=false branch. A future
+		// refactor that pulled the null-uuid guard inside the per-branch arms (e.g. as part of
+		// "tidy this up") would only be caught by the preFilter=true null-uuid test —
+		// build_shouldReturnEmptyChartAndSkipQueryStore_whenPatientUuidIsNull above. Locks
+		// both branches against that refactor.
+		builder.usePreFilter = false;
+		Patient unidentifiedPatient = new Patient();
+		unidentifiedPatient.setPatientId(99);
+		unidentifiedPatient.setUuid(null);
+
+		PatientChart chart = builder.build(unidentifiedPatient, "any allergies?");
+
+		assertEquals(0, chart.getMappings().size(),
+				"null uuid must short-circuit in preFilter=false mode — passing null to "
+				+ "getPatientChart would either NPE or surface backend-specific behaviour");
+		assertEquals(0, queryStore.getPatientChartCalls,
+				"null uuid must not reach getPatientChart");
+	}
+
+	@Test
 	public void build_shouldSkipNullAndMalformedHitsAndKeepValidOnes() {
 		// Locks the record-conversion loop: a refactor that breaks SerializedRecord field
 		// order, drops the null-text guard, or removes a skip clause would silently corrupt
