@@ -26,10 +26,12 @@ import org.openmrs.module.querystore.model.QueryDocument;
 /**
  * Pure unit tests for {@link QueryStoreChartBuilder}.
  *
- * <p>The class is mostly a thin pass-through to {@code QueryStoreService.searchByPatient};
- * these tests pin the contract that callers (especially the warmup path) rely on —
- * specifically, that blank or null questions short-circuit before reaching querystore
- * and return an empty chart, never an exception.
+ * <p>The class branches on {@code chartsearchai.embedding.preFilter} between
+ * {@code QueryStoreService.searchByPatient} (preFilter=true, ranked top-K) and
+ * {@code QueryStoreService.getPatientChart} (preFilter=false, unfiltered full chart
+ * per querystore Decision 15). These tests pin the dispatch correctness on both
+ * branches, the input-guard contract (null patient / null uuid in both modes; blank
+ * question only short-circuits in preFilter mode), and the record-conversion loop.
  */
 public class QueryStoreChartBuilderTest {
 
@@ -58,7 +60,7 @@ public class QueryStoreChartBuilderTest {
 				"blank question must produce an empty chart — the empty-question early-return "
 				+ "is what makes LlmInferenceService.warmup() safe to call with an empty string "
 				+ "before chart open, and what protects querystore from spurious calls");
-		assertEquals(0, queryStore.callCount,
+		assertEquals(0, queryStore.getCallCount(),
 				"blank question must not consume a querystore call — that costs RPC + a Gemma "
 				+ "encoder pass for no useful output");
 	}
@@ -69,7 +71,7 @@ public class QueryStoreChartBuilderTest {
 
 		assertEquals(0, chart.getMappings().size(),
 				"null question must not NPE — caller contract is empty chart");
-		assertEquals(0, queryStore.callCount);
+		assertEquals(0, queryStore.getCallCount());
 	}
 
 	@Test
@@ -78,7 +80,7 @@ public class QueryStoreChartBuilderTest {
 
 		assertEquals(0, chart.getMappings().size(),
 				"null patient must not NPE — caller contract is empty chart");
-		assertEquals(0, queryStore.callCount);
+		assertEquals(0, queryStore.getCallCount());
 	}
 
 	@Test
@@ -91,7 +93,7 @@ public class QueryStoreChartBuilderTest {
 		assertEquals(0, chart.getMappings().size(),
 				"both-null must short-circuit cleanly without NPE — the guard's OR-chain "
 				+ "must check patient==null BEFORE dereferencing patient.getUuid()");
-		assertEquals(0, queryStore.callCount);
+		assertEquals(0, queryStore.getCallCount());
 	}
 
 	@Test
@@ -108,7 +110,7 @@ public class QueryStoreChartBuilderTest {
 		assertEquals(0, chart.getMappings().size(),
 				"patient without uuid must short-circuit — passing a null uuid to querystore "
 				+ "would either NPE or return spurious results depending on the backend");
-		assertEquals(0, queryStore.callCount);
+		assertEquals(0, queryStore.getCallCount());
 	}
 
 	@Test
@@ -119,9 +121,78 @@ public class QueryStoreChartBuilderTest {
 		// callCount==1 in the success case.
 		builder.build(patient(1), "any allergies?");
 
-		assertEquals(1, queryStore.callCount,
+		assertEquals(1, queryStore.getCallCount(),
 				"valid (patient with uuid, non-blank question) must reach querystore — "
 				+ "this is the only test that locks the happy path against guard inversion");
+	}
+
+	@Test
+	public void build_shouldCallGetPatientChartNotSearchByPatient_whenPreFilterIsFalse() {
+		// Decision 15 dispatch contract: preFilter=false routes to getPatientChart for the
+		// unfiltered full-chart path that the LLM consumer wants. A regression that always
+		// called searchByPatient would still produce *a* chart (ranked top-K), but it would
+		// be the wrong shape — relevance-filtered when the consumer explicitly opted out.
+		builder.usePreFilter = false;
+
+		builder.build(patient(1), "any allergies?");
+
+		assertEquals(1, queryStore.getPatientChartCalls,
+				"preFilter=false must dispatch to getPatientChart — the new querystore Decision 15 path");
+		assertEquals(0, queryStore.searchByPatientCalls,
+				"preFilter=false must NOT call searchByPatient — that's the ranked path");
+	}
+
+	@Test
+	public void build_shouldCallSearchByPatientNotGetPatientChart_whenPreFilterIsTrue() {
+		// Positive control for the preFilter=true path. Without this counter-assertion, the
+		// preFilter=false test above could pass on a regression that inverted the branch and
+		// routed BOTH modes to getPatientChart — the preFilter=true path would silently lose
+		// its question-conditioned ranking.
+		builder.usePreFilter = true;
+
+		builder.build(patient(1), "any allergies?");
+
+		assertEquals(1, queryStore.searchByPatientCalls,
+				"preFilter=true must dispatch to searchByPatient — the ranked top-K path");
+		assertEquals(0, queryStore.getPatientChartCalls,
+				"preFilter=true must NOT call getPatientChart — that's the full-chart path");
+	}
+
+	@Test
+	public void build_shouldStillCallGetPatientChart_whenQuestionIsBlankAndPreFilterIsFalse() {
+		// The blank-question short-circuit only applies in preFilter mode. Full-chart mode
+		// ignores the question entirely — Decision 15's getPatientChart has no question
+		// parameter — so a blank question must still produce the full chart. This is what
+		// makes the warmup re-enablement (separate follow-up) viable: warmup calls
+		// buildChart(patient, "") and expects a real chart back when chart bytes are
+		// question-independent. A regression that short-circuited blank questions in both
+		// modes would silently leave warmup priming an empty prompt.
+		builder.usePreFilter = false;
+
+		PatientChart chart = builder.build(patient(1), "   ");
+
+		assertEquals(1, queryStore.getPatientChartCalls,
+				"blank question must reach getPatientChart in preFilter=false mode — the question is unused");
+		assertEquals(0, queryStore.searchByPatientCalls,
+				"blank question must not reach searchByPatient");
+		// chart is built from stubChart (empty), so the resulting chart has 0 mappings —
+		// the test's claim is about dispatch, not chart contents.
+		assertEquals(0, chart.getMappings().size(),
+				"empty stubChart produces an empty PatientChart; this just confirms the call returned cleanly");
+	}
+
+	@Test
+	public void build_shouldStillSkipNullPatient_whenPreFilterIsFalse() {
+		// Hard-error guards apply in both modes — null patient can't reach getPatientChart
+		// without NPEing on getUuid(). Mirrors the preFilter=true null-patient guard test;
+		// this is the symmetric coverage for the new branch.
+		builder.usePreFilter = false;
+
+		PatientChart chart = builder.build(null, "any allergies?");
+
+		assertEquals(0, chart.getMappings().size());
+		assertEquals(0, queryStore.getPatientChartCalls,
+				"null patient must short-circuit in preFilter=false mode too");
 	}
 
 	@Test
@@ -170,10 +241,17 @@ public class QueryStoreChartBuilderTest {
 	 * Subclass that bypasses {@code Context.getService} so this test runs without
 	 * a live OpenMRS context. The {@code resolve*} overrides are the seam — every
 	 * other code path goes through the real builder.
+	 *
+	 * <p>Defaults {@code resolveUsePreFilter()} to {@code true} so the legacy tests
+	 * (written when {@code searchByPatient} was the only dispatch target) continue to
+	 * exercise the preFilter path without explicit per-test wiring. Tests that need
+	 * the full-chart branch flip it via {@link #usePreFilter}.
 	 */
 	private static final class TestableQueryStoreChartBuilder extends QueryStoreChartBuilder {
 
 		private final QueryStoreService stub;
+
+		boolean usePreFilter = true;
 
 		TestableQueryStoreChartBuilder(QueryStoreService stub) {
 			this.stub = stub;
@@ -188,17 +266,39 @@ public class QueryStoreChartBuilderTest {
 		protected int resolveQueryStoreTopK() {
 			return 10;
 		}
+
+		@Override
+		protected boolean resolveUsePreFilter() {
+			return usePreFilter;
+		}
 	}
 
 	private static final class CountingQueryStore implements QueryStoreService {
 
-		int callCount = 0;
+		int searchByPatientCalls = 0;
+
+		int getPatientChartCalls = 0;
+
 		List<QueryDocument> stubHits = new ArrayList<QueryDocument>();
+
+		List<QueryDocument> stubChart = new ArrayList<QueryDocument>();
+
+		/** Backwards-compatible aggregate counter — pre-Decision-15 tests assert on
+		 *  total querystore calls without caring which method. */
+		int getCallCount() {
+			return searchByPatientCalls + getPatientChartCalls;
+		}
 
 		@Override
 		public List<QueryDocument> searchByPatient(String patientUuid, String question, int topK) {
-			callCount++;
+			searchByPatientCalls++;
 			return stubHits;
+		}
+
+		@Override
+		public List<QueryDocument> getPatientChart(String patientUuid) {
+			getPatientChartCalls++;
+			return stubChart;
 		}
 
 		@Override

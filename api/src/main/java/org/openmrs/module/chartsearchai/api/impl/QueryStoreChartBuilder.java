@@ -28,10 +28,19 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
- * Bridge to the querystore module's {@code searchByPatient} API. Resolves
- * the service lazily via {@link Context#getService(Class)} so chartsearchai
- * still starts when the querystore omod isn't installed — lookup failure
- * surfaces as an empty chart, same outcome as a search returning no hits.
+ * Bridge to the querystore module's read API. Resolves the service lazily via
+ * {@link Context#getService(Class)} so chartsearchai still starts when the
+ * querystore omod isn't installed — lookup failure surfaces as an empty chart,
+ * same outcome as a search returning no hits.
+ *
+ * <p>Branches on the {@code chartsearchai.embedding.preFilter} global property:
+ * when {@code preFilter=true}, dispatches to
+ * {@link QueryStoreService#searchByPatient(String, String, int)} for ranked,
+ * question-conditioned retrieval; when {@code preFilter=false}, dispatches to
+ * {@link QueryStoreService#getPatientChart(String)} — querystore Decision 15's
+ * unfiltered full-chart enumeration. The full-chart path ignores the
+ * {@code question} parameter (the LLM does its own reasoning over the whole
+ * chart) so a blank/null question is no longer a short-circuit there.
  *
  * <p>The {@code protected resolve*} methods and the package-private
  * {@link #setChartSerializer} are test seams, not an extension point.
@@ -55,13 +64,23 @@ class QueryStoreChartBuilder {
 
 	PatientChart build(Patient patient, String question) {
 		long buildStart = System.currentTimeMillis();
-		if (patient == null || patient.getUuid() == null
-				|| question == null || question.trim().isEmpty()) {
-			// outcome=skipped — caller passed invalid inputs; no querystore call, no chart.
-			// Logging this so operator-side chartBuildMs has a matching inner line.
+		// Hard-error guards apply in both modes: null patient or null uuid can't reach either
+		// querystore method without NPE.
+		if (patient == null || patient.getUuid() == null) {
 			log.info("[timing] querystoreBuild patient={} hits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=skipped",
 					patient == null ? null : patient.getPatientId(),
 					System.currentTimeMillis() - buildStart);
+			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
+		}
+
+		boolean usePreFilter = resolveUsePreFilter();
+		// Blank-question short-circuit only fires in preFilter mode: searchByPatient with an
+		// empty query is spurious (no ranking signal, wasted RPC). The full-chart path
+		// (getPatientChart) ignores the question entirely — a blank question still produces
+		// the patient's full indexed chart, which is exactly what the LLM consumer wants.
+		if (usePreFilter && (question == null || question.trim().isEmpty())) {
+			log.info("[timing] querystoreBuild patient={} hits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=skipped",
+					patient.getPatientId(), System.currentTimeMillis() - buildStart);
 			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
 
@@ -84,15 +103,26 @@ class QueryStoreChartBuilder {
 			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
 
-		String preprocessedQuestion = QueryPreprocessor.stripQueryStopwords(question);
-		int topK = resolveQueryStoreTopK();
 		long rpcStart = System.currentTimeMillis();
 		List<QueryDocument> hits;
 		try {
-			hits = queryStore.searchByPatient(patient.getUuid(), preprocessedQuestion, topK);
+			if (usePreFilter) {
+				String preprocessedQuestion = QueryPreprocessor.stripQueryStopwords(question);
+				int topK = resolveQueryStoreTopK();
+				hits = queryStore.searchByPatient(patient.getUuid(), preprocessedQuestion, topK);
+			}
+			else {
+				// querystore Decision 15: unfiltered full-chart enumeration, ordered by
+				// record_date desc with deterministic tie-break. Replaces the legacy
+				// ChartCache/PatientRecordLoader full-chart path now that querystore serializes
+				// every clinical record into per-type indices that the events-first sync keeps
+				// current — no need for chartsearchai to maintain a parallel serialization
+				// pipeline.
+				hits = queryStore.getPatientChart(patient.getUuid());
+			}
 		}
 		catch (RuntimeException e) {
-			log.error("QueryStore search failed for patient [uuid={}]", patient.getUuid(), e);
+			log.error("QueryStore retrieval failed for patient [uuid={}]", patient.getUuid(), e);
 			long failMs = System.currentTimeMillis() - rpcStart;
 			log.info("[timing] querystoreBuild patient={} hits=0 rpcMs={} serializeMs=0 totalMs={} outcome=error",
 					patient.getPatientId(), failMs, System.currentTimeMillis() - buildStart);
@@ -148,5 +178,10 @@ class QueryStoreChartBuilder {
 	/** Seam for tests: production reads the global property. */
 	protected int resolveQueryStoreTopK() {
 		return PipelineSettings.getQueryStoreTopK();
+	}
+
+	/** Seam for tests: production reads the global property. */
+	protected boolean resolveUsePreFilter() {
+		return PipelineSettings.usePreFilter();
 	}
 }
