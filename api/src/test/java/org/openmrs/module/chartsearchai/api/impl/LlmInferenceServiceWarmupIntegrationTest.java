@@ -79,20 +79,25 @@ public class LlmInferenceServiceWarmupIntegrationTest {
 	}
 
 	@Test
-	public void warmup_shouldSkipAllSideEffects_whenQuerystoreEnabled() {
-		// This is the bug fix's wiring lock: when querystore is enabled, the chart bytes
-		// vary per question, so warmup primes a prefix no real query will reuse — must skip
-		// both the chart-build and the provider.warmup call.
+	public void warmup_shouldFire_whenQuerystoreEnabledAndPreFilterDisabled() {
+		// After the Decision 15 dispatch change, querystore's full-chart mode
+		// (preFilter=false, queryStore=true) routes to getPatientChart and produces
+		// question-independent chart bytes. Warmup must fire here — pre-Decision-15 it
+		// was skipped because the chart varied per question via searchByPatient. This
+		// test locks the new wiring claim: a refactor that re-introduces a queryStore-
+		// dependent skip would re-disable warmup in the exact configuration where it
+		// now helps the most (large charts, repeated questions).
 		service.queryStoreEnabledStub = true;
+		strategy.usePreFilterStub = false;
 
 		service.warmup(patient(1));
 
-		assertFalse(strategy.buildChartCalled,
-				"with querystore enabled, the chart-build must be skipped — building a chart "
-				+ "that no real query will match is wasted CPU on the demo");
-		assertFalse(provider.warmupCalled,
-				"with querystore enabled, provider.warmup must NOT fire — this is the exact "
-				+ "regression a refactor that bypasses shouldRunWarmup would re-introduce");
+		assertTrue(strategy.buildChartCalled,
+				"with querystore enabled and preFilter disabled, the chart-build must fire — "
+				+ "getPatientChart returns a question-independent chart and warmup primes it");
+		assertTrue(provider.warmupCalled,
+				"with querystore enabled and preFilter disabled, provider.warmup must fire — "
+				+ "this is the Decision 15 warmup unlock");
 	}
 
 	@Test
@@ -137,12 +142,19 @@ public class LlmInferenceServiceWarmupIntegrationTest {
 
 	@Test
 	public void warmup_shouldSkipAllSideEffects_whenPreFilterEnabled() {
+		// preFilter is the sole chart-byte-stability gate after the Decision 15 dispatch
+		// change — when on, chart bytes vary per question regardless of whether querystore
+		// is wired, so warmup primes a prefix no real query will reuse. The companion
+		// _whenQuerystoreEnabledAndPreFilterDisabled test above locks the inverse claim.
 		strategy.usePreFilterStub = true;
 
 		service.warmup(patient(1));
 
-		assertFalse(strategy.buildChartCalled);
-		assertFalse(provider.warmupCalled);
+		assertFalse(strategy.buildChartCalled,
+				"with preFilter on, chart-build must be skipped — chart bytes vary per question");
+		assertFalse(provider.warmupCalled,
+				"with preFilter on, provider.warmup must NOT fire — the regression a refactor "
+				+ "that bypasses shouldRunWarmup would re-introduce");
 	}
 
 	/**

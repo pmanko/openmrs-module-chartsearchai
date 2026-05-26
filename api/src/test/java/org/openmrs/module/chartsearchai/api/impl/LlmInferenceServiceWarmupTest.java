@@ -38,7 +38,7 @@ public class LlmInferenceServiceWarmupTest {
 	}
 
 	@Test
-	public void shouldRunWarmup_shouldReturnTrue_whenFullChartPath() {
+	public void shouldRunWarmup_shouldReturnTrue_whenFullChartPathWithoutQueryStore() {
 		// querystore off + prefilter off: ChartCache returns the full chart, byte-identical
 		// across questions for the same patient. Warmup primes the real prefix. WORKS.
 		assertTrue(LlmInferenceService.shouldRunWarmup(false, false),
@@ -46,45 +46,47 @@ public class LlmInferenceServiceWarmupTest {
 	}
 
 	@Test
-	public void shouldRunWarmup_shouldReturnFalse_whenQuerystoreEnabled() {
-		// The bug fix: today this returned true and warmup ran with buildChart(patient,"")
-		// → empty chart → primed the wrong bytes. Real querystore queries with topK records
-		// hit a completely different prefix. Wasted compute, zero cache hit. Must skip.
-		assertFalse(LlmInferenceService.shouldRunWarmup(false, true),
-				"querystore on means chart varies per question; warmup primes bytes that "
-				+ "won't match real queries — must skip to avoid wasting compute");
+	public void shouldRunWarmup_shouldReturnTrue_whenFullChartPathWithQueryStore() {
+		// querystore on + prefilter off: chartsearchai dispatches to getPatientChart
+		// (querystore Decision 15), which returns the patient's full indexed projection —
+		// byte-identical across questions, same as the ChartCache path. Warmup primes the
+		// real prefix here too. Pre-Decision-15 this case returned false because the
+		// dispatch went through searchByPatient (question-conditioned, varying per query);
+		// the dispatch change makes it warmup-eligible.
+		assertTrue(LlmInferenceService.shouldRunWarmup(false, true),
+				"with the Decision 15 dispatch, querystore's full-chart mode produces "
+				+ "question-independent bytes — warmup must run to prime them");
 	}
 
 	@Test
-	public void shouldRunWarmup_shouldReturnFalse_whenBothPreFilterAndQuerystoreEnabled() {
-		// Locks the disjunction semantics: EITHER gate alone is sufficient. A refactor that
-		// accidentally ANDs them ("if (preFilter && querystore) return false") would still
-		// pass shouldRunWarmup_shouldReturnFalse_whenPreFilterEnabled AND
-		// shouldRunWarmup_shouldReturnFalse_whenQuerystoreEnabled — and silently regress
-		// to running warmup on the bug-on-bug combination.
+	public void shouldRunWarmup_shouldReturnFalse_whenPreFilterEnabledRegardlessOfQuerystore() {
+		// Pins that preFilter is the sole gate. A refactor that re-introduced a queryStore
+		// check (e.g., "skip if querystore on") could silently drop warmup in the
+		// (preFilter=false, queryStore=true) case where this slice explicitly enables it.
+		// This test plus the truth-table parameterised test below catch that regression.
 		assertFalse(LlmInferenceService.shouldRunWarmup(true, true),
-				"both question-dependent gates on must still skip; their relationship is OR, "
-				+ "not AND — either alone makes the chart bytes question-dependent");
+				"preFilter=true must skip warmup regardless of queryStore — chart varies per question");
 	}
 
 	/**
-	 * Exhaustive truth table — all 2² = 4 combinations. Expected = (!preFilterEnabled
-	 * AND !queryStoreEnabled). Only the (false,false) row should return true; every
-	 * other row returns false. Locks against any refactor that re-orders the gates,
-	 * drops one, or replaces the short-circuit chain with a misformed boolean expression.
+	 * Exhaustive truth table — all 2² = 4 combinations. Expected = {@code !preFilterEnabled};
+	 * the {@code queryStoreEnabled} parameter is non-load-bearing after the Decision 15
+	 * dispatch change. Locks against a refactor that re-introduces a queryStore-dependent
+	 * gate (a regression that would silently disable warmup in the full-chart-with-
+	 * querystore configuration).
 	 */
 	@ParameterizedTest(name = "[{index}] preFilter={0} queryStore={1} → {2}")
 	@CsvSource({
-			"false, false, true",   // ONLY this row is true — full-chart happy path
-			"false, true,  false",
-			"true,  false, false",
-			"true,  true,  false",
+			"false, false, true",   // full-chart, no querystore — original happy path
+			"false, true,  true",   // full-chart via Decision 15 getPatientChart — also warmup-eligible
+			"true,  false, false",  // preFilter on — chart varies per query
+			"true,  true,  false",  // preFilter on regardless of querystore — chart varies per query
 	})
 	public void shouldRunWarmup_exhaustiveTruthTable(boolean preFilterEnabled,
 			boolean queryStoreEnabled, boolean expected) {
 		assertEquals(expected,
 				LlmInferenceService.shouldRunWarmup(preFilterEnabled, queryStoreEnabled),
-				"truth-table row failed; the only row that should return true is "
-				+ "(preFilter=false, queryStore=false)");
+				"truth-table row failed; expected = (!preFilterEnabled), queryStoreEnabled "
+				+ "must not affect the outcome");
 	}
 }

@@ -182,27 +182,27 @@ public class LlmInferenceService implements ChartSearchService {
 	 * {@link #warmup(Patient)} call site instead, so this helper focuses
 	 * narrowly on chart-byte-stability semantics.
 	 *
-	 * @param preFilterEnabled the {@code chartsearchai.embedding.preFilter} setting —
-	 *        when true, the embedding pre-filter pipeline picks question-dependent
-	 *        records, so the chart prefix varies and warmup can't help
+	 * <p>Only {@code preFilterEnabled} matters for stability. When true, the
+	 * embedding pre-filter pipeline picks question-dependent records and the chart
+	 * prefix varies per query — warmup can't help and would prime bytes no real
+	 * query reuses. When false, the chart is the patient's full indexed projection
+	 * regardless of whether querystore (via Decision 15's {@code getPatientChart})
+	 * or the local {@code ChartCache} produces it — both shapes are byte-identical
+	 * across queries for the same patient, so warmup primes the real prefix.
+	 *
+	 * @param preFilterEnabled the {@code chartsearchai.embedding.preFilter} setting
 	 * @param queryStoreEnabled the {@code chartsearchai.querystore.enabled} setting —
-	 *        when on, each question reaches the LLM with a different top-K, so the
-	 *        chart prefix varies and warmup would prime bytes no real query will match
+	 *        retained in the signature for callers and for the call-site decoupling,
+	 *        but no longer load-bearing here since the dispatch in
+	 *        {@link QueryStoreChartBuilder} routes querystore's full-chart mode to
+	 *        the question-independent {@code getPatientChart}
 	 *
 	 * <p>When adding a new pipeline mode that produces question-dependent chart bytes,
 	 * extend this helper (and {@link LlmInferenceServiceWarmupTest}) — do not branch at
 	 * the {@code warmup()} call site, which would split the decision across two places.
 	 */
 	static boolean shouldRunWarmup(boolean preFilterEnabled, boolean queryStoreEnabled) {
-		if (preFilterEnabled) {
-			return false;
-		}
-		if (queryStoreEnabled) {
-			// Chart bytes vary per question — warmup would prime a prefix no real
-			// query will match. Skipping is cheaper than wasting compute.
-			return false;
-		}
-		return true;
+		return !preFilterEnabled;
 	}
 
 	List<ChartEmbedding> findSimilar(Patient patient, String question) {
