@@ -42,6 +42,11 @@ import org.springframework.stereotype.Service;
  * call and citation handling. The static helpers on this class are thin
  * delegates kept for backward-compatible test access; new code should
  * call the underlying class directly.
+ *
+ * <p>The {@code protected resolve*} methods and package-private setters exposed
+ * here are test seams, not an extension point. Subclassing this bean outside the
+ * test package is not a supported integration; Spring wiring assumes the singleton
+ * is this concrete class.
  */
 @Service("chartSearchAi.llmInferenceService")
 public class LlmInferenceService implements ChartSearchService {
@@ -53,6 +58,19 @@ public class LlmInferenceService implements ChartSearchService {
 
 	@Autowired
 	private ChartBuildingStrategy chartBuildingStrategy;
+
+	/** Test seam: production wires {@link LlmProvider} via {@link Autowired}.
+	 *  Package-private to allow {@code LlmInferenceServiceWarmupIntegrationTest} to
+	 *  inject a stub without bringing up Spring; matches the seam pattern established
+	 *  in {@code QueryStoreChartBuilder}. */
+	void setLlmProvider(LlmProvider llmProvider) {
+		this.llmProvider = llmProvider;
+	}
+
+	/** Test seam: production wires {@link ChartBuildingStrategy} via {@link Autowired}. */
+	void setChartBuildingStrategy(ChartBuildingStrategy chartBuildingStrategy) {
+		this.chartBuildingStrategy = chartBuildingStrategy;
+	}
 
 	/**
 	 * Bundles the pipeline result list with the computed noise profile so
@@ -82,34 +100,109 @@ public class LlmInferenceService implements ChartSearchService {
 
 	@Override
 	public ChartAnswer search(Patient patient, String question) {
-		PatientChart chart = chartBuildingStrategy.buildChart(patient, question);
-		LlmResponse response = llmProvider.search(chartTextOrPlaceholder(chart), question);
+		// LOG FORMAT — stable contract: operators grep these fields for SLO dashboards
+		// and latency triage. Renaming a field is a breaking change. Field set:
+		// patient, chartBuildMs, llmMs, totalMs, inputTokens, cachedTokens, outcome={ok,error}.
+		// cachedTokens is meaningful only on engines that report KV-cache reuse in their
+		// usage metadata (LocalLlmEngine populates it; remote engines may report 0 always).
+		// try/finally so an exception from buildChart or LLM still emits a timing line —
+		// otherwise the exact queries operators most need to diagnose would be invisible.
+		long buildStart = System.currentTimeMillis();
+		long buildMs = 0;
+		long llmMs = 0;
+		long inputTokens = 0;
+		long cachedTokens = 0;
+		String outcome = "error";
+		try {
+			PatientChart chart = chartBuildingStrategy.buildChart(patient, question);
+			buildMs = System.currentTimeMillis() - buildStart;
 
-		return new ChartAnswer(response.getAnswer(),
-				extractCitedReferences(response.getCitations(), chart.getMappings()),
-				response.getInputTokens(), response.getOutputTokens(),
-				response.getCachedTokens());
+			long llmStart = System.currentTimeMillis();
+			LlmResponse response = llmProvider.search(chartTextOrPlaceholder(chart), question);
+			llmMs = System.currentTimeMillis() - llmStart;
+			inputTokens = response.getInputTokens();
+			cachedTokens = response.getCachedTokens();
+
+			ChartAnswer answer = new ChartAnswer(response.getAnswer(),
+					extractCitedReferences(response.getCitations(), chart.getMappings()),
+					response.getInputTokens(), response.getOutputTokens(),
+					response.getCachedTokens());
+			outcome = "ok";
+			return answer;
+		}
+		finally {
+			log.info("[timing] search patient={} chartBuildMs={} llmMs={} totalMs={} inputTokens={} cachedTokens={} outcome={}",
+					patient == null ? null : patient.getPatientId(),
+					buildMs, llmMs, buildMs + llmMs,
+					inputTokens, cachedTokens, outcome);
+		}
 	}
 
 	@Override
 	public void warmup(Patient patient) {
-		if (!isWarmupEnabled()) {
+		// Two operational kill switches first, each as its own early-return so neither
+		// downstream call (usePreFilter — GP read; resolveQueryStoreEnabled — GP read) is
+		// evaluated when warmup is fundamentally impossible. Pre-slice these were implicit
+		// in the if-chain; the extracted helper would otherwise evaluate them eagerly.
+		if (!resolveWarmupEnabled()) {
 			return;
 		}
-		// Skip the upstream chart-serialization cost when the active engine
-		// gains nothing from warmup (e.g. remote APIs that cache themselves).
 		if (!llmProvider.supportsWarmup()) {
 			return;
 		}
-		// Pre-filter pipelines build a different prompt prefix for each
-		// query (the records sent depend on the question), so a chart-only
-		// warmup wouldn't match what a real query produces — the KV cache
-		// would not be reused.
-		if (chartBuildingStrategy.usePreFilter()) {
+		// The remaining gates are about chart-byte stability — both gates make the chart
+		// prefix question-dependent, so warmup would prime a prefix no real query matches.
+		if (!shouldRunWarmup(
+				chartBuildingStrategy.usePreFilter(),
+				resolveQueryStoreEnabled())) {
 			return;
 		}
 		PatientChart chart = chartBuildingStrategy.buildChart(patient, "");
 		llmProvider.warmup(chartTextOrPlaceholder(chart));
+	}
+
+	/** Test seam wrapping the static {@link #isWarmupEnabled()}; production delegates,
+	 *  tests override to control the gate without an OpenMRS context. */
+	protected boolean resolveWarmupEnabled() {
+		return isWarmupEnabled();
+	}
+
+	/** Test seam wrapping {@link ChartSearchAiUtils#isQueryStoreEnabled()}; production
+	 *  delegates, tests override to control the gate without an OpenMRS context. */
+	protected boolean resolveQueryStoreEnabled() {
+		return ChartSearchAiUtils.isQueryStoreEnabled();
+	}
+
+	/**
+	 * Pure-logic decision for whether the current pipeline mode produces a
+	 * question-independent chart prefix that warmup can usefully prime. Warmup
+	 * primes the cache with one specific prompt prefix; that only pays off if
+	 * real queries will reuse those same bytes. Operational kill switches
+	 * (warmup disabled, provider doesn't support warmup) are checked at the
+	 * {@link #warmup(Patient)} call site instead, so this helper focuses
+	 * narrowly on chart-byte-stability semantics.
+	 *
+	 * @param preFilterEnabled the {@code chartsearchai.embedding.preFilter} setting —
+	 *        when true, the embedding pre-filter pipeline picks question-dependent
+	 *        records, so the chart prefix varies and warmup can't help
+	 * @param queryStoreEnabled the {@code chartsearchai.querystore.enabled} setting —
+	 *        when on, each question reaches the LLM with a different top-K, so the
+	 *        chart prefix varies and warmup would prime bytes no real query will match
+	 *
+	 * <p>When adding a new pipeline mode that produces question-dependent chart bytes,
+	 * extend this helper (and {@link LlmInferenceServiceWarmupTest}) — do not branch at
+	 * the {@code warmup()} call site, which would split the decision across two places.
+	 */
+	static boolean shouldRunWarmup(boolean preFilterEnabled, boolean queryStoreEnabled) {
+		if (preFilterEnabled) {
+			return false;
+		}
+		if (queryStoreEnabled) {
+			// Chart bytes vary per question — warmup would prime a prefix no real
+			// query will match. Skipping is cheaper than wasting compute.
+			return false;
+		}
+		return true;
 	}
 
 	List<ChartEmbedding> findSimilar(Patient patient, String question) {
@@ -119,14 +212,40 @@ public class LlmInferenceService implements ChartSearchService {
 	@Override
 	public ChartAnswer searchStreaming(Patient patient, String question,
 			Consumer<String> tokenConsumer) {
-		PatientChart chart = chartBuildingStrategy.buildChart(patient, question);
-		LlmResponse response = llmProvider.searchStreaming(
-				chartTextOrPlaceholder(chart), question, tokenConsumer);
+		// LOG FORMAT — stable contract: same field set as search() with op=searchStreaming
+		// in the log tag. Streaming is the path the frontend actually uses by default, so
+		// this is what demo operators see in their logs. try/finally so exceptions still
+		// emit a timing line — see search() for the exception-safety rationale.
+		long buildStart = System.currentTimeMillis();
+		long buildMs = 0;
+		long llmMs = 0;
+		long inputTokens = 0;
+		long cachedTokens = 0;
+		String outcome = "error";
+		try {
+			PatientChart chart = chartBuildingStrategy.buildChart(patient, question);
+			buildMs = System.currentTimeMillis() - buildStart;
 
-		return new ChartAnswer(response.getAnswer(),
-				extractCitedReferences(response.getCitations(), chart.getMappings()),
-				response.getInputTokens(), response.getOutputTokens(),
-				response.getCachedTokens());
+			long llmStart = System.currentTimeMillis();
+			LlmResponse response = llmProvider.searchStreaming(
+					chartTextOrPlaceholder(chart), question, tokenConsumer);
+			llmMs = System.currentTimeMillis() - llmStart;
+			inputTokens = response.getInputTokens();
+			cachedTokens = response.getCachedTokens();
+
+			ChartAnswer answer = new ChartAnswer(response.getAnswer(),
+					extractCitedReferences(response.getCitations(), chart.getMappings()),
+					response.getInputTokens(), response.getOutputTokens(),
+					response.getCachedTokens());
+			outcome = "ok";
+			return answer;
+		}
+		finally {
+			log.info("[timing] searchStreaming patient={} chartBuildMs={} llmMs={} totalMs={} inputTokens={} cachedTokens={} outcome={}",
+					patient == null ? null : patient.getPatientId(),
+					buildMs, llmMs, buildMs + llmMs,
+					inputTokens, cachedTokens, outcome);
+		}
 	}
 
 	/**
