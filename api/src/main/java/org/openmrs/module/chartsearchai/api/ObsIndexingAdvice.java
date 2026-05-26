@@ -41,17 +41,12 @@ public class ObsIndexingAdvice implements AfterReturningAdvice {
 			return;
 		}
 
-		Patient patient = getPatientFromArgs(returnValue, args);
-		if (patient == null) {
+		if (IndexingHelper.isDisabledByQueryStore()) {
 			return;
 		}
 
-		// Invalidate the chart cache regardless of preFilter — the cache feeds the
-		// !preFilter path, so it needs invalidation precisely when the embedding
-		// re-index does not run.
-		ChartCacheInvalidator.invalidate(patient);
-
-		if (IndexingHelper.isDisabledByQueryStore()) {
+		Patient patient = getPatientFromArgs(returnValue, args);
+		if (patient == null) {
 			return;
 		}
 

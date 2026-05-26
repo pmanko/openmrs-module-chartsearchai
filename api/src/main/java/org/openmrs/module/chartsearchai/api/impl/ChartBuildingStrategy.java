@@ -80,10 +80,6 @@ class ChartBuildingStrategy {
 	private HybridRetriever hybridRetriever;
 
 	@Autowired
-	@Qualifier("chartSearchAi.chartCache")
-	private ChartCache chartCache;
-
-	@Autowired
 	@Qualifier("chartSearchAi.queryStoreChartBuilder")
 	private QueryStoreChartBuilder queryStoreChartBuilder;
 
@@ -104,14 +100,13 @@ class ChartBuildingStrategy {
 			return queryStoreChartBuilder.build(patient, question);
 		}
 
+		// Legacy full-chart path (querystore disabled, preFilter disabled): serialize the patient
+		// chart per request. The pre-Decision-15 in-memory ChartCache that used to amortize this
+		// cost was removed once querystore became the full-chart path — the AOP-driven cache
+		// invalidation overhead exceeded the savings on a per-call serialize, and querystore is
+		// the supported full-chart shape going forward.
 		if (!usePreFilter()) {
-			PatientChart cached = chartCache.get(patient);
-			if (cached != null) {
-				return cached;
-			}
-			PatientChart chart = chartSerializer.serialize(patient);
-			chartCache.put(patient, chart);
-			return chart;
+			return chartSerializer.serialize(patient);
 		}
 
 		if (isHybridPipeline()) {

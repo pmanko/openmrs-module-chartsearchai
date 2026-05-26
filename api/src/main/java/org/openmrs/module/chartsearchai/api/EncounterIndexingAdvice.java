@@ -45,17 +45,11 @@ public class EncounterIndexingAdvice implements AfterReturningAdvice {
 			return;
 		}
 
-		// Invalidate the chart cache regardless of preFilter — the cache feeds the
-		// !preFilter path, so it needs invalidation precisely when the embedding
-		// re-index does not run.
-		Patient patient = getPatientFromArgs(returnValue, args);
-		if (patient != null) {
-			ChartCacheInvalidator.invalidate(patient);
-		}
-
 		if (IndexingHelper.isDisabledByQueryStore()) {
 			return;
 		}
+
+		Patient patient = getPatientFromArgs(returnValue, args);
 
 		String preFilter = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
