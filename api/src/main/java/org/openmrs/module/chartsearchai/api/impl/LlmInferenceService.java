@@ -187,8 +187,9 @@ public class LlmInferenceService implements ChartSearchService {
 	 * prefix varies per query — warmup can't help and would prime bytes no real
 	 * query reuses. When false, the chart is the patient's full indexed projection
 	 * regardless of whether querystore (via Decision 15's {@code getPatientChart})
-	 * or the local {@code ChartCache} produces it — both shapes are byte-identical
-	 * across queries for the same patient, so warmup primes the real prefix.
+	 * or the legacy in-process {@code chartSerializer.serialize(patient)} produces
+	 * it — both shapes are byte-identical across queries for the same patient
+	 * (the serializer is deterministic), so warmup primes the real prefix.
 	 *
 	 * @param preFilterEnabled the {@code chartsearchai.embedding.preFilter} setting
 	 * @param queryStoreEnabled the {@code chartsearchai.querystore.enabled} setting —

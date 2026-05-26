@@ -91,9 +91,9 @@ class QueryStoreChartBuilder {
 		}
 
 		boolean usePreFilter = resolveUsePreFilter();
-		// {@code mode} labels each [timing] log line below so operators can distinguish the two
+		// `mode` labels each [timing] log line below so operators can distinguish the two
 		// dispatch shapes without correlating against the preFilter GP value at the time —
-		// Decision 15's full-chart mode has materially different {@code hits} and {@code rpcMs}
+		// Decision 15's full-chart mode has materially different `hits` and `rpcMs`
 		// distributions, and a single grep should be enough to tell the modes apart.
 		String mode = usePreFilter ? MODE_PRE_FILTER : MODE_FULL_CHART;
 		// Blank-question short-circuit only fires in preFilter mode: searchByPatient with an
@@ -146,10 +146,10 @@ class QueryStoreChartBuilder {
 		catch (RuntimeException e) {
 			log.error("QueryStore retrieval failed for patient [uuid={}]", patient.getUuid(), e);
 			long failMs = System.currentTimeMillis() - rpcStart;
-			// {@code errorClass} discriminates between backend-side exceptions
-			// ({@code IllegalStateException} thrown by the per-tier backends on RPC failure,
-			// {@code APIException} from authorization or service-context issues) and code-bug
-			// exceptions ({@code NullPointerException} from a malformed QueryDocument, etc.).
+			// `errorClass` discriminates between backend-side exceptions
+			// (`IllegalStateException` thrown by the per-tier backends on RPC failure,
+			// `APIException` from authorization or service-context issues) and code-bug
+			// exceptions (`NullPointerException` from a malformed QueryDocument, etc.).
 			// Without it, dashboards that bucket "why are charts empty?" cannot distinguish
 			// "querystore backend is down" from "chartsearchai has a regression."
 			log.info("[timing] querystoreBuild patient={} mode={} hits=0 rpcMs={} serializeMs=0 totalMs={} outcome=error errorClass={}",

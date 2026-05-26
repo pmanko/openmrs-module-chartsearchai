@@ -39,8 +39,9 @@ public class LlmInferenceServiceWarmupTest {
 
 	@Test
 	public void shouldRunWarmup_shouldReturnTrue_whenFullChartPathWithoutQueryStore() {
-		// querystore off + prefilter off: ChartCache returns the full chart, byte-identical
-		// across questions for the same patient. Warmup primes the real prefix. WORKS.
+		// querystore off + prefilter off: chartSerializer.serialize(patient) produces the
+		// full chart deterministically (byte-identical across questions for the same
+		// patient). Warmup primes the real prefix. WORKS.
 		assertTrue(LlmInferenceService.shouldRunWarmup(false, false),
 				"the full-chart path is the original happy case for warmup; this must keep working");
 	}
@@ -49,10 +50,10 @@ public class LlmInferenceServiceWarmupTest {
 	public void shouldRunWarmup_shouldReturnTrue_whenFullChartPathWithQueryStore() {
 		// querystore on + prefilter off: chartsearchai dispatches to getPatientChart
 		// (querystore Decision 15), which returns the patient's full indexed projection —
-		// byte-identical across questions, same as the ChartCache path. Warmup primes the
-		// real prefix here too. Pre-Decision-15 this case returned false because the
-		// dispatch went through searchByPatient (question-conditioned, varying per query);
-		// the dispatch change makes it warmup-eligible.
+		// byte-identical across questions, same shape as the legacy serializer path.
+		// Warmup primes the real prefix here too. Pre-Decision-15 this case returned false
+		// because the dispatch went through searchByPatient (question-conditioned, varying
+		// per query); the dispatch change makes it warmup-eligible.
 		assertTrue(LlmInferenceService.shouldRunWarmup(false, true),
 				"with the Decision 15 dispatch, querystore's full-chart mode produces "
 				+ "question-independent bytes — warmup must run to prime them");

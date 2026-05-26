@@ -17,7 +17,6 @@ import java.util.Set;
 import org.openmrs.Obs;
 import org.openmrs.Patient;
 import org.openmrs.api.context.Context;
-import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.aop.AfterReturningAdvice;
@@ -45,14 +44,14 @@ public class ObsIndexingAdvice implements AfterReturningAdvice {
 			return;
 		}
 
-		Patient patient = getPatientFromArgs(returnValue, args);
-		if (patient == null) {
+		if (!IndexingHelper.isPreFilterEnabled()) {
 			return;
 		}
 
-		String preFilter = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
-		if ("false".equalsIgnoreCase(preFilter.trim())) {
+		// Patient extraction lives below the GP check so the default preFilter=false hot
+		// path skips Obs.getPerson()'s Hibernate proxy resolution.
+		Patient patient = getPatientFromArgs(returnValue, args);
+		if (patient == null) {
 			return;
 		}
 

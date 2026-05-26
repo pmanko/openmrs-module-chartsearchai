@@ -140,7 +140,7 @@
 	<globalProperty>
 		<property>chartsearchai.querystore.enabled</property>
 		<defaultValue>false</defaultValue>
-		<description>Master switch for the querystore-backed retrieval path. When true, chartsearchai delegates retrieval to openmrs-module-querystore via QueryStoreService.searchByPatient and sends the top-K results to the LLM, bypassing chartsearchai's embedding pipelines. Requires the querystore module to be installed; if absent, the flag-on path degrades to an empty chart. Also suppresses chartsearchai's AOP indexing and the EmbeddingIndexTask backfill to avoid double-indexing (chart cache invalidation still runs). Default: false. See chartsearchai.querystore.topK for the result cap.</description>
+		<description>Master switch for the querystore-backed retrieval path. When true, chartsearchai delegates retrieval to openmrs-module-querystore — getPatientChart when chartsearchai.embedding.preFilter is false (the recommended shape for full-chart LLM reasoning), or searchByPatient with top-K when preFilter is true — and bypasses chartsearchai's own embedding pipelines. Requires the querystore module to be installed; if absent, the flag-on path degrades to an empty chart. Also suppresses chartsearchai's AOP indexing and the EmbeddingIndexTask backfill to avoid double-indexing. Default: false. NOTE — flipping this from false to true does not refresh pre-existing Lucene/Elasticsearch/MySQL embedding indices, which then stop receiving updates; flipping back exposes a stale snapshot. Treat the off→on transition as one-way for any deployment that previously ran the embedding pipelines, or re-run EmbeddingIndexTask after disabling. See chartsearchai.querystore.topK for the result cap.</description>
 	</globalProperty>
 
 	<globalProperty>
@@ -200,7 +200,7 @@
 	<globalProperty>
 		<property>chartsearchai.embedding.modelFilePath</property>
 		<defaultValue>chartsearchai/model.onnx</defaultValue>
-		<description>Relative path, including the filename, within the OpenMRS application data directory to the ONNX embedding model file. Required when embedding pre-filtering is enabled (chartsearchai.embedding.preFilter is true, the default). Example: chartsearchai/all-MiniLM-L6-v2.onnx (resolves to &lt;application-data-directory&gt;/chartsearchai/all-MiniLM-L6-v2.onnx). Download the model.onnx file from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 and rename it. Path traversal (e.g. "..") is not allowed.</description>
+		<description>Relative path, including the filename, within the OpenMRS application data directory to the ONNX embedding model file. Required when embedding pre-filtering is enabled (chartsearchai.embedding.preFilter is true (non-default)). Example: chartsearchai/all-MiniLM-L6-v2.onnx (resolves to &lt;application-data-directory&gt;/chartsearchai/all-MiniLM-L6-v2.onnx). Download the model.onnx file from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 and rename it. Path traversal (e.g. "..") is not allowed.</description>
 	</globalProperty>
 
 	<globalProperty>
@@ -212,7 +212,7 @@
 	<globalProperty>
 		<property>chartsearchai.embedding.vocabFilePath</property>
 		<defaultValue>chartsearchai/vocab.txt</defaultValue>
-		<description>Relative path, including the filename, within the OpenMRS application data directory to the WordPiece vocabulary file (vocab.txt) for the ONNX embedding model. Required when embedding pre-filtering is enabled (chartsearchai.embedding.preFilter is true, the default). Example: chartsearchai/vocab.txt (resolves to &lt;application-data-directory&gt;/chartsearchai/vocab.txt). Download vocab.txt from the same model repository as the ONNX model (e.g. https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2). Path traversal (e.g. "..") is not allowed.</description>
+		<description>Relative path, including the filename, within the OpenMRS application data directory to the WordPiece vocabulary file (vocab.txt) for the ONNX embedding model. Required when embedding pre-filtering is enabled (chartsearchai.embedding.preFilter is true (non-default)). Example: chartsearchai/vocab.txt (resolves to &lt;application-data-directory&gt;/chartsearchai/vocab.txt). Download vocab.txt from the same model repository as the ONNX model (e.g. https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2). Path traversal (e.g. "..") is not allowed.</description>
 	</globalProperty>
 
 	<!-- AOP -->

@@ -40,12 +40,12 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 /**
- * Picks the retrieval pipeline (embeddings, Lucene, Elasticsearch, hybrid)
- * for a patient query and returns the assembled {@link PatientChart}. Owns
- * the indexer collaborators, the chart cache, the patient-scoped noise
- * profile cache, and the entry into the embedding ranking pipeline. The
- * containing {@link LlmInferenceService} delegates here for chart
- * assembly and otherwise focuses on the LLM call and citation handling.
+ * Picks the retrieval pipeline (querystore, embeddings, Lucene, Elasticsearch,
+ * hybrid) for a patient query and returns the assembled {@link PatientChart}.
+ * Owns the indexer collaborators, the patient-scoped noise profile cache, and
+ * the entry into the embedding ranking pipeline. The containing
+ * {@link LlmInferenceService} delegates here for chart assembly and otherwise
+ * focuses on the LLM call and citation handling.
  */
 @Service("chartSearchAi.chartBuildingStrategy")
 class ChartBuildingStrategy {

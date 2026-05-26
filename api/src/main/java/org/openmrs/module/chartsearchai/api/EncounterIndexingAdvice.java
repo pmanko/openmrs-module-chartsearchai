@@ -17,7 +17,6 @@ import java.util.Set;
 import org.openmrs.Encounter;
 import org.openmrs.Patient;
 import org.openmrs.api.context.Context;
-import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.aop.AfterReturningAdvice;
@@ -49,11 +48,7 @@ public class EncounterIndexingAdvice implements AfterReturningAdvice {
 			return;
 		}
 
-		Patient patient = getPatientFromArgs(returnValue, args);
-
-		String preFilter = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
-		if ("false".equalsIgnoreCase(preFilter.trim())) {
+		if (!IndexingHelper.isPreFilterEnabled()) {
 			return;
 		}
 
@@ -69,6 +64,11 @@ public class EncounterIndexingAdvice implements AfterReturningAdvice {
 			}
 			IndexingHelper.reindexOtherPipelines(encounter.getPatient());
 		} else if (REINDEX_METHODS.contains(methodName)) {
+			// Patient extraction lives inside this arm because the saveEncounter arm above derives
+			// the patient from the returned Encounter directly. Hoisting it out of both branches
+			// would cost a redundant `Encounter.getPatient()` call on every saveEncounter
+			// path — Hibernate proxy resolution we don't need to pay twice.
+			Patient patient = getPatientFromArgs(returnValue, args);
 			if (patient != null) {
 				try {
 					EmbeddingIndexer indexer = Context.getRegisteredComponent(
