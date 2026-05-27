@@ -26,12 +26,15 @@ import org.openmrs.module.querystore.model.QueryDocument;
 /**
  * Pure unit tests for {@link QueryStoreChartBuilder}.
  *
- * <p>The class branches on {@code chartsearchai.embedding.preFilter} between
- * {@code QueryStoreService.searchByPatient} (preFilter=true, ranked top-K) and
- * {@code QueryStoreService.getPatientChart} (preFilter=false, unfiltered full chart
- * per querystore Decision 15). These tests pin the dispatch correctness on both
- * branches, the input-guard contract (null patient / null uuid in both modes; blank
- * question only short-circuits in preFilter mode), and the record-conversion loop.
+ * <p>Focus-hint mode contract: the builder always calls
+ * {@code QueryStoreService.getPatientChart} so the chart bytes are a function of the
+ * patient only (the property llama-server's KV-cache reuse needs). When
+ * {@code preFilter=true} with a non-blank question, it additionally calls
+ * {@code QueryStoreService.searchByPatient} to get a relevance ranking; the matching
+ * record UUIDs flow through {@code PatientChart.getFocusIndices()} for rendering as a
+ * small "Records most relevant to the query: ..." line in the LLM prompt. These tests
+ * pin the dispatch correctness, the input-guard contract (null patient / null uuid),
+ * and the record-conversion loop.
  */
 public class QueryStoreChartBuilderTest {
 
@@ -53,25 +56,37 @@ public class QueryStoreChartBuilderTest {
 	}
 
 	@Test
-	public void build_shouldReturnEmptyChartAndSkipQueryStore_whenQuestionIsBlank() {
+	public void build_shouldStillCallGetPatientChartAndSkipSearch_whenQuestionIsBlank() {
+		// Focus-hint contract: the chart bytes are a function of the patient only, so a blank
+		// question still produces the full chart — that's exactly what warmup needs (warmup
+		// calls buildChart(patient, "") to prime the prefix llama-server will reuse on real
+		// queries). The blank-question short-circuit is now scoped to the focus-hint side
+		// only: searchByPatient with an empty query is spurious (no ranking signal) so it's
+		// skipped, but getPatientChart still runs.
 		PatientChart chart = builder.build(patient(1), "   ");
 
 		assertEquals(0, chart.getMappings().size(),
-				"blank question must produce an empty chart — the empty-question early-return "
-				+ "is what makes LlmInferenceService.warmup() safe to call with an empty string "
-				+ "before chart open, and what protects querystore from spurious calls");
-		assertEquals(0, queryStore.getCallCount(),
-				"blank question must not consume a querystore call — that costs RPC + a Gemma "
-				+ "encoder pass for no useful output");
+				"empty stubChart produces an empty PatientChart; the test's claim is about dispatch");
+		assertEquals(1, queryStore.getPatientChartCalls,
+				"blank question must still reach getPatientChart — warmup depends on this");
+		assertEquals(0, queryStore.searchByPatientCalls,
+				"blank question must NOT reach searchByPatient — no ranking signal to spend RPC on");
+		assertEquals(0, chart.getFocusIndices().size(),
+				"blank question produces no focus hint");
 	}
 
 	@Test
-	public void build_shouldReturnEmptyChart_whenQuestionIsNull() {
+	public void build_shouldStillCallGetPatientChartAndSkipSearch_whenQuestionIsNull() {
+		// Mirrors the blank-question test: null question is treated the same as blank for the
+		// focus-hint short-circuit, but the chart fetch still runs.
 		PatientChart chart = builder.build(patient(1), null);
 
 		assertEquals(0, chart.getMappings().size(),
-				"null question must not NPE — caller contract is empty chart");
-		assertEquals(0, queryStore.getCallCount());
+				"null question must not NPE — caller contract is empty chart from empty stub");
+		assertEquals(1, queryStore.getPatientChartCalls,
+				"null question must still reach getPatientChart");
+		assertEquals(0, queryStore.searchByPatientCalls,
+				"null question must NOT reach searchByPatient");
 	}
 
 	@Test
@@ -114,71 +129,93 @@ public class QueryStoreChartBuilderTest {
 	}
 
 	@Test
-	public void build_shouldCallQueryStore_whenInputsAreValid() {
-		// Positive control: pins the happy path. Without this, the three null/blank tests
-		// would all still pass on a refactor that inverted the guard and short-circuited
-		// the VALID path — every test asserts callCount==0 in failure cases, none asserts
-		// callCount==1 in the success case.
-		builder.build(patient(1), "any allergies?");
-
-		assertEquals(1, queryStore.getCallCount(),
-				"valid (patient with uuid, non-blank question) must reach querystore — "
-				+ "this is the only test that locks the happy path against guard inversion");
-	}
-
-	@Test
-	public void build_shouldCallGetPatientChartNotSearchByPatient_whenPreFilterIsFalse() {
-		// Decision 15 dispatch contract: preFilter=false routes to getPatientChart for the
-		// unfiltered full-chart path that the LLM consumer wants. A regression that always
-		// called searchByPatient would still produce *a* chart (ranked top-K), but it would
-		// be the wrong shape — relevance-filtered when the consumer explicitly opted out.
+	public void build_shouldCallGetPatientChartOnly_whenPreFilterIsFalse() {
+		// preFilter=false is the plain full-chart path: no relevance ranking needed.
 		builder.usePreFilter = false;
 
 		builder.build(patient(1), "any allergies?");
 
 		assertEquals(1, queryStore.getPatientChartCalls,
-				"preFilter=false must dispatch to getPatientChart — the new querystore Decision 15 path");
+				"preFilter=false must call getPatientChart for the full chart");
 		assertEquals(0, queryStore.searchByPatientCalls,
-				"preFilter=false must NOT call searchByPatient — that's the ranked path");
+				"preFilter=false must NOT call searchByPatient — no focus hint requested");
 	}
 
 	@Test
-	public void build_shouldCallSearchByPatientNotGetPatientChart_whenPreFilterIsTrue() {
-		// Positive control for the preFilter=true path. Without this counter-assertion, the
-		// preFilter=false test above could pass on a regression that inverted the branch and
-		// routed BOTH modes to getPatientChart — the preFilter=true path would silently lose
-		// its question-conditioned ranking.
+	public void build_shouldCallBothGetPatientChartAndSearchByPatient_whenPreFilterIsTrue() {
+		// Focus-hint contract: preFilter=true calls BOTH endpoints — getPatientChart for the
+		// stable chart bytes (KV-cache-friendly) and searchByPatient for the relevance signal
+		// that becomes the focus hint. A regression that called only searchByPatient (the old
+		// pre-focus-hint contract) would silently break warmup and shred the KV cache.
 		builder.usePreFilter = true;
 
 		builder.build(patient(1), "any allergies?");
 
+		assertEquals(1, queryStore.getPatientChartCalls,
+				"preFilter=true must call getPatientChart for the stable chart bytes");
 		assertEquals(1, queryStore.searchByPatientCalls,
-				"preFilter=true must dispatch to searchByPatient — the ranked top-K path");
-		assertEquals(0, queryStore.getPatientChartCalls,
-				"preFilter=true must NOT call getPatientChart — that's the full-chart path");
+				"preFilter=true must also call searchByPatient for the focus-hint ranking");
 	}
 
 	@Test
-	public void build_shouldStillCallGetPatientChart_whenQuestionIsBlankAndPreFilterIsFalse() {
-		// The blank-question short-circuit only applies in preFilter mode. Full-chart mode
-		// ignores the question entirely — Decision 15's getPatientChart has no question
-		// parameter — so a blank question must still produce the full chart. This is what
-		// makes the warmup re-enablement (separate follow-up) viable: warmup calls
-		// buildChart(patient, "") and expects a real chart back when chart bytes are
-		// question-independent. A regression that short-circuited blank questions in both
-		// modes would silently leave warmup priming an empty prompt.
+	public void build_shouldExposeFocusIndicesMatchingSearchHits_whenPreFilterIsTrue() {
+		// End-to-end focus-hint wiring: searchByPatient hits → resource UUIDs collected →
+		// matched against chart record UUIDs → exposed as 1-based PatientChart focus indices
+		// for LlmProvider.buildUserMessage to render as the trailing focus-hint line.
+		QueryDocument chartDoc1 = new QueryDocument();
+		chartDoc1.setResourceType("Condition");
+		chartDoc1.setResourceUuid("cond-uuid-1");
+		chartDoc1.setText("Hypertension");
+		QueryDocument chartDoc2 = new QueryDocument();
+		chartDoc2.setResourceType("Obs");
+		chartDoc2.setResourceUuid("obs-uuid-2");
+		chartDoc2.setText("BP 140/90");
+		QueryDocument chartDoc3 = new QueryDocument();
+		chartDoc3.setResourceType("Obs");
+		chartDoc3.setResourceUuid("obs-uuid-3");
+		chartDoc3.setText("Heart rate 72");
+		queryStore.stubChart = new ArrayList<>();
+		queryStore.stubChart.add(chartDoc1);
+		queryStore.stubChart.add(chartDoc2);
+		queryStore.stubChart.add(chartDoc3);
+
+		QueryDocument focusHit = new QueryDocument();
+		focusHit.setResourceType("Obs");
+		focusHit.setResourceUuid("obs-uuid-2");
+		queryStore.stubHits = new ArrayList<>();
+		queryStore.stubHits.add(focusHit);
+
+		builder.usePreFilter = true;
+		PatientChart chart = builder.build(patient(1), "what is the blood pressure?");
+
+		assertEquals(3, chart.getMappings().size(),
+				"chart must include all 3 records from getPatientChart — full-chart bytes for cache reuse");
+		assertEquals(1, chart.getFocusIndices().size(),
+				"exactly the searchByPatient hit must be flagged as focus");
+		assertEquals(Integer.valueOf(2), chart.getFocusIndices().get(0),
+				"the focus index is the 1-based position of obs-uuid-2 in the chart");
+	}
+
+	@Test
+	public void build_shouldExposeEmptyFocus_whenPreFilterFalseEvenWithSearchHitsStub() {
+		// preFilter=false must skip the searchByPatient call entirely. The stub holds hits
+		// but the builder must not consult them — focus indices on the chart must be empty.
+		QueryDocument focusHit = new QueryDocument();
+		focusHit.setResourceType("Obs");
+		focusHit.setResourceUuid("obs-uuid-1");
+		queryStore.stubHits.add(focusHit);
+		QueryDocument chartDoc = new QueryDocument();
+		chartDoc.setResourceType("Obs");
+		chartDoc.setResourceUuid("obs-uuid-1");
+		chartDoc.setText("BP");
+		queryStore.stubChart.add(chartDoc);
+
 		builder.usePreFilter = false;
+		PatientChart chart = builder.build(patient(1), "blood pressure");
 
-		PatientChart chart = builder.build(patient(1), "   ");
-
-		assertEquals(1, queryStore.getPatientChartCalls,
-				"blank question must reach getPatientChart in preFilter=false mode — the question is unused");
-		assertEquals(0, queryStore.searchByPatientCalls,
-				"blank question must not reach searchByPatient");
-		// chart is built from stubChart (empty), so the resulting chart has 0 mappings —
-		// the test's claim is about dispatch, not chart contents.
-		assertEquals(0, chart.getMappings().size(),
-				"empty stubChart produces an empty PatientChart; this just confirms the call returned cleanly");
+		assertEquals(0, chart.getFocusIndices().size(),
+				"preFilter=false must not consult searchByPatient — focus indices must be empty "
+				+ "even when the stub would have returned hits");
 	}
 
 	@Test
@@ -217,6 +254,28 @@ public class QueryStoreChartBuilderTest {
 	}
 
 	@Test
+	public void build_shouldStillReturnFullChart_whenSearchByPatientThrows() {
+		// Focus-hint failure must not block the LLM call — the full chart is already fetched
+		// at the point searchByPatient runs, and is usable on its own (equivalent to
+		// fullChart mode). A regression that propagated the throw would turn a focus-hint
+		// outage into a chart outage, which is much worse.
+		QueryDocument chartDoc = new QueryDocument();
+		chartDoc.setResourceType("Obs");
+		chartDoc.setResourceUuid("obs-uuid-1");
+		chartDoc.setText("BP");
+		queryStore.stubChart.add(chartDoc);
+		queryStore.throwOnSearch = true;
+
+		builder.usePreFilter = true;
+		PatientChart chart = builder.build(patient(1), "any allergies?");
+
+		assertEquals(1, chart.getMappings().size(),
+				"full chart must still be returned when the focus-hint RPC throws");
+		assertEquals(0, chart.getFocusIndices().size(),
+				"focus indices must be empty when searchByPatient fails — no hint rendered");
+	}
+
+	@Test
 	public void build_shouldSkipNullAndMalformedHitsAndKeepValidOnes() {
 		// Locks the record-conversion loop: a refactor that breaks SerializedRecord field
 		// order, drops the null-text guard, or removes a skip clause would silently corrupt
@@ -243,7 +302,10 @@ public class QueryStoreChartBuilderTest {
 		mixed.add(malformedNoType);     // missing type → skip
 		mixed.add(valid2);
 		mixed.add(malformedNoUuid);     // missing uuid → skip
-		queryStore.stubHits = mixed;
+		// Focus-hint mode: the chart records come from getPatientChart (stubChart), not
+		// from searchByPatient (stubHits). The malformed-record loop is what converts
+		// stubChart docs into SerializedRecords.
+		queryStore.stubChart = mixed;
 
 		PatientChart chart = builder.build(patient(1), "any allergies?");
 
@@ -304,7 +366,9 @@ public class QueryStoreChartBuilderTest {
 
 		List<QueryDocument> stubChart = new ArrayList<QueryDocument>();
 
-		/** Backwards-compatible aggregate counter — pre-Decision-15 tests assert on
+		boolean throwOnSearch = false;
+
+		/** Backwards-compatible aggregate counter — pre-focus-hint tests assert on
 		 *  total querystore calls without caring which method. */
 		int getCallCount() {
 			return searchByPatientCalls + getPatientChartCalls;
@@ -313,6 +377,9 @@ public class QueryStoreChartBuilderTest {
 		@Override
 		public List<QueryDocument> searchByPatient(String patientUuid, String question, int topK) {
 			searchByPatientCalls++;
+			if (throwOnSearch) {
+				throw new RuntimeException("simulated focus-hint RPC failure");
+			}
 			return stubHits;
 		}
 

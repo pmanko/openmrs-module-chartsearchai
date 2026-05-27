@@ -9,8 +9,12 @@
  */
 package org.openmrs.module.chartsearchai.api.impl;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.Arrays;
+import java.util.Collections;
 
 import org.junit.jupiter.api.Test;
 
@@ -37,9 +41,11 @@ public class LlmProviderUserMessageTest {
 
 		assertTrue(realQuery.startsWith(warmup),
 				"warmup must produce a byte-prefix of the real query so llama-server's "
-				+ "--cache-reuse 256 can match the cached prefix tokens. If this ever "
-				+ "fails, the warmup is silently wasted: the prefix diverges before the "
-				+ "question and llama-server reprocesses the whole chart from scratch.\n"
+				+ "exact-prefix cache match (via cache_prompt=true; --cache-reuse is now "
+				+ "pinned to 0 to avoid the KV-shifting argmax flip) can reuse the cached "
+				+ "prefix tokens. If this ever fails, the warmup is silently wasted: the "
+				+ "prefix diverges before the question and llama-server reprocesses the "
+				+ "whole chart from scratch.\n"
 				+ "  warmup:    " + warmup + "\n"
 				+ "  realQuery: " + realQuery);
 	}
@@ -81,5 +87,76 @@ public class LlmProviderUserMessageTest {
 		String realEmpty = LlmProvider.buildUserMessage("", "Q?");
 		assertTrue(realEmpty.startsWith(warmupEmpty),
 				"empty-chart prefix must still match between warmup and real query");
+	}
+
+	// ---------- focus-hint variant ----------
+
+	@Test
+	public void buildUserMessageWithEmptyFocusShouldEqualTwoArgForm() {
+		// The 2-arg form is now a thin delegate over the 3-arg form with focusIndices=[].
+		// A regression that diverged the two forms would silently break the warmup byte-
+		// prefix contract: warmup uses the 2-arg form, real queries (when prefilter is off
+		// or the focus list is empty) use the 3-arg form — they must produce identical bytes.
+		String twoArg = LlmProvider.buildUserMessage(CHART, "Q?");
+		String threeArgEmpty = LlmProvider.buildUserMessage(CHART,
+				Collections.<Integer>emptyList(), "Q?");
+		assertEquals(twoArg, threeArgEmpty,
+				"empty focus must produce byte-identical output to the 2-arg form");
+	}
+
+	@Test
+	public void buildUserMessageWithFocusShouldRenderHintBeforeQuestion() {
+		String msg = LlmProvider.buildUserMessage(CHART, Arrays.asList(1, 2), "What is the BP?");
+		assertTrue(msg.contains("Records ranked most relevant to the query: 1, 2"),
+				"focus hint must render the focus label followed by 1-based indices comma-separated. "
+				+ "Got: '" + msg + "'");
+		assertTrue(msg.contains("Use these as the starting point"),
+				"focus hint must include the positive-direction instruction telling the LLM "
+				+ "the focus records are a starting point, not a hard cap — prevents the "
+				+ "\"thin answer\" mode where the LLM treats the focus list as a hard limit. "
+				+ "Got: '" + msg + "'");
+		assertTrue(msg.contains("Do NOT cite records about unrelated clinical topics"),
+				"focus hint must include the negative-direction instruction forbidding off-topic "
+				+ "citations — addresses the \"drift\" mode where the LLM cites records that "
+				+ "share keywords or chart position but aren't about the query topic. "
+				+ "Got: '" + msg + "'");
+		int hintPos = msg.indexOf("Records ranked most relevant");
+		int queryPos = msg.indexOf("Clinician's query:");
+		assertTrue(hintPos > 0 && hintPos < queryPos,
+				"focus hint must sit between the records section and the question header — "
+				+ "putting it after the question (or inside the records) would change the bytes "
+				+ "the LLM sees BEFORE the question and break llama-server's prefix match");
+	}
+
+	@Test
+	public void buildUserMessageWithFocusShouldShareChartPrefixWithEmptyFocus() {
+		// The KV-cache contract: bytes up to the end of the chart records section must be
+		// identical regardless of whether a focus hint follows. llama-server matches the
+		// prefix up to the divergence point — if the chart bytes diverged when a focus
+		// hint was added, we'd lose all the cache reuse the focus-hint mode was designed
+		// to enable.
+		String withFocus = LlmProvider.buildUserMessage(CHART, Arrays.asList(1, 2), "Q?");
+		String emptyFocus = LlmProvider.buildUserMessage(CHART,
+				Collections.<Integer>emptyList(), "Q?");
+		// Common prefix = up to where the two strings diverge.
+		int divergeAt = 0;
+		int max = Math.min(withFocus.length(), emptyFocus.length());
+		while (divergeAt < max && withFocus.charAt(divergeAt) == emptyFocus.charAt(divergeAt)) {
+			divergeAt++;
+		}
+		String sharedPrefix = withFocus.substring(0, divergeAt);
+		assertTrue(sharedPrefix.contains(CHART),
+				"shared prefix must include the entire chart records section — focus-hint "
+				+ "rendering must not perturb anything ABOVE the hint. Shared prefix ended at:\n"
+				+ "  '" + sharedPrefix + "'");
+	}
+
+	@Test
+	public void buildUserMessageShouldOmitHintLineWhenFocusIsNull() {
+		// Defensive null-handling: callers (PatientChart.getFocusIndices() in particular)
+		// can theoretically hand us null. Treat as empty rather than NPE.
+		String msg = LlmProvider.buildUserMessage(CHART, null, "Q?");
+		assertTrue(!msg.contains("Records most relevant"),
+				"null focus list must not render a hint line. Got: '" + msg + "'");
 	}
 }

@@ -119,17 +119,27 @@ public class LocalLlmEngineTest {
 	}
 
 	@Test
-	public void buildServerCommand_shouldEnableCrossRequestCacheReuse() {
+	public void buildServerCommand_shouldPinCacheReuseToZero() {
+		// --cache-reuse pinned to 0 (llama.cpp's default). The previous value of 256 enabled
+		// KV shifting (re-applying RoPE to cached K blocks for fuzzy prefix matching when the
+		// prefix bytes drift between requests). With the focus-hint prompt structure the
+		// chart prefix is byte-identical across successive queries on the same patient, so
+		// fuzzy matching adds nothing — we only pay the per-token RoPE re-application cost.
+		// Note: this flag is NOT the determinism lever — cache_prompt in the request body
+		// is the real cause of the borderline-argmax flip ("is she pregnant?" alternating
+		// between Gravida and Self-Induced Abortion). The flip is fundamental to llama-server's
+		// cache_prompt design (reused-vs-fresh KV is numerically close but not bit-identical)
+		// and cache_prompt stays on because the latency win is the whole point.
 		List<String> cmd = LocalLlmEngine.buildServerCommand(
 				"/bin/llama-server", "/data/model.gguf", 9999, 32768);
 
 		int idx = cmd.indexOf("--cache-reuse");
-		assertTrue(idx >= 0,
-				"--cache-reuse enables fuzzy prefix matching when the prompt prefix shifts "
-				+ "slightly between requests; without it slot-based reuse is brittle");
-		int chunk = Integer.parseInt(cmd.get(idx + 1));
-		assertTrue(chunk >= 64 && chunk <= 1024,
-				"reuse-chunk should be a sensible token granularity, got " + chunk);
+		assertTrue(idx >= 0, "--cache-reuse flag must be present (explicit even at the "
+				+ "default) so a future llama.cpp version that changes the default does not "
+				+ "silently re-enable KV shifting that this prompt shape doesn't benefit from");
+		assertEquals("0", cmd.get(idx + 1),
+				"--cache-reuse must be 0 (llama.cpp default); any positive value enables KV "
+				+ "shifting which the focus-hint prompt shape does not need");
 	}
 
 	@Test

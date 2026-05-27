@@ -118,7 +118,8 @@ public class LlmInferenceService implements ChartSearchService {
 			buildMs = System.currentTimeMillis() - buildStart;
 
 			long llmStart = System.currentTimeMillis();
-			LlmResponse response = llmProvider.search(chartTextOrPlaceholder(chart), question);
+			LlmResponse response = llmProvider.search(chartTextOrPlaceholder(chart),
+					chart.getFocusIndices(), question);
 			llmMs = System.currentTimeMillis() - llmStart;
 			inputTokens = response.getInputTokens();
 			cachedTokens = response.getCachedTokens();
@@ -182,33 +183,28 @@ public class LlmInferenceService implements ChartSearchService {
 	 * {@link #warmup(Patient)} call site instead, so this helper focuses
 	 * narrowly on chart-byte-stability semantics.
 	 *
-	 * <p>Only {@code preFilterEnabled} matters for stability. When true, the
-	 * embedding pre-filter pipeline picks question-dependent records and the chart
-	 * prefix varies per query — warmup can't help and would prime bytes no real
-	 * query reuses. When false, the chart is the patient's full indexed projection
-	 * regardless of whether querystore (via Decision 15's {@code getPatientChart})
-	 * or the legacy in-process {@code chartSerializer.serialize(patient)} produces
-	 * it — both shapes are byte-identical across queries for the same patient
-	 * (the serializer is deterministic), so warmup primes the real prefix.
+	 * <p>Three modes produce stable chart bytes today and so are warmup-viable:
+	 * <ul>
+	 *   <li>{@code preFilter=false} (any backend) — chart is the patient's full indexed
+	 *       projection; bytes are a function of the patient only.</li>
+	 *   <li>{@code preFilter=true, querystore.enabled=true} — focus-hint mode:
+	 *       {@link QueryStoreChartBuilder} fetches the full chart via
+	 *       {@code getPatientChart} and renders the prefilter hits as a small
+	 *       trailing "Records most relevant to the query: ..." line. The records
+	 *       section (the bulk of the prompt) is byte-identical across queries; only
+	 *       the focus-hint and the question vary, both at the very end where they
+	 *       don't break llama-server's prefix-cache match.</li>
+	 * </ul>
+	 * <p>The single remaining unstable mode is {@code preFilter=true} with the
+	 * legacy embedding/lucene/elasticsearch dispatch (querystore disabled). Those
+	 * paths still filter records inline and so the chart prefix varies per query.
 	 *
-	 * @param preFilterEnabled the {@code chartsearchai.embedding.preFilter} setting
-	 * @param queryStoreEnabled the {@code chartsearchai.querystore.enabled} setting —
-	 *        retained in the signature for callers and for the call-site decoupling,
-	 *        but no longer load-bearing here since the dispatch in
-	 *        {@link QueryStoreChartBuilder} routes querystore's full-chart mode to
-	 *        the question-independent {@code getPatientChart}
-	 *
-	 * <p>When adding a new pipeline mode that produces question-dependent chart bytes,
-	 * extend this helper (and {@link LlmInferenceServiceWarmupTest}) — do not branch at
-	 * the {@code warmup()} call site, which would split the decision across two places.
+	 * <p>When adding a new pipeline mode, extend this helper (and
+	 * {@link LlmInferenceServiceWarmupTest}) — do not branch at the {@code warmup()}
+	 * call site, which would split the decision across two places.
 	 */
-	@SuppressWarnings("unused")
 	static boolean shouldRunWarmup(boolean preFilterEnabled, boolean queryStoreEnabled) {
-		// queryStoreEnabled is preserved in the signature per the Javadoc above (call-site
-		// decoupling, future-mode extension point). @SuppressWarnings locks intent at the
-		// compiler level so a static-analysis "drop unused params" pass surfaces the
-		// retention rationale before silently breaking the seam.
-		return !preFilterEnabled;
+		return !preFilterEnabled || queryStoreEnabled;
 	}
 
 	List<ChartEmbedding> findSimilar(Patient patient, String question) {
@@ -234,7 +230,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 			long llmStart = System.currentTimeMillis();
 			LlmResponse response = llmProvider.searchStreaming(
-					chartTextOrPlaceholder(chart), question, tokenConsumer);
+					chartTextOrPlaceholder(chart), chart.getFocusIndices(), question, tokenConsumer);
 			llmMs = System.currentTimeMillis() - llmStart;
 			inputTokens = response.getInputTokens();
 			cachedTokens = response.getCachedTokens();

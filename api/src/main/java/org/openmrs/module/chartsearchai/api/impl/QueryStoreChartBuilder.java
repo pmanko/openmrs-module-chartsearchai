@@ -11,7 +11,9 @@ package org.openmrs.module.chartsearchai.api.impl;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.openmrs.Patient;
 import org.openmrs.api.APIException;
@@ -33,14 +35,18 @@ import org.springframework.stereotype.Component;
  * querystore omod isn't installed — lookup failure surfaces as an empty chart,
  * same outcome as a search returning no hits.
  *
- * <p>Branches on the {@code chartsearchai.embedding.preFilter} global property:
- * when {@code preFilter=true}, dispatches to
- * {@link QueryStoreService#searchByPatient(String, String, int)} for ranked,
- * question-conditioned retrieval; when {@code preFilter=false}, dispatches to
- * {@link QueryStoreService#getPatientChart(String)} — querystore Decision 15's
- * unfiltered full-chart enumeration. The full-chart path ignores the
- * {@code question} parameter (the LLM does its own reasoning over the whole
- * chart) so a blank/null question is no longer a short-circuit there.
+ * <p>Always fetches the full patient chart via
+ * {@link QueryStoreService#getPatientChart(String)} so the chart bytes sent to
+ * the LLM are a function of the patient only — that's the property
+ * llama-server's KV-cache reuse needs in order to skip ~99% of the prefill on
+ * subsequent queries for the same patient. When
+ * {@code chartsearchai.embedding.preFilter=true} and the question is non-blank,
+ * additionally calls {@link QueryStoreService#searchByPatient(String, String, int)}
+ * to obtain a relevance ranking, then renders those hits as a short
+ * "Records most relevant to the query: ..." focus-hint line in the LLM prompt
+ * (handled in {@code LlmProvider.buildUserMessage} via the
+ * {@link PatientChart#getFocusIndices()} payload). The hint biases the LLM's
+ * attention without removing records the LLM needs for negative reasoning.
  *
  * <p>The {@code protected resolve*} methods and the package-private
  * {@link #setChartSerializer} are test seams, not an extension point.
@@ -52,10 +58,9 @@ class QueryStoreChartBuilder {
 	private static final Logger log = LoggerFactory.getLogger(QueryStoreChartBuilder.class);
 
 	// Mode labels emitted in the [timing] querystoreBuild log lines so ops dashboards can
-	// distinguish the two dispatch shapes (their hits and rpcMs distributions differ by
-	// 1-2 orders of magnitude). Kept as compile-time constants so a typo on any future log
-	// line — there will be more sites as the slice's logging contract gets reused — surfaces
-	// at compile time rather than as a silently-dropped grep.
+	// distinguish the two dispatch shapes. preFilter mode does the extra searchByPatient
+	// call for the focus hint; fullChart skips it. Kept as compile-time constants so a typo
+	// on any future log line surfaces at compile time rather than as a silently-dropped grep.
 	static final String MODE_PRE_FILTER = "preFilter";
 
 	static final String MODE_FULL_CHART = "fullChart";
@@ -84,27 +89,16 @@ class QueryStoreChartBuilder {
 			// mode=unknown — the dispatch isn't determined yet (resolveUsePreFilter() runs
 			// below). Emitting an explicit label keeps the timing log shape uniform so a
 			// dashboard grepping for mode= doesn't undercount input-error events.
-			log.info("[timing] querystoreBuild patient={} mode={} hits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=skipped",
+			log.info("[timing] querystoreBuild patient={} mode={} hits=0 focusHits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=skipped",
 					patient == null ? null : patient.getPatientId(),
 					MODE_UNKNOWN, System.currentTimeMillis() - buildStart);
 			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
 
 		boolean usePreFilter = resolveUsePreFilter();
-		// `mode` labels each [timing] log line below so operators can distinguish the two
-		// dispatch shapes without correlating against the preFilter GP value at the time —
-		// Decision 15's full-chart mode has materially different `hits` and `rpcMs`
-		// distributions, and a single grep should be enough to tell the modes apart.
+		// `mode` labels each [timing] log line so operators can tell focus-hint preFilter
+		// dispatch (extra searchByPatient call) from plain fullChart dispatch.
 		String mode = usePreFilter ? MODE_PRE_FILTER : MODE_FULL_CHART;
-		// Blank-question short-circuit only fires in preFilter mode: searchByPatient with an
-		// empty query is spurious (no ranking signal, wasted RPC). The full-chart path
-		// (getPatientChart) ignores the question entirely — a blank question still produces
-		// the patient's full indexed chart, which is exactly what the LLM consumer wants.
-		if (usePreFilter && (question == null || question.trim().isEmpty())) {
-			log.info("[timing] querystoreBuild patient={} mode={} hits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=skipped",
-					patient.getPatientId(), mode, System.currentTimeMillis() - buildStart);
-			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
-		}
 
 		QueryStoreService queryStore;
 		try {
@@ -120,83 +114,101 @@ class QueryStoreChartBuilder {
 			log.warn("chartsearchai.querystore.enabled=true but QueryStoreService is unavailable — "
 					+ "install openmrs-module-querystore or set chartsearchai.querystore.enabled=false. "
 					+ "Returning empty chart.");
-			log.info("[timing] querystoreBuild patient={} mode={} hits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=unavailable",
+			log.info("[timing] querystoreBuild patient={} mode={} hits=0 focusHits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=unavailable",
 					patient.getPatientId(), mode, System.currentTimeMillis() - buildStart);
 			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
 
+		// Full chart first — this is what the LLM sees and what determines the KV-cache
+		// prefix. Always called regardless of mode so the chart bytes are a function of
+		// the patient only.
 		long rpcStart = System.currentTimeMillis();
-		List<QueryDocument> hits;
+		List<QueryDocument> chartDocs;
 		try {
-			if (usePreFilter) {
-				String preprocessedQuestion = QueryPreprocessor.stripQueryStopwords(question);
-				int topK = resolveQueryStoreTopK();
-				hits = queryStore.searchByPatient(patient.getUuid(), preprocessedQuestion, topK);
-			}
-			else {
-				// querystore Decision 15: unfiltered full-chart enumeration, ordered by
-				// record_date desc with deterministic tie-break. Replaces the legacy
-				// ChartCache/PatientRecordLoader full-chart path now that querystore serializes
-				// every clinical record into per-type indices that the events-first sync keeps
-				// current — no need for chartsearchai to maintain a parallel serialization
-				// pipeline.
-				hits = queryStore.getPatientChart(patient.getUuid());
-			}
+			chartDocs = queryStore.getPatientChart(patient.getUuid());
 		}
 		catch (RuntimeException e) {
-			log.error("QueryStore retrieval failed for patient [uuid={}]", patient.getUuid(), e);
+			log.error("QueryStore.getPatientChart failed for patient [uuid={}]", patient.getUuid(), e);
 			long failMs = System.currentTimeMillis() - rpcStart;
-			// `errorClass` discriminates between backend-side exceptions
-			// (`IllegalStateException` thrown by the per-tier backends on RPC failure,
-			// `APIException` from authorization or service-context issues) and code-bug
-			// exceptions (`NullPointerException` from a malformed QueryDocument, etc.).
-			// Without it, dashboards that bucket "why are charts empty?" cannot distinguish
-			// "querystore backend is down" from "chartsearchai has a regression."
-			log.info("[timing] querystoreBuild patient={} mode={} hits=0 rpcMs={} serializeMs=0 totalMs={} outcome=error errorClass={}",
+			log.info("[timing] querystoreBuild patient={} mode={} hits=0 focusHits=0 rpcMs={} serializeMs=0 totalMs={} outcome=error errorClass={}",
 					patient.getPatientId(), mode, failMs, System.currentTimeMillis() - buildStart,
 					e.getClass().getSimpleName());
 			return chartSerializer.serialize(patient, Collections.<SerializedRecord>emptyList());
 		}
-		long rpcMs = System.currentTimeMillis() - rpcStart;
 
-		List<SerializedRecord> records;
-		if (hits == null || hits.isEmpty()) {
-			records = Collections.<SerializedRecord>emptyList();
-		}
-		else {
-			records = new ArrayList<SerializedRecord>(hits.size());
-			for (QueryDocument doc : hits) {
-				if (doc == null) {
-					log.warn("Skipping null QueryDocument");
-					continue;
-				}
-				if (doc.getResourceType() == null || doc.getResourceUuid() == null) {
-					log.warn("Skipping malformed QueryDocument: type={} uuid={}",
-							doc.getResourceType(), doc.getResourceUuid());
-					continue;
-				}
-				String text = doc.getText() == null ? "" : doc.getText();
-				records.add(new SerializedRecord(doc.getResourceType(), doc.getResourceUuid(),
-						text, DateFormatUtil.toLegacyDate(doc.getDate())));
+		// Focus hint: only in preFilter mode, only with a non-blank question (searchByPatient
+		// with a blank query is spurious — no ranking signal). The hint is a tiny payload
+		// (UUIDs collected here, rendered as 1-based indices in the chart serializer).
+		Set<String> focusUuids = Collections.<String>emptySet();
+		int focusHits = 0;
+		if (usePreFilter && question != null && !question.trim().isEmpty()) {
+			try {
+				String preprocessedQuestion = QueryPreprocessor.stripQueryStopwords(question);
+				int topK = resolveQueryStoreTopK();
+				List<QueryDocument> hits = queryStore.searchByPatient(patient.getUuid(),
+						preprocessedQuestion, topK);
+				focusUuids = collectFocusUuids(hits);
+				focusHits = focusUuids.size();
+			}
+			catch (RuntimeException e) {
+				// Focus-hint failure must not block the LLM call — the full chart is already
+				// fetched and is usable on its own (equivalent to fullChart mode). Log + fall
+				// through with empty focus.
+				log.warn("QueryStore.searchByPatient failed for patient [uuid={}] — proceeding without focus hint",
+						patient.getUuid(), e);
 			}
 		}
-		// Single timer + log site for both empty and populated hits: keeps the
-		// empty-chart serialization cost visible (Jackson init, first-call warmup)
-		// instead of bucketing it as zero. records.size() (not hits.size()) is the
-		// count that actually reached the LLM — any null/malformed docs are logged
-		// at WARN earlier in the loop and dropped from this count.
+		long rpcMs = System.currentTimeMillis() - rpcStart;
+
+		List<SerializedRecord> records = toSerializedRecords(chartDocs);
 		long serializeStart = System.currentTimeMillis();
-		PatientChart chart = chartSerializer.serialize(patient, records);
+		PatientChart chart = chartSerializer.serialize(patient, records, focusUuids);
 		long serializeMs = System.currentTimeMillis() - serializeStart;
-		// totalMs spans the whole successful build (post-blank-guard), so it includes the
-		// record-building loop time that rpcMs and serializeMs don't account for. The
-		// caller's chartBuildMs in LlmInferenceService.search should approximately equal
-		// this number; a large gap means time is going to query preprocessing or service
-		// resolution, both pre-rpcStart.
 		long totalMs = System.currentTimeMillis() - buildStart;
-		log.info("[timing] querystoreBuild patient={} mode={} hits={} rpcMs={} serializeMs={} totalMs={} outcome=ok",
-				patient.getPatientId(), mode, records.size(), rpcMs, serializeMs, totalMs);
+		log.info("[timing] querystoreBuild patient={} mode={} hits={} focusHits={} rpcMs={} serializeMs={} totalMs={} outcome=ok",
+				patient.getPatientId(), mode, records.size(), focusHits, rpcMs, serializeMs, totalMs);
 		return chart;
+	}
+
+	/** Collects {@code resource_uuid}s from a hit list, skipping nulls and malformed docs.
+	 *  These uuids are mapped to 1-based chart indices in {@code PatientChartSerializer.serialize}
+	 *  to render the LLM-facing focus hint. */
+	private Set<String> collectFocusUuids(List<QueryDocument> hits) {
+		if (hits == null || hits.isEmpty()) {
+			return Collections.<String>emptySet();
+		}
+		Set<String> uuids = new HashSet<String>(hits.size() * 2);
+		for (QueryDocument doc : hits) {
+			if (doc != null && doc.getResourceUuid() != null) {
+				uuids.add(doc.getResourceUuid());
+			}
+		}
+		return uuids;
+	}
+
+	/** Converts a querystore hit list into the chartsearchai serializer's input shape,
+	 *  dropping null and malformed docs with a WARN so operators can spot upstream
+	 *  serialization regressions without losing the rest of the chart. */
+	private List<SerializedRecord> toSerializedRecords(List<QueryDocument> docs) {
+		if (docs == null || docs.isEmpty()) {
+			return Collections.<SerializedRecord>emptyList();
+		}
+		List<SerializedRecord> out = new ArrayList<SerializedRecord>(docs.size());
+		for (QueryDocument doc : docs) {
+			if (doc == null) {
+				log.warn("Skipping null QueryDocument");
+				continue;
+			}
+			if (doc.getResourceType() == null || doc.getResourceUuid() == null) {
+				log.warn("Skipping malformed QueryDocument: type={} uuid={}",
+						doc.getResourceType(), doc.getResourceUuid());
+				continue;
+			}
+			String text = doc.getText() == null ? "" : doc.getText();
+			out.add(new SerializedRecord(doc.getResourceType(), doc.getResourceUuid(),
+					text, DateFormatUtil.toLegacyDate(doc.getDate())));
+		}
+		return out;
 	}
 
 	/** Seam for tests: production resolves via the OpenMRS context. */
