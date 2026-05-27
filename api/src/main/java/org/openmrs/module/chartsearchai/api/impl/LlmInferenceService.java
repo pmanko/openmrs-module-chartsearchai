@@ -190,7 +190,7 @@ public class LlmInferenceService implements ChartSearchService {
 	 *   <li>{@code preFilter=true, querystore.enabled=true} — focus-hint mode:
 	 *       {@link QueryStoreChartBuilder} fetches the full chart via
 	 *       {@code getPatientChart} and renders the prefilter hits as a small
-	 *       trailing "Records most relevant to the query: ..." line. The records
+	 *       trailing "Records ranked by similarity to the query: ..." line. The records
 	 *       section (the bulk of the prompt) is byte-identical across queries; only
 	 *       the focus-hint and the question vary, both at the very end where they
 	 *       don't break llama-server's prefix-cache match.</li>

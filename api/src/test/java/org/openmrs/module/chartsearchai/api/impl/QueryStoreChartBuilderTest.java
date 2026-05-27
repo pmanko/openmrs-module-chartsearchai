@@ -32,7 +32,7 @@ import org.openmrs.module.querystore.model.QueryDocument;
  * {@code preFilter=true} with a non-blank question, it additionally calls
  * {@code QueryStoreService.searchByPatient} to get a relevance ranking; the matching
  * record UUIDs flow through {@code PatientChart.getFocusIndices()} for rendering as a
- * small "Records most relevant to the query: ..." line in the LLM prompt. These tests
+ * small "Records ranked by similarity to the query: ..." line in the LLM prompt. These tests
  * pin the dispatch correctness, the input-guard contract (null patient / null uuid),
  * and the record-conversion loop.
  */

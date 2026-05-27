@@ -10,6 +10,7 @@
 package org.openmrs.module.chartsearchai.api.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -107,7 +108,7 @@ public class LlmProviderUserMessageTest {
 	@Test
 	public void buildUserMessageWithFocusShouldRenderHintBeforeQuestion() {
 		String msg = LlmProvider.buildUserMessage(CHART, Arrays.asList(1, 2), "What is the BP?");
-		assertTrue(msg.contains("Records ranked most relevant to the query: 1, 2"),
+		assertTrue(msg.contains("Records ranked by similarity to the query: 1, 2"),
 				"focus hint must render the focus label followed by 1-based indices comma-separated. "
 				+ "Got: '" + msg + "'");
 		assertTrue(msg.contains("Use these as the starting point"),
@@ -120,12 +121,33 @@ public class LlmProviderUserMessageTest {
 				+ "citations — addresses the \"drift\" mode where the LLM cites records that "
 				+ "share keywords or chart position but aren't about the query topic. "
 				+ "Got: '" + msg + "'");
-		int hintPos = msg.indexOf("Records ranked most relevant");
+		int hintPos = msg.indexOf("Records ranked by similarity");
 		int queryPos = msg.indexOf("Clinician's query:");
 		assertTrue(hintPos > 0 && hintPos < queryPos,
 				"focus hint must sit between the records section and the question header — "
 				+ "putting it after the question (or inside the records) would change the bytes "
 				+ "the LLM sees BEFORE the question and break llama-server's prefix match");
+	}
+
+	@Test
+	public void buildUserMessageWithFocusShouldNotPresupposeRelevanceAndShouldPermitAbstention() {
+		String msg = LlmProvider.buildUserMessage(CHART, Arrays.asList(1, 2), "Any eye problems?");
+		// The focus list is just the top-K nearest neighbours from querystore — there is no
+		// relevance gate on that path, so it is non-empty even when nothing in the chart is
+		// about the query. The label must NOT assert these records ARE relevant, otherwise it
+		// overrides the system prompt's abstention guidance.
+		assertFalse(msg.contains("most relevant"),
+				"focus hint must not claim the ranked records are 'most relevant' — that "
+				+ "presupposes relevance the similarity ranking does not establish, and steers "
+				+ "the LLM to answer about off-topic nearest-neighbours instead of abstaining. "
+				+ "Got: '" + msg + "'");
+		assertTrue(msg.contains("Similarity does not guarantee relevance"),
+				"focus hint must explicitly state that similarity does not guarantee relevance. "
+				+ "Got: '" + msg + "'");
+		assertTrue(msg.contains("no relevant records were found") && msg.contains("cite nothing"),
+				"focus hint must give the LLM an explicit abstention escape: when none of the "
+				+ "ranked records are actually about the query, say no relevant records were found "
+				+ "and cite nothing. Got: '" + msg + "'");
 	}
 
 	@Test

@@ -32,6 +32,11 @@ public class LlmProvider {
 
 	private static final Logger log = LoggerFactory.getLogger(LlmProvider.class);
 
+	/** Label that prefixes the focus-hint line in the user message. Shared with the
+	 *  DEFAULT_SYSTEM_PROMPT few-shot so the demonstration always mirrors the real prompt
+	 *  shape — if they drift, the few-shot stops teaching the format the model actually sees. */
+	static final String FOCUS_HINT_LABEL = "Records ranked by similarity to the query: ";
+
 	static final String DEFAULT_SYSTEM_PROMPT = "You are a clinical assistant helping a clinician "
 			+ "review a patient's chart. Answer ONLY the specific query. "
 			+ "Use only the patient records below (sorted most recent first). "
@@ -54,6 +59,7 @@ public class LlmProvider {
 			+ "Clinician's query: How many apples were delivered?\n"
 			+ "{\"answer\": \"12 apples on 2024-03-10 [1] and 5 apples on 2024-01-20 [3].\","
 			+ " \"citations\": [1, 3]}\n\n"
+			+ FOCUS_HINT_LABEL + "2.\n"
 			+ "Clinician's query: Were any bananas delivered?\n"
 			+ "{\"answer\": \"There are no records of banana deliveries.\", \"citations\": []}\n\n"
 			+ "END OF FORMAT DEMONSTRATION. Now answer using ONLY the actual patient records below.";
@@ -78,7 +84,7 @@ public class LlmProvider {
 	}
 
 	/**
-	 * Focus-hint variant of {@link #search}: renders a short "Records most relevant to the
+	 * Focus-hint variant of {@link #search}: renders a short "Records ranked by similarity to the
 	 * query: ..." line between the records section and the question. The numberedRecords
 	 * are still the full patient chart in stable date-desc order, so the prompt prefix is
 	 * byte-identical across queries for the same patient and llama-server's KV cache reuses
@@ -308,7 +314,7 @@ public class LlmProvider {
 
 	/**
 	 * Focus-hint variant: when {@code focusIndices} is non-empty, inserts a short
-	 * {@code "Records most relevant to the query: 3, 7, 12"} line between the records
+	 * {@code "Records ranked by similarity to the query: 3, 7, 12"} line between the records
 	 * section and the {@code "Clinician's query:"} header. The records bytes stay byte-
 	 * identical to a no-focus query (and to a warmup call with the same patient), so
 	 * llama-server's KV cache reuse contract is preserved up to the focus-hint divergence
@@ -320,14 +326,28 @@ public class LlmProvider {
 		StringBuilder sb = new StringBuilder();
 		sb.append("Patient records (most recent first):\n").append(normalizeRecords(numberedRecords));
 		if (focusIndices != null && !focusIndices.isEmpty()) {
-			// Three-part hint, calibrated against the 4-patient × 10-query rubric on local
-			// Gemma E4B (variants v1-v4 tested; this is v2, the empirical winner):
-			//   1. List the ranked focus records (positive signal).
+			// Four-part hint, calibrated against the 4-patient × 10-query rubric on local
+			// Gemma E4B (variants v1-v4 tested; the positive/negative pair below is v2, the
+			// empirical winner; the similarity-vs-relevance + abstention clause is v5, added to
+			// fix the querystore no-gate failure described below):
+			//   1. List the ranked focus records (positive signal). The label says "ranked by
+			//      similarity", NOT "most relevant": the querystore focus path
+			//      (QueryStoreChartBuilder.searchByPatient + topK) has no relevance gate, so this
+			//      list is the K nearest neighbours and is non-empty even when NOTHING in the
+			//      chart is about the query. Calling them "most relevant" asserted a relevance the
+			//      ranking never established and steered the LLM to answer about off-topic records
+			//      ("Is she in any programs?" -> listed conditions on a patient with no programs).
 			//   2. "Use these as the starting point. Also include other records ... clinically
 			//      about the same topic" — soft permission to expand beyond the focus list,
 			//      addresses the "thin answer" mode where the LLM treats the focus list as a
 			//      hard cap and misses on-topic records elsewhere in the chart.
-			//   3. "Do NOT cite records about unrelated clinical topics" — addresses the
+			//   3. "Similarity does not guarantee relevance: if none of these records are actually
+			//      about the query, answer that no relevant records were found and cite nothing" —
+			//      the abstention escape. Without it the focus line overrides the system prompt's
+			//      "name what is missing" guidance whenever retrieval fails to gate (i.e. always,
+			//      on the querystore path). Paired with the focus-mode abstention few-shot in
+			//      DEFAULT_SYSTEM_PROMPT.
+			//   4. "Do NOT cite records about unrelated clinical topics" — addresses the
 			//      "drift" mode where the LLM cites records that share keywords or chart
 			//      position but aren't about the query topic.
 			// Two alternative phrasings were tested and rolled back:
@@ -344,7 +364,7 @@ public class LlmProvider {
 			//     asked about cancer/tumor, where v2 correctly returned "no records").
 			// v2 wins: 40/40 on-topic vs OLD prefilter's 39/40, 16 new_better vs 16 new_worse
 			// (net neutral on rubric), no hallucinations observed.
-			sb.append("\n\nRecords ranked most relevant to the query: ");
+			sb.append("\n\n").append(FOCUS_HINT_LABEL);
 			for (int i = 0; i < focusIndices.size(); i++) {
 				if (i > 0) {
 					sb.append(", ");
@@ -352,7 +372,9 @@ public class LlmProvider {
 				sb.append(focusIndices.get(i));
 			}
 			sb.append(".\nUse these as the starting point. Also include other records from the chart "
-					+ "that are clinically about the same topic as the query. Do NOT cite records "
+					+ "that are clinically about the same topic as the query. Similarity does not "
+					+ "guarantee relevance: if none of these records are actually about the query, "
+					+ "answer that no relevant records were found and cite nothing. Do NOT cite records "
 					+ "about unrelated clinical topics, even if they share keywords or appear in "
 					+ "the chart.");
 		}

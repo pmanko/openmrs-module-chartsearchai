@@ -43,7 +43,7 @@ import org.springframework.stereotype.Component;
  * {@code chartsearchai.embedding.preFilter=true} and the question is non-blank,
  * additionally calls {@link QueryStoreService#searchByPatient(String, String, int)}
  * to obtain a relevance ranking, then renders those hits as a short
- * "Records most relevant to the query: ..." focus-hint line in the LLM prompt
+ * "Records ranked by similarity to the query: ..." focus-hint line in the LLM prompt
  * (handled in {@code LlmProvider.buildUserMessage} via the
  * {@link PatientChart#getFocusIndices()} payload). The hint biases the LLM's
  * attention without removing records the LLM needs for negative reasoning.

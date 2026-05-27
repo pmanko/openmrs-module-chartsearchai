@@ -65,16 +65,16 @@ public class PatientChartSerializer {
 	/**
 	 * Serialize a list of records and compute focus indices for the records whose resource
 	 * UUID appears in {@code focusUuids}. The focus-hint mode of prefilter retrieval (where
-	 * the LLM sees the full chart but is told which records are most relevant for the query)
-	 * uses this to attach 1-based indices alongside the chart text — the LLM prompt then
-	 * carries a short "Records most relevant to the query: 3, 7, 12" hint after the chart so
+	 * the LLM sees the full chart but is told which records rank highest by similarity to the
+	 * query) uses this to attach 1-based indices alongside the chart text — the LLM prompt then
+	 * carries a short "Records ranked by similarity to the query: 3, 7, 12" hint after the chart so
 	 * the variable-bytes portion of the prompt is tiny while the chart prefix stays stable
 	 * across queries for the same patient (the property llama-server's KV-cache reuse needs).
 	 *
 	 * @param patient the patient whose demographics to include
 	 * @param records the records to serialize
-	 * @param focusUuids resource UUIDs (no resourceType prefix) the retrieval ranked as most
-	 *                   relevant to the question; empty means no hint will be rendered
+	 * @param focusUuids resource UUIDs (no resourceType prefix) the retrieval ranked highest by
+	 *                   similarity to the question; empty means no hint will be rendered
 	 * @return the serialized chart with numbered records, index mapping, and focus indices
 	 */
 	public PatientChart serialize(Patient patient, List<SerializedRecord> records, Set<String> focusUuids) {
@@ -125,7 +125,7 @@ public class PatientChartSerializer {
 
 	/**
 	 * The serialized patient chart with numbered records, index mapping, and (in focus-hint
-	 * prefilter mode) the 1-based indices of records the retrieval flagged as most relevant.
+	 * prefilter mode) the 1-based indices of records the retrieval ranked highest by similarity.
 	 * The {@link #getText()} bytes are a function of the patient only — the focus indices are
 	 * the per-query payload that rides alongside and is rendered at the end of the LLM prompt
 	 * by {@code LlmProvider.buildUserMessage}.
