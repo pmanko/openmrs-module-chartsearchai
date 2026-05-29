@@ -45,6 +45,20 @@ public interface ChatService {
 	ChatSession closeAndStartNew(Patient patient);
 
 	/**
+	 * Rebuilds the chart snapshot for the patient's current active session
+	 * (picking up clinical data entered since the session started) WITHOUT
+	 * touching the conversation transcript. The deliberate counterpart to
+	 * {@link #closeAndStartNew}: same session, same messages, fresh chart.
+	 * Used by REST POST {@code /chat/refresh-chart}.
+	 *
+	 * <p>Rebuilding changes the chart bytes, so the LLM's cached prefix for
+	 * this session is invalidated — the next turn pays one full prefill then
+	 * re-caches. That cost is the explicit price of freshness. If no active
+	 * session exists yet, opens one (nothing to refresh).
+	 */
+	ChatSession refreshChartSnapshot(Patient patient);
+
+	/**
 	 * Returns prior chat messages for a session in chronological order,
 	 * excluding summary rows.
 	 */
