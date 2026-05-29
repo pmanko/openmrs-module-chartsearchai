@@ -850,6 +850,32 @@ public class ChartSearchAiRestController {
 	}
 
 	/**
+	 * Rebuild the patient's current session's chart snapshot in place, keeping
+	 * the conversation. The deliberate counterpart to {@code /chat/new}: that
+	 * returns {@code messages:[]} to signal a wipe; this omits {@code messages}
+	 * entirely and returns the new {@code chartBuiltAt} to signal "same chat,
+	 * fresher chart". Access is gated by {@code resolvePatient} → canAccess.
+	 */
+	@RequestMapping(value = "/chat/refresh-chart", method = RequestMethod.POST)
+	@ResponseBody
+	public ResponseEntity<Object> chatRefreshChart(@RequestBody Map<String, String> body) {
+		Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA);
+
+		PatientResolution resolved = resolvePatient(body.get("patient"));
+		if (resolved.hasError()) {
+			return new ResponseEntity<Object>(
+					errorResponse(resolved.errorMessage), resolved.errorStatus);
+		}
+
+		ChatSession session = chatService.refreshChartSnapshot(resolved.patient);
+		Map<String, Object> response = new LinkedHashMap<String, Object>();
+		response.put("session", session.getUuid());
+		response.put("chartBuiltAt",
+				session.getChartBuiltAt() != null ? session.getChartBuiltAt().getTime() : null);
+		return new ResponseEntity<Object>(response, HttpStatus.OK);
+	}
+
+	/**
 	 * Hydrate the SPA on mount: returns the current (patient, user) session
 	 * (creating one if none exists) and its prior messages in chronological
 	 * order. Empty {@code messages[]} on a freshly-created session.
@@ -881,6 +907,8 @@ public class ChartSearchAiRestController {
 
 		Map<String, Object> response = new LinkedHashMap<String, Object>();
 		response.put("session", session.getUuid());
+		response.put("chartBuiltAt",
+				session.getChartBuiltAt() != null ? session.getChartBuiltAt().getTime() : null);
 		response.put("messages", out);
 		return new ResponseEntity<Object>(response, HttpStatus.OK);
 	}

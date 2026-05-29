@@ -91,6 +91,20 @@ public class ChatServiceImpl implements ChatService {
 	}
 
 	@Override
+	public ChatSession refreshChartSnapshot(Patient patient) {
+		User user = Context.getAuthenticatedUser();
+		ChatSession existing = chatDAO.getLatestSession(patient, user);
+		if (existing == null) {
+			// Nothing to refresh — opening a session builds a fresh snapshot anyway.
+			return createSession(patient, user);
+		}
+		// Rebuild only the three chart fields; the transcript (messages) is never
+		// touched — this is the whole contrast with closeAndStartNew.
+		populateChartSnapshot(existing, patient);
+		return chatDAO.saveSession(existing);
+	}
+
+	@Override
 	public List<ChatMessage> getMessages(ChatSession session) {
 		return chatDAO.getMessages(session);
 	}
