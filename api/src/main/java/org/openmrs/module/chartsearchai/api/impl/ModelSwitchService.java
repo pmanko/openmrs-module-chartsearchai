@@ -362,6 +362,226 @@ public class ModelSwitchService {
 	}
 
 	/**
+	 * One configured endpoint in the picker registry: a human label + the
+	 * OpenAI-compat chat-completions URL the backend points chartsearchai at.
+	 */
+	public static final class Endpoint {
+
+		private final String label;
+
+		private final String url;
+
+		public Endpoint(String label, String url) {
+			this.label = label;
+			this.url = url;
+		}
+
+		public String getLabel() {
+			return label;
+		}
+
+		public String getUrl() {
+			return url;
+		}
+	}
+
+	/**
+	 * A picker section: one endpoint, the models it serves (probed live), and
+	 * whether it's reachable + currently selected. A probe failure yields
+	 * {@code reachable=false} with no models rather than throwing, so one dead
+	 * endpoint never blanks the whole picker.
+	 */
+	public static final class EndpointSection {
+
+		private final String label;
+
+		private final String url;
+
+		private final String provider;
+
+		private final List<ModelEntry> entries;
+
+		private final boolean reachable;
+
+		private final boolean current;
+
+		public EndpointSection(String label, String url, String provider,
+				List<ModelEntry> entries, boolean reachable, boolean current) {
+			this.label = label;
+			this.url = url;
+			this.provider = provider;
+			this.entries = entries;
+			this.reachable = reachable;
+			this.current = current;
+		}
+
+		public String getLabel() {
+			return label;
+		}
+
+		public String getUrl() {
+			return url;
+		}
+
+		public String getProvider() {
+			return provider;
+		}
+
+		public List<ModelEntry> getEntries() {
+			return entries;
+		}
+
+		public boolean isReachable() {
+			return reachable;
+		}
+
+		public boolean isCurrent() {
+			return current;
+		}
+	}
+
+	/**
+	 * Parse the {@link ChartSearchAiConstants#GP_LLM_REMOTE_ENDPOINTS} JSON
+	 * registry into endpoints. Tolerant by design: a null/blank/malformed value
+	 * yields an empty list (caller falls back to the single configured
+	 * endpoint); entries missing a {@code url} are skipped; a missing
+	 * {@code label} defaults to the url.
+	 */
+	static List<Endpoint> parseEndpointRegistry(String json) {
+		List<Endpoint> endpoints = new ArrayList<>();
+		if (json == null || json.trim().isEmpty()) {
+			return endpoints;
+		}
+		try {
+			JsonNode root = MAPPER.readTree(json);
+			if (root == null || !root.isArray()) {
+				return endpoints;
+			}
+			for (JsonNode node : root) {
+				JsonNode urlNode = node.get("url");
+				if (urlNode == null || !urlNode.isTextual() || urlNode.asText().trim().isEmpty()) {
+					continue;
+				}
+				String url = urlNode.asText().trim();
+				JsonNode labelNode = node.get("label");
+				String label = (labelNode != null && labelNode.isTextual()
+						&& !labelNode.asText().trim().isEmpty())
+								? labelNode.asText().trim() : url;
+				endpoints.add(new Endpoint(label, url));
+			}
+		}
+		catch (IOException e) {
+			log.warn("Malformed endpoint registry JSON; ignoring: {}", e.getMessage());
+		}
+		return endpoints;
+	}
+
+	/**
+	 * Build a picker section per endpoint by probing each one's model list.
+	 * {@code currentUrl} marks the active endpoint. Package-visible so tests can
+	 * drive it against the {@code httpGet} seam without touching global
+	 * properties.
+	 */
+	List<EndpointSection> buildEndpointSections(List<Endpoint> endpoints, String currentUrl) {
+		List<EndpointSection> sections = new ArrayList<>();
+		for (Endpoint ep : endpoints) {
+			boolean isCurrent = currentUrl != null && currentUrl.equals(ep.getUrl());
+			try {
+				AvailableModels probed = fetchAvailable(ep.getUrl());
+				sections.add(new EndpointSection(ep.getLabel(), ep.getUrl(),
+						probed.getProvider(), probed.getEntries(), true, isCurrent));
+			}
+			catch (RuntimeException e) {
+				log.info("Endpoint '{}' ({}) unreachable for picker: {}",
+						ep.getLabel(), ep.getUrl(), e.getMessage());
+				sections.add(new EndpointSection(ep.getLabel(), ep.getUrl(),
+						null, Collections.<ModelEntry> emptyList(), false, isCurrent));
+			}
+		}
+		return sections;
+	}
+
+	/**
+	 * List the configured endpoints as picker sections (each with its live
+	 * model list). Falls back to a single section built from the active
+	 * {@link ChartSearchAiConstants#GP_LLM_REMOTE_ENDPOINT_URL} when the
+	 * registry GP is unset, so the picker works with no extra config.
+	 *
+	 * @throws APIException for the local engine (model-switching is remote-only)
+	 */
+	public List<EndpointSection> listEndpoints() {
+		String engine = getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE);
+		if (!ChartSearchAiConstants.LLM_ENGINE_REMOTE.equalsIgnoreCase(engine)) {
+			throw new APIException("Endpoint listing requires the remote engine; "
+					+ "active engine is '" + engine + "'.");
+		}
+		String currentUrl = getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
+		List<Endpoint> endpoints = parseEndpointRegistry(
+				getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINTS));
+		if (endpoints.isEmpty() && currentUrl != null && !currentUrl.isEmpty()) {
+			endpoints.add(new Endpoint("Current endpoint", currentUrl));
+		}
+		return buildEndpointSections(endpoints, currentUrl);
+	}
+
+	/**
+	 * Switch the active endpoint AND model in one step: validate the URL is a
+	 * known endpoint (registry or the currently-configured one) and that the
+	 * model is in that endpoint's live {@code /v1/models}, then write both GPs.
+	 * Writes nothing if either is invalid.
+	 *
+	 * @throws IllegalArgumentException blank input, an unknown endpoint, or a
+	 *         model the endpoint does not serve
+	 */
+	public void setEndpointAndModel(String endpointUrl, String modelName) {
+		if (endpointUrl == null || endpointUrl.trim().isEmpty()) {
+			throw new IllegalArgumentException("endpointUrl is required");
+		}
+		if (modelName == null || modelName.trim().isEmpty()) {
+			throw new IllegalArgumentException("modelName is required");
+		}
+		String url = endpointUrl.trim();
+		String model = modelName.trim();
+
+		// The URL must be one we know about (registry or the current endpoint),
+		// so a picker selection can't repoint the backend at an arbitrary host.
+		List<Endpoint> endpoints = parseEndpointRegistry(
+				getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINTS));
+		String currentUrl = getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
+		boolean known = url.equals(currentUrl);
+		for (Endpoint ep : endpoints) {
+			if (ep.getUrl().equals(url)) {
+				known = true;
+				break;
+			}
+		}
+		if (!known) {
+			throw new IllegalArgumentException("Endpoint '" + url
+					+ "' is not in the configured endpoint registry.");
+		}
+
+		// The model must be one the endpoint actually serves.
+		AvailableModels probed = fetchAvailable(url);
+		boolean served = false;
+		for (ModelEntry entry : probed.getEntries()) {
+			if (entry.getId().equals(model)) {
+				served = true;
+				break;
+			}
+		}
+		if (!served) {
+			throw new IllegalArgumentException("Model '" + model
+					+ "' is not served by endpoint '" + url + "'.");
+		}
+
+		Context.getAdministrationService().setGlobalProperty(
+				ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL, url);
+		Context.getAdministrationService().setGlobalProperty(
+				ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME, model);
+		log.info("Active endpoint set to '{}' with model '{}'", url, model);
+	}
+
+	/**
 	 * Derive LM Studio's {@code /api/v1/models} URL from the configured
 	 * chat-completions URL. Strips the OpenAI-compat path suffix (the
 	 * {@code /v1/...} part) and appends {@code /api/v1/models} on the host.
