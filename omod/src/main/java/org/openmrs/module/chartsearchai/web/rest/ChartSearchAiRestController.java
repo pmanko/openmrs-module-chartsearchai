@@ -471,6 +471,12 @@ public class ChartSearchAiRestController {
 			}
 			Map<String, Object> response = new LinkedHashMap<String, Object>();
 			response.put("endpoints", out);
+			Map<String, Object> current = new LinkedHashMap<String, Object>();
+			current.put("endpointUrl", Context.getAdministrationService()
+					.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL));
+			current.put("modelName", Context.getAdministrationService()
+					.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME));
+			response.put("current", current);
 			return new ResponseEntity<Object>(response, HttpStatus.OK);
 		}
 		catch (org.openmrs.api.APIException e) {
