@@ -273,6 +273,16 @@ public class ChartSearchAiConstants {
 
 	public static final String GP_LLM_REMOTE_MODEL_NAME = "chartsearchai.llm.remote.modelName";
 
+	/**
+	 * Optional JSON registry of selectable endpoints for the picker's
+	 * per-endpoint sections, e.g.
+	 * {@code [{"label":"LM Studio","url":".../v1/chat/completions"},
+	 * {"label":"Med Agent Hub","url":"http://med-agent-hub:8080/v1/chat/completions"}]}.
+	 * When unset/blank the picker falls back to a single section built from
+	 * {@link #GP_LLM_REMOTE_ENDPOINT_URL}.
+	 */
+	public static final String GP_LLM_REMOTE_ENDPOINTS = "chartsearchai.llm.remote.endpoints";
+
 	public static final String GP_SYSTEM_PROMPT = "chartsearchai.llm.systemPrompt";
 
 	public static final String GP_LLM_TIMEOUT_SECONDS = "chartsearchai.llm.timeoutSeconds";

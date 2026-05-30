@@ -19,6 +19,8 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.module.chartsearchai.api.impl.ModelSwitchService.AvailableModels;
+import org.openmrs.module.chartsearchai.api.impl.ModelSwitchService.Endpoint;
+import org.openmrs.module.chartsearchai.api.impl.ModelSwitchService.EndpointSection;
 import org.openmrs.module.chartsearchai.api.impl.ModelSwitchService.ModelEntry;
 
 public class ModelSwitchServiceTest {
@@ -265,6 +267,107 @@ public class ModelSwitchServiceTest {
 		assertEquals("generic-openai-compat", result.getProvider());
 		assertEquals(List.of("only"),
 				result.getEntries().stream().map(ModelEntry::getId).toList());
+	}
+
+	@Test
+	public void parseEndpointRegistry_parsesLabelAndUrl() {
+		List<Endpoint> eps = ModelSwitchService.parseEndpointRegistry(
+				"[{\"label\":\"LM Studio\",\"url\":\"http://lmstudio:1234/v1/chat/completions\"},"
+						+ "{\"label\":\"Med Agent Hub\",\"url\":\"http://medhub:8080/v1/chat/completions\"}]");
+		assertEquals(2, eps.size());
+		assertEquals("LM Studio", eps.get(0).getLabel());
+		assertEquals("http://lmstudio:1234/v1/chat/completions", eps.get(0).getUrl());
+		assertEquals("Med Agent Hub", eps.get(1).getLabel());
+	}
+
+	@Test
+	public void parseEndpointRegistry_skipsEntriesWithoutUrlAndDefaultsLabelToUrl() {
+		List<Endpoint> eps = ModelSwitchService.parseEndpointRegistry(
+				"[{\"label\":\"No URL\"},{\"url\":\"http://h:1/v1/chat/completions\"}]");
+		assertEquals(1, eps.size(), "an entry without a url is skipped");
+		assertEquals("http://h:1/v1/chat/completions", eps.get(0).getUrl());
+		assertEquals("http://h:1/v1/chat/completions", eps.get(0).getLabel(),
+				"label defaults to url when absent");
+	}
+
+	@Test
+	public void parseEndpointRegistry_emptyOnBlankNullMalformedOrNonArray() {
+		assertTrue(ModelSwitchService.parseEndpointRegistry(null).isEmpty());
+		assertTrue(ModelSwitchService.parseEndpointRegistry("   ").isEmpty());
+		assertTrue(ModelSwitchService.parseEndpointRegistry("not json").isEmpty());
+		assertTrue(ModelSwitchService.parseEndpointRegistry("{\"url\":\"x\"}").isEmpty(),
+				"a JSON object (not an array) yields no endpoints");
+	}
+
+	@Test
+	public void buildEndpointSections_buildsSectionPerEndpointWithItsOwnModels() {
+		// Real section-assembly logic; only the HTTP boundary is seamed. Each
+		// endpoint is probed independently and gets its own model list.
+		ModelSwitchService svc = new ModelSwitchService() {
+			@Override
+			protected String httpGet(String url, String apiKey) {
+				if (url.endsWith("/api/v1/models")) {
+					throw new RuntimeException("not lm studio; force OpenAI-compat fallback");
+				}
+				if (url.startsWith("http://lmstudio")) {
+					return "{\"data\":[{\"id\":\"gemma-4-e4b\"},{\"id\":\"medgemma\"}]}";
+				}
+				if (url.startsWith("http://medhub")) {
+					return "{\"data\":[{\"id\":\"med-agent-team\"}]}";
+				}
+				throw new AssertionError("unexpected url " + url);
+			}
+		};
+		List<Endpoint> eps = List.of(
+				new Endpoint("LM Studio", "http://lmstudio:1234/v1/chat/completions"),
+				new Endpoint("Med Agent Hub", "http://medhub:8080/v1/chat/completions"));
+
+		List<EndpointSection> sections = svc.buildEndpointSections(
+				eps, "http://medhub:8080/v1/chat/completions");
+
+		assertEquals(2, sections.size());
+		EndpointSection lm = sections.get(0);
+		assertEquals("LM Studio", lm.getLabel());
+		assertTrue(lm.isReachable());
+		assertFalse(lm.isCurrent());
+		assertEquals(List.of("gemma-4-e4b", "medgemma"),
+				lm.getEntries().stream().map(ModelEntry::getId).toList());
+		EndpointSection hub = sections.get(1);
+		assertEquals("Med Agent Hub", hub.getLabel());
+		assertTrue(hub.isReachable());
+		assertTrue(hub.isCurrent(), "the configured-current endpoint is flagged");
+		assertEquals(List.of("med-agent-team"),
+				hub.getEntries().stream().map(ModelEntry::getId).toList());
+	}
+
+	@Test
+	public void buildEndpointSections_marksUnreachableEndpointWithoutFailingOthers() {
+		// One dead endpoint must not blank the picker: it becomes a reachable=false
+		// section with no models, while the others still build.
+		ModelSwitchService svc = new ModelSwitchService() {
+			@Override
+			protected String httpGet(String url, String apiKey) {
+				if (url.endsWith("/api/v1/models")) {
+					throw new RuntimeException("404");
+				}
+				if (url.startsWith("http://lmstudio")) {
+					return "{\"data\":[{\"id\":\"gemma\"}]}";
+				}
+				throw new RuntimeException("connection refused"); // medhub is down
+			}
+		};
+		List<Endpoint> eps = List.of(
+				new Endpoint("LM Studio", "http://lmstudio:1234/v1/chat/completions"),
+				new Endpoint("Med Agent Hub", "http://medhub:8080/v1/chat/completions"));
+
+		List<EndpointSection> sections = svc.buildEndpointSections(eps, null);
+
+		assertEquals(2, sections.size());
+		assertTrue(sections.get(0).isReachable(), "the reachable endpoint still builds");
+		assertEquals(1, sections.get(0).getEntries().size());
+		assertFalse(sections.get(1).isReachable(),
+				"the dead endpoint is marked unreachable, not thrown");
+		assertTrue(sections.get(1).getEntries().isEmpty());
 	}
 
 	@Test
