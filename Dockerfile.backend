@@ -27,7 +27,7 @@ FROM openmrs/openmrs-reference-application-3-backend:nightly AS openmrs-dist
 FROM eclipse-temurin:21-jre
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl libgomp1 \
+    curl libgomp1 mariadb-client \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r openmrs && useradd -r -g openmrs -u 1001 openmrs
