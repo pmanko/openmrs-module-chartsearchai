@@ -53,9 +53,9 @@ public class RemoteLlmEngine implements LlmEngine {
 
 	@Override
 	public InferenceResult infer(ArrayNode messages, int timeoutSeconds) {
-		String endpointUrl = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
+		String endpointUrl = resolveEndpointUrl();
 		String apiKey = getOptionalRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
-		String modelName = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
+		String modelName = resolveModelName();
 
 		String requestBody = buildRequestBody(messages, modelName, false);
 
@@ -103,9 +103,9 @@ public class RemoteLlmEngine implements LlmEngine {
 	@Override
 	public InferenceResult inferStreaming(ArrayNode messages, int timeoutSeconds,
 			Consumer<String> tokenConsumer) {
-		String endpointUrl = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
+		String endpointUrl = resolveEndpointUrl();
 		String apiKey = getOptionalRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
-		String modelName = getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
+		String modelName = resolveModelName();
 
 		String requestBody = buildRequestBody(messages, modelName, true);
 
@@ -204,6 +204,23 @@ public class RemoteLlmEngine implements LlmEngine {
 	InferenceResult parseStreamingResponse(InputStream inputStream,
 			Consumer<String> tokenConsumer) throws IOException {
 		return LlmResponseParser.parseStreamingResponse(inputStream, tokenConsumer, log);
+	}
+
+	/**
+	 * The endpoint URL to call: a per-request override when one is set (validated
+	 * upstream against the registry), otherwise the config-controlled global.
+	 */
+	String resolveEndpointUrl() {
+		String override = RequestLlmOverride.endpointUrl();
+		return override != null ? override
+				: getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
+	}
+
+	/** The model to send: per-request override when set, otherwise the global. */
+	String resolveModelName() {
+		String override = RequestLlmOverride.modelName();
+		return override != null ? override
+				: getRequiredGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
 	}
 
 	private String getRequiredGlobalProperty(String propertyName) {
