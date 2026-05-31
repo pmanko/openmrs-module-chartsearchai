@@ -44,6 +44,7 @@ import org.openmrs.module.chartsearchai.api.AuditLogService;
 import org.openmrs.module.chartsearchai.api.ChatService;
 import org.openmrs.module.chartsearchai.api.ChatService.ChatTurnResult;
 import org.openmrs.module.chartsearchai.api.PatientAccessCheck;
+import org.openmrs.module.chartsearchai.api.impl.RequestLlmOverride;
 import org.openmrs.module.chartsearchai.api.impl.ResponseBlock;
 import org.openmrs.module.chartsearchai.api.impl.WarmupExecutor;
 import org.openmrs.module.chartsearchai.model.ChartSearchAuditLog;
@@ -1157,6 +1158,24 @@ public class ChartSearchAiRestController {
 
 		ChatSession session = resolveOrOpenSession(patient, sessionUuid);
 
+		// Per-request backend override: if the caller names a backend, use it for
+		// THIS request only (validated against the registry; the config-controlled
+		// global default is untouched). Cleared in finally so it can't leak.
+		String overrideUrl = body.get("endpointUrl");
+		String overrideModel = body.get("modelName");
+		boolean overridden = false;
+		if (overrideUrl != null && !overrideUrl.trim().isEmpty()
+				&& overrideModel != null && !overrideModel.trim().isEmpty()) {
+			try {
+				String[] valid = modelSwitchService.validateEndpointAndModel(overrideUrl, overrideModel);
+				RequestLlmOverride.set(valid[0], valid[1]);
+				overridden = true;
+			}
+			catch (IllegalArgumentException e) {
+				return new ResponseEntity<Object>(errorResponse(e.getMessage()), HttpStatus.BAD_REQUEST);
+			}
+		}
+
 		ChatTurnResult result;
 		try {
 			result = chatService.chat(session, question);
@@ -1174,6 +1193,11 @@ public class ChartSearchAiRestController {
 			return new ResponseEntity<Object>(
 					errorResponse("Chart search failed. Please try again or contact your administrator."),
 					HttpStatus.INTERNAL_SERVER_ERROR);
+		}
+		finally {
+			if (overridden) {
+				RequestLlmOverride.clear();
+			}
 		}
 
 		ChartAnswer answer = result.getAnswer();
