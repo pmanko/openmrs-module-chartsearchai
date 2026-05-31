@@ -1000,25 +1000,19 @@ public class ChartSearchAiRestController {
 			return;
 		}
 
-		// Per-request backend override (see /chat): validated before the stream opens;
-		// cleared in finally after streaming so it can't leak to a pooled thread.
-		String overrideUrl = body.get("endpointUrl");
-		String overrideModel = body.get("modelName");
+		// Per-request backend override (see /chat): resolved engine-aware, validated
+		// before the stream opens; cleared in finally after streaming so it can't
+		// leak to a pooled thread.
 		boolean overridden = false;
-		String answeredModel = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
-		if (overrideUrl != null && !overrideUrl.trim().isEmpty()
-				&& overrideModel != null && !overrideModel.trim().isEmpty()) {
-			try {
-				String[] valid = modelSwitchService.validateEndpointAndModel(overrideUrl, overrideModel);
-				RequestLlmOverride.set(valid[0], valid[1]);
-				overridden = true;
-				answeredModel = valid[1];
-			}
-			catch (IllegalArgumentException e) {
-				writeJsonError(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
-				return;
-			}
+		String answeredModel;
+		try {
+			OverrideResolution overrideRes = resolveOverride(body);
+			answeredModel = overrideRes.answeredModel;
+			overridden = overrideRes.overridden;
+		}
+		catch (IllegalArgumentException e) {
+			writeJsonError(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+			return;
 		}
 
 		ChatSession session = resolveOrOpenSession(patient, sessionUuid);
@@ -1186,28 +1180,20 @@ public class ChartSearchAiRestController {
 		ChatSession session = resolveOrOpenSession(patient, sessionUuid);
 
 		// Per-request backend override: if the caller names a backend, use it for
-		// THIS request only (validated against the registry; the config-controlled
-		// global default is untouched). Cleared in finally so it can't leak.
-		String overrideUrl = body.get("endpointUrl");
-		String overrideModel = body.get("modelName");
+		// THIS request only (remote engine; validated against the registry; the
+		// config-controlled global default is untouched). Resolved engine-aware so
+		// the answered model is accurate under the local (bundled) engine too.
+		// answeredModel is captured HERE because the override is cleared in finally
+		// before the response is built.
 		boolean overridden = false;
-		// The model that actually answered (for the UI's per-response tag): the
-		// per-request override when set, otherwise the config-controlled default.
-		// Captured HERE because the override is cleared in finally before the
-		// response is built.
-		String answeredModel = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
-		if (overrideUrl != null && !overrideUrl.trim().isEmpty()
-				&& overrideModel != null && !overrideModel.trim().isEmpty()) {
-			try {
-				String[] valid = modelSwitchService.validateEndpointAndModel(overrideUrl, overrideModel);
-				RequestLlmOverride.set(valid[0], valid[1]);
-				overridden = true;
-				answeredModel = valid[1];
-			}
-			catch (IllegalArgumentException e) {
-				return new ResponseEntity<Object>(errorResponse(e.getMessage()), HttpStatus.BAD_REQUEST);
-			}
+		String answeredModel;
+		try {
+			OverrideResolution overrideRes = resolveOverride(body);
+			answeredModel = overrideRes.answeredModel;
+			overridden = overrideRes.overridden;
+		}
+		catch (IllegalArgumentException e) {
+			return new ResponseEntity<Object>(errorResponse(e.getMessage()), HttpStatus.BAD_REQUEST);
 		}
 
 		ChatTurnResult result;
@@ -1663,5 +1649,82 @@ public class ChartSearchAiRestController {
 		Map<String, String> error = new HashMap<String, String>();
 		error.put("error", message);
 		return error;
+	}
+
+	/**
+	 * The model that answered a chat request + whether a per-request override was
+	 * applied. Produced by {@link #resolveOverride}.
+	 */
+	private static final class OverrideResolution {
+
+		private final String answeredModel;
+
+		private final boolean overridden;
+
+		OverrideResolution(String answeredModel, boolean overridden) {
+			this.answeredModel = answeredModel;
+			this.overridden = overridden;
+		}
+	}
+
+	/**
+	 * Resolve the model that will answer this chat request and apply any
+	 * per-request backend override, honoring the active LLM engine:
+	 * <ul>
+	 *   <li><b>remote</b>: the answering model is {@code GP_LLM_REMOTE_MODEL_NAME},
+	 *       or the validated {@code {endpointUrl, modelName}} override when the
+	 *       caller supplies one (sets {@link RequestLlmOverride}; the caller MUST
+	 *       clear it in a finally when {@code overridden} is true).</li>
+	 *   <li><b>local</b> (bundled llama-server): the answering model is the bundled
+	 *       model file; a per-request remote override does not apply and is
+	 *       rejected so the caller isn't misled into thinking it took effect.</li>
+	 * </ul>
+	 *
+	 * @throws IllegalArgumentException on an invalid override, or an override sent
+	 *         to a non-remote engine — callers map this to HTTP 400.
+	 */
+	private OverrideResolution resolveOverride(Map<String, String> body) {
+		String engine = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE);
+		boolean isRemote = ChartSearchAiConstants.LLM_ENGINE_REMOTE
+				.equalsIgnoreCase(engine != null ? engine.trim() : "");
+
+		String overrideUrl = body.get("endpointUrl");
+		String overrideModel = body.get("modelName");
+		boolean hasOverride = overrideUrl != null && !overrideUrl.trim().isEmpty()
+				&& overrideModel != null && !overrideModel.trim().isEmpty();
+
+		if (!isRemote) {
+			if (hasOverride) {
+				throw new IllegalArgumentException(
+						"Per-request backend override requires the remote engine; active engine is '"
+								+ (engine != null ? engine.trim() : "") + "'.");
+			}
+			return new OverrideResolution(localModelName(), false);
+		}
+
+		String answeredModel = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
+		if (hasOverride) {
+			String[] valid = modelSwitchService.validateEndpointAndModel(overrideUrl, overrideModel);
+			RequestLlmOverride.set(valid[0], valid[1]);
+			return new OverrideResolution(valid[1], true);
+		}
+		return new OverrideResolution(answeredModel, false);
+	}
+
+	/**
+	 * The local (bundled) engine's model name for the per-response tag — the
+	 * basename of {@code GP_LLM_MODEL_FILE_PATH}, or {@code "local"} if unset.
+	 */
+	private String localModelName() {
+		String path = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH);
+		if (path == null || path.trim().isEmpty()) {
+			return "local";
+		}
+		String p = path.trim();
+		int slash = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+		return slash >= 0 ? p.substring(slash + 1) : p;
 	}
 }
