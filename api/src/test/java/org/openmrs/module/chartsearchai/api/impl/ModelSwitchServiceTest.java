@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.module.chartsearchai.api.impl.ModelSwitchService.AvailableModels;
@@ -267,7 +268,7 @@ public class ModelSwitchServiceTest {
 		AvailableModels result = svc.fetchAvailable("http://host:1234/v1/chat/completions");
 		assertEquals("generic-openai-compat", result.getProvider());
 		assertEquals(List.of("only"),
-				result.getEntries().stream().map(ModelEntry::getId).toList());
+				result.getEntries().stream().map(ModelEntry::getId).collect(Collectors.toList()));
 	}
 
 	@Test
@@ -332,13 +333,13 @@ public class ModelSwitchServiceTest {
 		assertTrue(lm.isReachable());
 		assertFalse(lm.isCurrent());
 		assertEquals(List.of("gemma-4-e4b", "medgemma"),
-				lm.getEntries().stream().map(ModelEntry::getId).toList());
+				lm.getEntries().stream().map(ModelEntry::getId).collect(Collectors.toList()));
 		EndpointSection hub = sections.get(1);
 		assertEquals("Med Agent Hub", hub.getLabel());
 		assertTrue(hub.isReachable());
 		assertTrue(hub.isCurrent(), "the configured-current endpoint is flagged");
 		assertEquals(List.of("med-agent-team"),
-				hub.getEntries().stream().map(ModelEntry::getId).toList());
+				hub.getEntries().stream().map(ModelEntry::getId).collect(Collectors.toList()));
 	}
 
 	@Test
