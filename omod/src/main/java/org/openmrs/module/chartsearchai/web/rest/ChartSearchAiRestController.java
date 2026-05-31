@@ -1000,6 +1000,27 @@ public class ChartSearchAiRestController {
 			return;
 		}
 
+		// Per-request backend override (see /chat): validated before the stream opens;
+		// cleared in finally after streaming so it can't leak to a pooled thread.
+		String overrideUrl = body.get("endpointUrl");
+		String overrideModel = body.get("modelName");
+		boolean overridden = false;
+		String answeredModel = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
+		if (overrideUrl != null && !overrideUrl.trim().isEmpty()
+				&& overrideModel != null && !overrideModel.trim().isEmpty()) {
+			try {
+				String[] valid = modelSwitchService.validateEndpointAndModel(overrideUrl, overrideModel);
+				RequestLlmOverride.set(valid[0], valid[1]);
+				overridden = true;
+				answeredModel = valid[1];
+			}
+			catch (IllegalArgumentException e) {
+				writeJsonError(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+				return;
+			}
+		}
+
 		ChatSession session = resolveOrOpenSession(patient, sessionUuid);
 
 		// Unwrap any response wrappers that buffer the body (kills SSE liveness).
@@ -1060,6 +1081,7 @@ public class ChartSearchAiRestController {
 			doneData.put("blocks", blocksToJson(answer.getBlocks()));
 			doneData.put("session", result.getSessionUuid());
 			doneData.put("messageId", result.getAssistantMessageUuid());
+			doneData.put("model", answeredModel);
 
 			writeSseEvent(out, "done", new ObjectMapper().writeValueAsString(doneData));
 		}
@@ -1097,6 +1119,11 @@ public class ChartSearchAiRestController {
 				catch (IOException ioe) {
 					log.debug("Could not send error event, client likely disconnected");
 				}
+			}
+		}
+		finally {
+			if (overridden) {
+				RequestLlmOverride.clear();
 			}
 		}
 
@@ -1164,12 +1191,19 @@ public class ChartSearchAiRestController {
 		String overrideUrl = body.get("endpointUrl");
 		String overrideModel = body.get("modelName");
 		boolean overridden = false;
+		// The model that actually answered (for the UI's per-response tag): the
+		// per-request override when set, otherwise the config-controlled default.
+		// Captured HERE because the override is cleared in finally before the
+		// response is built.
+		String answeredModel = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
 		if (overrideUrl != null && !overrideUrl.trim().isEmpty()
 				&& overrideModel != null && !overrideModel.trim().isEmpty()) {
 			try {
 				String[] valid = modelSwitchService.validateEndpointAndModel(overrideUrl, overrideModel);
 				RequestLlmOverride.set(valid[0], valid[1]);
 				overridden = true;
+				answeredModel = valid[1];
 			}
 			catch (IllegalArgumentException e) {
 				return new ResponseEntity<Object>(errorResponse(e.getMessage()), HttpStatus.BAD_REQUEST);
@@ -1218,6 +1252,7 @@ public class ChartSearchAiRestController {
 		response.put("blocks", blocksToJson(answer.getBlocks()));
 		response.put("session", result.getSessionUuid());
 		response.put("messageId", result.getAssistantMessageUuid());
+		response.put("model", answeredModel);
 
 		return new ResponseEntity<Object>(response, HttpStatus.OK);
 	}
