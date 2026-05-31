@@ -51,6 +51,21 @@ public class RemoteLlmEngineTest {
 	}
 
 	@Test
+	public void resolve_usesPerRequestOverrideOverGlobalProperties() {
+		// With a request-scoped override set, the engine must use it. There is no
+		// OpenMRS Context in this unit test, so a global-property read would throw —
+		// reaching the override values proves the global path was NOT taken.
+		try {
+			RequestLlmOverride.set("http://override:9000/v1/chat/completions", "override-model");
+			assertEquals("http://override:9000/v1/chat/completions", engine.resolveEndpointUrl());
+			assertEquals("override-model", engine.resolveModelName());
+		}
+		finally {
+			RequestLlmOverride.clear();
+		}
+	}
+
+	@Test
 	public void buildRequestBody_shouldOmitTemperatureAndUseTopKForClaudeOpus47()
 			throws IOException {
 		String body = engine.buildRequestBody("sys", "usr", "claude-opus-4-7", false);

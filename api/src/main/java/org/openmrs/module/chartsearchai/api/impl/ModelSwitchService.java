@@ -534,6 +534,40 @@ public class ModelSwitchService {
 	 *         model the endpoint does not serve
 	 */
 	public void setEndpointAndModel(String endpointUrl, String modelName) {
+		String[] valid = validateEndpointAndModel(endpointUrl, modelName);
+		Context.getAdministrationService().setGlobalProperty(
+				ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL, valid[0]);
+		Context.getAdministrationService().setGlobalProperty(
+				ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME, valid[1]);
+		log.info("Active endpoint set to '{}' with model '{}'", valid[0], valid[1]);
+	}
+
+	/**
+	 * Validate that {@code endpointUrl} is a registered endpoint and {@code
+	 * modelName} is served there, WITHOUT changing any global property. Returns the
+	 * trimmed {@code [endpointUrl, modelName]}. Reused by {@link
+	 * #setEndpointAndModel} (which then writes the config-controlled globals) and
+	 * by the per-request override path (which must not touch them).
+	 *
+	 * @throws IllegalArgumentException blank input, an unknown endpoint, or a model
+	 *         the endpoint does not serve
+	 */
+	public String[] validateEndpointAndModel(String endpointUrl, String modelName) {
+		List<Endpoint> registry = parseEndpointRegistry(
+				getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINTS));
+		String currentUrl = getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
+		return validateEndpointAndModel(endpointUrl, modelName, registry, currentUrl);
+	}
+
+	/**
+	 * Pure validation against a supplied registry — no global-property reads — so
+	 * the SSRF guard (endpoint must be registered) and the served-model check are
+	 * unit-testable. {@code currentUrl} is also accepted as a known endpoint (the
+	 * configured default). Only {@link #fetchAvailable} (the HTTP probe) reaches
+	 * outside; tests seam it via {@code httpGet}.
+	 */
+	String[] validateEndpointAndModel(String endpointUrl, String modelName,
+			List<Endpoint> registry, String currentUrl) {
 		if (endpointUrl == null || endpointUrl.trim().isEmpty()) {
 			throw new IllegalArgumentException("endpointUrl is required");
 		}
@@ -544,12 +578,9 @@ public class ModelSwitchService {
 		String model = modelName.trim();
 
 		// The URL must be one we know about (registry or the current endpoint),
-		// so a picker selection can't repoint the backend at an arbitrary host.
-		List<Endpoint> endpoints = parseEndpointRegistry(
-				getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINTS));
-		String currentUrl = getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
+		// so a caller can't repoint the backend at an arbitrary host.
 		boolean known = url.equals(currentUrl);
-		for (Endpoint ep : endpoints) {
+		for (Endpoint ep : registry) {
 			if (ep.getUrl().equals(url)) {
 				known = true;
 				break;
@@ -573,12 +604,7 @@ public class ModelSwitchService {
 			throw new IllegalArgumentException("Model '" + model
 					+ "' is not served by endpoint '" + url + "'.");
 		}
-
-		Context.getAdministrationService().setGlobalProperty(
-				ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL, url);
-		Context.getAdministrationService().setGlobalProperty(
-				ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME, model);
-		log.info("Active endpoint set to '{}' with model '{}'", url, model);
+		return new String[] { url, model };
 	}
 
 	/**

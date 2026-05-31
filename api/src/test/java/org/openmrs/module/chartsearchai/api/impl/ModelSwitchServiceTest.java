@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -368,6 +369,96 @@ public class ModelSwitchServiceTest {
 		assertFalse(sections.get(1).isReachable(),
 				"the dead endpoint is marked unreachable, not thrown");
 		assertTrue(sections.get(1).getEntries().isEmpty());
+	}
+
+	// --- per-request override validation (the SSRF guard + served-model check
+	// reused by the per-request override path; only the HTTP probe is seamed) ---
+
+	@Test
+	public void validateEndpointAndModel_returnsTrimmedPairForRegisteredEndpointAndServedModel() {
+		ModelSwitchService svc = new ModelSwitchService() {
+			@Override
+			protected String httpGet(String url, String apiKey) {
+				if (url.endsWith("/api/v1/models")) {
+					throw new RuntimeException("not lm studio; OpenAI-compat fallback");
+				}
+				return "{\"data\":[{\"id\":\"med-agent-team\"}]}";
+			}
+		};
+		List<Endpoint> registry = List.of(
+				new Endpoint("Med Agent Hub", "http://medhub:8080/v1/chat/completions"));
+
+		String[] valid = svc.validateEndpointAndModel(
+				"  http://medhub:8080/v1/chat/completions  ", " med-agent-team ", registry, null);
+
+		assertEquals("http://medhub:8080/v1/chat/completions", valid[0]);
+		assertEquals("med-agent-team", valid[1]);
+	}
+
+	@Test
+	public void validateEndpointAndModel_rejectsEndpointNotInRegistry() {
+		// SSRF guard: a per-request override cannot repoint the backend at an
+		// arbitrary host — it must be a registered endpoint.
+		ModelSwitchService svc = new ModelSwitchService() {
+			@Override
+			protected String httpGet(String url, String apiKey) {
+				throw new AssertionError("must reject before probing an unregistered host");
+			}
+		};
+		List<Endpoint> registry = List.of(
+				new Endpoint("Med Agent Hub", "http://medhub:8080/v1/chat/completions"));
+
+		assertThrows(IllegalArgumentException.class, () -> svc.validateEndpointAndModel(
+				"http://evil.example.com/v1/chat/completions", "med-agent-team", registry, null));
+	}
+
+	@Test
+	public void validateEndpointAndModel_rejectsModelNotServedByEndpoint() {
+		ModelSwitchService svc = new ModelSwitchService() {
+			@Override
+			protected String httpGet(String url, String apiKey) {
+				if (url.endsWith("/api/v1/models")) {
+					throw new RuntimeException("OpenAI-compat fallback");
+				}
+				return "{\"data\":[{\"id\":\"med-agent-team\"}]}";
+			}
+		};
+		List<Endpoint> registry = List.of(
+				new Endpoint("Med Agent Hub", "http://medhub:8080/v1/chat/completions"));
+
+		assertThrows(IllegalArgumentException.class, () -> svc.validateEndpointAndModel(
+				"http://medhub:8080/v1/chat/completions", "no-such-model", registry, null));
+	}
+
+	@Test
+	public void validateEndpointAndModel_acceptsCurrentEndpointEvenIfNotInRegistry() {
+		// The configured-current endpoint counts as known, so a request can name it
+		// even when the registry GP is empty.
+		ModelSwitchService svc = new ModelSwitchService() {
+			@Override
+			protected String httpGet(String url, String apiKey) {
+				if (url.endsWith("/api/v1/models")) {
+					throw new RuntimeException("OpenAI-compat fallback");
+				}
+				return "{\"data\":[{\"id\":\"gemma-4-e2b-it\"}]}";
+			}
+		};
+
+		String[] valid = svc.validateEndpointAndModel(
+				"http://host.docker.internal:1234/v1/chat/completions", "gemma-4-e2b-it",
+				List.of(), "http://host.docker.internal:1234/v1/chat/completions");
+
+		assertEquals("gemma-4-e2b-it", valid[1]);
+	}
+
+	@Test
+	public void validateEndpointAndModel_rejectsBlankInput() {
+		ModelSwitchService svc = new ModelSwitchService();
+		List<Endpoint> registry = List.of();
+		assertThrows(IllegalArgumentException.class,
+				() -> svc.validateEndpointAndModel("", "m", registry, null));
+		assertThrows(IllegalArgumentException.class,
+				() -> svc.validateEndpointAndModel("http://x/v1/chat/completions", "  ", registry, null));
 	}
 
 	@Test
