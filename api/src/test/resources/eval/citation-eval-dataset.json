@@ -192,6 +192,13 @@
       "simulatedLlmResponse": "{\"answer\": \"Azithromycin [1] [2].\", \"citations\": [1, 2,]}",
       "expectedRecordIndices": [1, 2],
       "tags": ["citation", "malformed", "trailing-comma"]
+    },
+    {
+      "id": "citation-inline-markers-missing-from-array",
+      "question": "any infections?",
+      "simulatedLlmResponse": "{\"answer\": \"Active Tuberculosis [8], CD4 988.0 [9] and 1191.0 [10]. Beef allergy [5].\", \"citations\": [8]}",
+      "expectedRecordIndices": [5, 8, 9, 10],
+      "tags": ["citation", "inline-only", "exact"]
     }
   ]
 }

@@ -314,8 +314,20 @@ public class LocalLlmEngine implements LlmEngine {
 	 *       memory pressure, avoiding multi-second stalls on a busy host.</li>
 	 *   <li>{@code -b 4096 -ub 1024} — large batch sizes for prompt processing. Default 2048/512
 	 *       leaves prompt-processing parallelism on the table for chart-length inputs.</li>
-	 *   <li>{@code --cache-reuse 256} + {@code cache_prompt=true} (in request body) — reuse the
-	 *       chart prefix's KV cache across successive queries on the same patient.</li>
+	 *   <li>{@code --cache-reuse 0} + {@code cache_prompt=true} (in request body) — reuse the
+	 *       chart prefix's KV cache across successive queries on the same patient via the
+	 *       request-body flag (exact-prefix match). The CLI flag is pinned to 0 (llama.cpp's
+	 *       default) because the focus-hint prompt structure has byte-identical prefix bytes
+	 *       across successive queries on the same patient — KV shifting (the {@code N>0}
+	 *       behavior) is for fuzzy prefix matching when the prefix bytes drift slightly, and
+	 *       that case doesn't arise on this prompt shape. Note that cache_prompt itself
+	 *       introduces a low-level non-determinism on borderline argmax decisions because the
+	 *       reused-vs-fresh KV path is numerically close but not bit-identical — observed as
+	 *       "is she pregnant?" alternating between Gravida and Self-Induced Abortion on
+	 *       successive identical requests for patient 4acc0b80. The trade-off (latency win
+	 *       from cache_prompt vs. determinism on borderline questions) is fundamental to
+	 *       llama-server's design; cache_prompt stays on because the latency win is the
+	 *       whole point.</li>
 	 *   <li>{@code --reasoning-budget 0} — disable reasoning channel; json_schema does not
 	 *       constrain it and Gemma 4 burns thousands of tokens before the answer.</li>
 	 * </ul>
@@ -347,7 +359,7 @@ public class LocalLlmEngine implements LlmEngine {
 		cmd.add("-ub");
 		cmd.add("1024");
 		cmd.add("--cache-reuse");
-		cmd.add("256");
+		cmd.add("0");
 		cmd.add("--reasoning-budget");
 		cmd.add("0");
 		cmd.add("--log-disable");

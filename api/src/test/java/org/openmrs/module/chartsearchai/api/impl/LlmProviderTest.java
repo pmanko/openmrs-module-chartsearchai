@@ -58,6 +58,46 @@ public class LlmProviderTest {
 	}
 
 	@Test
+	public void defaultSystemPrompt_shouldInstructAbstentionWhenNoRecordsRelevant() {
+		// The few-shot demonstrates abstention in FOCUS mode (a "Records ranked by
+		// similarity..." line followed by an empty-citations answer). On the non-focus path
+		// (full-chart mode / usePreFilter=false, or any query whose focus list is empty) the
+		// user message carries NO ranked line, so this explicit instruction is the sole
+		// abstention guidance the model gets. A future prompt edit that drops it would
+		// silently strip all "none found" behaviour from the non-focus path with no demo to
+		// fall back on — pin it.
+		assertTrue(LlmProvider.DEFAULT_SYSTEM_PROMPT.contains("If no records are relevant"),
+				"System prompt must keep the explicit abstention instruction for the non-focus "
+				+ "path — the focus-mode few-shot does not cover it");
+	}
+
+	@Test
+	public void defaultSystemPrompt_shouldDemonstrateAbstentionDespiteFocusHint() {
+		// In querystore focus-hint mode, retrieval (searchByPatient + topK) has no
+		// relevance gate — it always returns the K nearest records, so the user message
+		// always carries a non-empty "Records ranked by similarity to the query: ..." line,
+		// even when NOTHING in the chart is actually about the query. The few-shot must
+		// demonstrate abstaining in exactly that situation, otherwise the model treats the
+		// ranked list as proof of relevance and answers about off-topic records (the
+		// "Is she in any programs?" -> lists conditions failure on the demo).
+		String prompt = LlmProvider.DEFAULT_SYSTEM_PROMPT;
+		int rankedAt = prompt.indexOf("Records ranked by similarity to the query:");
+		assertTrue(rankedAt > 0,
+				"System prompt few-shot must include a focus-hint line in the same "
+				+ "'Records ranked by similarity to the query: ...' format the user message uses, "
+				+ "so the demonstration matches the real prompt shape. Prompt:\n" + prompt);
+		String afterRanked = prompt.substring(rankedAt);
+		assertTrue(afterRanked.contains(
+				"{\"answer\": \"There are no records of banana deliveries.\", \"citations\": [], \"blocks\": []}"),
+				"The focus-hint line must be immediately followed by the abstaining banana answer "
+				+ "(empty citations) — not just any later empty-citations answer. This pins the "
+				+ "demonstration order: a non-empty ranked list does NOT guarantee the listed "
+				+ "records are about the query, so the correct response can be to cite nothing. A "
+				+ "loose check would pass even if the abstention few-shot were reordered before the "
+				+ "ranked line or its answer swapped. Prompt:\n" + prompt);
+	}
+
+	@Test
 	public void extractResponse_shouldParseJsonWithCitations() {
 		String response = "{\"answer\": \"The patient has Hypertension [48] and Diabetes [49].\", \"citations\": [48, 49]}";
 		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);

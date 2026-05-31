@@ -22,7 +22,6 @@ import org.openmrs.Order;
 import org.openmrs.Patient;
 import org.openmrs.PatientProgram;
 import org.openmrs.api.context.Context;
-import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.aop.AfterReturningAdvice;
@@ -67,28 +66,20 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 	public void afterReturning(Object returnValue, Method method, Object[] args, Object target) {
 		String methodName = method.getName();
 
-		boolean isMerge = "mergePatients".equals(methodName);
-		Patient patient = isMerge ? null : extractPatient(methodName, args);
-		if (!isMerge && patient == null) {
-			return;
-		}
-
-		// Invalidate the chart cache regardless of preFilter — the cache feeds the
-		// !preFilter path, so it needs invalidation precisely when the embedding
-		// re-index does not run.
-		if (isMerge) {
-			invalidateMergedPatients(args);
-		} else {
-			ChartCacheInvalidator.invalidate(patient);
-		}
-
 		if (IndexingHelper.isDisabledByQueryStore()) {
 			return;
 		}
 
-		String preFilter = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
-		if ("false".equalsIgnoreCase(preFilter.trim())) {
+		if (!IndexingHelper.isPreFilterEnabled()) {
+			return;
+		}
+
+		// Patient extraction lives below the GP check so the default preFilter=false hot
+		// path skips the Hibernate proxy resolution extractPatient can trigger
+		// (Condition.getPatient(), Order.getPatient(), etc.).
+		boolean isMerge = "mergePatients".equals(methodName);
+		Patient patient = isMerge ? null : extractPatient(methodName, args);
+		if (!isMerge && patient == null) {
 			return;
 		}
 
@@ -108,14 +99,6 @@ public class PatientDataIndexingAdvice implements AfterReturningAdvice {
 		}
 
 		IndexingHelper.reindexOtherPipelines(patient);
-	}
-
-	private void invalidateMergedPatients(Object[] args) {
-		if (args.length < 2 || !(args[0] instanceof Patient) || !(args[1] instanceof Patient)) {
-			return;
-		}
-		ChartCacheInvalidator.invalidate((Patient) args[0]);
-		ChartCacheInvalidator.invalidate((Patient) args[1]);
 	}
 
 	private void handleMergePatients(Object[] args) {

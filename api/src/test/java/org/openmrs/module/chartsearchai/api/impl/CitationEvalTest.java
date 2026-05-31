@@ -155,7 +155,7 @@ public class CitationEvalTest {
 		}
 
 		List<RecordReference> refs = LlmInferenceService.extractCitedReferences(
-				predictedCitations, getMappings());
+				llmResponse.getAnswer(), predictedCitations, getMappings());
 		List<Integer> predictedIndices = new ArrayList<>();
 		for (RecordReference ref : refs) {
 			predictedIndices.add(ref.getIndex());

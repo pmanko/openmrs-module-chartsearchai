@@ -16,7 +16,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.openmrs.Patient;
 import org.openmrs.api.context.Context;
-import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
 import org.openmrs.scheduler.tasks.AbstractTask;
 import org.slf4j.Logger;
@@ -61,9 +60,7 @@ public class EmbeddingIndexTask extends AbstractTask {
 			return;
 		}
 
-		String preFilter = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
-		if ("false".equalsIgnoreCase(preFilter.trim())) {
+		if (!IndexingHelper.isPreFilterEnabled()) {
 			log.info("Embedding pre-filter is disabled, skipping backfill");
 			return;
 		}

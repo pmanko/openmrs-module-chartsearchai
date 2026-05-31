@@ -11,6 +11,7 @@ package org.openmrs.module.chartsearchai.api;
 
 import org.openmrs.Patient;
 import org.openmrs.api.context.Context;
+import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +31,18 @@ final class IndexingHelper {
 	 *  indexing. */
 	static boolean isDisabledByQueryStore() {
 		return ChartSearchAiUtils.isQueryStoreEnabled();
+	}
+
+	/** Whether {@code chartsearchai.embedding.preFilter} is on. The AOP advice
+	 *  classes and {@code EmbeddingIndexTask} all gate their work behind this;
+	 *  centralising the check avoids the four-site duplication that would silently
+	 *  diverge if the GP semantics ever change (e.g. accepting {@code "0"} /
+	 *  {@code "disabled"}, or adding a system-property override). Mirrors the
+	 *  {@link #isDisabledByQueryStore()} sibling. */
+	static boolean isPreFilterEnabled() {
+		String mode = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
+		return !"false".equalsIgnoreCase(mode.trim());
 	}
 
 	static void reindexOtherPipelines(Patient patient) {

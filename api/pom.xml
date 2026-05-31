@@ -53,10 +53,18 @@
 			<scope>provided</scope>
 		</dependency>
 		<!-- querystore-api is accessed reflectively in QueryStoreChartBuilder so
-		     chartsearchai compiles and starts without it. When the querystore
-		     omod is installed at runtime, reflection finds the service. When
-		     it's not, the chart-build falls back to an empty result, same as
-		     a search returning zero hits. -->
+		     chartsearchai compiles and starts without it on the main classpath.
+		     When the querystore omod is installed at runtime, reflection finds
+		     the service. When it's not, the chart-build falls back to an empty
+		     result, same as a search returning zero hits. It is pulled in at
+		     TEST scope only so QueryStoreChartBuilderTest can stub the typed
+		     QueryStoreService / QueryDocument; main code never compiles against it. -->
+		<dependency>
+			<groupId>org.openmrs.module</groupId>
+			<artifactId>querystore-api</artifactId>
+			<version>1.0.0-SNAPSHOT</version>
+			<scope>test</scope>
+		</dependency>
 		<dependency>
 			<groupId>org.openmrs.api</groupId>
 			<artifactId>openmrs-api</artifactId>

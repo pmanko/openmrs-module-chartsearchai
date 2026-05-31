@@ -1,7 +1,21 @@
-FROM maven:3.9-eclipse-temurin-11 AS builder
+FROM maven:3.9-eclipse-temurin-11 AS chartsearchai-builder
 
 ARG CACHE_BUST
 RUN git clone --depth 1 https://github.com/openmrs/openmrs-module-chartsearchai.git /build
+WORKDIR /build
+RUN mvn clean package -DskipTests -B
+
+# Build openmrs-module-querystore too. chartsearchai's omod declares
+# aware_of_module=org.openmrs.module.querystore so its OpenmrsClassLoader can
+# see QueryStoreService at runtime; that declaration is also load-bearing for
+# OpenMRS's module loader to use the initial-startup web-start path. Without
+# querystore actually present, the loader falls back to a deferred path that
+# registers servlet filters after Tomcat has finalised the /openmrs context —
+# crashing with IllegalStateException at chartsearchai's WebComponentRegistrar.
+FROM maven:3.9-eclipse-temurin-11 AS querystore-builder
+
+ARG CACHE_BUST
+RUN git clone --depth 1 https://github.com/openmrs/openmrs-module-querystore.git /build
 WORKDIR /build
 RUN mvn clean package -DskipTests -B
 
@@ -13,7 +27,7 @@ FROM openmrs/openmrs-reference-application-3-backend:nightly AS openmrs-dist
 FROM eclipse-temurin:21-jre
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl libgomp1 \
+    curl libgomp1 mariadb-client \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r openmrs && useradd -r -g openmrs -u 1001 openmrs
@@ -24,8 +38,9 @@ WORKDIR /openmrs
 COPY --from=openmrs-dist /openmrs /openmrs
 COPY --from=openmrs-dist /usr/local/tomcat /usr/local/tomcat
 
-# Add the chartsearchai module
-COPY --from=builder /build/omod/target/chartsearchai-*.omod /openmrs/distribution/openmrs_modules/
+# Add the chartsearchai module + the querystore module it is aware-of-bound to.
+COPY --from=chartsearchai-builder /build/omod/target/chartsearchai-*.omod /openmrs/distribution/openmrs_modules/
+COPY --from=querystore-builder /build/omod/target/querystore-*.omod /openmrs/distribution/openmrs_modules/
 COPY --chmod=755 backend-init.sh /usr/local/bin/backend-init.sh
 
 RUN mkdir -p /openmrs/data && chown -R 1001:1001 /openmrs /usr/local/tomcat

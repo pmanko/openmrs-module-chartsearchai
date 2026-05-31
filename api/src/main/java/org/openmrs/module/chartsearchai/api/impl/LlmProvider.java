@@ -38,6 +38,11 @@ public class LlmProvider {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
 
+	/** Label that prefixes the focus-hint line in the user message. Shared with the
+	 *  DEFAULT_SYSTEM_PROMPT few-shot so the demonstration always mirrors the real prompt
+	 *  shape — if they drift, the few-shot stops teaching the format the model actually sees. */
+	static final String FOCUS_HINT_LABEL = "Records ranked by similarity to the query: ";
+
 	static final String DEFAULT_SYSTEM_PROMPT = "You are a clinical assistant helping a clinician "
 			+ "review a patient's chart. Answer ONLY the specific query. "
 			+ "Use only the patient records below (sorted most recent first). "
@@ -97,6 +102,7 @@ public class LlmProvider {
 			+ "\"fruit\":{\"text\":\"apples\",\"refs\":[3]},"
 			+ "\"qty\":{\"text\":\"5\",\"refs\":[3]}}}"
 			+ "]}]}\n\n"
+			+ FOCUS_HINT_LABEL + "2.\n"
 			+ "Clinician's query: Were any bananas delivered?\n"
 			+ "{\"answer\": \"There are no records of banana deliveries.\","
 			+ " \"citations\": [], \"blocks\": []}\n\n"
@@ -118,8 +124,19 @@ public class LlmProvider {
 	 * @return the LLM's response with answer text and structured citation indices
 	 */
 	public LlmResponse search(String numberedRecords, String question) {
+		return search(numberedRecords, Collections.<Integer>emptyList(), question);
+	}
+
+	/**
+	 * Focus-hint variant of {@link #search}: renders a short "Records ranked by similarity to the
+	 * query: ..." line between the records section and the question. The numberedRecords
+	 * are still the full patient chart in stable date-desc order, so the prompt prefix is
+	 * byte-identical across queries for the same patient and llama-server's KV cache reuses
+	 * the prefill. The variable bytes are the small focus-hint line plus the question.
+	 */
+	public LlmResponse search(String numberedRecords, List<Integer> focusIndices, String question) {
 		String systemPrompt = getSystemPrompt();
-		String userMessage = buildUserMessage(numberedRecords, question);
+		String userMessage = buildUserMessage(numberedRecords, focusIndices, question);
 		int timeoutSeconds = getTimeoutSeconds();
 
 		LlmEngine.InferenceResult result = getActiveEngine().infer(
@@ -140,8 +157,14 @@ public class LlmProvider {
 	 */
 	public LlmResponse searchStreaming(String numberedRecords, String question,
 			Consumer<String> tokenConsumer) {
+		return searchStreaming(numberedRecords, Collections.<Integer>emptyList(), question, tokenConsumer);
+	}
+
+	/** Focus-hint variant of {@link #searchStreaming}. See {@link #search(String, List, String)}. */
+	public LlmResponse searchStreaming(String numberedRecords, List<Integer> focusIndices, String question,
+			Consumer<String> tokenConsumer) {
 		String systemPrompt = getSystemPrompt();
-		String userMessage = buildUserMessage(numberedRecords, question);
+		String userMessage = buildUserMessage(numberedRecords, focusIndices, question);
 		int timeoutSeconds = getTimeoutSeconds();
 
 		// Wrap the consumer to extract only the "answer" value from the JSON
@@ -414,8 +437,77 @@ public class LlmProvider {
 	 * shared prefix is exactly what llama-server's KV cache reuses.
 	 */
 	static String buildUserMessage(String numberedRecords, String question) {
-		return "Patient records (most recent first):\n" + normalizeRecords(numberedRecords)
-				+ "\n\nClinician's query: " + question;
+		return buildUserMessage(numberedRecords, Collections.<Integer>emptyList(), question);
+	}
+
+	/**
+	 * Focus-hint variant: when {@code focusIndices} is non-empty, inserts a short
+	 * {@code "Records ranked by similarity to the query: 3, 7, 12"} line between the records
+	 * section and the {@code "Clinician's query:"} header. The records bytes stay byte-
+	 * identical to a no-focus query (and to a warmup call with the same patient), so
+	 * llama-server's KV cache reuse contract is preserved up to the focus-hint divergence
+	 * point. With ~30 focus indices the hint is ~50 tokens, vs ~870 tokens for a
+	 * filtered-records section under the old prefilter contract — that's the source of
+	 * the 5-10x LLM-time reduction on local Gemma for same-patient/distinct-query traffic.
+	 */
+	static String buildUserMessage(String numberedRecords, List<Integer> focusIndices, String question) {
+		StringBuilder sb = new StringBuilder();
+		sb.append("Patient records (most recent first):\n").append(normalizeRecords(numberedRecords));
+		if (focusIndices != null && !focusIndices.isEmpty()) {
+			// Four-part hint, calibrated against the 4-patient × 10-query rubric on local
+			// Gemma E4B (variants v1-v4 tested; the positive/negative pair below is v2, the
+			// empirical winner; the similarity-vs-relevance + abstention clause is v5, added to
+			// fix the querystore no-gate failure described below):
+			//   1. List the ranked focus records (positive signal). The label says "ranked by
+			//      similarity", NOT "most relevant": the querystore focus path
+			//      (QueryStoreChartBuilder.searchByPatient + topK) has no relevance gate, so this
+			//      list is the K nearest neighbours and is non-empty even when NOTHING in the
+			//      chart is about the query. Calling them "most relevant" asserted a relevance the
+			//      ranking never established and steered the LLM to answer about off-topic records
+			//      ("Is she in any programs?" -> listed conditions on a patient with no programs).
+			//   2. "Use these as the starting point. Also include other records ... clinically
+			//      about the same topic" — soft permission to expand beyond the focus list,
+			//      addresses the "thin answer" mode where the LLM treats the focus list as a
+			//      hard cap and misses on-topic records elsewhere in the chart.
+			//   3. "Similarity does not guarantee relevance: if none of these records are actually
+			//      about the query, answer that no relevant records were found and cite nothing" —
+			//      the abstention escape. Without it the focus line overrides the system prompt's
+			//      "name what is missing" guidance whenever retrieval fails to gate (i.e. always,
+			//      on the querystore path). Paired with the focus-mode abstention few-shot in
+			//      DEFAULT_SYSTEM_PROMPT.
+			//   4. "Do NOT cite records about unrelated clinical topics" — addresses the
+			//      "drift" mode where the LLM cites records that share keywords or chart
+			//      position but aren't about the query topic.
+			// Two alternative phrasings were tested and rolled back:
+			//   - v3 ("LIST EVERY chart record whose primary content is ...") triggered
+			//     hallucinations: invented BP values echoing record indices ("699 mmHg [691]",
+			//     "714 mmHg [714]"), off-topic listings with self-correcting "Note: this is a
+			//     cardiac condition, not mental health" asides, and one topic loss
+			//     (karen_sanchez CKD went from kidney-relevant to listing pneumonia and bone
+			//     destruction).
+			//   - v4 added "Quote numeric values and dates EXACTLY ... do not invent values"
+			//     on top of v2 to absorb v3's hallucination risk pre-emptively. v2 didn't
+			//     have those hallucinations in the first place, and the extra directive made
+			//     the LLM less willing to abstain (it started listing benign Haemangioma when
+			//     asked about cancer/tumor, where v2 correctly returned "no records").
+			// v2 wins: 40/40 on-topic vs OLD prefilter's 39/40, 16 new_better vs 16 new_worse
+			// (net neutral on rubric), no hallucinations observed.
+			sb.append("\n\n").append(FOCUS_HINT_LABEL);
+			for (int i = 0; i < focusIndices.size(); i++) {
+				if (i > 0) {
+					sb.append(", ");
+				}
+				sb.append(focusIndices.get(i));
+			}
+			sb.append(".\nUse these as the starting point. Also include other records from the chart "
+					+ "that are clinically about the same topic as the query. Similarity does not "
+					+ "guarantee relevance: if none of these records are actually about the query, "
+					+ "answer that no relevant records were found and cite nothing. Do NOT cite records "
+					+ "about unrelated clinical topics, even if they share keywords or appear in "
+					+ "the chart.");
+		}
+		sb.append("\n\nClinician's query: ").append(question);
+		return sb.toString();
 	}
 
 	private static String normalizeRecords(String numberedRecords) {

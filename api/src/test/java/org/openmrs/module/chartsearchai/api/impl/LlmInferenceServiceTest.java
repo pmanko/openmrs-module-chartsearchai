@@ -158,6 +158,46 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void extractCitedReferences_shouldIncludeInlineMarkersMissingFromCitationsArray() {
+		List<RecordMapping> mappings = Arrays.asList(
+				new RecordMapping(1, "program", uuid(1), null),
+				new RecordMapping(8, "condition", uuid(8), null),
+				new RecordMapping(9, "obs", uuid(9), null));
+
+		// The LLM wrote [1] and [8] inline in the prose but listed only [9] in
+		// its structured citations array. Every inline-cited record that exists
+		// in the chart must still resolve to a clickable reference, otherwise the
+		// answer text points at a citation the UI cannot render.
+		String answer = "Diabetes program [1]. Active Tuberculosis [8]. CD4 988.0 [9].";
+
+		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
+				answer, Arrays.asList(9), mappings);
+
+		List<Integer> indices = new ArrayList<Integer>();
+		for (RecordReference ref : result) {
+			indices.add(ref.getIndex());
+		}
+		Collections.sort(indices);
+		assertEquals(Arrays.asList(1, 8, 9), indices);
+	}
+
+	@Test
+	public void extractCitedReferences_shouldNotAddInlineMarkersWithNoMapping() {
+		List<RecordMapping> mappings = Arrays.asList(
+				new RecordMapping(9, "obs", uuid(9), null));
+
+		// [8] is cited inline but there is no record 8 in the chart. A dangling
+		// inline marker must not fabricate a reference.
+		String answer = "Tuberculosis [8]. CD4 988.0 [9].";
+
+		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
+				answer, Arrays.asList(9), mappings);
+
+		assertEquals(1, result.size());
+		assertEquals(9, result.get(0).getIndex());
+	}
+
+	@Test
 	public void stripQueryStopwords_shouldNormalizeDifferentPhrasingsToSameResult() {
 		// Both queries have only 1 content word ("medications"), so both
 		// preserve the full sentence. The embedding model handles both

@@ -40,12 +40,12 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 /**
- * Picks the retrieval pipeline (embeddings, Lucene, Elasticsearch, hybrid)
- * for a patient query and returns the assembled {@link PatientChart}. Owns
- * the indexer collaborators, the chart cache, the patient-scoped noise
- * profile cache, and the entry into the embedding ranking pipeline. The
- * containing {@link LlmInferenceService} delegates here for chart
- * assembly and otherwise focuses on the LLM call and citation handling.
+ * Picks the retrieval pipeline (querystore, embeddings, Lucene, Elasticsearch,
+ * hybrid) for a patient query and returns the assembled {@link PatientChart}.
+ * Owns the indexer collaborators, the patient-scoped noise profile cache, and
+ * the entry into the embedding ranking pipeline. The containing
+ * {@link LlmInferenceService} delegates here for chart assembly and otherwise
+ * focuses on the LLM call and citation handling.
  */
 @Service("chartSearchAi.chartBuildingStrategy")
 class ChartBuildingStrategy {
@@ -80,10 +80,6 @@ class ChartBuildingStrategy {
 	private HybridRetriever hybridRetriever;
 
 	@Autowired
-	@Qualifier("chartSearchAi.chartCache")
-	private ChartCache chartCache;
-
-	@Autowired
 	@Qualifier("chartSearchAi.queryStoreChartBuilder")
 	private QueryStoreChartBuilder queryStoreChartBuilder;
 
@@ -104,14 +100,13 @@ class ChartBuildingStrategy {
 			return queryStoreChartBuilder.build(patient, question);
 		}
 
+		// Legacy full-chart path (querystore disabled, preFilter disabled): serialize the patient
+		// chart per request. The pre-Decision-15 in-memory ChartCache that used to amortize this
+		// cost was removed once querystore became the full-chart path — the AOP-driven cache
+		// invalidation overhead exceeded the savings on a per-call serialize, and querystore is
+		// the supported full-chart shape going forward.
 		if (!usePreFilter()) {
-			PatientChart cached = chartCache.get(patient);
-			if (cached != null) {
-				return cached;
-			}
-			PatientChart chart = chartSerializer.serialize(patient);
-			chartCache.put(patient, chart);
-			return chart;
+			return chartSerializer.serialize(patient);
 		}
 
 		if (isHybridPipeline()) {
@@ -136,17 +131,12 @@ class ChartBuildingStrategy {
 	 *
 	 * <p>Mirrors the no-pre-filter branch of {@link #buildChart} but is
 	 * always full-chart so the caller doesn't have to know about the global
-	 * property. The {@code chartCache} is shared with that branch so a
-	 * session-create within seconds of a single-shot search hits the cache.
+	 * property. Serializes per call: the in-memory ChartCache that used to
+	 * amortize this was removed once querystore became the full-chart path
+	 * (see {@link #buildChart}).
 	 */
 	PatientChart buildChartUnfiltered(Patient patient) {
-		PatientChart cached = chartCache.get(patient);
-		if (cached != null) {
-			return cached;
-		}
-		PatientChart chart = chartSerializer.serialize(patient);
-		chartCache.put(patient, chart);
-		return chart;
+		return chartSerializer.serialize(patient);
 	}
 
 	private PatientChart buildChartWithEmbeddings(Patient patient, String question) {
