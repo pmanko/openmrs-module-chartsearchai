@@ -18,6 +18,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
@@ -125,7 +127,8 @@ public class LlmInferenceService implements ChartSearchService {
 			cachedTokens = response.getCachedTokens();
 
 			ChartAnswer answer = new ChartAnswer(response.getAnswer(),
-					extractCitedReferences(response.getCitations(), chart.getMappings()),
+					extractCitedReferences(response.getAnswer(), response.getCitations(),
+							chart.getMappings()),
 					response.getInputTokens(), response.getOutputTokens(),
 					response.getCachedTokens());
 			outcome = "ok";
@@ -236,7 +239,8 @@ public class LlmInferenceService implements ChartSearchService {
 			cachedTokens = response.getCachedTokens();
 
 			ChartAnswer answer = new ChartAnswer(response.getAnswer(),
-					extractCitedReferences(response.getCitations(), chart.getMappings()),
+					extractCitedReferences(response.getAnswer(), response.getCitations(),
+							chart.getMappings()),
 					response.getInputTokens(), response.getOutputTokens(),
 					response.getCachedTokens());
 			outcome = "ok";
@@ -265,7 +269,26 @@ public class LlmInferenceService implements ChartSearchService {
 		return !"false".equalsIgnoreCase(value.trim());
 	}
 
+	/** Matches an inline {@code [N]} citation marker in the answer prose. */
+	private static final Pattern INLINE_CITATION = Pattern.compile("\\[(\\d{1,9})\\]");
+
 	static List<RecordReference> extractCitedReferences(List<Integer> citations,
+			List<RecordMapping> mappings) {
+		return extractCitedReferences(null, citations, mappings);
+	}
+
+	/**
+	 * Builds the clickable reference list for an answer, reconciling the two
+	 * sources of citation indices that can disagree: the LLM's structured
+	 * {@code citations} array and the {@code [N]} markers it writes inline in the
+	 * prose. We take the UNION of both (restricted to indices that map to a real
+	 * retrieved record), so a record the model cited inline but forgot to add to
+	 * the array — or listed in the array but only referenced inline — still
+	 * resolves to a reference. Indices with no matching record are dropped and
+	 * logged, exactly as the array path already drops unmapped indices; the
+	 * prose itself is never rewritten.
+	 */
+	static List<RecordReference> extractCitedReferences(String answer, List<Integer> citations,
 			List<RecordMapping> mappings) {
 		Map<Integer, RecordMapping> indexMap = new HashMap<Integer, RecordMapping>();
 		for (RecordMapping mapping : mappings) {
@@ -273,8 +296,16 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 
 		Set<Integer> seen = new LinkedHashSet<Integer>();
-		for (Integer index : citations) {
-			seen.add(index);
+		if (citations != null) {
+			for (Integer index : citations) {
+				seen.add(index);
+			}
+		}
+		if (answer != null) {
+			Matcher marker = INLINE_CITATION.matcher(answer);
+			while (marker.find()) {
+				seen.add(Integer.valueOf(marker.group(1)));
+			}
 		}
 
 		List<RecordReference> references = new ArrayList<RecordReference>();
