@@ -148,22 +148,37 @@ public class ChatServiceImpl implements ChatService {
 		int nextOrdinal = chatDAO.getLastOrdinal(session) + 1;
 		persistUserMessage(session, question, nextOrdinal);
 
+		// Accumulate the streamed text so a mid-stream abort can persist the
+		// partial answer the client already received (see catch below).
+		StringBuilder streamed = new StringBuilder();
+		Consumer<String> accumulating = token -> {
+			streamed.append(token);
+			tokenConsumer.accept(token);
+		};
+
 		long startedMs = System.currentTimeMillis();
 		ChartAnswer answer;
-		String finishReason = ChatMessage.FINISH_STOP;
 		try {
 			answer = llmInferenceService.chatStreaming(
-					chartEnvelope, mappings, priorTurns, question, tokenConsumer);
+					chartEnvelope, mappings, priorTurns, question, accumulating);
 		}
 		catch (RuntimeException e) {
-			finishReason = ChatMessage.FINISH_ABORTED;
+			// Client disconnected (or the upstream stream died) mid-flight.
+			// Persist the partial assistant turn with finish_reason='aborted'
+			// BEFORE re-throwing so the transcript stays well-formed: the next
+			// request resumes at the correct ordinal instead of appending a
+			// second consecutive user message. (ChatService docstring contract.)
+			long abortedMs = System.currentTimeMillis() - startedMs;
+			ChartAnswer partial = new ChartAnswer(streamed.toString(), Collections.emptyList());
+			persistAssistantTurn(session, partial, nextOrdinal + 1,
+					ChatMessage.FINISH_ABORTED, question, abortedMs);
 			touchSession(session);
 			throw e;
 		}
 		long elapsedMs = System.currentTimeMillis() - startedMs;
 
 		ChatMessage assistant = persistAssistantTurn(session, answer, nextOrdinal + 1,
-				finishReason, question, elapsedMs);
+				ChatMessage.FINISH_STOP, question, elapsedMs);
 		touchSession(session);
 
 		return new ChatTurnResult(answer, session.getUuid(), assistant.getUuid());
