@@ -26,7 +26,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.openmrs.Patient;
 import org.openmrs.User;
+import org.openmrs.api.APIAuthenticationException;
+import org.openmrs.api.APIException;
 import org.openmrs.api.context.Context;
+import org.openmrs.api.context.ContextAuthenticationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
@@ -557,6 +560,43 @@ public class ChartSearchAiRestController {
 		return new ResponseEntity<Object>(
 				errorResponse("Invalid request body. Expected JSON with 'patient' and 'question' fields."),
 				HttpStatus.BAD_REQUEST);
+	}
+
+	/**
+	 * Maps an authorization failure to a proper status with a clean body. Without this, the framework
+	 * serializes the thrown exception as an HTTP 200 carrying a full stack trace — both a misleading
+	 * status and an information leak. 401 when the caller is unauthenticated; 403 when authenticated
+	 * but lacking the privilege.
+	 *
+	 * <p>Catches both auth-failure types because they are siblings under {@code APIException}, not one
+	 * hierarchy: every endpoint's up-front {@link Context#requirePrivilege} gate throws
+	 * {@link ContextAuthenticationException} (the active path here, since this controller authorizes
+	 * programmatically rather than with {@code @Authorized}), while the {@code @Authorized} AOP throws
+	 * {@link APIAuthenticationException}. The second arm is defense-in-depth so an authorization failure
+	 * raised by any downstream {@code @Authorized} service call still surfaces as 401/403 rather than
+	 * falling to the catch-all as a 500.
+	 */
+	@ExceptionHandler({ ContextAuthenticationException.class, APIAuthenticationException.class })
+	@ResponseBody
+	public ResponseEntity<Object> handleAuthFailure(APIException ex) {
+		HttpStatus status = Context.isAuthenticated() ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED;
+		return new ResponseEntity<Object>(
+				errorResponse(status == HttpStatus.FORBIDDEN ? "Insufficient privileges" : "Authentication required"),
+				status);
+	}
+
+	/**
+	 * Last-resort handler so an otherwise-unhandled exception surfaces as a clean 500 instead of the
+	 * framework's default HTTP 200 + stack trace. The more specific handlers above (auth, malformed
+	 * body) take precedence. The streaming endpoint handles its own post-commit errors internally, so
+	 * this only sees pre-stream failures there.
+	 */
+	@ExceptionHandler(Exception.class)
+	@ResponseBody
+	public ResponseEntity<Object> handleUnexpected(Exception ex) {
+		log.error("Unhandled exception in chartsearchai REST controller", ex);
+		return new ResponseEntity<Object>(errorResponse("Internal error"),
+				HttpStatus.INTERNAL_SERVER_ERROR);
 	}
 
 	/**
