@@ -1007,6 +1007,20 @@ public class ChartSearchAiRestController {
 			log.debug("Could not flush chat SSE stream, client likely disconnected");
 		}
 		}
+		catch (Exception e) {
+			// Failure BEFORE the SSE stream opened (session resolution / chart build /
+			// opening the stream). Return a clean JSON 500 instead of letting it propagate
+			// to the servlet container's HTML error page, which the SPA cannot parse.
+			// Post-commit failures are already handled as SSE error events above.
+			if (!response.isCommitted()) {
+				log.error("Chat stream setup failed for patient [id={}]", patient.getPatientId(), e);
+				writeJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+						"Chart search failed. Please try again or contact your administrator.");
+			}
+			else {
+				log.error("Chat stream failed after response commit for patient [id={}]", patient.getPatientId(), e);
+			}
+		}
 		finally {
 			if (overridden) {
 				RequestLlmOverride.clear();
@@ -1062,7 +1076,16 @@ public class ChartSearchAiRestController {
 			return rateLimitError;
 		}
 
-		ChatSession session = resolveOrOpenSession(patient, sessionUuid);
+		ChatSession session;
+		try {
+			session = resolveOrOpenSession(patient, sessionUuid);
+		}
+		catch (Exception e) {
+			log.error("Chat session/chart resolution failed for patient [id={}]", patient.getPatientId(), e);
+			return new ResponseEntity<Object>(
+					errorResponse("Chart search failed. Please try again or contact your administrator."),
+					HttpStatus.INTERNAL_SERVER_ERROR);
+		}
 
 		// Per-request backend override: if the caller names a backend, use it for
 		// THIS request only (remote engine; validated against the registry; the
