@@ -16,9 +16,15 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.openmrs.User;
+import org.openmrs.api.APIAuthenticationException;
+import org.openmrs.api.context.Context;
+import org.openmrs.api.context.UserContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 
 public class ChartSearchAiRestControllerTest {
 
@@ -225,5 +231,54 @@ public class ChartSearchAiRestControllerTest {
 		// Exactly {"error":"Internal error"} — size 1 proves no stack trace / message field leaked.
 		assertEquals(1, error.size());
 		assertEquals("Internal error", error.get("error"));
+	}
+
+	@AfterEach
+	public void clearContext() {
+		Context.clearUserContext();
+	}
+
+	/**
+	 * handleAuthFailure branches on Context.isAuthenticated() (the thread-bound UserContext): 401 when
+	 * unauthenticated, 403 when authenticated but denied a privilege. The handler uses no autowired
+	 * state, so the controller is instantiated directly and the UserContext is set directly to drive
+	 * each branch — no Spring context is loaded. HTTP routing of the exception to this handler is
+	 * verified end-to-end against a live server.
+	 */
+	@Test
+	public void handleAuthFailure_shouldReturn401WhenUnauthenticated() {
+		Context.setUserContext(new UserContext(null)); // no authenticated user => not authenticated
+		ResponseEntity<Object> response = new ChartSearchAiRestController()
+				.handleAuthFailure(new APIAuthenticationException("denied"));
+		assertEquals(HttpStatus.UNAUTHORIZED, response.getStatusCode());
+		assertEquals("Authentication required", errorOf(response));
+	}
+
+	@Test
+	public void handleAuthFailure_shouldReturn403WhenAuthenticated() {
+		Context.setUserContext(new UserContext(null) {
+
+			@Override
+			public User getAuthenticatedUser() {
+				return new User();
+			}
+		});
+		ResponseEntity<Object> response = new ChartSearchAiRestController()
+				.handleAuthFailure(new APIAuthenticationException("denied"));
+		assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+		assertEquals("Insufficient privileges", errorOf(response));
+	}
+
+	@Test
+	public void handleBadRequest_shouldReturn400() {
+		ResponseEntity<Object> response = new ChartSearchAiRestController()
+				.handleBadRequest(new HttpMessageNotReadableException("bad json"));
+		assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+		assertEquals("Invalid request body. Expected JSON with 'patient' and 'question' fields.",
+				errorOf(response));
+	}
+
+	private static String errorOf(ResponseEntity<Object> response) {
+		return (String) ((Map<?, ?>) response.getBody()).get("error");
 	}
 }
