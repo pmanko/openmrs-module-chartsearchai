@@ -209,6 +209,50 @@ public class ChartSearchAiStreamingTest {
 	}
 
 	/**
+	 * A failure while RESOLVING/BUILDING the session — e.g. the chart-snapshot build
+	 * throwing a dangling-FK {@code FetchNotFoundException} — happens BEFORE the SSE
+	 * stream opens. It must be handled as a clean 500 JSON error, NOT propagate
+	 * uncaught to the servlet container (which renders an OpenMRS HTML error page the
+	 * SPA can't parse — the "blank 500"). The streaming service must never be reached
+	 * and the raw exception must not leak to the client.
+	 */
+	@Test
+	public void chatStream_shouldReturnCleanError_whenSessionOrChartBuildFails() throws Exception {
+		Fixture f = newFixture(true);
+		// resolveOrOpenSession(patient, null) opens a new session, which builds the
+		// chart snapshot. Simulate that build hitting a dangling encounter FK.
+		when(f.chatService.openOrLoadActiveSession(f.patient))
+				.thenThrow(new RuntimeException(
+						"org.hibernate.FetchNotFoundException: Entity Encounter id 958 does not exist"));
+
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		try (MockedStatic<Context> ctx = mockStatic(Context.class)) {
+			ctx.when(() -> Context.requirePrivilege(
+					ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA)).then(inv -> null);
+			ctx.when(Context::getPatientService).thenReturn(f.patientService);
+			ctx.when(Context::getAdministrationService).thenReturn(f.adminService);
+			ctx.when(Context::getAuthenticatedUser).thenReturn(f.user);
+
+			// Must NOT throw — the controller has to catch the pre-stream failure.
+			f.controller.chatStream(chatBody(), response);
+		}
+
+		assertEquals(500, response.getStatus(),
+				"a pre-stream build failure must be a handled 500, not a propagated exception");
+		verify(f.chatService, never()).chatStreaming(any(), any(), any());
+
+		String body = response.getContentAsString();
+		assertTrue(body.contains("\"error\""),
+				"500 must carry a JSON error body, got:\n" + body);
+		assertTrue(response.getContentType() != null
+						&& response.getContentType().startsWith("application/json"),
+				"pre-stream failure must be JSON, not an event-stream; got " + response.getContentType());
+		assertTrue(!body.contains("FetchNotFoundException") && !body.contains("event: token"),
+				"must not leak the raw exception or open the SSE stream, got:\n" + body);
+	}
+
+	/**
 	 * Extracts and parses the JSON object carried by the terminal {@code done}
 	 * SSE event. The controller emits {@code data: <json>} lines after
 	 * {@code event: done}; reassemble them and parse.
