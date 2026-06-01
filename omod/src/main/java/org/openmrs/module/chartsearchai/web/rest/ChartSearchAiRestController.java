@@ -894,6 +894,11 @@ public class ChartSearchAiRestController {
 			return;
 		}
 
+		// Everything from session resolution through the final flush runs under an
+		// outer finally that clears any per-request override — opening the stream
+		// (getOutputStream/flushBuffer) can throw before the inner streaming try,
+		// and that window must not leak the thread-local onto a pooled thread.
+		try {
 		ChatSession session = resolveOrOpenSession(patient, sessionUuid);
 
 		// Unwrap any response wrappers that buffer the body (kills SSE liveness).
@@ -994,17 +999,18 @@ public class ChartSearchAiRestController {
 				}
 			}
 		}
-		finally {
-			if (overridden) {
-				RequestLlmOverride.clear();
-			}
-		}
 
 		try {
 			out.flush();
 		}
 		catch (IOException e) {
 			log.debug("Could not flush chat SSE stream, client likely disconnected");
+		}
+		}
+		finally {
+			if (overridden) {
+				RequestLlmOverride.clear();
+			}
 		}
 	}
 
