@@ -272,4 +272,21 @@
 		</addColumn>
 	</changeSet>
 
+	<changeSet id="chartsearchai-009" author="openmrs">
+		<comment>
+			Make the chat_message → audit_log link survive an audit purge. The
+			audit row is the long-retention regulatory record; the chat message
+			has its own (independent) shorter retention. When the audit purge
+			deletes an audit row that a still-living chat message references, the
+			original RESTRICT foreign key aborts the whole purge. audit_log_id is
+			nullable, so ON DELETE SET NULL is the correct semantics: drop the
+			citation link, keep the message.
+		</comment>
+		<dropForeignKeyConstraint baseTableName="chartsearchai_chat_message"
+				constraintName="fk_chartsearchai_chat_message_audit"/>
+		<addForeignKeyConstraint baseTableName="chartsearchai_chat_message" baseColumnNames="audit_log_id"
+				referencedTableName="chartsearchai_audit_log" referencedColumnNames="audit_log_id"
+				constraintName="fk_chartsearchai_chat_message_audit" onDelete="SET NULL"/>
+	</changeSet>
+
 </databaseChangeLog>
