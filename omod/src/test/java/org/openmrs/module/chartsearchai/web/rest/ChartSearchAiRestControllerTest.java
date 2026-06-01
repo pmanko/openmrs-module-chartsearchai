@@ -17,6 +17,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 
 public class ChartSearchAiRestControllerTest {
 
@@ -202,5 +204,26 @@ public class ChartSearchAiRestControllerTest {
 	public void sanitizeFeedbackComment_shouldStripControlCharacters() {
 		String result = ChartSearchAiRestController.sanitizeFeedbackComment("bad\u0000comment\u0007here");
 		assertEquals("badcommenthere", result);
+	}
+
+	// --- Exception handler tests ---
+
+	/**
+	 * Guards the catch-all handler that replaced the framework default of serializing an unhandled
+	 * exception as HTTP 200 + stack trace. Asserts both halves of the contract: the 500 status, and a
+	 * body that carries ONLY the generic message — no exception detail leaks to the client.
+	 */
+	@Test
+	public void handleUnexpected_shouldMapToCleanInternalServerError() {
+		ResponseEntity<Object> response = new ChartSearchAiRestController()
+				.handleUnexpected(new RuntimeException("sensitive internal detail"));
+
+		assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+		Object body = response.getBody();
+		assertNotNull(body);
+		Map<?, ?> error = (Map<?, ?>) body;
+		// Exactly {"error":"Internal error"} — size 1 proves no stack trace / message field leaked.
+		assertEquals(1, error.size());
+		assertEquals("Internal error", error.get("error"));
 	}
 }
