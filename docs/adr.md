@@ -562,7 +562,7 @@ Example LLM output:
 
 On the Java side, each citation number maps back to a `resource_type` + `resource_uuid` pair maintained in an ordered list (`RecordMapping`) during prompt construction. The UI can then link each citation directly to the source record in OpenMRS, allowing the clinician to verify every claim with one click.
 
-As a safety net, any slash-separated citations that small LLMs occasionally produce in the answer text (e.g., `[5/12]`) are normalized to `[5], [12]` before returning to the user. This is cosmetic only — the authoritative citations come from the structured `citations` array.
+As a safety net, slash-separated citation shorthand that small LLMs occasionally produce in the answer text (e.g., `[5/12]`) is normalized to `[5], [12]` before returning to the user. This split only fires when every number in the group appears in the model's structured `citations` array, so a slash-separated clinical *value* the model bracketed — e.g. a blood pressure `[120/80]` — is left intact rather than mangled into `[120], [80]`. Using the citations array as the authority (rather than valid record indices) keeps this correct regardless of chart size. This is cosmetic only — the authoritative citations come from the structured `citations` array.
 
 ### Candidate models
 

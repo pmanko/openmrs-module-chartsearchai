@@ -212,6 +212,43 @@ public class LlmProviderTest {
 	}
 
 	@Test
+	public void extractResponse_shouldNotSplitBracketedValueAbsentFromCitations() {
+		// A blood-pressure value the model bracketed as [120/80] must NOT be rewritten into
+		// citation markers [120], [80] — 120 and 80 are not in the citations array, so they
+		// are a slash-separated clinical value, not citation shorthand.
+		String response = "{\"answer\": \"Blood pressure was [120/80] mmHg [1].\", \"citations\": [1]}";
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
+		assertEquals("Blood pressure was [120/80] mmHg [1].", result.getAnswer());
+		assertEquals(Arrays.asList(1), result.getCitations());
+	}
+
+	@Test
+	public void extractResponse_shouldNotSplitSlashGroupWhenAnyPartAbsentFromCitations() {
+		// [5/120]: 5 is a cited record but 120 is not. Splitting would emit a half-correct
+		// [5], [120]; the whole group must be left untouched unless EVERY part is cited.
+		String response = "{\"answer\": \"Reading [5/120] noted [5].\", \"citations\": [5]}";
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
+		assertEquals("Reading [5/120] noted [5].", result.getAnswer());
+	}
+
+	@Test
+	public void normalizeSlashCitations_withCitations_shouldSplitOnlyWhollyCitedGroups() {
+		// [1/2] -> both cited -> split; [120/80] -> neither cited -> preserved as a value.
+		assertEquals("BP [120/80] and conditions [1], [2]",
+				LlmProvider.normalizeSlashCitations("BP [120/80] and conditions [1/2]", Arrays.asList(1, 2)));
+	}
+
+	@Test
+	public void extractResponse_fallbackPath_shouldValidateSlashGroupsAgainstCitations() {
+		// Missing closing brace forces the regex-fallback path (Jackson rejects it). Even there,
+		// a slash value [120/80] must be preserved while a genuinely cited group [1/2] still splits.
+		String malformed = "{\"answer\": \"BP [120/80] and conditions [1/2]\", \"citations\": [1, 2]";
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse(malformed);
+		assertEquals("BP [120/80] and conditions [1], [2]", result.getAnswer());
+		assertEquals(Arrays.asList(1, 2), result.getCitations());
+	}
+
+	@Test
 	public void extractResponse_shouldNotStackOverflowOnLongTruncatedJson() {
 		// Reproduces the production failure: an LLM answer that hits max_tokens mid-string
 		// produces a long JSON missing its closing quote and brace, sending Jackson into the

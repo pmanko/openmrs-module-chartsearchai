@@ -10,6 +10,7 @@
 package org.openmrs.module.chartsearchai.api.impl;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Consumer;
@@ -406,6 +407,10 @@ public class LlmProvider {
 
 	static String normalizeSlashCitations(String text) {
 		return LlmAnswerExtractor.normalizeSlashCitations(text);
+	}
+
+	static String normalizeSlashCitations(String text, Collection<Integer> validCitations) {
+		return LlmAnswerExtractor.normalizeSlashCitations(text, validCitations);
 	}
 
 	static class LlmResponse {

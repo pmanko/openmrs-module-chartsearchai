@@ -11,6 +11,7 @@ package org.openmrs.module.chartsearchai.api.impl;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -37,7 +38,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  *       array, so a token-cap cutoff still returns useful content.</li>
  * </ol>
  *
- * <p>Also normalizes shorthand citation syntax: {@code [1/2/3]} → {@code [1], [2], [3]}.</p>
+ * <p>Also normalizes shorthand citation syntax: {@code [1/2/3]} → {@code [1], [2], [3]} —
+ * but only when every number in the group is a record the model actually cited, so a
+ * slash-separated clinical value like {@code [120/80]} is left intact.</p>
  */
 final class LlmAnswerExtractor {
 
@@ -95,7 +98,6 @@ final class LlmAnswerExtractor {
 			JsonNode root = MAPPER.readTree(trimmed);
 			JsonNode answerNode = root.get("answer");
 			if (answerNode != null && answerNode.isTextual()) {
-				String answer = normalizeSlashCitations(answerNode.asText().trim());
 				List<Integer> citations = new ArrayList<>();
 				JsonNode citationsNode = root.get("citations");
 				if (citationsNode != null && citationsNode.isArray()) {
@@ -105,6 +107,7 @@ final class LlmAnswerExtractor {
 						}
 					}
 				}
+				String answer = normalizeSlashCitations(answerNode.asText().trim(), citations);
 				return new LlmResponse(answer, citations);
 			}
 		}
@@ -127,8 +130,8 @@ final class LlmAnswerExtractor {
 						.replace("\\\"", "\"")
 						.replace("\\\\/", "/")
 						.replace("\\\\", "\\");
-				answer = normalizeSlashCitations(answer.trim());
-				// Try to extract citations from whatever was produced
+				// Try to extract citations from whatever was produced — parsed before
+				// normalizing the answer so slash groups can be validated against them.
 				List<Integer> citations = new ArrayList<>();
 				int citationsStart = trimmed.indexOf("\"citations\"");
 				if (citationsStart >= 0) {
@@ -138,6 +141,7 @@ final class LlmAnswerExtractor {
 						citations.add(Integer.parseInt(numMatcher.group(1)));
 					}
 				}
+				answer = normalizeSlashCitations(answer.trim(), citations);
 				return new LlmResponse(answer, citations);
 			}
 		}
@@ -152,7 +156,28 @@ final class LlmAnswerExtractor {
 		return new LlmResponse(trimmed, Collections.emptyList());
 	}
 
+	/**
+	 * Unconditional split: rewrites every {@code [a/b/...]} group into {@code [a], [b], ...}.
+	 * Used when no citation context is available to disambiguate citation shorthand from a
+	 * slash-separated value. Prefer {@link #normalizeSlashCitations(String, Collection)}.
+	 */
 	static String normalizeSlashCitations(String text) {
+		return normalizeSlashCitations(text, null);
+	}
+
+	/**
+	 * Rewrites citation shorthand {@code [a/b/...]} into {@code [a], [b], ...}, but only for
+	 * groups whose every part appears in {@code validCitations}. This keeps a slash-separated
+	 * clinical value the model bracketed — e.g. a blood pressure {@code [120/80]} — intact,
+	 * since 120 and 80 are not record numbers the model cited. When {@code validCitations} is
+	 * {@code null} the split is unconditional (no context to validate against).
+	 *
+	 * <p>Trade-off: if the model writes {@code [5/12]} inline but omits 5/12 from its citations
+	 * array, the group is left as-is rather than risk mangling a value. The structured citations
+	 * array is the authority — chart size is irrelevant, unlike validating against record
+	 * indices (where a 150-record chart would wrongly split a {@code [120/80]} value).
+	 */
+	static String normalizeSlashCitations(String text, Collection<Integer> validCitations) {
 		Matcher matcher = SLASH_CITATION.matcher(text);
 		if (!matcher.find()) {
 			return text;
@@ -161,6 +186,11 @@ final class LlmAnswerExtractor {
 		matcher.reset();
 		while (matcher.find()) {
 			String[] parts = matcher.group(1).split("/");
+			if (validCitations != null && !allCited(parts, validCitations)) {
+				// Not citation shorthand — a slash-separated value. Leave it untouched.
+				matcher.appendReplacement(sb, Matcher.quoteReplacement(matcher.group(0)));
+				continue;
+			}
 			StringBuilder replacement = new StringBuilder();
 			for (int i = 0; i < parts.length; i++) {
 				if (i > 0) {
@@ -172,5 +202,21 @@ final class LlmAnswerExtractor {
 		}
 		matcher.appendTail(sb);
 		return sb.toString();
+	}
+
+	/** True only if every {@code part} parses to an integer present in {@code validCitations}. */
+	private static boolean allCited(String[] parts, Collection<Integer> validCitations) {
+		for (String part : parts) {
+			try {
+				if (!validCitations.contains(Integer.valueOf(part.trim()))) {
+					return false;
+				}
+			}
+			catch (NumberFormatException e) {
+				// A part too large to be an int cannot be a record number — treat as not cited.
+				return false;
+			}
+		}
+		return true;
 	}
 }
