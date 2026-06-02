@@ -40,6 +40,8 @@ import org.openmrs.module.chartsearchai.api.ChartSearchService.ChartAnswer;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
 import org.openmrs.module.chartsearchai.api.AuditLogService;
 import org.openmrs.module.chartsearchai.api.PatientAccessCheck;
+import org.openmrs.module.chartsearchai.api.ReindexStatus;
+import org.openmrs.module.chartsearchai.api.impl.PatientIndexReindexer;
 import org.openmrs.module.chartsearchai.api.impl.WarmupExecutor;
 import org.openmrs.module.chartsearchai.model.ChartSearchAuditLog;
 import org.openmrs.module.webservices.rest.web.RestConstants;
@@ -113,6 +115,15 @@ public class ChartSearchAiRestController {
 	@Autowired
 	@Qualifier("chartSearchAi.warmupExecutor")
 	private WarmupExecutor warmupExecutor;
+
+	@Autowired
+	@Qualifier("chartSearchAi.patientIndexReindexer")
+	private PatientIndexReindexer reindexer;
+
+	/** Test seam: production wires {@link PatientIndexReindexer} via {@link Autowired}. */
+	void setReindexer(PatientIndexReindexer reindexer) {
+		this.reindexer = reindexer;
+	}
 
 	@RequestMapping(value = "/search", method = RequestMethod.POST)
 	@ResponseBody
@@ -552,6 +563,60 @@ public class ChartSearchAiRestController {
 		Map<String, Object> response = new HashMap<String, Object>();
 		response.put("success", true);
 		return new ResponseEntity<Object>(response, HttpStatus.OK);
+	}
+
+	/**
+	 * Triggers a full reindex of every patient's chart into the active retrieval backend
+	 * (querystore or embedding). The work runs on a background daemon thread and this
+	 * returns immediately — reindexing a whole server can take minutes, far longer than a
+	 * request should be held open. Poll {@code GET /index/all/status} for progress.
+	 *
+	 * <p>Primary use is repairing index drift on the demo server after a SQL-dump load,
+	 * which bypasses the incremental-indexing AOP bridge and leaves the querystore missing
+	 * records. Gated on {@link ChartSearchAiConstants#PRIV_MANAGE_INDEX} — a server-wide
+	 * admin operation, not the per-clinician query privilege.
+	 *
+	 * <p>Returns 202 Accepted when a run is started, or 409 Conflict (with the current
+	 * status) when one is already in flight, so a double-submit can't launch two concurrent
+	 * rebuilds.
+	 */
+	@RequestMapping(value = "/index/all", method = RequestMethod.POST)
+	@ResponseBody
+	public ResponseEntity<Object> reindexAll() {
+		Context.requirePrivilege(ChartSearchAiConstants.PRIV_MANAGE_INDEX);
+
+		boolean started = reindexer.start();
+		Map<String, Object> body = reindexStatusMap(reindexer.getStatus());
+		if (!started) {
+			body.put("message", "A reindex is already in progress");
+			return new ResponseEntity<Object>(body, HttpStatus.CONFLICT);
+		}
+		body.put("message", "Reindex started");
+		return new ResponseEntity<Object>(body, HttpStatus.ACCEPTED);
+	}
+
+	/**
+	 * Returns the progress of the current (or most recent) full reindex. Gated on the same
+	 * {@link ChartSearchAiConstants#PRIV_MANAGE_INDEX} privilege as triggering one.
+	 */
+	@RequestMapping(value = "/index/all/status", method = RequestMethod.GET)
+	@ResponseBody
+	public ResponseEntity<Object> reindexAllStatus() {
+		Context.requirePrivilege(ChartSearchAiConstants.PRIV_MANAGE_INDEX);
+		return new ResponseEntity<Object>(reindexStatusMap(reindexer.getStatus()), HttpStatus.OK);
+	}
+
+	/** Renders a {@link ReindexStatus} snapshot as the endpoint's JSON body. */
+	static Map<String, Object> reindexStatusMap(ReindexStatus status) {
+		Map<String, Object> map = new LinkedHashMap<String, Object>();
+		map.put("running", status.isRunning());
+		map.put("backend", status.getBackend());
+		map.put("processed", status.getProcessed());
+		map.put("succeeded", status.getSucceeded());
+		map.put("failed", status.getFailed());
+		map.put("startedAt", status.getStartedAt());
+		map.put("finishedAt", status.getFinishedAt());
+		return map;
 	}
 
 	@ExceptionHandler(HttpMessageNotReadableException.class)
