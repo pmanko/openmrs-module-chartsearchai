@@ -20,7 +20,6 @@ import org.openmrs.module.chartsearchai.api.AuditLogPurgeTask;
 import org.openmrs.module.chartsearchai.api.EmbeddingIndexTask;
 import org.openmrs.module.chartsearchai.api.ElasticsearchIndexer;
 import org.openmrs.module.chartsearchai.api.impl.LlmProvider;
-import org.openmrs.module.chartsearchai.api.impl.PatientIndexReindexer;
 import org.openmrs.module.chartsearchai.api.impl.WarmupExecutor;
 import org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider;
 import org.openmrs.scheduler.SchedulerService;
@@ -47,13 +46,6 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator implements
 		}
 		catch (APIException e) {
 			log.warn("Could not propagate DaemonToken to WarmupExecutor", e);
-		}
-		try {
-			Context.getRegisteredComponent("chartSearchAi.patientIndexReindexer",
-					PatientIndexReindexer.class).setDaemonToken(token);
-		}
-		catch (APIException e) {
-			log.warn("Could not propagate DaemonToken to PatientIndexReindexer", e);
 		}
 	}
 

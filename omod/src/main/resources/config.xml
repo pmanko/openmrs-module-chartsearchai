@@ -40,11 +40,6 @@
 		<description>Allows viewing the audit log of AI chart search queries</description>
 	</privilege>
 
-	<privilege>
-		<name>Manage AI Index</name>
-		<description>Allows triggering a full reindex of all patients into the AI chart search retrieval backend</description>
-	</privilege>
-
 	<!-- Global Properties -->
 	<globalProperty>
 		<property>chartsearchai.llm.engine</property>

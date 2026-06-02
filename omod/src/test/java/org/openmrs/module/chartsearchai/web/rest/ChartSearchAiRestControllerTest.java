@@ -10,10 +10,8 @@
 package org.openmrs.module.chartsearchai.web.rest;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -23,10 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.openmrs.User;
 import org.openmrs.api.APIAuthenticationException;
 import org.openmrs.api.context.Context;
-import org.openmrs.api.context.ContextAuthenticationException;
 import org.openmrs.api.context.UserContext;
-import org.openmrs.module.chartsearchai.api.ReindexStatus;
-import org.openmrs.module.chartsearchai.api.impl.PatientIndexReindexer;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -285,161 +280,5 @@ public class ChartSearchAiRestControllerTest {
 
 	private static String errorOf(ResponseEntity<Object> response) {
 		return (String) ((Map<?, ?>) response.getBody()).get("error");
-	}
-
-	// --- /index/all reindex endpoints ---
-
-	/** A UserContext that grants every privilege, to drive the privileged happy path. */
-	private static void setPrivilegedContext() {
-		Context.setUserContext(new UserContext(null) {
-
-			@Override
-			public User getAuthenticatedUser() {
-				return new User();
-			}
-
-			@Override
-			public boolean isAuthenticated() {
-				return true;
-			}
-
-			@Override
-			public boolean hasPrivilege(String privilege) {
-				return true;
-			}
-		});
-	}
-
-	/** A reindexer double that records start() calls and serves a canned status. */
-	private static final class FakeReindexer extends PatientIndexReindexer {
-
-		boolean startResult = true;
-
-		int startCalls = 0;
-
-		ReindexStatus status = ReindexStatus.idle();
-
-		@Override
-		public boolean start() {
-			startCalls++;
-			return startResult;
-		}
-
-		@Override
-		public ReindexStatus getStatus() {
-			return status;
-		}
-	}
-
-	@Test
-	public void reindexAll_shouldReturn202AndStartRun_whenPrivilegedAndNotAlreadyRunning() {
-		setPrivilegedContext();
-		FakeReindexer fake = new FakeReindexer();
-		fake.startResult = true;
-		fake.status = new ReindexStatus(true, "querystore", 0, 0, 0, 1000L, null);
-		ChartSearchAiRestController controller = new ChartSearchAiRestController();
-		controller.setReindexer(fake);
-
-		ResponseEntity<Object> response = controller.reindexAll();
-
-		assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
-		assertEquals(1, fake.startCalls, "the endpoint must delegate to reindexer.start()");
-		Map<?, ?> body = (Map<?, ?>) response.getBody();
-		assertEquals(Boolean.TRUE, body.get("running"));
-		assertEquals("querystore", body.get("backend"));
-		assertEquals("Reindex started", body.get("message"));
-	}
-
-	@Test
-	public void reindexAll_shouldReturn409_whenReindexAlreadyRunning() {
-		setPrivilegedContext();
-		FakeReindexer fake = new FakeReindexer();
-		fake.startResult = false; // a run is already in flight
-		fake.status = new ReindexStatus(true, "querystore", 7, 7, 0, 1000L, null);
-		ChartSearchAiRestController controller = new ChartSearchAiRestController();
-		controller.setReindexer(fake);
-
-		ResponseEntity<Object> response = controller.reindexAll();
-
-		assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
-		Map<?, ?> body = (Map<?, ?>) response.getBody();
-		assertEquals("A reindex is already in progress", body.get("message"));
-		assertEquals(7, body.get("processed"));
-	}
-
-	@Test
-	public void reindexAll_shouldRequireManageIndexPrivilege() {
-		// Unprivileged context: requirePrivilege must reject before any reindex starts.
-		Context.setUserContext(new UserContext(null) {
-
-			@Override
-			public boolean hasPrivilege(String privilege) {
-				return false;
-			}
-		});
-		FakeReindexer fake = new FakeReindexer();
-		ChartSearchAiRestController controller = new ChartSearchAiRestController();
-		controller.setReindexer(fake);
-
-		assertThrows(ContextAuthenticationException.class, controller::reindexAll);
-		assertEquals(0, fake.startCalls, "no reindex may start without the Manage AI Index privilege");
-	}
-
-	@Test
-	public void reindexAllStatus_shouldReturn200WithSnapshot_whenPrivileged() {
-		setPrivilegedContext();
-		FakeReindexer fake = new FakeReindexer();
-		fake.status = new ReindexStatus(false, "querystore", 120, 118, 2, 1000L, 9000L);
-		ChartSearchAiRestController controller = new ChartSearchAiRestController();
-		controller.setReindexer(fake);
-
-		ResponseEntity<Object> response = controller.reindexAllStatus();
-
-		assertEquals(HttpStatus.OK, response.getStatusCode());
-		assertEquals(0, fake.startCalls, "the status endpoint must not trigger a run");
-		Map<?, ?> body = (Map<?, ?>) response.getBody();
-		assertEquals(Boolean.FALSE, body.get("running"));
-		assertEquals(120, body.get("processed"));
-		assertEquals(118, body.get("succeeded"));
-		assertEquals(2, body.get("failed"));
-		assertEquals(9000L, body.get("finishedAt"));
-	}
-
-	@Test
-	public void reindexAllStatus_shouldRequireManageIndexPrivilege() {
-		Context.setUserContext(new UserContext(null) {
-
-			@Override
-			public boolean hasPrivilege(String privilege) {
-				return false;
-			}
-		});
-		ChartSearchAiRestController controller = new ChartSearchAiRestController();
-		controller.setReindexer(new FakeReindexer());
-
-		assertThrows(ContextAuthenticationException.class, controller::reindexAllStatus);
-	}
-
-	@Test
-	public void reindexStatusMap_shouldRenderEveryField() {
-		Map<String, Object> map = ChartSearchAiRestController.reindexStatusMap(
-				new ReindexStatus(true, "embedding", 5, 4, 1, 1000L, null));
-		assertEquals(Boolean.TRUE, map.get("running"));
-		assertEquals("embedding", map.get("backend"));
-		assertEquals(5, map.get("processed"));
-		assertEquals(4, map.get("succeeded"));
-		assertEquals(1, map.get("failed"));
-		assertEquals(1000L, map.get("startedAt"));
-		assertNull(map.get("finishedAt"), "an in-flight run has no finishedAt");
-	}
-
-	@Test
-	public void reindexStatusMap_shouldRenderIdleSnapshotWithNulls() {
-		Map<String, Object> map = ChartSearchAiRestController.reindexStatusMap(ReindexStatus.idle());
-		assertEquals(Boolean.FALSE, map.get("running"));
-		assertNull(map.get("backend"));
-		assertEquals(0, map.get("processed"));
-		assertNull(map.get("startedAt"));
-		assertFalse(map.containsKey("message"), "the raw status map carries no message field");
 	}
 }
