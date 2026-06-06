@@ -30,12 +30,12 @@ on:
       onnx_model_url:
         description: 'Download URL for the ONNX model file'
         required: false
-        default: 'https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx'
+        default: ''   # MiniLM is only used by the non-default chartsearchai.embedding.preFilter pipeline; not bundled
         type: string
       vocab_url:
         description: 'Download URL for the vocab.txt file'
         required: false
-        default: 'https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt'
+        default: ''
         type: string
 
 concurrency:
@@ -47,8 +47,8 @@ env:
   OPENMRS_VERSION: ${{ inputs.openmrs_version || '2.9.0-SNAPSHOT' }}
   STANDALONE_BRANCH: ${{ inputs.standalone_branch || 'openmrs-emr3' }}
   GGUF_MODEL_URL: ${{ inputs.gguf_model_url || 'https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf' }}
-  ONNX_MODEL_URL: ${{ inputs.onnx_model_url || 'https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx' }}
-  VOCAB_URL: ${{ inputs.vocab_url || 'https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt' }}
+  ONNX_MODEL_URL: ${{ inputs.onnx_model_url || '' }}
+  VOCAB_URL: ${{ inputs.vocab_url || '' }}
 
 jobs:
   build-standalone:
