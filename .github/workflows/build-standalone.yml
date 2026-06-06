@@ -15,7 +15,7 @@ on:
       openmrs_version:
         description: 'OpenMRS Core version'
         required: false
-        default: '2.8.6'
+        default: '2.9.0-SNAPSHOT'
         type: string
       standalone_branch:
         description: 'openmrs-standalone branch to build from'
@@ -44,7 +44,7 @@ concurrency:
 
 env:
   REFAPP_VERSION: ${{ inputs.refapp_version || '3.7.0-SNAPSHOT' }}
-  OPENMRS_VERSION: ${{ inputs.openmrs_version || '2.8.6' }}
+  OPENMRS_VERSION: ${{ inputs.openmrs_version || '2.9.0-SNAPSHOT' }}
   STANDALONE_BRANCH: ${{ inputs.standalone_branch || 'openmrs-emr3' }}
   GGUF_MODEL_URL: ${{ inputs.gguf_model_url || 'https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf' }}
   ONNX_MODEL_URL: ${{ inputs.onnx_model_url || 'https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx' }}
@@ -130,8 +130,18 @@ jobs:
               "$VOCAB_URL"
           fi
 
+          # querystore embedding model: e5-base-v2 (ADR Decision 22). The Xenova mirror ships a
+          # self-contained ONNX export; the canonical intfloat onnx/ uses external-data format
+          # that breaks as a single-file download.
+          mkdir -p standalone/target/querystore
+          echo "Downloading querystore e5-base-v2 embedding model..."
+          curl -L -o standalone/target/querystore/e5_model.onnx \
+            "https://huggingface.co/Xenova/e5-base-v2/resolve/main/onnx/model.onnx"
+          curl -L -o standalone/target/querystore/vocab.txt \
+            "https://huggingface.co/intfloat/e5-base-v2/resolve/main/vocab.txt"
+
           echo "AI model files:"
-          ls -lh standalone/target/chartsearchai/ || echo "No model files downloaded"
+          ls -lh standalone/target/chartsearchai/ standalone/target/querystore/ || echo "No model files downloaded"
 
       # Patch the standalone build to include chartsearchai
       - name: Configure standalone build for chartsearchai
@@ -145,7 +155,7 @@ jobs:
           #    Insert an echo task after the existing replaceregexp tasks
           sed -i '/<\/target>/i \
                                   <echo file="${project.build.directory}/openmrs3x/openmrs-distro.properties"\
-                                        append="true" message="${line.separator}omod.chartsearchai=1.0.0-SNAPSHOT${line.separator}"/>' pom-step-01.xml
+                                        append="true" message="${line.separator}omod.chartsearchai=1.0.0-SNAPSHOT${line.separator}omod.querystore=1.0.0-SNAPSHOT${line.separator}"/>' pom-step-01.xml
 
           # 3. Add chartsearchai model files to the assembly descriptor (if models were downloaded)
           if [ -d "target/chartsearchai" ] && [ "$(ls -A target/chartsearchai 2>/dev/null)" ]; then
@@ -155,6 +165,27 @@ jobs:
                 <outputDirectory>${project.build.finalName}/appdata/chartsearchai</outputDirectory>\
               </fileSet>' src/main/assembly/zip-standalone.xml
           fi
+
+          # 4. Add the querystore embedding model to the assembly descriptor
+          if [ -d "target/querystore" ] && [ "$(ls -A target/querystore 2>/dev/null)" ]; then
+            sed -i '/<\/fileSets>/i \
+              <fileSet>\
+                <directory>${project.build.directory}/querystore</directory>\
+                <outputDirectory>${project.build.finalName}/appdata/querystore</outputDirectory>\
+              </fileSet>' src/main/assembly/zip-standalone.xml
+          fi
+
+          # 5. Pre-enable the querystore retrieval path in the bundled demo database.
+          #    Modules only create global properties that are missing, so rows present in the
+          #    imported demo dump win over the module defaults on first start.
+          {
+            echo ""
+            echo "INSERT INTO global_property (property, property_value, uuid) VALUES"
+            echo "('chartsearchai.querystore.enabled','true',UUID()),"
+            echo "('querystore.backend','lucene',UUID()),"
+            echo "('querystore.embedding.modelFilePath','querystore/e5_model.onnx',UUID()),"
+            echo "('querystore.embedding.vocabFilePath','querystore/vocab.txt',UUID());"
+          } >> "src/main/db/demo-db-${REFAPP_VERSION}.sql"
 
       - name: Pre-run OpenMRS SDK Plugin
         working-directory: standalone
@@ -266,6 +297,17 @@ jobs:
           echo "=== Routes registry entry ==="
           unzip -p "$ZIP_FILE" "*/frontend/routes.registry.json" | \
             python3 -c "import json,sys; d=json.load(sys.stdin); print('@openmrs/esm-chartsearchai-app' in d)"
+
+          echo ""
+          echo "=== Querystore components ==="
+          zipinfo -1 "$ZIP_FILE" | grep -i querystore || { echo "ERROR: no querystore files in zip"; exit 1; }
+
+          echo ""
+          echo "=== Querystore GPs in bundled demo DB ==="
+          unzip -p "$ZIP_FILE" "*/demodatabase.zip" > /tmp/demodb.zip
+          GP_COUNT=$(unzip -p /tmp/demodb.zip "data/demo-db-${REFAPP_VERSION}.sql" | grep -c "querystore" || true)
+          echo "querystore mentions in demo dump: $GP_COUNT"
+          [ "$GP_COUNT" -ge 4 ] || { echo "ERROR: querystore GPs missing from bundled demo DB"; exit 1; }
 
       - name: Upload standalone zip as artifact
         uses: actions/upload-artifact@v4
