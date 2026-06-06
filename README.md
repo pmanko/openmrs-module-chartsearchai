@@ -8,7 +8,7 @@ For project background, community discussion, and roadmap, see the [wiki project
 
 The standalone download above includes the backend module, frontend ESM, and the following AI models — ready to run:
 
-- **LLM**: [Gemma 4 26B MoE Instruct (UD-Q4_K_M)](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) — 17 GB, for answering clinical questions
+- **LLM**: [Gemma 4 E4B Instruct (Q4_K_M)](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF) — ~5 GB, the module's default model, for answering clinical questions. (A larger Gemma 4 26B MoE bundle can be built via the workflow's `gguf_model_url` input.)
 - **Embedding**: [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) — ONNX model + vocab, for semantic search over patient records
 
 ## Table of Contents
@@ -67,8 +67,8 @@ Notes:
 - OpenMRS Platform 2.8.0+
 - Webservices REST module 2.44.0+
 - RAM for local LLM inference (not required when using a remote LLM):
-  - **~6–8GB RAM** for the module's default model — Gemma 4 E4B (~5GB GGUF). Suitable for most deployments adding the module to an existing OpenMRS site.
-  - **~24GB+ RAM recommended** for the production-grade Gemma 4 26B MoE bundled with the standalone download.
+  - **~6–8GB RAM** for the module's default model — Gemma 4 E4B (~5GB GGUF), as bundled with the standalone download. Suitable for most deployments adding the module to an existing OpenMRS site.
+  - **~24GB+ RAM** for the production-grade Gemma 4 26B MoE (optional; build the standalone bundle with the workflow's `gguf_model_url` input and point `chartsearchai.llm.modelFilePath` at the downloaded filename).
 - Elasticsearch 8.14+ *(optional, for the hybrid retrieval pipeline; the default embedding and Lucene pipelines require no external services)*
 
 ## Docker
