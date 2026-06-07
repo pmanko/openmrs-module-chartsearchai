@@ -291,7 +291,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 		return new ChartAnswer(response.getAnswer(),
 				extractCitedReferences(response.getCitations(), mappings),
-				response.getBlocks(),
+				response.getBlocks(), response.getConfidence(),
 				response.getInputTokens(), response.getOutputTokens(),
 				response.getCachedTokens());
 	}
@@ -306,7 +306,7 @@ public class LlmInferenceService implements ChartSearchService {
 
 		return new ChartAnswer(response.getAnswer(),
 				extractCitedReferences(response.getCitations(), mappings),
-				response.getBlocks(),
+				response.getBlocks(), response.getConfidence(),
 				response.getInputTokens(), response.getOutputTokens(),
 				response.getCachedTokens());
 	}

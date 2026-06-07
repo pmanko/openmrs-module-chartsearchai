@@ -12,6 +12,7 @@ package org.openmrs.module.chartsearchai.api.impl;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -541,6 +542,14 @@ public class LlmProvider {
 
 		private final List<ResponseBlock> blocks;
 
+		/**
+		 * Per-section validator confidence ({@code {answer:{level,note}, in_depth:{level,note}}},
+		 * level ∈ green|yellow|red) emitted by the med-agent-hub. Opaque pass-through metadata a
+		 * client renders as a tag; {@code null} for backends that don't emit it (LM Studio, the
+		 * parity lane). The dashboard/report read the same structure from the reasoning trace.
+		 */
+		private final Map<String, Object> confidence;
+
 		private final int inputTokens;
 
 		private final int outputTokens;
@@ -562,11 +571,17 @@ public class LlmProvider {
 
 		LlmResponse(String answer, List<Integer> citations, List<ResponseBlock> blocks,
 				int inputTokens, int outputTokens, int cachedTokens) {
+			this(answer, citations, blocks, null, inputTokens, outputTokens, cachedTokens);
+		}
+
+		LlmResponse(String answer, List<Integer> citations, List<ResponseBlock> blocks,
+				Map<String, Object> confidence, int inputTokens, int outputTokens, int cachedTokens) {
 			this.answer = answer;
 			this.citations = Collections.unmodifiableList(new ArrayList<>(citations));
 			this.blocks = blocks == null
 					? Collections.emptyList()
 					: Collections.unmodifiableList(new ArrayList<>(blocks));
+			this.confidence = confidence;
 			this.inputTokens = inputTokens;
 			this.outputTokens = outputTokens;
 			this.cachedTokens = cachedTokens;
@@ -582,6 +597,10 @@ public class LlmProvider {
 
 		List<ResponseBlock> getBlocks() {
 			return blocks;
+		}
+
+		Map<String, Object> getConfidence() {
+			return confidence;
 		}
 
 		int getInputTokens() {

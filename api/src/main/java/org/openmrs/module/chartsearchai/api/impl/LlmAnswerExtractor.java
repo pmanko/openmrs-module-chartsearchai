@@ -73,7 +73,7 @@ final class LlmAnswerExtractor {
 			int cachedTokens) {
 		LlmResponse parsed = extractResponse(response);
 		return new LlmResponse(parsed.getAnswer(), parsed.getCitations(),
-				parsed.getBlocks(), inputTokens, outputTokens, cachedTokens);
+				parsed.getBlocks(), parsed.getConfidence(), inputTokens, outputTokens, cachedTokens);
 	}
 
 	static LlmResponse extractResponse(String response) {
@@ -109,7 +109,8 @@ final class LlmAnswerExtractor {
 					}
 				}
 				List<ResponseBlock> blocks = parseBlocks(root.get("blocks"));
-				return new LlmResponse(answer, citations, blocks, 0, 0, 0);
+				Map<String, Object> confidence = parseConfidence(root.get("confidence"));
+				return new LlmResponse(answer, citations, blocks, confidence, 0, 0, 0);
 			}
 		}
 		catch (IOException e) {
@@ -164,6 +165,20 @@ final class LlmAnswerExtractor {
 	 * block types (list, timeline) won't be understood by older parsers but
 	 * shouldn't break the response.
 	 */
+	/**
+	 * Materialize the optional {@code confidence} object the med-agent-hub emits
+	 * ({@code {answer:{level,note}, in_depth:{level,note}}}, level ∈ green|yellow|red) as an opaque
+	 * nested map the chat envelope passes straight through to the SPA. Returns {@code null} when
+	 * absent or not an object (LM Studio / parity lane / legacy rows) so the UI renders no tag.
+	 */
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> parseConfidence(JsonNode confidenceNode) {
+		if (confidenceNode == null || !confidenceNode.isObject()) {
+			return null;
+		}
+		return MAPPER.convertValue(confidenceNode, Map.class);
+	}
+
 	private static List<ResponseBlock> parseBlocks(JsonNode blocksNode) {
 		if (blocksNode == null || !blocksNode.isArray()) {
 			return Collections.emptyList();
