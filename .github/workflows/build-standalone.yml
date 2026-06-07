@@ -310,9 +310,32 @@ jobs:
           echo "querystore mentions in demo dump: $GP_COUNT"
           [ "$GP_COUNT" -ge 4 ] || { echo "ERROR: querystore GPs missing from bundled demo DB"; exit 1; }
 
-      - name: Upload standalone zip as artifact
+      # GitHub always re-zips whatever upload-artifact is handed. Uploading the
+      # standalone .zip directly therefore yields a zip-inside-a-zip that users
+      # must extract twice. Extract it here and upload the *contents* so GitHub's
+      # mandatory wrapper IS the standalone zip — one extraction lands the
+      # runnable directory.
+      - name: Stage extracted standalone for a single-extract artifact
+        working-directory: standalone/target
+        run: |
+          ZIP="referenceapplication-standalone-${REFAPP_VERSION}.zip"
+          # Reclaim space before doubling the standalone on disk (the verify step
+          # already ran against the zip, and nothing downstream needs these).
+          rm -rf ~/.m2/repository "$GITHUB_WORKSPACE"/standalone/node_modules || true
+          rm -rf chartsearchai querystore || true
+          unzip -q "$ZIP" -d artifact
+          rm -f "$ZIP"
+          echo "Artifact tree (extracts in one step):"
+          ls -1 artifact
+
+      - name: Upload standalone as artifact
         uses: actions/upload-artifact@v4
         with:
           name: openmrs-standalone-chartsearchai
-          path: standalone/target/referenceapplication-standalone-${{ env.REFAPP_VERSION }}.zip
+          path: standalone/target/artifact
+          # The old upload handed over the .zip as an opaque blob, so every byte
+          # (including dotfiles) survived. Re-uploading the extracted tree subjects
+          # it to v4's default hidden-file exclusion — keep parity so no runtime
+          # config or appdata marker is silently dropped.
+          include-hidden-files: true
           retention-days: 90
