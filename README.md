@@ -8,7 +8,7 @@ For project background, community discussion, and roadmap, see the [wiki project
 
 The standalone download above includes the backend module, frontend ESM, and the following AI models — ready to run:
 
-> **macOS note:** if a downloaded build older than 2026-06-07 fails to start with a `libpcre2` dyld error, run `xattr -dr com.apple.quarantine <extracted-directory>` once. Current builds handle this automatically.
+> **macOS note:** if a downloaded build fails to start with a `libpcre2` dyld error, run `xattr -dr com.apple.quarantine <extracted-directory>` once and retry. Current builds handle this automatically at launcher startup (verified end-to-end against a quarantined download).
 
 - **LLM**: [Gemma 4 E4B Instruct (Q4_K_M)](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF) — ~5 GB, the module's default model, for answering clinical questions. (A larger Gemma 4 26B MoE bundle can be built via the workflow's `gguf_model_url` input.)
 - **Retrieval + embedding**: the [querystore module](https://github.com/openmrs/openmrs-module-querystore) with [e5-base-v2](https://huggingface.co/intfloat/e5-base-v2) (~440 MB ONNX) — the recommended hybrid retrieval path, pre-enabled (`chartsearchai.querystore.enabled=true`, Lucene backend). The module's own optional pre-filter embedder (all-MiniLM-L6-v2) is not bundled; see the `chartsearchai.embedding.modelFilePath` property description if you enable `chartsearchai.embedding.preFilter`.
