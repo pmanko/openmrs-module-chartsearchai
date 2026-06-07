@@ -1,10 +1,11 @@
 name: Build O3 Standalone with Chart Search AI
 
 on:
+  # Rebuild on every push so the README's nightly.link download stays current:
+  # nightly.link only serves artifacts from push/schedule-triggered runs, so
+  # workflow_dispatch rebuilds are invisible to the download button.
   push:
     branches: [main]
-    paths:
-      - '.github/workflows/build-standalone.yml'
   workflow_dispatch:
     inputs:
       refapp_version:
