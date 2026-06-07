@@ -136,6 +136,13 @@ public interface ChartSearchService {
 
 		private final List<org.openmrs.module.chartsearchai.api.impl.ResponseBlock> blocks;
 
+		/**
+		 * Per-section validator confidence ({@code {answer:{level,note}, in_depth:{level,note}}})
+		 * the med-agent-hub emits; opaque pass-through metadata the SPA renders as a tag.
+		 * {@code null} for backends that don't emit it.
+		 */
+		private final java.util.Map<String, Object> confidence;
+
 		private final int inputTokens;
 
 		private final int outputTokens;
@@ -160,12 +167,20 @@ public interface ChartSearchService {
 		public ChartAnswer(String answer, List<RecordReference> references,
 				List<org.openmrs.module.chartsearchai.api.impl.ResponseBlock> blocks,
 				int inputTokens, int outputTokens, int cachedTokens) {
+			this(answer, references, blocks, null, inputTokens, outputTokens, cachedTokens);
+		}
+
+		public ChartAnswer(String answer, List<RecordReference> references,
+				List<org.openmrs.module.chartsearchai.api.impl.ResponseBlock> blocks,
+				java.util.Map<String, Object> confidence,
+				int inputTokens, int outputTokens, int cachedTokens) {
 			this.answer = answer;
 			this.references = java.util.Collections.unmodifiableList(
 					new java.util.ArrayList<>(references));
 			this.blocks = blocks == null
 					? java.util.Collections.emptyList()
 					: java.util.Collections.unmodifiableList(new java.util.ArrayList<>(blocks));
+			this.confidence = confidence;
 			this.inputTokens = inputTokens;
 			this.outputTokens = outputTokens;
 			this.cachedTokens = cachedTokens;
@@ -192,6 +207,14 @@ public interface ChartSearchService {
 		 */
 		public List<org.openmrs.module.chartsearchai.api.impl.ResponseBlock> getBlocks() {
 			return blocks;
+		}
+
+		/**
+		 * Per-section validator confidence ({@code {answer:{level,note}, in_depth:{level,note}}}),
+		 * or {@code null} when the backend didn't emit it.
+		 */
+		public java.util.Map<String, Object> getConfidence() {
+			return confidence;
 		}
 
 		/**

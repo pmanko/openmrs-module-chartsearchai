@@ -1074,6 +1074,9 @@ public class ChartSearchAiRestController {
 			}
 			doneData.put("references", refs);
 			doneData.put("blocks", blocksToJson(answer.getBlocks()));
+			if (answer.getConfidence() != null) {
+				doneData.put("confidence", answer.getConfidence());
+			}
 			doneData.put("session", result.getSessionUuid());
 			doneData.put("messageId", result.getAssistantMessageUuid());
 			doneData.put("model", answeredModel);
@@ -1261,6 +1264,9 @@ public class ChartSearchAiRestController {
 		}
 		response.put("references", refs);
 		response.put("blocks", blocksToJson(answer.getBlocks()));
+		if (answer.getConfidence() != null) {
+			response.put("confidence", answer.getConfidence());
+		}
 		response.put("session", result.getSessionUuid());
 		response.put("messageId", result.getAssistantMessageUuid());
 		response.put("model", answeredModel);
@@ -1352,6 +1358,7 @@ public class ChartSearchAiRestController {
 				String stored = m.getContent();
 				String prose = stored;
 				List<Object> blocks = new ArrayList<Object>();
+				Map<String, Object> confidence = null;
 				if (stored != null && stored.trim().startsWith("{")) {
 					try {
 						com.fasterxml.jackson.databind.JsonNode root =
@@ -1364,6 +1371,10 @@ public class ChartSearchAiRestController {
 						if (blocksNode != null && blocksNode.isArray()) {
 							blocks = hydrateMapper.convertValue(blocksNode, List.class);
 						}
+						com.fasterxml.jackson.databind.JsonNode confNode = root.get("confidence");
+						if (confNode != null && confNode.isObject()) {
+							confidence = hydrateMapper.convertValue(confNode, Map.class);
+						}
 					}
 					catch (IOException ignored) {
 						// Treat as plaintext.
@@ -1371,6 +1382,9 @@ public class ChartSearchAiRestController {
 				}
 				entry.put("content", prose);
 				entry.put("blocks", blocks);
+				if (confidence != null) {
+					entry.put("confidence", confidence);
+				}
 			} else {
 				entry.put("content", m.getContent());
 			}

@@ -316,6 +316,11 @@ public class ChatServiceImpl implements ChatService {
 		// keep wire format identical across persistence and live response so
 		// SPA hydration and SSE done events parse the same way.
 		wire.put("blocks", blocksToWire(answer.getBlocks()));
+		// Persist per-section confidence so a page reload rehydrates the same tag the live
+		// stream showed; omitted when absent (LM Studio / parity lane) so no phantom tag.
+		if (answer.getConfidence() != null) {
+			wire.put("confidence", answer.getConfidence());
+		}
 		try {
 			return MAPPER.writeValueAsString(wire);
 		}
