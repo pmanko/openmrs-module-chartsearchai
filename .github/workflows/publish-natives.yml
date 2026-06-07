@@ -14,6 +14,10 @@ env:
 jobs:
   build-native:
     strategy:
+      # Build every platform independently so one failing leg neither cancels the
+      # others nor hides their results. The publish job still requires the whole
+      # matrix to succeed (it `needs` this job), so a partial failure never ships.
+      fail-fast: false
       matrix:
         include:
           - os: macos-14
@@ -47,6 +51,14 @@ jobs:
             arch: x86_64
             binary: llama-server.exe
             cmake_extra: ''
+          - os: windows-2022
+            platform: Windows
+            arch: aarch64
+            binary: llama-server.exe
+            # GGML refuses MSVC for ARM ("use clang"), so Windows ARM64 has its own
+            # build step below (clang + Ninja + the upstream arm64-windows-llvm
+            # toolchain). cmake_extra is unused for this leg.
+            cmake_extra: ''
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout llama.cpp
@@ -56,6 +68,7 @@ jobs:
           ref: ${{ env.LLAMA_VERSION }}
 
       - name: Build llama-server (static)
+        if: ${{ !(matrix.platform == 'Windows' && matrix.arch == 'aarch64') }}
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
@@ -64,6 +77,40 @@ jobs:
             ${{ matrix.cmake_extra }}
           cmake --build build --config Release --target llama-server -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
         shell: bash
+
+      # Windows ARM64 must use clang (GGML rejects MSVC for ARM). Mirror llama.cpp's
+      # own windows-cpu/arm64 job: vcvarsall amd64_arm64 supplies the ARM64 Windows
+      # SDK headers/libs that clang (targeting arm64-pc-windows-msvc) links against,
+      # Ninja drives the upstream clang toolchain file, and GGML_OPENMP=OFF keeps the
+      # result a single self-contained .exe (no libomp DLL to bundle alongside it).
+      # The upstream arm64-windows-llvm toolchain pins -march=armv8.7-a, which would
+      # SIGILL on the bulk of the Windows-on-ARM install base (Surface Pro X and all
+      # Snapdragon 8cx devices are ~ARMv8.2; only 2024+ Snapdragon X is >=v8.7). Lower
+      # it to the armv8.2-a baseline the other ARM legs deliberately pin for broad
+      # compatibility. arch_c_flags is defined once and reused for C and CXX, so a
+      # single substitution covers both.
+      - name: Pin Windows ARM64 baseline to armv8.2-a
+        if: ${{ matrix.platform == 'Windows' && matrix.arch == 'aarch64' }}
+        shell: bash
+        run: |
+          sed -i 's/-march=armv8.7-a/-march=armv8.2-a/' cmake/arm64-windows-llvm.cmake
+          grep -q -- '-march=armv8.2-a' cmake/arm64-windows-llvm.cmake \
+            || { echo "ERROR: armv8.2-a pin did not apply (upstream toolchain changed?)"; exit 1; }
+
+      - name: Build llama-server (Windows ARM64, clang cross)
+        if: ${{ matrix.platform == 'Windows' && matrix.arch == 'aarch64' }}
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64_arm64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake ^
+            -D CMAKE_BUILD_TYPE=Release ^
+            -D BUILD_SHARED_LIBS=OFF ^
+            -D GGML_STATIC=ON ^
+            -D GGML_OPENMP=OFF ^
+            -D GGML_NATIVE=OFF ^
+            -D LLAMA_OPENSSL=OFF
+          cmake --build build --config Release --target llama-server
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -75,6 +122,10 @@ jobs:
 
   publish:
     needs: build-native
+    # Only deploy the natives JAR to the shared OpenMRS Nexus from main. Dispatching
+    # this workflow on a feature branch builds every platform (so the binaries — and
+    # their sizes — can be inspected from the run artifacts) without republishing.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
