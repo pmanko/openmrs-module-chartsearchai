@@ -87,13 +87,22 @@ public class PatientChartSerializer {
 		for (int i = 0; i < records.size(); i++) {
 			SerializedRecord record = records.get(i);
 			int index = i + 1;
-			mappings.add(new RecordMapping(index, record.getResourceType(), record.getResourceUuid(), record.getDate()));
-
-			sb.append("[").append(index).append("] ");
+			// The exact per-record content the LLM sees in the chart line (everything after
+			// the "[N] " index): the date parenthetical plus the synonym-stripped body. The
+			// grounding verifier compares cited records against this same string, so its view
+			// matches the model's — otherwise a cited date (which the model reads from the
+			// prefix) would look unsupported because the bare record body omits it.
+			StringBuilder rendered = new StringBuilder();
 			if (record.getDate() != null) {
-				sb.append("(").append(DateFormatUtil.formatDate(record.getDate())).append(") ");
+				rendered.append("(").append(DateFormatUtil.formatDate(record.getDate())).append(") ");
 			}
-			sb.append(ConceptNameUtil.stripSynonyms(record.getText())).append("\n");
+			rendered.append(ConceptNameUtil.stripSynonyms(record.getText()));
+			String renderedText = rendered.toString();
+
+			mappings.add(new RecordMapping(index, record.getResourceType(), record.getResourceUuid(),
+					record.getDate(), renderedText));
+
+			sb.append("[").append(index).append("] ").append(renderedText).append("\n");
 
 			if (focusUuids != null && focusUuids.contains(record.getResourceUuid())) {
 				focusIndices.add(index);
@@ -174,11 +183,24 @@ public class PatientChartSerializer {
 
 		private final Date date;
 
+		private final String text;
+
+		/**
+		 * Backward-compatible constructor that carries no source text. Mappings
+		 * built this way cannot be grounding-checked; the grounding verifier
+		 * treats a null/blank text as "cannot verify" and leaves the citation
+		 * unannotated.
+		 */
 		public RecordMapping(int index, String resourceType, String resourceUuid, Date date) {
+			this(index, resourceType, resourceUuid, date, null);
+		}
+
+		public RecordMapping(int index, String resourceType, String resourceUuid, Date date, String text) {
 			this.index = index;
 			this.resourceType = resourceType;
 			this.resourceUuid = resourceUuid;
 			this.date = date;
+			this.text = text;
 		}
 
 		public int getIndex() {
@@ -195,6 +217,18 @@ public class PatientChartSerializer {
 
 		public Date getDate() {
 			return date;
+		}
+
+		/**
+		 * The exact per-record content the LLM saw in the chart line for this
+		 * index — the date parenthetical (if any) plus the synonym-stripped body,
+		 * i.e. everything after the {@code "[N] "} prefix. The citation grounding
+		 * verifier compares cited records against this so its view matches the
+		 * model's (including the date the model may cite). May be {@code null}
+		 * when the mapping was built without text.
+		 */
+		public String getText() {
+			return text;
 		}
 	}
 }
