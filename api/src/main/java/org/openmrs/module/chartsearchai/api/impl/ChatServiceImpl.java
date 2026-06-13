@@ -198,7 +198,7 @@ public class ChatServiceImpl implements ChatService {
 
 	/**
 	 * Backfill chart snapshot for legacy sessions (created before
-	 * chartsearchai-008) on first chat() call. Idempotent.
+	 * chartsearchai-004) on first chat() call. Idempotent.
 	 */
 	protected void ensureChartSnapshot(ChatSession session) {
 		if (session.getChartSnapshot() != null) {

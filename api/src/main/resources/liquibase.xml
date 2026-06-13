@@ -106,46 +106,6 @@
 	</changeSet>
 
 	<changeSet id="chartsearchai-003" author="openmrs">
-		<comment>Add feedback columns (rating and comment) to chartsearchai_audit_log</comment>
-		<addColumn tableName="chartsearchai_audit_log">
-			<column name="rating" type="varchar(10)"/>
-			<column name="feedback_comment" type="text"/>
-		</addColumn>
-	</changeSet>
-
-	<changeSet id="chartsearchai-004" author="openmrs">
-		<comment>Add token_count column to chartsearchai_audit_log for tracking LLM token usage per request</comment>
-		<addColumn tableName="chartsearchai_audit_log">
-			<column name="token_count" type="int"/>
-		</addColumn>
-	</changeSet>
-
-	<changeSet id="chartsearchai-005" author="openmrs">
-		<comment>Split token_count into separate input_tokens and output_tokens columns for accurate cost tracking</comment>
-		<addColumn tableName="chartsearchai_audit_log">
-			<column name="input_tokens" type="int"/>
-			<column name="output_tokens" type="int"/>
-		</addColumn>
-		<dropColumn tableName="chartsearchai_audit_log" columnName="token_count"/>
-	</changeSet>
-
-	<changeSet id="chartsearchai-006" author="openmrs">
-		<comment>
-			An earlier config.xml default pointed at "medgemma-1.5-4b-it.Q4_K_M.gguf" (dot before Q4_K_M).
-			OpenMRS only inserts a GP default when the row is missing; it never overwrites an existing
-			value. So instances that started up against the old default are stuck with a path that does
-			not match the canonical filename ("medgemma-1.5-4b-it-Q4_K_M.gguf", with hyphen) used by
-			the upstream GGUF release and by the in-image download script. Migrate that one stale value
-			only — leave any custom user-set path alone.
-		</comment>
-		<update tableName="global_property">
-			<column name="property_value" value="chartsearchai/medgemma-1.5-4b-it-Q4_K_M.gguf"/>
-			<where>property = 'chartsearchai.llm.modelFilePath'
-				AND property_value = 'chartsearchai/medgemma-1.5-4b-it.Q4_K_M.gguf'</where>
-		</update>
-	</changeSet>
-
-	<changeSet id="chartsearchai-007" author="openmrs">
 		<comment>
 			Multi-turn chat history. Two tables — a session header and the message rows.
 			Existing chartsearchai_audit_log is intentionally untouched: it remains the
@@ -247,7 +207,7 @@
 		</createIndex>
 	</changeSet>
 
-	<changeSet id="chartsearchai-008" author="openmrs">
+	<changeSet id="chartsearchai-004" author="openmrs">
 		<comment>
 			Add the per-session frozen chart snapshot. Multi-turn chat needs a
 			byte-stable patient-chart prefix across every turn of a session so
@@ -272,7 +232,7 @@
 		</addColumn>
 	</changeSet>
 
-	<changeSet id="chartsearchai-009" author="openmrs">
+	<changeSet id="chartsearchai-005" author="openmrs">
 		<comment>
 			Make the chat_message → audit_log link survive an audit purge. The
 			audit row is the long-retention regulatory record; the chat message
