@@ -131,17 +131,10 @@ class ChartBuildingStrategy {
 	 *
 	 * <p>Mirrors the no-pre-filter branch of {@link #buildChart} but is
 	 * always full-chart so the caller doesn't have to know about the global
-	 * property. The {@code chartCache} is shared with that branch so a
-	 * session-create within seconds of a single-shot search hits the cache.
+	 * property.
 	 */
 	PatientChart buildChartUnfiltered(Patient patient) {
-		PatientChart cached = chartCache.get(patient);
-		if (cached != null) {
-			return cached;
-		}
-		PatientChart chart = chartSerializer.serialize(patient);
-		chartCache.put(patient, chart);
-		return chart;
+		return chartSerializer.serialize(patient);
 	}
 
 	private PatientChart buildChartWithEmbeddings(Patient patient, String question) {

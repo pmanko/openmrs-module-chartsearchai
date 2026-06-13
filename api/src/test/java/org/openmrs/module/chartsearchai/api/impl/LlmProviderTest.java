@@ -98,7 +98,8 @@ public class LlmProviderTest {
 		// abstaining answer + empty citations + closing brace rather than a literal "{...}" — the
 		// intent is unchanged: the focus-hint line is immediately followed by an abstaining answer.
 		assertTrue(afterRanked.contains(
-				"\"answer\": \"There are no records of banana deliveries.\", \"citations\": []}"),
+				"\"answer\": \"There are no records of banana deliveries.\", "
+						+ "\"citations\": [], \"blocks\": []}"),
 				"The focus-hint line must be immediately followed by the abstaining banana answer "
 				+ "(empty citations) — not just any later empty-citations answer. This pins the "
 				+ "demonstration order: a non-empty ranked list does NOT guarantee the listed "
