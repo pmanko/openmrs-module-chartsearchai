@@ -231,11 +231,15 @@ jobs:
           INSTALLED_VER=$(node -p "require('./node_modules/openmrs/package.json').version")
           [ "$INSTALLED_VER" = "9.0.3-pre.4342" ] || { echo "openmrs version mismatch: got $INSTALLED_VER"; exit 1; }
 
-      # Build the standalone distribution (skip Docker init in CI)
+      # Build the standalone distribution (skip Docker init in CI). Tests are skipped here on
+      # purpose: this job packages the distro, and the standalone's tests run in the
+      # openmrs-standalone repo's own CI. Running them here also re-ran the timing-sensitive
+      # MariaDbRestartTest on a loaded runner, which flakily timed out ("ready for connections"
+      # not seen in 30s) and failed the whole download build.
       - name: Build standalone distribution
         working-directory: standalone
         run: |
-          mvn package -Pci -B \
+          mvn package -Pci -B -DskipTests \
             --settings .github/maven-settings.xml \
             -Drefapp.version=$REFAPP_VERSION \
             -Dopenmrs.version=$OPENMRS_VERSION
@@ -273,7 +277,7 @@ jobs:
       - name: Assemble final standalone zip
         working-directory: standalone
         run: |
-          mvn package -rf :referenceapplication-standalone-zip-stage -Dexec.skip=true -B \
+          mvn package -rf :referenceapplication-standalone-zip-stage -Dexec.skip=true -DskipTests -B \
             --settings .github/maven-settings.xml \
             -Drefapp.version=$REFAPP_VERSION \
             -Dopenmrs.version=$OPENMRS_VERSION
