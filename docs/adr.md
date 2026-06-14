@@ -1605,6 +1605,112 @@ Download via `Xenova/e5-base-v2`, which ships a self-contained ONNX export (~440
 - **−** Slower per-record embedding than L6-v2 (~5× the parameters: 110M vs 22M). Bounded by querystore's per-patient projection (lazy indexing on chart open), not paid on every query.
 - **−** Quality on this path is judged by end-to-end LLM-answer correctness rather than the recall@K eval baseline that drives Decisions 19–21. A separate eval harness for the LLM-as-filter path is future work.
 
+## Decision 23: Drug-reference injection + post-answer drug-safety validation
+
+**Status: Accepted** (June 2026)
+
+### Context
+
+Chart-search answers are grounded only in what the patient's chart contains. The chart says *what was prescribed*; it does not carry the reference facts a clinician weighs against it — published dosing maxima, drug–drug interactions, allergy/condition contraindications. Asked "is ibuprofen safe for this patient?" against a chart with an NSAID allergy, the LLM can reason it out only if the allergy record happens to surface *and* the model connects "NSAID" to "ibuprofen" — a colloquial-to-clinical bridge it makes unreliably, and exactly the gap the "Concept graph traversal" future-work item (see Planned future work) was meant to close through retrieval.
+
+### Decision
+
+Add an additive, opt-in (`chartsearchai.drugReference.enabled`, default `false`) drug-reference subsystem in two deterministic parts:
+
+1. **Injection (`DrugReferenceInjector`, pre-answer)** — append reference entries matching the question (by alias) or the patient's active orders (by ATC code) to the serialized chart as numbered, citable records carrying the `drug_reference` resource type. Numeric dosing is age-gated (a pediatric maximum is never surfaced for an adult). The LLM cites them the same way it cites chart records; the system prompt notes that `drug_reference` records are reference data, not the patient's own.
+2. **Validation (`DrugSafetyValidator`, post-answer)** — a deterministic check that annotates the answer with non-blocking `SafetyWarning`s (overdose / interaction / contraindication), cross-referencing the reference table against the patient's age, active orders, allergies, and conditions. It never rewrites or blocks the answer.
+
+### Why deterministic + data-driven
+
+The clinical knowledge lives in a configurable JSON dataset (`drug-reference.json`, operator-overridable via `chartsearchai.drugReference.dataFilePath`, with the bundled dataset as a classpath fallback), **not** in the algorithm — consistent with the project rule against encoding clinical domain knowledge into code. The matching (alias / ATC), age-banding, and safety checks are domain-agnostic mechanisms over that data. The validator runs deterministically (no second LLM call) so the safety net does not inherit the LLM's variability, and it is conservative by construction: a warning fires only when a dose can be computed and exceeds a published maximum, or a named drug matches an interaction/contraindication rule against real patient data — so a chart-sufficient answer naming no reference drug produces nothing.
+
+### Dose parser: clause-scoped, alias-anchored
+
+The overdose check parses `(drug, mg, frequency)` from the free-text answer. To avoid false alarms, dose attribution is **clause-scoped and anchored to the nearest drug name**: a dose stated for one drug in a neighbouring clause is not charged to another (`"ibuprofen or paracetamol 1000 mg"` does not flag ibuprofen), a number introduced by a limit cue (`"maximum 2400 mg/day"`) is treated as a ceiling rather than a prescribed dose, and frequency word-forms are word-boundary matched (`"bd"` does not match inside `"abdominal"`). Known v1 limitation: only the literal unit `mg` is parsed — doses in grams are not flagged (the conservative, miss-not-false-positive direction).
+
+### Wire & frontend
+
+`ChartAnswer` carries `safetyWarnings`; the REST controller emits a `safetyWarnings` array (`{ type, drug, detail }`) on both the blocking `/search` response and the streaming `done` event (always present, possibly empty). The [frontend ESM](https://github.com/openmrs/openmrs-esm-chartsearchai) renders them as colour-coded chips below the answer and renders `drug_reference` citations as non-navigating reference chips. With the feature off (the default), the wire carries an empty array and the frontend is a no-op.
+
+### Trade-offs
+
+- **+** Reference facts (dosing / interactions / contraindications) the chart alone can't provide, cited and grounded like any record, plus a deterministic safety net independent of LLM variability.
+- **+** Knowledge is data, not code — operators extend `drug-reference.json` without a rebuild.
+- **−** The seed dataset is small (ibuprofen, paracetamol, amoxicillin, gentamicin; WHO Model List of Essential Medicines for Children) — coverage expands per deployment.
+- **−** The overdose arm depends on the LLM stating a parseable dose in the answer; with chart-grounded prompts the model often recites reference maxima rather than proposing doses, so in practice the interaction/contraindication arms (which only need the drug *named* plus matching patient data) fire more than the overdose arm.
+- **−** Injected `drug_reference` records add a little answer/grounding latency when the feature is enabled and a reference is cited.
+
+## Decision 24: Drug-reference as a pluggable consumer of authoritative datasets
+
+**Status: Accepted** (June 2026) — implemented. Extends [Decision 23](#decision-23-drug-reference-injection--post-answer-drug-safety-validation).
+
+### Context
+
+Decision 23 shipped the drug-reference feature with a hand-curated, chartsearchai-specific `drug-reference.json` seeded from four drugs (from the WHO Model List of Essential Medicines for Children). That is fine as a proof-of-concept seed but is **not a maintainable knowledge base**: clinical drug knowledge spans thousands of agents, dosing varies by formulation/age/renal function, and interactions are combinatorial. Hand-curating an entry per drug does not scale and rots immediately.
+
+The "is aspirin safe?" case made the deeper point concrete. The warning a clinician expects there is not an *aspirin* fact — it is a **class** fact: aspirin and ibuprofen are both NSAIDs, and the patient is allergic to the NSAID class. Encoding it as a per-drug aspirin entry "works," but then the same NSAID-allergy rule must be re-encoded on naproxen, diclofenac, ketorolac, … indefinitely.
+
+### Constraints
+
+The maintainer's requirements, which this decision is bound by:
+
+1. **Do not extend or maintain the OpenMRS concept dictionary** for this — an explicit maintenance burden to avoid.
+2. **Do not hand-maintain per-drug data** inside chartsearchai.
+3. **Consume authoritative datasets** published by recognised global bodies (WHO and similar) that can be *downloaded and refreshed* rather than authored.
+4. The system should be **ready to consume such a dataset by simply pointing at it** when one is available.
+
+### Decision
+
+Refactor the drug-reference *data layer* into a **pluggable source/adapter architecture**:
+
+- A `DrugReferenceSource` interface over the existing internal model.
+- **Format adapters** that map an external dataset's *native* format → that model, so a dataset is consumed as published rather than hand-transformed into chartsearchai's bespoke schema.
+- A global property selecting the adapter/format, reusing the existing `chartsearchai.drugReference.dataFilePath` to locate the file.
+
+Incorporating an authoritative dataset then becomes: **drop the file, point the GP at it, select the adapter** — no code, no curation, no dictionary changes. The knowledge (drug → class, dosing references) comes entirely from the consumed dataset, so there is **no dependency on the OpenMRS concept dictionary** (constraint 1). The current bespoke JSON is demoted to *one* adapter plus a small fallback example — not the artifact anyone maintains.
+
+### Class-based reasoning is the scalable mechanism
+
+The first and most important adapter consumes the **WHO ATC classification**. ATC gives the class hierarchy, so a drug named in the question/answer resolves to its class *from the dataset*, and the safety checks run at the **class** level — one rule per class (e.g. "an NSAID-class allergy contraindicates NSAID-class drugs") covers the whole family. This removes the per-drug treadmill and answers "do we do this for every drug?" directly: **no — classify, then reason by class, from a downloaded table.**
+
+### Honest data-availability matrix
+
+Not every safety dimension has a clean, free, downloadable authoritative dataset. Building with eyes open:
+
+| Dimension | Authoritative downloadable source? | Notes |
+|---|---|---|
+| **Drug classification** | **Yes — WHO ATC** | Enables class-based allergy/interaction reasoning (the scalable win). WHOCC bulk ATC/DDD data carries use-terms; the cleanest machine-readable form is often an RxNorm↔ATC crosswalk. |
+| **Essential-medicines list** | **Yes — WHO EML** | A curated formulary list. |
+| **Max / safe daily dose** | **No (free)** | WHO **DDD is a drug-*utilization* statistic, not a clinical ceiling**, and is adult-only — it must **not** drive overdose checks. Dosing maxima live in the WHO Model Formulary as prose, not a dataset. |
+| **Pairwise interactions / contraindication rules** | **No (free)** | Structured rules live in prose formularies or in **commercial** databases (First Databank, Lexicomp, Medi-Span, full DrugBank). The adapter lets one be plugged in when licensed. |
+
+So pointing at WHO ATC delivers **class-based contraindication/interaction reasoning today**; the **exact-dosing and pairwise-rule** dimensions have no free authoritative dataset and remain either a small curated seed or a licensed source loaded through the same adapter. This is a documented bound, not a regression — it is the same or better than the Decision 23 seed.
+
+### Relationship to other decisions
+
+- **Extends Decision 23**: the bespoke JSON becomes one adapter + fallback; the feature's *behaviour* (injection + post-answer validation, opt-in / default-off, the clause-scoped dose parser) is unchanged.
+- **Deliberately does not take the "concept graph traversal" route** listed in Planned future work for drug safety. That item framed class reasoning as an *OpenMRS-dictionary* traversal; per constraint 1 the class knowledge is instead carried in the **consumed external dataset**. The two remain complementary — concept-graph traversal is still relevant to *retrieval*.
+
+### Trade-offs
+
+- **+** No per-drug curation and no concept-dictionary maintenance; coverage is refreshed by downloading a newer dataset.
+- **+** Class-based reasoning covers whole drug families from one table (solves aspirin/NSAID and its siblings at once).
+- **+** Authoritative provenance (WHO et al.) instead of a hand-written file.
+- **−** No free authoritative dataset exists for exact dosing maxima or pairwise interaction/contraindication rules — those stay curated-seed or licensed.
+- **−** WHO ATC/DDD bulk data carries use-terms (not a no-strings-open CSV); an RxNorm↔ATC crosswalk may be the practical source.
+- **−** Class-based allergy matching needs the recorded allergy to resolve to a class: free-text "NSAID" matches directly, but a coded allergen needs a class mapping that must come from the consumed dataset (not the OpenMRS dictionary, per constraint 1) — an edge for the ATC adapter to handle.
+
+### Implementation
+
+- `DrugReferenceSource` interface; `JsonDrugReferenceSource` (the bespoke schema, retained as one adapter + bundled fallback); `AtcDrugReferenceSource` (WHO ATC / RxNorm-ATC crosswalk → one classification entry per level-5 substance, `drugClass` derived from the nearest parent group present in the dataset).
+- GP `chartsearchai.drugReference.sourceFormat` (`json` | `atc`) alongside the existing `dataFilePath`.
+- **Class-level contraindication / interaction matching in `DrugSafetyValidator`**, keyed on ATC class rather than per-drug rules, so a rule-less classification source still produces safety reasoning:
+  - **Contraindication** — fires when a recorded allergy resolves (by name) to the drug the answer recommends (a direct allergy that the rule-less source would otherwise miss) **or** to a drug sharing its ATC class (cross-reactivity). Deduplicated per resolved allergen, so several aliases of one allergy warn once.
+  - **Interaction** — fires when the answer's drug shares an ATC class with an active order (additive effects / duplicate therapy), skipping an order that is the *same* drug (restating existing therapy is not a duplicate).
+  - Both are **additive** to the rule-based checks and reuse the existing `warnOnContraindications` / `warnOnInteractions` toggles.
+- **"Same class" = ATC level-4 (chemical subgroup, the 5-character prefix `M01AE`), not level-3.** Level 4 groups structurally-related drugs (ibuprofen/naproxen) with the fewest false positives; level 3 (`M01A` = all NSAIDs) fans out far more broadly with no curated data to justify it. This is the project's standing anti-false-positive stance (the dose-parser hardening existed for the same reason) applied to class breadth.
+- **Documented boundary (unchanged from the matrix above):** ATC's tree does not capture cross-*branch* cross-reactivity — aspirin `N02BA01` (salicylates) is a different ATC branch from ibuprofen `M01AE01` (propionic NSAIDs), so an ibuprofen allergy does **not** flag aspirin by class alone. That linkage needs a curated cross-reactivity dataset, not classification, and is asserted as a boundary test (`classContraindicationNotRaisedAcrossDifferentAtcBranch`).
+
 ## Known limitations
 
 - **Counting questions**: LLMs are unreliable at precise counting tasks (e.g., "how many weight records in the last 10 years?"). The model may undercount or overcount even when all relevant records are provided. Larger, more capable models perform better at counting but are still not perfectly reliable. This is a fundamental limitation of LLM inference, not a retrieval issue. Questions that require exact counts are better suited to structured queries.
