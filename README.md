@@ -10,6 +10,10 @@ The standalone download above includes the backend module, frontend ESM, and the
 
 > **macOS note:** if a downloaded build fails to start with a `libpcre2` dyld error, run `xattr -dr com.apple.quarantine <extracted-directory>` once and retry. Current builds handle this automatically at launcher startup, rebuild the patient search index on first run, and land directly on the login page — all verified end-to-end against a quarantined download.
 
+> **Windows note:** the bundled build runs as-is — the standalone now ships the Microsoft Visual C++ runtime that ONNX Runtime needs, so chart search works without separately installing the Visual C++ Redistributable.
+
+> **Intel (x86_64) Mac note:** Apple Silicon Macs run the bundled database out of the box. Intel Macs have no bundled MariaDB (no maintained x86_64 macOS build exists), so install one first with `brew install mariadb`; the standalone then uses it automatically.
+
 - **LLM**: [Gemma 4 E4B Instruct (Q4_K_M)](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF) — ~5 GB, the module's default model, for answering clinical questions. (A larger Gemma 4 26B MoE bundle can be built via the workflow's `gguf_model_url` input.)
 - **Retrieval + embedding**: the [querystore module](https://github.com/openmrs/openmrs-module-querystore) with [e5-base-v2](https://huggingface.co/intfloat/e5-base-v2) (~440 MB ONNX) — the recommended hybrid retrieval path, pre-enabled (`chartsearchai.querystore.enabled=true`, Lucene backend). The module's own optional pre-filter embedder (all-MiniLM-L6-v2) is not bundled; see the `chartsearchai.embedding.modelFilePath` property description if you enable `chartsearchai.embedding.preFilter`.
 
