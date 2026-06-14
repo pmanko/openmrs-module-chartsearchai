@@ -16,6 +16,7 @@ import java.util.Set;
 
 import org.openmrs.Obs;
 import org.openmrs.Patient;
+import org.openmrs.Person;
 import org.openmrs.api.context.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,7 +45,8 @@ public class ObsIndexingAdvice implements AfterReturningAdvice {
 
 		// Indexing is gated by querystore/preFilter; the answer cache must be invalidated on every
 		// write regardless of backend (see IndexingHelper.invalidateAnswerCache). Patient extraction
-		// stays below both checks so the all-off hot path skips Obs.getPerson()'s proxy resolution.
+		// stays below both checks so the all-off hot path skips Obs.getPerson()'s proxy resolution
+		// and the patient-by-id lookup getPatientFromArgs may otherwise perform.
 		boolean indexingActive = !IndexingHelper.isDisabledByQueryStore()
 				&& IndexingHelper.isPreFilterEnabled();
 		boolean cacheActive = IndexingHelper.isAnswerCacheEnabled();
@@ -76,14 +78,41 @@ public class ObsIndexingAdvice implements AfterReturningAdvice {
 	}
 
 	Patient getPatientFromArgs(Object returnValue, Object[] args) {
+		Person person = personFromArgs(returnValue, args);
+		if (person == null) {
+			return null;
+		}
+		// A real obs loaded by the service/REST layer carries a plain Person (Hibernate maps
+		// obs.person to Person), never a Patient instance, so an instanceof check alone would drop
+		// every obs write and leave the answer cache stale after an obs edit. Resolve the Patient by
+		// id when the person is not already one; a non-patient or unsaved Person resolves to null and
+		// is correctly skipped.
+		if (person instanceof Patient) {
+			return (Patient) person;
+		}
+		return resolvePatient(person);
+	}
+
+	private static Person personFromArgs(Object returnValue, Object[] args) {
 		if (returnValue instanceof Obs) {
-			return ((Obs) returnValue).getPerson() instanceof Patient
-					? (Patient) ((Obs) returnValue).getPerson() : null;
+			return ((Obs) returnValue).getPerson();
 		}
 		if (args != null && args.length > 0 && args[0] instanceof Obs) {
-			Obs obs = (Obs) args[0];
-			return obs.getPerson() instanceof Patient ? (Patient) obs.getPerson() : null;
+			return ((Obs) args[0]).getPerson();
 		}
 		return null;
+	}
+
+	/**
+	 * Resolves the {@link Patient} for a person carrying a patient id, or null when the person is
+	 * unsaved or not a patient. Package-private seam so unit tests can exercise the loaded-obs path
+	 * (where {@code obs.getPerson()} is a {@link Person}, not a {@link Patient}) without an OpenMRS
+	 * context.
+	 */
+	Patient resolvePatient(Person person) {
+		if (person == null || person.getPersonId() == null) {
+			return null;
+		}
+		return Context.getPatientService().getPatient(person.getPersonId());
 	}
 }

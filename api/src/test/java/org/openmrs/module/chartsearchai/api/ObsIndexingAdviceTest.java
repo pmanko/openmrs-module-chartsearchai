@@ -45,6 +45,28 @@ public class ObsIndexingAdviceTest {
 	}
 
 	@Test
+	public void getPatientFromArgs_shouldResolvePatientWhenObsCarriesPlainPerson() {
+		// A service/REST-loaded obs has getPerson() return a plain Person (not a Patient) even though
+		// it belongs to a patient. The advice must resolve the Patient by id, or obs writes silently
+		// fail to invalidate the answer cache (and re-index) — the production bug this guards against.
+		Person person = new Person(7);
+		Obs obs = new Obs();
+		obs.setPerson(person);
+		final Patient resolved = new Patient(7);
+		ObsIndexingAdvice withSeam = new ObsIndexingAdvice() {
+
+			@Override
+			Patient resolvePatient(Person p) {
+				return p != null && Integer.valueOf(7).equals(p.getPersonId()) ? resolved : null;
+			}
+		};
+		assertEquals(resolved, withSeam.getPatientFromArgs(obs, new Object[] {}),
+				"a loaded obs whose person is a plain Person must resolve to its Patient (returnValue path)");
+		assertEquals(resolved, withSeam.getPatientFromArgs(null, new Object[] { obs }),
+				"...and via the saveObs/voidObs argument path too");
+	}
+
+	@Test
 	public void getPatientFromArgs_shouldReturnNullWhenPersonIsNotPatient() {
 		Person person = new Person();
 		Obs obs = new Obs();
@@ -52,6 +74,15 @@ public class ObsIndexingAdviceTest {
 
 		Patient result = advice.getPatientFromArgs(obs, new Object[] {});
 		assertNull(result);
+	}
+
+	@Test
+	public void resolvePatient_shouldReturnNullForNullOrUnsavedPersonWithoutTouchingContext() {
+		// The null/null-id guard must short-circuit before Context.getPatientService(), so a bare
+		// (unsaved) Person never NPEs in a context-free unit test or in production. Removing it would
+		// break every loaded-obs write path.
+		assertNull(advice.resolvePatient(null));
+		assertNull(advice.resolvePatient(new Person()));
 	}
 
 	@Test
