@@ -171,6 +171,245 @@ public class LocalLlmEngineTest {
 	}
 
 	@Test
+	public void buildServerCommand_shouldOmitSlotSavePathWhenCacheDirNotConfigured() {
+		List<String> cmd = LocalLlmEngine.buildServerCommand(
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768);
+		assertFalse(cmd.contains("--slot-save-path"),
+				"--slot-save-path must be absent when no KV-cache directory is configured "
+				+ "(the disk-persistence feature is opt-in)");
+	}
+
+	@Test
+	public void buildServerCommand_shouldAddSlotSavePathWhenCacheDirConfigured() {
+		List<String> cmd = LocalLlmEngine.buildServerCommand(
+				"/bin/llama-server", "/data/model.gguf", 9999, 32768, "/var/kvcache");
+		int idx = cmd.indexOf("--slot-save-path");
+		assertTrue(idx >= 0, "--slot-save-path must be present so llama-server can persist and "
+				+ "restore a patient's prefilled KV cache across queries and restarts");
+		assertEquals("/var/kvcache", cmd.get(idx + 1));
+	}
+
+	private static final String DISC = "/models/e2b.gguf 32768";
+
+	@Test
+	public void kvCacheKey_shouldBeDeterministicAndContentSensitiveAndFilenameSafe() {
+		String scope = "5a440752-e11d-4b2d-a9a5-c53ee0cab928";
+		String a = LocalLlmEngine.kvCacheKey(scope, "system prompt", "patient chart A", DISC);
+		String aAgain = LocalLlmEngine.kvCacheKey(scope, "system prompt", "patient chart A", DISC);
+		String b = LocalLlmEngine.kvCacheKey(scope, "system prompt", "patient chart B", DISC);
+		String c = LocalLlmEngine.kvCacheKey(scope, "different system", "patient chart A", DISC);
+
+		assertEquals(a, aAgain, "same prompt prefix must map to the same KV-cache file");
+		assertFalse(a.equals(b), "a different chart must map to a different KV-cache file so a "
+				+ "stale chart never restores the wrong patient's KV");
+		assertFalse(a.equals(c), "the system prompt is part of the key so a prompt change "
+				+ "invalidates every cached KV");
+		assertTrue(a.matches(scope + "-[0-9a-f]+\\.bin"), "the filename must be <scope>-<hex>.bin "
+				+ "(path-traversal safe for slot-save-path), was: " + a);
+	}
+
+	@Test
+	public void modelDiscriminator_shouldChangeWhenModelFileContextOrIdentityChanges() throws Exception {
+		java.io.File dir = java.nio.file.Files.createTempDirectory("disc-test").toFile();
+		try {
+			java.io.File model = new java.io.File(dir, "m.gguf");
+			java.nio.file.Files.write(model.toPath(), new byte[] { 1, 2, 3 });
+			model.setLastModified(1_000_000L);
+			String base = LocalLlmEngine.modelDiscriminator(model.getAbsolutePath(), 32768);
+			assertEquals(base, LocalLlmEngine.modelDiscriminator(model.getAbsolutePath(), 32768),
+					"same model file + context must yield a stable discriminator");
+			assertFalse(base.equals(LocalLlmEngine.modelDiscriminator(model.getAbsolutePath(), 16384)),
+					"a context-size change must change the discriminator");
+			// Replace the file in place at the SAME path with different content (a redeploy shipping a
+			// newer gguf): length and/or mtime change, so the discriminator must change.
+			java.nio.file.Files.write(model.toPath(), new byte[] { 9, 9, 9, 9, 9 });
+			model.setLastModified(2_000_000L);
+			assertFalse(base.equals(LocalLlmEngine.modelDiscriminator(model.getAbsolutePath(), 32768)),
+					"a model file replaced in place must change the discriminator so its old KV is not reused");
+		}
+		finally {
+			for (java.io.File f : dir.listFiles()) {
+				f.delete();
+			}
+			dir.delete();
+		}
+	}
+
+	@Test
+	public void modelDiscriminator_shouldTolerateNullOrMissingModelPath() {
+		assertEquals("null 32768 0 0", LocalLlmEngine.modelDiscriminator(null, 32768),
+				"a null model path must not throw on the warmup path");
+		String missing = LocalLlmEngine.modelDiscriminator("/no/such/model.gguf", 32768);
+		assertTrue(missing.endsWith(" 0 0"), "a missing file reads length+mtime as 0, was: " + missing);
+	}
+
+	@Test
+	public void kvCacheKey_shouldDifferWhenModelOrContextDiscriminatorChanges() {
+		String scope = "5a440752-e11d-4b2d-a9a5-c53ee0cab928";
+		String e2b = LocalLlmEngine.kvCacheKey(scope, "sys", "chart", "/models/e2b.gguf 32768");
+		String e4b = LocalLlmEngine.kvCacheKey(scope, "sys", "chart", "/models/e4b.gguf 32768");
+		String ctx = LocalLlmEngine.kvCacheKey(scope, "sys", "chart", "/models/e2b.gguf 16384");
+		assertFalse(e2b.equals(e4b), "a model swap must change the key so a KV saved under one model "
+				+ "is never restored under another (silent KV corruption)");
+		assertFalse(e2b.equals(ctx), "a context-size change must change the key");
+	}
+
+	@Test
+	public void kvCacheKey_shouldOmitScopePrefixWhenScopeBlank() {
+		String key = LocalLlmEngine.kvCacheKey(null, "system prompt", "patient chart A", DISC);
+		assertTrue(key.matches("[0-9a-f]+\\.bin"),
+				"a null scope must yield a hash-only filename, was: " + key);
+	}
+
+	@Test
+	public void kvCacheKey_sameChartDifferentScope_shouldDifferByPrefixOnly() {
+		String k1 = LocalLlmEngine.kvCacheKey("patient-1", "sys", "chart", DISC);
+		String k2 = LocalLlmEngine.kvCacheKey("patient-2", "sys", "chart", DISC);
+		assertFalse(k1.equals(k2), "different patients must map to different files");
+		assertEquals(k1.replaceFirst("^patient-1-", ""), k2.replaceFirst("^patient-2-", ""),
+				"identical chart text must share the same digest tail across scopes");
+	}
+
+	@Test
+	public void purgeKvScopeEntries_shouldDeleteOnlyOtherFilesOfSameScope() throws Exception {
+		java.io.File dir = java.nio.file.Files.createTempDirectory("kvscope-test").toFile();
+		try {
+			java.io.File keep = newFile(dir, "pA-newhash.bin", 3_000L);
+			java.io.File stale = newFile(dir, "pA-oldhash.bin", 1_000L);
+			java.io.File otherPatient = newFile(dir, "pB-hash.bin", 1_000L);
+			java.io.File prefixLookalike = newFile(dir, "pAA-hash.bin", 1_000L);
+
+			LocalLlmEngine.purgeKvScopeEntries(dir, "pA", "pA-newhash.bin");
+
+			assertTrue(keep.exists(), "the patient's current entry must be kept");
+			assertFalse(stale.exists(), "the patient's superseded entry must be deleted");
+			assertTrue(otherPatient.exists(), "another patient's entry must never be touched");
+			assertTrue(prefixLookalike.exists(),
+					"a different scope that merely shares a leading substring must not be matched");
+		}
+		finally {
+			for (java.io.File f : dir.listFiles()) {
+				f.delete();
+			}
+			dir.delete();
+		}
+	}
+
+	@Test
+	public void purgeKvScopeEntries_shouldBeNoOpForBlankScope() throws Exception {
+		java.io.File dir = java.nio.file.Files.createTempDirectory("kvscope-blank").toFile();
+		try {
+			java.io.File f = newFile(dir, "deadbeef.bin", 1_000L);
+			LocalLlmEngine.purgeKvScopeEntries(dir, null, "other.bin");
+			assertTrue(f.exists(), "with no scope there is nothing to group, so nothing is deleted");
+		}
+		finally {
+			for (java.io.File g : dir.listFiles()) {
+				g.delete();
+			}
+			dir.delete();
+		}
+	}
+
+	@Test
+	public void resolveKvCacheDir_shouldDefaultToAppdataSubdirWhenUnset() {
+		String dir = LocalLlmEngine.resolveKvCacheDir("", "/var/openmrs");
+		assertTrue(dir.replace('\\', '/').endsWith("/chartsearchai/kvcache"),
+				"an empty value must enable the cache at <appdata>/chartsearchai/kvcache, was: " + dir);
+		assertEquals(LocalLlmEngine.resolveKvCacheDir(null, "/var/openmrs"), dir,
+				"null and empty must resolve the same");
+	}
+
+	@Test
+	public void resolveKvCacheDir_shouldUseExplicitPathVerbatim() {
+		assertEquals("/mnt/fast/kv",
+				LocalLlmEngine.resolveKvCacheDir("  /mnt/fast/kv  ", "/var/openmrs"),
+				"an explicitly configured path must win over the appdata default");
+	}
+
+	@Test
+	public void resolveKvCacheDir_shouldTolerateNullAppDataForNonDefaultBranches() {
+		// The instance method resolves the appdata dir lazily (only for the empty/default branch),
+		// passing null otherwise. The explicit-path and disable-token branches must not touch it.
+		assertEquals("/mnt/fast/kv", LocalLlmEngine.resolveKvCacheDir("/mnt/fast/kv", null));
+		assertEquals(null, LocalLlmEngine.resolveKvCacheDir("off", null));
+	}
+
+	@Test
+	public void resolveKvCacheDir_shouldDisableOnDisableToken() {
+		for (String token : new String[] { "off", "OFF", "false", "none", "Disabled" }) {
+			assertEquals(null, LocalLlmEngine.resolveKvCacheDir(token, "/var/openmrs"),
+					"'" + token + "' must disable disk KV persistence (return null)");
+		}
+	}
+
+	@Test
+	public void evictOldestKvEntries_shouldDeleteOldestBeyondTheLimit() throws Exception {
+		java.io.File dir = java.nio.file.Files.createTempDirectory("kvcache-test").toFile();
+		try {
+			// Three .bin files with strictly increasing last-modified times, plus an unrelated file
+			// that must never be touched.
+			java.io.File oldest = newFile(dir, "a.bin", 1_000L);
+			java.io.File middle = newFile(dir, "b.bin", 2_000L);
+			java.io.File newest = newFile(dir, "c.bin", 3_000L);
+			java.io.File unrelated = newFile(dir, "notes.txt", 1L);
+
+			LocalLlmEngine.evictOldestKvEntries(dir, 2);
+
+			assertFalse(oldest.exists(), "the oldest .bin must be evicted when over the limit");
+			assertTrue(middle.exists(), "entries within the limit must be kept");
+			assertTrue(newest.exists(), "the newest entry must be kept");
+			assertTrue(unrelated.exists(), "non-.bin files must never be evicted");
+		}
+		finally {
+			for (java.io.File f : dir.listFiles()) {
+				f.delete();
+			}
+			dir.delete();
+		}
+	}
+
+	private static java.io.File newFile(java.io.File dir, String name, long lastModified) throws IOException {
+		java.io.File f = new java.io.File(dir, name);
+		java.nio.file.Files.write(f.toPath(), new byte[] { 1 });
+		f.setLastModified(lastModified);
+		return f;
+	}
+
+	@Test
+	public void serverNeedsRestart_shouldNotRestartWhenNothingChanged() {
+		assertFalse(LocalLlmEngine.serverNeedsRestart("/m.gguf", 32768, "/kv", "/m.gguf", 32768, "/kv"));
+	}
+
+	@Test
+	public void serverNeedsRestart_shouldRestartWhenKvCacheDirChanges() {
+		assertTrue(LocalLlmEngine.serverNeedsRestart("/m.gguf", 32768, "/kv", "/m.gguf", 32768, "/other"),
+				"a KV-cache directory change must relaunch the server with the new --slot-save-path");
+		assertTrue(LocalLlmEngine.serverNeedsRestart("/m.gguf", 32768, null, "/m.gguf", 32768, "/kv"),
+				"enabling the cache at runtime must relaunch with the flag");
+		assertTrue(LocalLlmEngine.serverNeedsRestart("/m.gguf", 32768, "/kv", "/m.gguf", 32768, null),
+				"disabling the cache at runtime must relaunch without the flag");
+	}
+
+	@Test
+	public void serverNeedsRestart_shouldNotLoopWhenDirCreationFailed() {
+		// Regression guard: on a mkdirs failure the effective --slot-save-path is nulled, but
+		// loadedKvCacheDir holds the INTENDED (configured) path. The restart decision compares that
+		// intended value against the same resolved value, so it must report "no restart" — comparing
+		// the nulled effective path instead would restart the server on every single call.
+		String configured = "/var/openmrs/chartsearchai/kvcache";
+		assertFalse(LocalLlmEngine.serverNeedsRestart("/m.gguf", 32768, configured,
+				"/m.gguf", 32768, configured),
+				"a one-time directory-creation failure must not cause a per-call restart loop");
+	}
+
+	@Test
+	public void serverNeedsRestart_shouldNotRestartBeforeAnythingLoaded() {
+		assertFalse(LocalLlmEngine.serverNeedsRestart(null, -1, null, "/m.gguf", 32768, "/kv"),
+				"with nothing loaded yet the initial start handles it, not a restart");
+	}
+
+	@Test
 	public void buildRequestBody_shouldEnableUsageWhenStreaming() throws IOException {
 		String body = engine.buildRequestBody("sys", "usr", true);
 		JsonNode root = MAPPER.readTree(body);

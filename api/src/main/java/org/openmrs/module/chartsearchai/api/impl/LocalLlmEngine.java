@@ -19,10 +19,15 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -36,6 +41,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.openmrs.api.APIException;
 import org.openmrs.api.context.Context;
+import org.openmrs.util.OpenmrsUtil;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.api.ChartTooLargeException;
@@ -91,6 +97,18 @@ public class LocalLlmEngine implements LlmEngine {
 	private String loadedModelPath;
 
 	private int loadedContextSize = -1;
+
+	/** The resolved KV-cache directory the running server was configured for (the
+	 *  {@link #resolveKvCacheDir()} value at launch; null when disabled). Used ONLY for the restart
+	 *  decision — it must reflect intent, not whether the directory could be created, otherwise a
+	 *  one-time {@code mkdirs} failure (effective path nulled below) would never equal the intended
+	 *  path and the server would restart on every call. */
+	private String loadedKvCacheDir;
+
+	/** The {@code --slot-save-path} the running server was actually launched with, or null when KV
+	 *  persistence is off OR the directory could not be created. Save/restore is gated on this, so a
+	 *  server running without the flag never attempts (and logs) doomed slot calls. */
+	private String loadedSlotSavePath;
 
 	private int serverPort;
 
@@ -213,7 +231,36 @@ public class LocalLlmEngine implements LlmEngine {
 
 	@Override
 	public synchronized void warmup(String systemPrompt, String userMessage, int timeoutSeconds) {
+		warmup(systemPrompt, userMessage, timeoutSeconds, null);
+	}
+
+	@Override
+	public synchronized void warmup(String systemPrompt, String userMessage, int timeoutSeconds,
+			String cacheScope) {
 		ensureServerRunning();
+
+		// Disk-persisted KV cache (on by default). When enabled, a patient's prefilled chart KV is
+		// restored from disk (I/O-bound, tens of ms) instead of recomputed (CPU-bound, tens of
+		// seconds to minutes on a GPU-less host). The key is the exact prompt prefix scoped by the
+		// patient UUID, so a restore only ever reuses the right patient's state; the restored KV is
+		// byte-for-byte what a fresh prefill would produce, so answer quality is unchanged. On a miss
+		// we prefill as before and then save, so the next visit (or the next process lifetime) is
+		// fast — and the save replaces this patient's previous entry so a changed chart leaves no
+		// orphan.
+		String cacheDir = loadedSlotSavePath;
+		// Bind the key to the model + context the server is actually running (set by
+		// ensureServerRunning above), so a KV saved under one model is never restored under
+		// another — including a model file replaced in place at the same path (a redeploy that
+		// ships a newer gguf into the preserved volume), which the path alone would not catch.
+		String discriminator = modelDiscriminator(loadedModelPath, loadedContextSize);
+		String cacheKey = cacheDir != null
+				? kvCacheKey(cacheScope, systemPrompt, userMessage, discriminator) : null;
+		if (cacheKey != null && new File(cacheDir, cacheKey).isFile()
+				&& restoreSlot(cacheKey, timeoutSeconds)) {
+			log.warn("Warmup restored KV cache from disk: {}", cacheKey);
+			resetIdleTimer();
+			return;
+		}
 
 		// max_tokens=1 forces llama-server to do the prompt prefill (loading the system+user
 		// message into the KV cache) without spending time on real generation. The prefix
@@ -242,6 +289,15 @@ public class LocalLlmEngine implements LlmEngine {
 			// the cached-token count is the only direct evidence the warmup primed the KV.
 			log.warn("Warmup primed KV cache: {} input ({} cached)",
 					result.getInputTokens(), result.getCachedTokens());
+			// Persist the freshly prefilled KV so the next visit to this patient (even after a
+			// server restart or an eviction by another patient's query) restores it from disk
+			// instead of paying the full prefill again. Drop this patient's previous entry first
+			// (a changed chart hashes to a new filename) so a stale version is never left behind,
+			// then apply the global count cap.
+			if (cacheKey != null && saveSlot(cacheKey, timeoutSeconds)) {
+				purgeKvScopeEntries(new File(cacheDir), cacheScope, cacheKey);
+				evictOldestKvEntries(new File(cacheDir), getKvCacheMaxEntries());
+			}
 			resetIdleTimer();
 		}
 		catch (IOException e) {
@@ -251,6 +307,217 @@ public class LocalLlmEngine implements LlmEngine {
 			Thread.currentThread().interrupt();
 			log.debug("Warmup interrupted");
 		}
+	}
+
+	/**
+	 * The model-identity discriminator folded into the KV-cache key: the model path, context size,
+	 * and the model file's length + last-modified time. Path alone is not enough — a redeploy can
+	 * ship a newer gguf at the SAME path into the preserved volume, and restoring KV produced by the
+	 * old weights into the new model would be silent corruption. Length+mtime change when the file
+	 * is replaced, so the key changes and the stale entry simply misses (then re-prefills). Tolerates
+	 * a null/missing model file (length and mtime read as 0) so it never throws on the warmup path.
+	 */
+	static String modelDiscriminator(String modelPath, int contextSize) {
+		long length = 0L;
+		long lastModified = 0L;
+		if (modelPath != null) {
+			File modelFile = new File(modelPath);
+			length = modelFile.length();
+			lastModified = modelFile.lastModified();
+		}
+		return modelPath + " " + contextSize + " " + length + " " + lastModified;
+	}
+
+	/**
+	 * The KV-cache filename for a prompt prefix: an optional {@code <scope>-} prefix followed by a
+	 * hex SHA-256 of {@code systemPrompt}, {@code userMessage}, and {@code discriminator}
+	 * (NUL-separated so the boundaries are unambiguous) plus {@code .bin}. The digest changes
+	 * whenever the system prompt or chart text changes, so a stale chart never restores the wrong
+	 * KV — a miss simply falls back to a fresh prefill. The {@code discriminator} carries the
+	 * model + context identity, so a KV produced under one model is never restored under another
+	 * (the operator-driven model A/B swap on {@code chartsearchai.llm.modelFilePath} would otherwise
+	 * match by prompt hash and risk loading mismatched KV). The {@code scope} (e.g. the patient
+	 * UUID, sanitized) groups a subject's entries so {@link #purgeKvScopeEntries} can drop the
+	 * previous one when the chart changes. The whole name is path-traversal safe for llama-server's
+	 * {@code --slot-save-path}.
+	 */
+	static String kvCacheKey(String scope, String systemPrompt, String userMessage,
+			String discriminator) {
+		try {
+			MessageDigest md = MessageDigest.getInstance("SHA-256");
+			md.update((systemPrompt == null ? "" : systemPrompt).getBytes(StandardCharsets.UTF_8));
+			md.update((byte) 0);
+			md.update((userMessage == null ? "" : userMessage).getBytes(StandardCharsets.UTF_8));
+			md.update((byte) 0);
+			md.update((discriminator == null ? "" : discriminator).getBytes(StandardCharsets.UTF_8));
+			byte[] digest = md.digest();
+			StringBuilder sb = new StringBuilder();
+			String prefix = sanitizeScope(scope);
+			if (!prefix.isEmpty()) {
+				sb.append(prefix).append('-');
+			}
+			for (byte b : digest) {
+				sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+				sb.append(Character.forDigit(b & 0xF, 16));
+			}
+			return sb.append(".bin").toString();
+		}
+		catch (NoSuchAlgorithmException e) {
+			// SHA-256 is mandated by the JLS; unreachable on any conformant JVM.
+			throw new APIException("SHA-256 unavailable for KV-cache key", e);
+		}
+	}
+
+	/**
+	 * Reduces a cache scope (e.g. a patient UUID) to a filename-safe token: characters outside
+	 * {@code [A-Za-z0-9_.-]} become {@code _}, capped at 64 chars. Returns "" for null/blank, which
+	 * yields a scope-less (hash-only) filename. UUIDs pass through unchanged.
+	 */
+	static String sanitizeScope(String scope) {
+		if (scope == null) {
+			return "";
+		}
+		String trimmed = scope.trim();
+		if (trimmed.isEmpty()) {
+			return "";
+		}
+		String cleaned = trimmed.replaceAll("[^A-Za-z0-9_.-]", "_");
+		return cleaned.length() > 64 ? cleaned.substring(0, 64) : cleaned;
+	}
+
+	/**
+	 * Deletes every persisted KV file for {@code scope} except {@code keepFilename} — the subject's
+	 * now-current entry. Called after a save so a changed chart (which hashes to a new filename)
+	 * does not leave the previous version as an orphan. A no-op when {@code scope} is null/blank,
+	 * since scope-less entries cannot be grouped.
+	 */
+	static void purgeKvScopeEntries(File dir, String scope, String keepFilename) {
+		String prefix = sanitizeScope(scope);
+		if (prefix.isEmpty()) {
+			return;
+		}
+		String match = prefix + "-";
+		File[] files = dir.listFiles((d, name) ->
+				name.startsWith(match) && name.endsWith(".bin") && !name.equals(keepFilename));
+		if (files == null) {
+			return;
+		}
+		for (File f : files) {
+			if (!f.delete()) {
+				log.warn("Could not delete superseded KV-cache file {}", f);
+			}
+		}
+	}
+
+	/**
+	 * Keeps at most {@code maxEntries} {@code .bin} files in {@code dir}, deleting the oldest (by
+	 * last-modified time) first. Each persisted KV file is large (proportional to the chart's token
+	 * count), so this bounds disk use. Non-{@code .bin} files are never touched.
+	 */
+	static void evictOldestKvEntries(File dir, int maxEntries) {
+		File[] files = dir.listFiles((d, name) -> name.endsWith(".bin"));
+		if (files == null || files.length <= maxEntries) {
+			return;
+		}
+		Arrays.sort(files, Comparator.comparingLong(File::lastModified));
+		for (int i = 0; i < files.length - maxEntries; i++) {
+			if (!files[i].delete()) {
+				log.warn("Could not evict stale KV-cache file {}", files[i]);
+			}
+		}
+	}
+
+	/** POSTs a {@code /slots/0} save/restore action, returning true on a 2xx response. The slot id
+	 *  is fixed at 0 because the server runs {@code --parallel 1}. Failures (missing file, disabled
+	 *  endpoint, I/O) are logged and treated as a miss so warmup degrades to a plain prefill. */
+	private boolean slotAction(String action, String filename, int timeoutSeconds) {
+		String url = "http://127.0.0.1:" + serverPort + "/slots/0?action=" + action;
+		ObjectNode body = MAPPER.createObjectNode();
+		body.put("filename", filename);
+		try {
+			HttpRequest request = HttpRequest.newBuilder()
+					.uri(URI.create(url))
+					.timeout(Duration.ofSeconds(timeoutSeconds))
+					.header("Content-Type", "application/json")
+					.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body),
+							StandardCharsets.UTF_8))
+					.build();
+			HttpResponse<String> response = getHttpClient().send(request,
+					HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+			if (response.statusCode() >= 200 && response.statusCode() < 300) {
+				return true;
+			}
+			log.warn("KV-cache slot {} returned HTTP {}: {}", action, response.statusCode(),
+					truncate(response.body()));
+			return false;
+		}
+		catch (IOException e) {
+			log.warn("KV-cache slot {} failed: {}", action, e.getMessage());
+			return false;
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			return false;
+		}
+	}
+
+	private boolean restoreSlot(String filename, int timeoutSeconds) {
+		return slotAction("restore", filename, timeoutSeconds);
+	}
+
+	private boolean saveSlot(String filename, int timeoutSeconds) {
+		return slotAction("save", filename, timeoutSeconds);
+	}
+
+	/** The effective KV-cache directory, or null when disk KV persistence is disabled. Read on the
+	 *  request/daemon thread; {@link #loadedSlotSavePath} caches what the running server was actually
+	 *  launched with. */
+	String resolveKvCacheDir() {
+		String value = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_KV_CACHE_DIR);
+		// Only the default (empty) branch needs the application-data directory, and resolving it
+		// touches the filesystem; skip that work for explicit-path and disable-token deployments,
+		// since ensureServerRunning calls this on every request.
+		boolean usesAppData = value == null || value.trim().isEmpty();
+		return resolveKvCacheDir(value,
+				usesAppData ? OpenmrsUtil.getApplicationDataDirectory() : null);
+	}
+
+	/**
+	 * Pure resolution of the configured {@link ChartSearchAiConstants#GP_LLM_KV_CACHE_DIR} value
+	 * against the application-data directory. Disk KV persistence is ON by default: an empty/unset
+	 * value resolves to {@code <appdata>/chartsearchai/kvcache}. An explicit path is used verbatim.
+	 * A disable token ({@code off}/{@code false}/{@code none}/{@code disabled}, case-insensitive)
+	 * turns the feature off (returns null) — the escape hatch for hosts where the on-disk KV files
+	 * (which contain the model's encoding of the chart) or their disk footprint are unwanted.
+	 */
+	static String resolveKvCacheDir(String gpValue, String appDataDir) {
+		String value = gpValue == null ? "" : gpValue.trim();
+		if (value.isEmpty()) {
+			return new File(appDataDir, "chartsearchai/kvcache").getAbsolutePath();
+		}
+		if (value.equalsIgnoreCase("off") || value.equalsIgnoreCase("false")
+				|| value.equalsIgnoreCase("none") || value.equalsIgnoreCase("disabled")) {
+			return null;
+		}
+		return value;
+	}
+
+	int getKvCacheMaxEntries() {
+		String value = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_KV_CACHE_MAX_ENTRIES);
+		if (value != null && !value.trim().isEmpty()) {
+			try {
+				int parsed = Integer.parseInt(value.trim());
+				if (parsed > 0) {
+					return parsed;
+				}
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid KV-cache max entries '{}', using default", value);
+			}
+		}
+		return ChartSearchAiConstants.DEFAULT_LLM_KV_CACHE_MAX_ENTRIES;
 	}
 
 	@Override
@@ -271,16 +538,21 @@ public class LocalLlmEngine implements LlmEngine {
 	private void ensureServerRunning() {
 		String modelPath = resolveModelPath();
 		int currentContextSize = getContextSize();
+		// The CONFIGURED (intended) directory, not the effective --slot-save-path. The restart
+		// decision must compare intent so a one-time mkdirs failure (which nulls the effective path)
+		// does not differ on every call and loop. Do not swap this for loadedSlotSavePath.
+		String configuredKvCacheDir = resolveKvCacheDir();
 
 		if (serverProcess != null && serverProcess.isAlive()
-				&& !shouldRestartServer(loadedModelPath, loadedContextSize,
-						modelPath, currentContextSize)) {
+				&& !serverNeedsRestart(loadedModelPath, loadedContextSize, loadedKvCacheDir,
+						modelPath, currentContextSize, configuredKvCacheDir)) {
 			return;
 		}
 
 		if (serverProcess != null && serverProcess.isAlive()) {
-			log.info("LLM config changed (model {}→{}, ctx {}→{}), restarting server",
-					loadedModelPath, modelPath, loadedContextSize, currentContextSize);
+			log.info("LLM config changed (model {}→{}, ctx {}→{}, kvCacheDir {}→{}), restarting server",
+					loadedModelPath, modelPath, loadedContextSize, currentContextSize,
+					loadedKvCacheDir, configuredKvCacheDir);
 			stopServer();
 		}
 
@@ -299,6 +571,23 @@ public class LocalLlmEngine implements LlmEngine {
 			return false;
 		}
 		return !loadedPath.equals(currentPath) || loadedCtx != currentCtx;
+	}
+
+	/**
+	 * Whether a running server must restart, factoring in the KV-cache directory alongside model
+	 * path and context size. The {@code loadedKvCacheDir} argument is the CONFIGURED (intended)
+	 * directory the server was started for, NOT the effective path that {@code mkdirs} may have
+	 * nulled — comparing the effective path here would make a one-time directory-creation failure
+	 * differ from the intended value on every subsequent call and restart the server in a loop.
+	 * Returns false when nothing is loaded yet (the caller handles the initial start).
+	 */
+	static boolean serverNeedsRestart(String loadedModel, int loadedCtx, String loadedKvCacheDir,
+			String currentModel, int currentCtx, String currentKvCacheDir) {
+		if (loadedModel == null) {
+			return false;
+		}
+		return shouldRestartServer(loadedModel, loadedCtx, currentModel, currentCtx)
+				|| !Objects.equals(loadedKvCacheDir, currentKvCacheDir);
 	}
 
 	/**
@@ -342,6 +631,18 @@ public class LocalLlmEngine implements LlmEngine {
 	 */
 	static List<String> buildServerCommand(String binaryPath, String modelPath, int port,
 			int contextSize) {
+		return buildServerCommand(binaryPath, modelPath, port, contextSize, null);
+	}
+
+	/**
+	 * As {@link #buildServerCommand(String, String, int, int)} but, when {@code slotSavePath} is
+	 * non-blank, adds {@code --slot-save-path} so llama-server can persist a slot's KV cache to disk
+	 * and restore it later. Restoring a patient's prefilled chart KV from disk is I/O-bound (tens of
+	 * ms) versus re-running the full prefill, which on a GPU-less host is tens of seconds to minutes;
+	 * see {@link #warmup}.
+	 */
+	static List<String> buildServerCommand(String binaryPath, String modelPath, int port,
+			int contextSize, String slotSavePath) {
 		List<String> cmd = new ArrayList<>();
 		cmd.add(binaryPath);
 		cmd.add("-m");
@@ -365,6 +666,10 @@ public class LocalLlmEngine implements LlmEngine {
 		cmd.add("0");
 		cmd.add("--reasoning-budget");
 		cmd.add("0");
+		if (slotSavePath != null && !slotSavePath.trim().isEmpty()) {
+			cmd.add("--slot-save-path");
+			cmd.add(slotSavePath.trim());
+		}
 		cmd.add("--log-disable");
 		return cmd;
 	}
@@ -373,8 +678,24 @@ public class LocalLlmEngine implements LlmEngine {
 		String serverBinaryPath = LlamaServerBinary.resolve();
 		serverPort = getServerPort();
 
+		// The intended (configured) directory drives the restart decision; the effective path is
+		// what we actually launch with — nulled if the directory can't be created, so save/restore
+		// is skipped without forcing a per-call restart (the two must not be conflated).
+		String configuredKvCacheDir = resolveKvCacheDir();
+		String slotSavePath = configuredKvCacheDir;
+		if (slotSavePath != null) {
+			// llama-server's --slot-save-path requires the directory to exist; create it up front
+			// so the first save does not fail on a fresh install.
+			File dir = new File(slotSavePath);
+			if (!dir.isDirectory() && !dir.mkdirs()) {
+				log.warn("Could not create KV-cache directory {}; disabling disk KV persistence "
+						+ "for this server start", slotSavePath);
+				slotSavePath = null;
+			}
+		}
+
 		List<String> command = buildServerCommand(serverBinaryPath, modelPath, serverPort,
-				getContextSize());
+				getContextSize(), slotSavePath);
 
 		log.info("Starting llama-server on port {} with model {}", serverPort, modelPath);
 
@@ -408,6 +729,8 @@ public class LocalLlmEngine implements LlmEngine {
 			waitForServerReady();
 			loadedModelPath = modelPath;
 			loadedContextSize = getContextSize();
+			loadedKvCacheDir = configuredKvCacheDir;
+			loadedSlotSavePath = slotSavePath;
 			log.info("llama-server started successfully on port {}", serverPort);
 		}
 		catch (IOException e) {
@@ -476,6 +799,8 @@ public class LocalLlmEngine implements LlmEngine {
 			serverProcess = null;
 			loadedModelPath = null;
 			loadedContextSize = -1;
+			loadedKvCacheDir = null;
+			loadedSlotSavePath = null;
 		}
 		httpClient = null;
 	}

@@ -271,6 +271,31 @@ public class ChartSearchAiConstants {
 
 	public static final int DEFAULT_LLM_MAX_OUTPUT_TOKENS = 4096;
 
+	/**
+	 * Directory where the local engine persists each patient's prefilled KV cache (one file per
+	 * distinct chart prefix). When set, llama-server is launched with {@code --slot-save-path} and
+	 * {@link org.openmrs.module.chartsearchai.api.impl.LocalLlmEngine#warmup} restores a patient's
+	 * KV from disk (I/O-bound, ~tens of ms) instead of re-running the full chart prefill (CPU-bound,
+	 * tens of seconds to minutes on a GPU-less host). The restored state is byte-for-byte what a
+	 * fresh prefill would have produced, so answer quality is unchanged. Enabled by default: an
+	 * empty/unset value resolves to {@code <appdata>/chartsearchai/kvcache}. Set an explicit path to
+	 * relocate it (e.g. to faster or larger storage), or a disable token
+	 * ({@code off}/{@code false}/{@code none}/{@code disabled}) to turn it off — the escape hatch for
+	 * hosts that do not want the on-disk KV files (which contain the model's encoding of the chart)
+	 * or their disk footprint. See {@link org.openmrs.module.chartsearchai.api.impl.LocalLlmEngine#resolveKvCacheDir(String, String)}.
+	 */
+	public static final String GP_LLM_KV_CACHE_DIR = "chartsearchai.llm.kvCacheDir";
+
+	/**
+	 * Maximum number of persisted KV-cache files to retain in {@link #GP_LLM_KV_CACHE_DIR}. Each
+	 * file is large (tens to a few hundred MB, proportional to the chart's token count), so the
+	 * oldest entries are evicted (by last-modified time) once this many exist. Only consulted when
+	 * the cache directory is configured.
+	 */
+	public static final String GP_LLM_KV_CACHE_MAX_ENTRIES = "chartsearchai.llm.kvCacheMaxEntries";
+
+	public static final int DEFAULT_LLM_KV_CACHE_MAX_ENTRIES = 16;
+
 	public static final String GP_RATE_LIMIT_PER_MINUTE = "chartsearchai.rateLimitPerMinute";
 
 	public static final int DEFAULT_RATE_LIMIT_PER_MINUTE = 10;

@@ -223,6 +223,15 @@ public class LlmInferenceServiceWarmupIntegrationTest {
 			warmupCalled = true;
 		}
 
+		// Production warms via the scope-aware overload (it passes the patient UUID so the local
+		// engine can group a patient's on-disk KV entries). Record that call too, so this wiring
+		// lock keeps asserting the same thing — warmup fires when the gates are favorable — rather
+		// than falling through to the real LlmProvider (which would read GPs off a missing context).
+		@Override
+		public void warmup(String numberedRecords, String cacheScope) {
+			warmupCalled = true;
+		}
+
 		@Override
 		public boolean supportsWarmup() {
 			supportsWarmupCalls++;

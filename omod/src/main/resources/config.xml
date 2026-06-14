@@ -108,6 +108,18 @@
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.llm.kvCacheDir</property>
+		<defaultValue></defaultValue>
+		<description>Directory where the local engine persists each patient's prefilled chart KV cache to disk (one file per distinct chart prefix), via llama-server's --slot-save-path. The warmup that fires on chart-open restores a patient's KV from disk (I/O-bound, tens of ms) instead of recomputing the full chart prefill (CPU-bound, tens of seconds to minutes on a GPU-less host) — turning the slow first query on a patient into a fast one, and surviving llama-server restarts and single-slot evictions that the in-RAM prompt cache does not. The restored KV is byte-for-byte what a fresh prefill produces, so answer quality is unchanged (verified: identical answers and citations on the standalone). The first-ever visit to a patient still pays one prefill (to create the file). ENABLED BY DEFAULT: an empty value resolves to &lt;appdata&gt;/chartsearchai/kvcache. Set an explicit path to relocate it onto faster or larger storage, or set it to "off" (or false/none/disabled) to turn the feature off — do that on hosts where the on-disk KV files (which contain the model's encoding of the patient chart) or their disk footprint are unwanted. Only applies when chartsearchai.llm.engine is "local". Each file is large (tens to a few hundred MB, proportional to the chart's token count) — see chartsearchai.llm.kvCacheMaxEntries for the disk cap, and prefer fast local storage.</description>
+	</globalProperty>
+
+	<globalProperty>
+		<property>chartsearchai.llm.kvCacheMaxEntries</property>
+		<defaultValue>16</defaultValue>
+		<description>Maximum number of persisted KV-cache files to keep in chartsearchai.llm.kvCacheDir. The oldest (by last-modified time) are evicted once this many exist, bounding disk use. Only consulted when the cache directory is configured.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.llm.reasoningMaxChars</property>
 		<defaultValue>0</defaultValue>
 		<description>When greater than 0, caps the model's "reasoning" scratchpad at this many characters via a grammar-enforced maxLength in the chart-answer schema. The reasoning phase is the dominant decode cost on CPU-only servers (3-27 seconds of thinking before any answer text); capping it bounds that cost. The answer itself is never capped. 0 (default) leaves the schema exactly as before. IMPORTANT: truncating the model's chain of thought can change its answers — only enable a value that has cleared the 32-cell answer-quality gold standard (eval/drift-metric/metric_gold.standalone.json) with no regression in mean F1, abstention accuracy, or off-topic citations versus the uncapped baseline. Measured 2026-06-12: Gemma 4 E2B at 400 FAILED that gate on all three axes (meanF1 0.464 to 0.428, abstention 1.00 to 0.91, off-topic citations 41 to 47) — no certified value exists; leave at 0 unless a fresh gate run for your model and value passes.</description>

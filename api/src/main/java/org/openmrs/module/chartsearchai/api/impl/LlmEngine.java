@@ -73,6 +73,19 @@ public interface LlmEngine {
 	void warmup(String systemPrompt, String userMessage, int timeoutSeconds);
 
 	/**
+	 * As {@link #warmup(String, String, int)} but with a {@code cacheScope} (e.g. the patient
+	 * UUID) that identifies which on-disk KV-cache entries belong together, so an engine that
+	 * persists KV to disk can replace a patient's stale entry when their chart changes instead of
+	 * leaving orphans. The default ignores the scope and delegates to the 3-arg form, so engines
+	 * that don't persist KV (and existing callers/tests) are unaffected.
+	 *
+	 * @param cacheScope a stable per-subject key for grouping persisted entries, or null
+	 */
+	default void warmup(String systemPrompt, String userMessage, int timeoutSeconds, String cacheScope) {
+		warmup(systemPrompt, userMessage, timeoutSeconds);
+	}
+
+	/**
 	 * Whether this engine benefits from a warmup call. Used by callers to decide
 	 * whether to pay any pre-warmup work (chart serialization, etc.).
 	 */

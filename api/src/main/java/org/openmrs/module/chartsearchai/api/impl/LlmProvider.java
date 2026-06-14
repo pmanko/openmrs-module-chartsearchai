@@ -583,10 +583,19 @@ public class LlmProvider {
 	 * the byte-prefix contract that lets llama-server reuse the cached tokens.
 	 */
 	public void warmup(String numberedRecords) {
+		warmup(numberedRecords, null);
+	}
+
+	/**
+	 * Scope-aware variant of {@link #warmup(String)}. The {@code cacheScope} (e.g. the patient
+	 * UUID) lets an engine that persists its prompt cache to disk group a subject's entries, so a
+	 * changed chart replaces the subject's stale entry rather than orphaning it.
+	 */
+	public void warmup(String numberedRecords, String cacheScope) {
 		String systemPrompt = getSystemPrompt();
 		String userMessage = buildUserMessage(numberedRecords, "");
 		int timeoutSeconds = getTimeoutSeconds();
-		getActiveEngine().warmup(systemPrompt, userMessage, timeoutSeconds);
+		getActiveEngine().warmup(systemPrompt, userMessage, timeoutSeconds, cacheScope);
 	}
 
 	/**

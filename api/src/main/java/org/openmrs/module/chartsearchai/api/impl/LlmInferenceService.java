@@ -192,7 +192,10 @@ public class LlmInferenceService implements ChartSearchService {
 			return;
 		}
 		PatientChart chart = chartBuildingStrategy.buildChart(patient, "");
-		llmProvider.warmup(chartTextOrPlaceholder(chart));
+		// Pass the patient UUID as the KV-cache scope so the local engine can replace this patient's
+		// stale on-disk entry when their chart changes, instead of leaving an orphan per chart version.
+		llmProvider.warmup(chartTextOrPlaceholder(chart),
+				patient == null ? null : patient.getUuid());
 	}
 
 	/** Test seam wrapping the static {@link #isWarmupEnabled()}; production delegates,
