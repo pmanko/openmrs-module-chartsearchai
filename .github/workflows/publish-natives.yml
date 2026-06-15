@@ -143,7 +143,12 @@ jobs:
             if [ -f "$c" ]; then BIN="$c"; break; fi
           done
           [ -n "$BIN" ] || { echo "ERROR: built binary not found"; exit 1; }
-          MATCHES=$(LC_ALL=C grep -a -o -i -E "libssl|libcrypto|msvcp140|vcruntime140|vcomp140|libgomp|libomp" "$BIN" | sort -u || true)
+          # These names only appear in the binary as DYNAMIC imports given our flags (OpenSSL
+          # off -> no libssl/libcrypto strings; static CRT -> no msvcp140/vcruntime140; vcomp140
+          # is DLL-only, never static). Do NOT add libgomp/libomp: GGML statically links OpenMP
+          # on Linux, so those appear as static-link strings with no runtime dep and would
+          # false-fail the self-contained Linux binary. vcomp140 already covers Windows OpenMP.
+          MATCHES=$(LC_ALL=C grep -a -o -i -E "libssl|libcrypto|msvcp140|vcruntime140|vcomp140" "$BIN" | sort -u || true)
           if [ -n "$MATCHES" ]; then
             echo "ERROR: $BIN links non-bundled runtime dependencies:"
             echo "$MATCHES"
