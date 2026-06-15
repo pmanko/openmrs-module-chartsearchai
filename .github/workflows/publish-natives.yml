@@ -126,6 +126,27 @@ jobs:
             -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           cmake --build build --config Release --target llama-server
 
+      # Guard against silent regression: we ship only the binary (no sibling libs), so it
+      # must not dynamically link OpenSSL, the MSVC runtime, or OpenMP - those are absent
+      # on a clean host and crash at startup (this is exactly the bug that broke the
+      # Windows/macOS downloads). Those library names appear in the import table only when
+      # actually linked, and never in help/version text, so a portable byte grep over the
+      # binary is a reliable cross-OS denylist (no objdump/otool/dumpbin needed). Verified
+      # to match the pre-fix binaries and pass the self-contained ones.
+      - name: Verify the binary is self-contained
+        shell: bash
+        run: |
+          BIN=$(ls build/bin/${{ matrix.binary }} build/bin/Release/${{ matrix.binary }} 2>/dev/null | head -1)
+          [ -n "$BIN" ] || { echo "ERROR: built binary not found"; exit 1; }
+          MATCHES=$(LC_ALL=C grep -a -o -i -E "libssl|libcrypto|msvcp140|vcruntime140|vcomp140|libgomp|libomp" "$BIN" | sort -u || true)
+          if [ -n "$MATCHES" ]; then
+            echo "ERROR: $BIN links non-bundled runtime dependencies:"
+            echo "$MATCHES"
+            echo "Add the missing cmake flag to this leg (LLAMA_OPENSSL=OFF / GGML_OPENMP=OFF / CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded)."
+            exit 1
+          fi
+          echo "OK: $BIN is self-contained (no OpenSSL / MSVC-runtime / OpenMP)."
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
