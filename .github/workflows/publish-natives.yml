@@ -136,7 +136,12 @@ jobs:
       - name: Verify the binary is self-contained
         shell: bash
         run: |
-          BIN=$(ls build/bin/${{ matrix.binary }} build/bin/Release/${{ matrix.binary }} 2>/dev/null | head -1)
+          # Find the binary without tripping `set -e -o pipefail`: `ls a b` where one path is
+          # absent returns non-zero, which pipefail+errexit would turn into a step abort.
+          BIN=""
+          for c in "build/bin/${{ matrix.binary }}" "build/bin/Release/${{ matrix.binary }}"; do
+            if [ -f "$c" ]; then BIN="$c"; break; fi
+          done
           [ -n "$BIN" ] || { echo "ERROR: built binary not found"; exit 1; }
           MATCHES=$(LC_ALL=C grep -a -o -i -E "libssl|libcrypto|msvcp140|vcruntime140|vcomp140|libgomp|libomp" "$BIN" | sort -u || true)
           if [ -n "$MATCHES" ]; then
