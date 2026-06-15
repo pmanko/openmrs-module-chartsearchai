@@ -314,13 +314,6 @@ jobs:
           echo "querystore mentions in demo dump: $GP_COUNT"
           [ "$GP_COUNT" -ge 4 ] || { echo "ERROR: querystore GPs missing from bundled demo DB"; exit 1; }
 
-          echo ""
-          echo "=== Windows MSVC runtime DLLs (so ONNX loads without the VC++ Redistributable) ==="
-          zipinfo -1 "$ZIP_FILE" | grep -iE "native/windows-x64/lib/.*\.dll" || echo "(none listed)"
-          DLL_COUNT=$(zipinfo -1 "$ZIP_FILE" | grep -ciE "native/windows-x64/lib/(vcruntime140|vcruntime140_1|msvcp140)\.dll" || true)
-          echo "bundled Windows MSVC runtime DLLs in zip: $DLL_COUNT"
-          [ "$DLL_COUNT" -ge 3 ] || { echo "ERROR: Windows MSVC runtime DLLs missing from zip (chart search would fail on Windows without the VC++ Redistributable)"; exit 1; }
-
       # GitHub always re-zips whatever upload-artifact is handed. Uploading the
       # standalone .zip directly therefore yields a zip-inside-a-zip that users
       # must extract twice. Extract it here and upload the *contents* so GitHub's

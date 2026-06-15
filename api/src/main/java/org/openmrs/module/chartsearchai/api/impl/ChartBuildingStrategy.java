@@ -97,20 +97,7 @@ class ChartBuildingStrategy {
 
 	PatientChart buildChart(Patient patient, String question) {
 		if (ChartSearchAiUtils.isQueryStoreEnabled()) {
-			try {
-				return queryStoreChartBuilder.build(patient, question);
-			}
-			catch (Exception | LinkageError e) {
-				// Querystore retrieval needs the ONNX embedder, which on some hosts cannot
-				// initialize - notably Windows, where onnxruntime's native lib requires a newer
-				// MSVC runtime than the JDK bundles, so OrtEnvironment fails class-init with
-				// NoClassDefFoundError / UnsatisfiedLinkError (a LinkageError, not an Exception).
-				// Degrade to the full chart rather than failing every query; querystore is still
-				// used on every host where the embedder loads. Mirrors the other fall-backs below.
-				log.error("Querystore chart build failed for patient [id={}]; falling back to full chart",
-						patient.getPatientId(), e);
-				return chartSerializer.serialize(patient);
-			}
+			return queryStoreChartBuilder.build(patient, question);
 		}
 
 		// Legacy full-chart path (querystore disabled, preFilter disabled): serialize the patient
