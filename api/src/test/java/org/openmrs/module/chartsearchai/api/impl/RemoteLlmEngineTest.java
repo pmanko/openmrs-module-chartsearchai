@@ -121,8 +121,7 @@ public class RemoteLlmEngineTest {
 		assertEquals("array", properties.get("blocks").get("type").asText());
 
 		JsonNode required = schema.get("required");
-		assertEquals(3, required.size(), "reasoning, answer and citations are all required");
-		assertEquals(3, required.size(), "expected answer + citations + blocks required");
+		assertEquals(4, required.size(), "reasoning, answer, citations and blocks are all required");
 	}
 
 	@Test

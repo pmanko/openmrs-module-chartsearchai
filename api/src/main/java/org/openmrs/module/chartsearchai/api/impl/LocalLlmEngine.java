@@ -922,10 +922,14 @@ public class LocalLlmEngine implements LlmEngine {
 	String buildRequestBody(String systemPrompt, String userMessage, boolean stream,
 			int maxTokens, ObjectNode responseFormat) {
 		return buildRequestBody(ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage),
-				stream, maxTokens);
+				stream, maxTokens, responseFormat);
 	}
 
 	String buildRequestBody(ArrayNode messages, boolean stream, int maxTokens) {
+		return buildRequestBody(messages, stream, maxTokens, ChartAnswerResponseFormat.build(MAPPER));
+	}
+
+	String buildRequestBody(ArrayNode messages, boolean stream, int maxTokens, ObjectNode responseFormat) {
 		ObjectNode root = MAPPER.createObjectNode();
 		root.put("temperature", 0.0);
 		root.put("max_tokens", maxTokens);
@@ -972,7 +976,7 @@ public class LocalLlmEngine implements LlmEngine {
 			root.set("stream_options", streamOptions);
 		}
 
-		root.set("response_format", ChartAnswerResponseFormat.build(MAPPER));
+		root.set("response_format", responseFormat != null ? responseFormat : ChartAnswerResponseFormat.build(MAPPER));
 		root.set("messages", messages);
 
 		try {
