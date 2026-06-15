@@ -27,7 +27,7 @@ jobs:
             # Disable native auto-detect and pin a baseline so the binary runs on
             # older M-series chips and on virtualised ARM CPUs (e.g. Docker on Mac
             # doesn't expose every extension the runner's M-series supports).
-            cmake_extra: '-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a'
+            cmake_extra: '-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a -DLLAMA_OPENSSL=OFF'
           - os: macos-14
             platform: Mac
             arch: x86_64
@@ -37,7 +37,10 @@ jobs:
             platform: Linux
             arch: x86_64
             binary: llama-server
-            cmake_extra: ''
+            # We ship only the binary (no sibling libs), so don't link OpenSSL - it
+            # isn't needed for local inference and libssl.so.3/libcrypto.so.3 would be
+            # missing on minimal hosts. (Matches every other leg; see the Windows x64 note.)
+            cmake_extra: '-DLLAMA_OPENSSL=OFF'
           - os: ubuntu-22.04-arm
             platform: Linux
             arch: aarch64
@@ -45,7 +48,7 @@ jobs:
             # GitHub's ARM runners are Neoverse-class with SVE/SVE2; Apple Silicon
             # under Docker does not expose those. Disable native auto-detect and
             # pin armv8.2-a so the binary runs on any reasonable aarch64 host.
-            cmake_extra: '-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a'
+            cmake_extra: '-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a -DLLAMA_OPENSSL=OFF'
           - os: windows-2022
             platform: Windows
             arch: x86_64
