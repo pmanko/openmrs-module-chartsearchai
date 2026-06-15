@@ -8,18 +8,15 @@ For project background, community discussion, and roadmap, see the [wiki project
 
 The standalone download above includes the backend module, frontend ESM, and the following AI models — ready to run:
 
-> **macOS note:** if a downloaded build fails to start with a `libpcre2` dyld error, run `xattr -dr com.apple.quarantine <extracted-directory>` once and retry. Current builds handle this automatically at launcher startup, rebuild the patient search index on first run, and land directly on the login page — all verified end-to-end against a quarantined download.
-
-> **Windows note:** run the standalone with a JDK whose bundled MSVC runtime is **≥ 14.40** (Visual Studio 2022 17.10+) — [**Microsoft Build of OpenJDK 21.0.8+**](https://learn.microsoft.com/en-us/java/openjdk/download) (recommended), a current [**Eclipse Temurin 21**](https://adoptium.net/temurin/releases/?version=21), or **Azul Zulu**. The local ONNX embedder (querystore retrieval) is compiled against that runtime; an older JDK — **Oracle JDK in particular ships an outdated `msvcp140.dll` and fails even at 21/24** — makes ONNX fail to initialize (`onnxruntime.dll: A dynamic link library (DLL) initialization routine failed`) and chart queries error out. Check yours with `java -version` (vendor matters more than the number). See [onnxruntime#24287](https://github.com/microsoft/onnxruntime/issues/24287).
-
-> **Intel (x86_64) Mac note:** Apple Silicon Macs run the bundled database out of the box. Intel Macs have no bundled MariaDB (no maintained x86_64 macOS build exists), so install one first with `brew install mariadb`; the standalone then uses it automatically.
-
 - **LLM**: [Gemma 4 E4B Instruct (Q4_K_M)](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF) — ~5 GB, the module's default model, for answering clinical questions. (A larger Gemma 4 26B MoE bundle can be built via the workflow's `gguf_model_url` input.)
 - **Retrieval + embedding**: the [querystore module](https://github.com/openmrs/openmrs-module-querystore) with [e5-base-v2](https://huggingface.co/intfloat/e5-base-v2) (~440 MB ONNX) — the recommended hybrid retrieval path, pre-enabled (`chartsearchai.querystore.enabled=true`, Lucene backend). The module's own optional pre-filter embedder (all-MiniLM-L6-v2) is not bundled; see the `chartsearchai.embedding.modelFilePath` property description if you enable `chartsearchai.embedding.preFilter`.
+
+> **Before running the download, see [Standalone platform notes](#standalone-platform-notes)** — in particular the **Windows JDK requirement** (the local embedder won't load on an old or Oracle JDK).
 
 ## Table of Contents
 
 - [Try it on the demo server](#try-it-on-the-demo-server)
+- [Standalone platform notes](#standalone-platform-notes)
 - [Requirements](#requirements)
 - [Docker](#docker)
 - [Setup](#setup)
@@ -66,6 +63,14 @@ Notes:
 - The launch surface is configurable via the frontend `chatLaunchMode` setting: `floating` (the bottom-right circular button used above), `workspace` (an icon in the top-right workspace strip that opens the chat as a docked workspace), or `both` (default).
 - First-query latency on the demo reflects the remote provider's cold-start. The chart-open prompt-cache warmup (`chartsearchai.warmupEnabled`) is a no-op for remote engines — it only helps local llama-server deployments.
 - The demo currently calls a remote LLM, since the server doesn't yet have the RAM and CPU headroom to comfortably run a local model like Gemma 4 E4B; latency on the demo therefore reflects the remote provider, not local CPU inference.
+
+## Standalone platform notes
+
+Per-platform setup for the [downloaded standalone](#chart-search-ai-module) (Java 21+ required; see the Windows note for *which* JDK):
+
+- **Windows:** run it with a JDK whose bundled MSVC runtime is **≥ 14.40** (Visual Studio 2022 17.10+) — [**Microsoft Build of OpenJDK 21.0.8+**](https://learn.microsoft.com/en-us/java/openjdk/download) (recommended), a current [**Eclipse Temurin 21**](https://adoptium.net/temurin/releases/?version=21), or **Azul Zulu**. The local ONNX embedder (querystore retrieval) is compiled against that runtime; an older JDK — **Oracle JDK in particular ships an outdated `msvcp140.dll` and fails even at 21/24** — makes ONNX fail to initialize (`onnxruntime.dll: A dynamic link library (DLL) initialization routine failed`) and chart queries error out. Check yours with `java -version` (vendor matters more than the number). See [onnxruntime#24287](https://github.com/microsoft/onnxruntime/issues/24287).
+- **macOS:** if a downloaded build fails to start with a `libpcre2` dyld error, run `xattr -dr com.apple.quarantine <extracted-directory>` once and retry. Current builds handle this automatically at launcher startup, rebuild the patient search index on first run, and land directly on the login page — all verified end-to-end against a quarantined download.
+- **Intel (x86_64) Mac:** Apple Silicon Macs run the bundled database out of the box. Intel Macs have no bundled MariaDB (no maintained x86_64 macOS build exists), so install one first with `brew install mariadb`; the standalone then uses it automatically.
 
 ## Requirements
 
