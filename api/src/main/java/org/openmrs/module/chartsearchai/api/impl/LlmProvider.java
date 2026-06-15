@@ -48,7 +48,6 @@ public class LlmProvider {
 	 *  DEFAULT_SYSTEM_PROMPT few-shot so the demonstration always mirrors the real prompt
 	 *  shape — if they drift, the few-shot stops teaching the format the model actually sees. */
 	static final String FOCUS_HINT_LABEL = "Records ranked by similarity to the query: ";
-	private static final ObjectMapper MAPPER = new ObjectMapper();
 	static final String DEFAULT_SYSTEM_PROMPT = "You are a clinical assistant helping a clinician "
 			+ "review a patient's chart. Answer ONLY the specific query. "
 			+ "Use only the patient records below (sorted most recent first). "

@@ -64,7 +64,6 @@ public class RemoteLlmEngine implements LlmEngine {
 		String apiKey = getOptionalRuntimeProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
 		String modelName = resolveModelName();
 
-		String requestBody = buildRequestBody(systemPrompt, userMessage, modelName, false, responseFormat);
 		String requestBody = buildRequestBody(messages, modelName, false);
 
 		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
@@ -204,10 +203,6 @@ public class RemoteLlmEngine implements LlmEngine {
 			root.set("stream_options", streamOptions);
 		}
 
-		root.set("response_format",
-				responseFormat != null ? responseFormat
-						: ChartAnswerResponseFormat.build(MAPPER, resolveReasoningMaxChars()));
-		root.set("messages", ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage));
 		root.set("response_format", ChartAnswerResponseFormat.build(MAPPER));
 		root.set("messages", messages);
 

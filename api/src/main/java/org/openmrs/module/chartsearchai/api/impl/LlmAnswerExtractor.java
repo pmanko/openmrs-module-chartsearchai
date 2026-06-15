@@ -115,7 +115,6 @@ final class LlmAnswerExtractor {
 					}
 				}
 				String answer = normalizeSlashCitations(answerNode.asText().trim(), citations);
-				return new LlmResponse(answer, citations);
 				List<ResponseBlock> blocks = parseBlocks(root.get("blocks"));
 				Map<String, Object> confidence = parseConfidence(root.get("confidence"));
 				return new LlmResponse(answer, citations, blocks, confidence, 0, 0, 0);

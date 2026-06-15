@@ -217,9 +217,7 @@ public interface ChartSearchService {
 			this.inputTokens = inputTokens;
 			this.outputTokens = outputTokens;
 			this.cachedTokens = cachedTokens;
-			this.safetyWarnings = java.util.Collections.unmodifiableList(
-					new java.util.ArrayList<>(safetyWarnings == null
-							? java.util.Collections.<SafetyWarning> emptyList() : safetyWarnings));
+			this.safetyWarnings = java.util.Collections.emptyList();
 		}
 
 		/**

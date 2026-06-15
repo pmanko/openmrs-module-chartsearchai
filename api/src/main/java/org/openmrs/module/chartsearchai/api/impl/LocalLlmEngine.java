@@ -144,7 +144,9 @@ public class LocalLlmEngine implements LlmEngine {
 	@Override
 	public synchronized InferenceResult infer(ArrayNode messages, int timeoutSeconds) {
 		ensureServerRunning();
-		return postForResult(buildRequestBody(systemPrompt, userMessage, false), timeoutSeconds);
+		String requestBody = buildRequestBody(messages, false,
+				ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS);
+		return postForResult(requestBody, timeoutSeconds);
 	}
 
 	@Override
@@ -157,8 +159,6 @@ public class LocalLlmEngine implements LlmEngine {
 						ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS, responseFormat);
 		return postForResult(requestBody, timeoutSeconds);
 	}
-		String requestBody = buildRequestBody(messages, false,
-				ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS);
 
 	/**
 	 * Sends a pre-built request body to the local llama-server and parses the (non-streaming)
@@ -220,29 +220,6 @@ public class LocalLlmEngine implements LlmEngine {
 			Consumer<String> tokenConsumer) {
 		ensureServerRunning();
 
-		// Disk-persisted KV cache on the QUERY path (mirrors what warmup already does, see
-		// #warmup). The seed is the question-INDEPENDENT prefix, so warmup-saved and query-saved
-		// entries share one filename per patient+chart and the restored KV is byte-for-byte what a
-		// fresh prefill would produce — answer quality is unchanged; cache_prompt then re-prefills
-		// only the cheap focus-hint + question tail. The decision is gated so the warm and
-		// alternating-patient paths (the chart already resident in this process's RAM prompt-cache
-		// pool) do NO extra disk I/O — only a genuinely cold chart with a disk hit restores.
-		String cacheDir = loadedSlotSavePath;
-		String cacheKey = (cacheDir != null && cacheSeed != null)
-				? kvCacheKey(cacheScope, systemPrompt, cacheSeed,
-						modelDiscriminator(loadedModelPath, loadedContextSize))
-				: null;
-		boolean ramResident = cacheKey != null && ramResidentKeys.contains(cacheKey);
-		boolean fileExists = cacheKey != null && !ramResident && new File(cacheDir, cacheKey).isFile();
-		KvQueryAction action = kvQueryAction(cacheKey != null, ramResident, fileExists);
-		boolean restored = false;
-		if (action == KvQueryAction.RESTORE && restoreSlot(cacheKey, timeoutSeconds)) {
-			restored = true;
-			ramResidentKeys.add(cacheKey);
-			log.warn("Query restored KV cache from disk: {}", cacheKey);
-		}
-
-		String requestBody = buildRequestBody(systemPrompt, userMessage, true);
 		String requestBody = buildRequestBody(messages, true,
 				ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS);
 
@@ -271,19 +248,9 @@ public class LocalLlmEngine implements LlmEngine {
 				throw new APIException("Local llama-server returned HTTP " + response.statusCode());
 			}
 
-			InferenceResult result = LlmResponseParser.parseStreamingResponse(
-					response.body(), tokenConsumer, log);
+		InferenceResult result = LlmResponseParser.parseStreamingResponse(
+				response.body(), tokenConsumer, log);
 
-			// The chart prefix is now resident in the RAM pool. If this was a genuinely cold prefill
-			// (not resident, not restored), persist it so the next visit — even after a restart —
-			// restores from disk instead of re-paying the prefill; replace the patient's prior entry
-			// and apply the global cap, exactly as warmup does.
-			if (cacheKey != null) {
-				ramResidentKeys.add(cacheKey);
-				if (!ramResident && !restored) {
-					persistKvEntry(cacheKey, cacheScope, cacheDir, timeoutSeconds);
-				}
-			}
 			resetIdleTimer();
 			return result;
 		}
@@ -1005,8 +972,6 @@ public class LocalLlmEngine implements LlmEngine {
 			root.set("stream_options", streamOptions);
 		}
 
-		root.set("response_format", responseFormat);
-		root.set("messages", ChatMessages.systemAndUser(MAPPER, systemPrompt, userMessage));
 		root.set("response_format", ChartAnswerResponseFormat.build(MAPPER));
 		root.set("messages", messages);
 
