@@ -50,7 +50,17 @@ jobs:
             platform: Windows
             arch: x86_64
             binary: llama-server.exe
-            cmake_extra: ''
+            # Make the x64 exe self-contained so it runs on a clean Windows with no
+            # prerequisites (we ship only the .exe, no sibling DLLs):
+            #   LLAMA_OPENSSL=OFF          - drop libssl-3-x64.dll / libcrypto-3-x64.dll
+            #                                (not in Windows nor the VC++ redist; unused for
+            #                                local inference - matches the macOS x86_64 leg)
+            #   GGML_OPENMP=OFF            - drop vcomp140.dll (matches the Windows ARM64 leg)
+            #   CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded - static CRT, drop msvcp140 /
+            #                                vcruntime140 / vcruntime140_1
+            # Result: imports only in-box Windows DLLs (kernel32, advapi32, ws2_32,
+            # crypt32, and the Win10/11 UCRT api-ms-win-crt-*). Verified with objdump.
+            cmake_extra: '-DLLAMA_OPENSSL=OFF -DGGML_OPENMP=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded'
           - os: windows-2022
             platform: Windows
             arch: aarch64
