@@ -49,7 +49,9 @@ jobs:
             # under Docker does not expose those. Disable native auto-detect and
             # pin armv8.2-a so the binary runs on any reasonable aarch64 host.
             cmake_extra: '-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a -DLLAMA_OPENSSL=OFF'
-          - os: windows-2022
+          - os: windows-2022   # NOTE: the clean-Windows smoke step below pins a
+                                 # container tag (ltsc2022) to THIS host for process
+                                 # isolation - bump both together if this runner changes.
             platform: Windows
             arch: x86_64
             binary: llama-server.exe
@@ -143,6 +145,9 @@ jobs:
             if [ -f "$c" ]; then BIN="$c"; break; fi
           done
           [ -n "$BIN" ] || { echo "ERROR: built binary not found"; exit 1; }
+          # Export the resolved path so the Windows smoke step below reuses it verbatim
+          # rather than re-deriving it (single source of truth; no candidate-order drift).
+          echo "VERIFIED_BIN=$BIN" >> "$GITHUB_ENV"
           # These names only appear in the binary as DYNAMIC imports given our flags (OpenSSL
           # off -> no libssl/libcrypto strings; static CRT -> no msvcp140/vcruntime140; vcomp140
           # is DLL-only, never static). Do NOT add libgomp/libomp: GGML statically links OpenMP
@@ -156,6 +161,78 @@ jobs:
             exit 1
           fi
           echo "OK: $BIN is self-contained (no OpenSSL / MSVC-runtime / OpenMP)."
+
+      # Runtime proof of the same claim the static check above makes from the import
+      # table: execute the binary on a GENUINELY clean Windows that ships no VC++
+      # redistributable. A Windows Server Core container has no msvcp140/vcruntime140,
+      # so `llama-server.exe --version` returning 0 (rather than 0xC0000135 /
+      # -1073741515 STATUS_DLL_NOT_FOUND) proves the .exe resolves only in-box DLLs.
+      # x86_64 only: this is an x64 runner, so it can neither execute an arm64 .exe
+      # nor host an arm64 container; the Windows arm64 leg relies on the static check.
+      # ltsc2022 matches the windows-2022 host so the container uses fast process
+      # isolation. Costs one Server Core image pull (~minutes) on this leg per run.
+      - name: Smoke-test launch on clean Windows Server Core
+        if: ${{ matrix.platform == 'Windows' && matrix.arch == 'x86_64' }}
+        shell: pwsh
+        run: |
+          # Native command non-zero exits must flow to $LASTEXITCODE (for the daemon
+          # readiness poll and the launch check below), not throw — the GitHub pwsh
+          # prologue sets ErrorActionPreference=stop, and pwsh 7.4+ would otherwise
+          # turn a native non-zero exit into a terminating error.
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          # Classify failures so a red leg is triageable from the run UI (not just the
+          # step log): an infra hiccup is "re-run", a binary failure is "do not ship".
+          # The ::error:: annotations surface the distinction on the run summary page.
+          function Fail-Infra ($m)  { Write-Host "::error title=Clean-Windows smoke - infra (not a binary failure)::$m"; throw $m }
+          function Fail-Binary($m)  { Write-Host "::error title=Clean-Windows smoke - binary failed to launch::$m";    throw $m }
+
+          # Reuse the exact binary the static check above resolved (single source of truth).
+          $bin = $env:VERIFIED_BIN
+          if (-not $bin -or -not (Test-Path $bin)) { Fail-Infra "VERIFIED_BIN ('$bin') is unset or missing; the Verify step should have exported it." }
+          $dir  = (Get-Item $bin).Directory.FullName
+          $name = Split-Path $bin -Leaf
+          $img  = "mcr.microsoft.com/windows/servercore:ltsc2022"
+
+          # GitHub's Windows runners ship Docker (Moby) but don't reliably leave the
+          # daemon running, so the engine pipe may be absent at first use. Start the
+          # service and wait up to 120s (40 x 3s, breaks on first success) for readiness.
+          Start-Service docker -ErrorAction SilentlyContinue
+          $ready = $false
+          foreach ($i in 1..40) {
+            docker info *> $null
+            if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+            Start-Sleep -Seconds 3
+          }
+          if (-not $ready) { Fail-Infra "Docker daemon did not become ready on this runner." }
+
+          # Pull the image as a distinct, infra-classed step so a registry/network
+          # failure can't later be misread as a binary launch failure.
+          docker pull $img
+          if ($LASTEXITCODE -ne 0) { Fail-Infra "failed to pull $img." }
+
+          # The test only proves "self-contained" if the base image is genuinely clean,
+          # so ASSERT the VC++ runtime is absent — don't just log it. A future image that
+          # bundled it would otherwise let this gate pass without proving anything.
+          $vc = "$(docker run --rm $img cmd /c "if exist C:\Windows\System32\vcruntime140.dll (echo PRESENT) else (echo ABSENT)")".Trim()
+          Write-Host "vcruntime140 in base image: $vc"
+          if ($vc -ne "ABSENT") { Fail-Infra "base image $img vcruntime140 check returned '$vc' (expected ABSENT); the clean-box claim no longer holds." }
+
+          # The actual proof: the binary loads (all imports resolve to in-box DLLs) and runs.
+          $out = (docker run --rm -v "${dir}:C:\app" $img "C:\app\$name" --version 2>&1 | Out-String)
+          $code = $LASTEXITCODE
+          Write-Host "exit code: $code"
+          Write-Host $out
+          # 125 = docker/CLI could not start the container (mount/daemon/image) — infra.
+          if ($code -eq 125) { Fail-Infra "docker could not start the container (exit 125)." }
+          # Any other non-zero (e.g. 0xC0000135 / -1073741515 STATUS_DLL_NOT_FOUND) means
+          # the .exe failed to load; exit 0 with no output means it never actually ran.
+          if ($code -ne 0)        { Fail-Binary "$name failed to launch on clean Windows Server Core (exit $code; 0xC0000135 / -1073741515 = missing DLL)." }
+          if (-not $out.Trim())   { Fail-Binary "$name exited 0 but produced no --version output on clean Windows Server Core." }
+          Write-Host "OK: $name launches and runs on clean Windows Server Core (no VC++ redist)."
+          # The GitHub pwsh wrapper ends with `exit $LASTEXITCODE`; make success explicit
+          # and immune to any lingering native exit code.
+          exit 0
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
