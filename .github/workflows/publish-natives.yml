@@ -122,7 +122,8 @@ jobs:
             -D GGML_STATIC=ON ^
             -D GGML_OPENMP=OFF ^
             -D GGML_NATIVE=OFF ^
-            -D LLAMA_OPENSSL=OFF
+            -D LLAMA_OPENSSL=OFF ^
+            -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           cmake --build build --config Release --target llama-server
 
       - name: Upload binary
