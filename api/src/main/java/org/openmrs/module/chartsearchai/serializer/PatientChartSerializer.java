@@ -106,6 +106,13 @@ public class PatientChartSerializer {
 				rendered.append("(").append(DateFormatUtil.formatDate(record.getDate())).append(") ");
 			}
 			rendered.append(ConceptNameUtil.stripSynonyms(record.getText()));
+			// Age is the one demographic that must be computed live: baking it into querystore's
+			// indexed patient record would go stale as the patient ages (the index carries only
+			// birthdate). Merge the current age into that same citable line so "how old is the
+			// patient?" answers directly instead of echoing a birthdate — without resurrecting the
+			// misattribution-prone demographics header. Included in renderedText so the grounding
+			// verifier's view still matches what the model saw.
+			appendLiveAge(rendered, record, patient);
 			String renderedText = rendered.toString();
 
 			mappings.add(new RecordMapping(index, record.getResourceType(), record.getResourceUuid(),
@@ -120,6 +127,21 @@ public class PatientChartSerializer {
 
 		return new PatientChart(sb.toString(), Collections.unmodifiableList(mappings),
 				Collections.unmodifiableList(focusIndices));
+	}
+
+	/**
+	 * Appends the patient's <em>current</em> age to querystore's {@code patient} demographics record line.
+	 * Computed live from the {@link Patient} rather than read from the indexed text, because age changes
+	 * over time while the index stores only birthdate. No-op for non-patient records or when age is unknown.
+	 */
+	private static void appendLiveAge(StringBuilder rendered, SerializedRecord record, Patient patient) {
+		if (patient == null || record == null || !"patient".equals(record.getResourceType())) {
+			return;
+		}
+		Integer age = patient.getAge();
+		if (age != null) {
+			rendered.append(" (").append(age).append(age == 1 ? " year old)" : " years old)");
+		}
 	}
 
 	/**

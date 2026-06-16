@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 
@@ -65,8 +66,13 @@ public class PatientChartSerializerTest {
 		// record (e.g. answering "What gender?" with "Female [1]" pointing at an allergy).
 		Patient patient = new Patient();
 		patient.setGender("F");
+		// Birthday two days ago, 30 years back -> deterministically age 30 (no birthday-boundary flake).
+		Calendar c = Calendar.getInstance();
+		c.add(Calendar.YEAR, -30);
+		c.add(Calendar.DAY_OF_MONTH, -2);
+		patient.setBirthdate(c.getTime());
 		SerializedRecord patientRecord = new SerializedRecord("patient", "p-uuid",
-				"Berryl Ojienda; Female; OpenMRS ID 7120", null);
+				"Berryl Ojienda; Female; born 1996-01-01", null);
 		SerializedRecord allergy = new SerializedRecord("allergy", "a-uuid", "Allergy to penicillin", null);
 
 		PatientChart chart = new PatientChartSerializer().serialize(patient, Arrays.asList(patientRecord, allergy));
@@ -76,6 +82,13 @@ public class PatientChartSerializerTest {
 						+ chart.getText());
 		assertTrue(chart.getText().startsWith("[1] "),
 				"chart should begin with the first numbered record; chart was:\n" + chart.getText());
+		// The live age is merged into the patient record's own line so age questions answer directly
+		// (the indexed record carries only birthdate); a regression here makes "how old?" echo the DOB.
+		assertTrue(chart.getText().contains("(30 years old)"),
+				"live age must be merged into the patient record line; chart was:\n" + chart.getText());
+		assertTrue(chart.getMappings().get(0).getText().contains("(30 years old)"),
+				"mapping text must match what the LLM saw (incl. age) for grounding; mapping was:\n"
+						+ chart.getMappings().get(0).getText());
 	}
 
 	@Test
