@@ -38,6 +38,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class PatientChartSerializer {
 
+	/** querystore's resource type for the patient demographics document (see its PatientRecordSerializer). */
+	private static final String PATIENT_RESOURCE_TYPE = "patient";
+
 	@Autowired
 	private PatientRecordLoader recordLoader;
 
@@ -135,7 +138,7 @@ public class PatientChartSerializer {
 	 * over time while the index stores only birthdate. No-op for non-patient records or when age is unknown.
 	 */
 	private static void appendLiveAge(StringBuilder rendered, SerializedRecord record, Patient patient) {
-		if (patient == null || record == null || !"patient".equals(record.getResourceType())) {
+		if (patient == null || record == null || !PATIENT_RESOURCE_TYPE.equals(record.getResourceType())) {
 			return;
 		}
 		Integer age = patient.getAge();
@@ -154,7 +157,7 @@ public class PatientChartSerializer {
 			return false;
 		}
 		for (SerializedRecord record : records) {
-			if (record != null && "patient".equals(record.getResourceType())) {
+			if (record != null && PATIENT_RESOURCE_TYPE.equals(record.getResourceType())) {
 				return true;
 			}
 		}
