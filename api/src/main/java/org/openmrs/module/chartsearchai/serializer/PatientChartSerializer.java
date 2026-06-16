@@ -82,7 +82,16 @@ public class PatientChartSerializer {
 		List<RecordMapping> mappings = new ArrayList<RecordMapping>();
 		List<Integer> focusIndices = new ArrayList<Integer>();
 
-		appendDemographics(sb, patient);
+		// querystore indexes the patient itself as a citable "patient" record (name, sex, birthdate,
+		// identifiers — see querystore's PatientRecordSerializer), so when one is present the demographics
+		// already live in a numbered, citable record. Prepending the computed header too would duplicate
+		// them and, worse, place an un-numbered "Patient: ..." line directly above [1], where small models
+		// misattribute it to record [1] (e.g. citing an allergy for the patient's sex). Fall back to the
+		// computed header only when no patient record is present — e.g. a nameless patient, which
+		// PatientRecordSerializer skips, yielding no querystore document.
+		if (!hasPatientRecord(records)) {
+			appendDemographics(sb, patient);
+		}
 
 		for (int i = 0; i < records.size(); i++) {
 			SerializedRecord record = records.get(i);
@@ -111,6 +120,23 @@ public class PatientChartSerializer {
 
 		return new PatientChart(sb.toString(), Collections.unmodifiableList(mappings),
 				Collections.unmodifiableList(focusIndices));
+	}
+
+	/**
+	 * True if the chart already carries querystore's citable {@code patient} demographics record. When
+	 * it does, the separately-computed demographics header would be a redundant — and
+	 * misattribution-prone — duplicate, so {@link #serialize} omits it.
+	 */
+	private static boolean hasPatientRecord(List<SerializedRecord> records) {
+		if (records == null) {
+			return false;
+		}
+		for (SerializedRecord record : records) {
+			if (record != null && "patient".equals(record.getResourceType())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void appendDemographics(StringBuilder sb, Patient patient) {

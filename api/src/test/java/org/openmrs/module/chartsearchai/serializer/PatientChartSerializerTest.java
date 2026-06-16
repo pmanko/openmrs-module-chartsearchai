@@ -10,6 +10,7 @@
 package org.openmrs.module.chartsearchai.serializer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
@@ -17,6 +18,7 @@ import java.util.Date;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
@@ -53,5 +55,41 @@ public class PatientChartSerializerTest {
 		// And the mapping text is exactly the chart line content after the "[N] " prefix.
 		assertTrue(chart.getText().contains("[1] " + datePrefix + "Temperature: 36.7"),
 				"chart line should equal '[N] ' + the mapping text; chart was:\n" + chart.getText());
+	}
+
+	@Test
+	public void serialize_omitsComputedDemographicsHeader_whenPatientRecordPresent() {
+		// querystore indexes the patient as a citable "patient" record carrying sex/name/identifiers.
+		// When one is present the serializer must NOT also prepend the un-numbered "Patient: ..." header:
+		// it duplicates the demographics and sits above [1], where small models misattribute it to that
+		// record (e.g. answering "What gender?" with "Female [1]" pointing at an allergy).
+		Patient patient = new Patient();
+		patient.setGender("F");
+		SerializedRecord patientRecord = new SerializedRecord("patient", "p-uuid",
+				"Berryl Ojienda; Female; OpenMRS ID 7120", null);
+		SerializedRecord allergy = new SerializedRecord("allergy", "a-uuid", "Allergy to penicillin", null);
+
+		PatientChart chart = new PatientChartSerializer().serialize(patient, Arrays.asList(patientRecord, allergy));
+
+		assertFalse(chart.getText().startsWith("Patient:"),
+				"computed demographics header must be omitted when a patient record is present; chart was:\n"
+						+ chart.getText());
+		assertTrue(chart.getText().startsWith("[1] "),
+				"chart should begin with the first numbered record; chart was:\n" + chart.getText());
+	}
+
+	@Test
+	public void serialize_addsDemographicsHeader_whenNoPatientRecordPresent() {
+		// Fallback: PatientRecordSerializer skips a nameless patient, yielding no querystore "patient"
+		// document, so the computed header stays the only demographics source and must still be emitted.
+		Patient patient = new Patient();
+		patient.setGender("F");
+		SerializedRecord allergy = new SerializedRecord("allergy", "a-uuid", "Allergy to penicillin", null);
+
+		PatientChart chart = new PatientChartSerializer().serialize(patient, Arrays.asList(allergy));
+
+		assertTrue(chart.getText().startsWith("Patient: Female"),
+				"computed header must be the fallback when no patient record is present; chart was:\n"
+						+ chart.getText());
 	}
 }
