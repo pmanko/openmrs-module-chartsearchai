@@ -14,6 +14,7 @@ import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.util.ConceptNameUtil;
@@ -42,12 +43,27 @@ import org.springframework.stereotype.Component;
  * <p>It also appends an obs-group label (e.g. {@code "(part of: Basic metabolic panel)"})
  * after the body of any record that carries obs-group metadata, so the LLM can cluster
  * the atomic members of a lab panel / vital-signs set — see {@link #appendGroupMembership}.
+ *
+ * <p>Finally, the trailing {@code ".0"} OpenMRS adds to whole-number obs values is trimmed
+ * (e.g. {@code "988.0"} → {@code "988"}) to save further prompt tokens — value-lossless and
+ * scoped so a {@code ".0"} inside a code or version (e.g. ICD-10 {@code "E11.0"},
+ * {@code "1.0.0"}) is preserved. See {@link #trimTrailingZeroDecimals}.
  */
 @Component
 public class PatientChartSerializer {
 
 	/** querystore's resource type for the patient demographics document (see its PatientRecordSerializer). */
 	private static final String PATIENT_RESOURCE_TYPE = "patient";
+
+	/**
+	 * Matches a standalone whole-number value rendered with a trailing {@code ".0"} (OpenMRS formats
+	 * whole-number obs values that way, e.g. {@code "988.0"}, {@code "18.0"}) so it can be dropped to save
+	 * prompt tokens — the {@code ".0"} is formatting noise, not precision, so removing it is value-lossless.
+	 * The {@code (?<![\w.])} / {@code (?![\w.])} guards keep it standalone: a {@code ".0"} embedded in a code
+	 * or version is preserved (e.g. ICD-10 {@code "E11.0"}, where {@code "E11"} is a DIFFERENT diagnosis, and
+	 * {@code "1.0.0"}), so the trim can never silently change clinical meaning.
+	 */
+	private static final Pattern TRAILING_ZERO_DECIMAL = Pattern.compile("(?<![\\w.])(\\d+)\\.0(?![\\w.])");
 
 	/**
 	 * Serialize a pre-filtered list of records into numbered text lines.
@@ -109,7 +125,7 @@ public class PatientChartSerializer {
 			// Body = synonym-stripped text + any obs-group (panel) label + live age — everything after
 			// the "[N] " index EXCEPT the leading date parenthetical.
 			StringBuilder body = new StringBuilder();
-			body.append(ConceptNameUtil.stripSynonyms(record.getText()));
+			body.append(trimTrailingZeroDecimals(ConceptNameUtil.stripSynonyms(record.getText())));
 			// Surface obs-group (e.g. lab-panel / vital-signs-set) membership inline so the LLM can
 			// cluster atomic members of the same group. querystore carries the group identity only in
 			// metadata, never in the doc text (ADR Decision 6), and leaves clustering to the consumer.
@@ -156,6 +172,16 @@ public class PatientChartSerializer {
 	 */
 	private static String dateLabelPrefix(String dateLabel) {
 		return dateLabel == null ? "" : "(" + dateLabel + ") ";
+	}
+
+	/**
+	 * Drops the value-lossless trailing {@code ".0"} OpenMRS adds to whole-number obs values, to save
+	 * prompt tokens. Scoped by {@link #TRAILING_ZERO_DECIMAL} so only standalone numeric values are
+	 * trimmed ({@code "988.0 cells" -> "988 cells"}); a {@code ".0"} inside a code or version is never
+	 * touched, so the trim cannot change clinical meaning.
+	 */
+	private static String trimTrailingZeroDecimals(String text) {
+		return TRAILING_ZERO_DECIMAL.matcher(text).replaceAll("$1");
 	}
 
 	/**
