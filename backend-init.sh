@@ -329,6 +329,16 @@ SQL
   seed_sql "$DB_NAME" -e \
     "INSERT INTO global_property (property, property_value, uuid) VALUES ('chartsearchai.demo.seededDataset','$DEMO_SEED_TAG', UUID()) ON DUPLICATE KEY UPDATE property_value='$DEMO_SEED_TAG';" || true
 
+  # A fresh dump bypasses querystore's write-path sync, so its read index starts empty and the FIRST
+  # chart query on each patient would pay a ~40s lazy projection (getPatientChart -> ensureIndexedSafely
+  # embeds all of that patient's records on the request thread). querystore already has the cure: a
+  # progressive, checkpoint-resumable bootstrap (BootstrapProgress cursor, persisted per page) that runs
+  # on module startup when querystore.bootstrap.autostart=true. Enable it so the next startup pre-indexes
+  # every patient in the background (resuming if interrupted) instead of paying the cost lazily per first
+  # query. No app/auth/post-start hook needed — the module's own autostart does it.
+  seed_sql "$DB_NAME" -e \
+    "INSERT INTO global_property (property, property_value, uuid) VALUES ('querystore.bootstrap.autostart','true', UUID()) ON DUPLICATE KEY UPDATE property_value='true';" || true
+
   rm -f "$_dump" "$_gp"
   _count=$(seed_sql -N "$DB_NAME" -e 'SELECT COUNT(*) FROM patient' 2>/dev/null)
   seed_status "done: $_count patients"
