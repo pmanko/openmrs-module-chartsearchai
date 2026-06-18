@@ -42,7 +42,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>It also appends an obs-group label (e.g. {@code "(part of: Basic metabolic panel)"})
  * after the body of any record that carries obs-group metadata, so the LLM can cluster
- * the atomic members of a lab panel / vital-signs set — see {@link #appendGroupMembership}.
+ * the atomic members of a lab panel / vital-signs set — see {@link #groupMembershipLabel}.
  *
  * <p>Finally, the trailing {@code ".0"} OpenMRS adds to whole-number obs values is trimmed
  * (e.g. {@code "988.0"} → {@code "988"}) to save further prompt tokens — value-lossless and

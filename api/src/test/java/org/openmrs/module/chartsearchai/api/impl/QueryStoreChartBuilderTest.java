@@ -323,6 +323,45 @@ public class QueryStoreChartBuilderTest {
 	}
 
 	@Test
+	public void build_shouldDropRepeatedPanelLabel_whenDedupPanelLabelsEnabled() {
+		// End-to-end (composed build()) coverage of the dedup-ON wiring: build() reads
+		// chartsearchai.serializer.dedupPanelLabels via resolveDedupPanelLabels() and threads it into the
+		// serializer, which run-length de-dups the panel label on a consecutive same-group member. The
+		// flag-OFF invariant (every member labelled) is build_shouldRenderPanelMembership above; this pins
+		// the flag-ON path and the grounding-mapping guarantee (mapping keeps the full label).
+		QueryDocument sodium = new QueryDocument();
+		sodium.setResourceType("Obs");
+		sodium.setResourceUuid("obs-na");
+		sodium.setText("Sodium: 140 mmol/L");
+		sodium.putMetadata("obs_group_uuid", "grp-bmp-1");
+		sodium.putMetadata("obs_group_concept_name", "Basic metabolic panel");
+		QueryDocument potassium = new QueryDocument();
+		potassium.setResourceType("Obs");
+		potassium.setResourceUuid("obs-k");
+		potassium.setText("Potassium: 4.2 mmol/L");
+		potassium.putMetadata("obs_group_uuid", "grp-bmp-1");
+		potassium.putMetadata("obs_group_concept_name", "Basic metabolic panel");
+		queryStore.stubChart = new ArrayList<>();
+		queryStore.stubChart.add(sodium);
+		queryStore.stubChart.add(potassium);
+
+		builder.usePreFilter = false;
+		builder.dedupPanelLabels = true;
+		PatientChart chart = builder.build(patient(1), "metabolic panel?");
+		String text = chart.getText();
+
+		assertTrue(text.contains("Sodium: 140 mmol/L (part of: Basic metabolic panel)"),
+				"the run-leader keeps the panel label; chart was:\n" + text);
+		assertTrue(text.contains("[2] Potassium: 4.2 mmol/L\n"),
+				"a consecutive same-group member drops the repeated label on its chart line; chart was:\n" + text);
+		assertFalse(text.contains("Potassium: 4.2 mmol/L (part of:"),
+				"the dropped member must not carry the panel label on its chart line; chart was:\n" + text);
+		assertTrue(chart.getMappings().get(1).getText().contains("(part of: Basic metabolic panel)"),
+				"grounding integrity: the dropped member's mapping must keep the full panel label; mapping was:\n"
+						+ chart.getMappings().get(1).getText());
+	}
+
+	@Test
 	public void build_shouldNotRenderPanelLabel_whenGroupUuidPresentButConceptNameAbsent() {
 		// ObsRecordSerializer.putGroupFields always sets obs_group_uuid for a member but only sets
 		// obs_group_concept_name when the parent concept has a non-empty preferred name. With a uuid
@@ -431,6 +470,8 @@ public class QueryStoreChartBuilderTest {
 
 		boolean usePreFilter = true;
 
+		boolean dedupPanelLabels = false;
+
 		TestableQueryStoreChartBuilder(QueryStoreService stub) {
 			this.stub = stub;
 		}
@@ -448,6 +489,11 @@ public class QueryStoreChartBuilderTest {
 		@Override
 		protected boolean resolveUsePreFilter() {
 			return usePreFilter;
+		}
+
+		@Override
+		protected boolean resolveDedupPanelLabels() {
+			return dedupPanelLabels;
 		}
 	}
 
