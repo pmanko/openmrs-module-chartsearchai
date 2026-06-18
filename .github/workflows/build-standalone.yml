@@ -353,13 +353,6 @@ jobs:
       #
       # Intentionally fatal: a published download must be pre-indexed, or the build fails.
       - name: Bake querystore Lucene index into the demo appdata
-        # TEMPORARILY DISABLED (greens main while we debug): the headless standalone boot does not
-        # reach "started" in CI — OpenMRS webapp init fails with "Table 'openmrs.global_property'
-        # doesn't exist", so StartupFilter 302-redirects every request for the whole window. The
-        # demo SQL DOES contain the schema, so the fault is in the headless -noninteractive first-boot
-        # DB init (import vs. runtime data dir). Reproducing locally; re-enable once the boot is fixed.
-        # See run 27762476295.
-        if: false
         working-directory: standalone/target/artifact
         run: |
           set -uo pipefail
@@ -367,16 +360,23 @@ jobs:
           [ -d "$ART" ] || { echo "::error::extracted standalone dir $ART not found"; ls -1; exit 1; }
 
           PRISTINE="$PWD/$ART"                          # uploaded artifact — only receives the index
-          BAKE="/tmp/bakerun/$ART"                      # throwaway run dir
+          # IMPORTANT: the throwaway run dir must NOT live under the JVM temp dir (java.io.tmpdir,
+          # which is /tmp on the Linux runner). MariaDB4j deletes its data dir on shutdown when that
+          # dir sits under java.io.tmpdir, so a /tmp location would wipe the just-imported demo DB
+          # during the intermediate stopMariaDB() — leaving the run phase with an empty schema
+          # ("global_property doesn't exist") and the server stuck at HTTP 302. $GITHUB_WORKSPACE
+          # (/home/runner/work/...) is not under /tmp, so the imported data dir survives. (Confirmed
+          # by local repro: data dir under java.io.tmpdir -> wiped on stop; outside -> persists.)
+          BAKE="$GITHUB_WORKSPACE/bakerun/$ART"          # throwaway run dir (NOT under /tmp — see above)
           BASE="http://127.0.0.1:8081/openmrs"          # tomcatport=8081, context=openmrs (shipped runtime props)
           AUTH="admin:Admin123"
           QS="$BASE/ws/rest/v1/querystore"
 
           # Throwaway copy WITHOUT the GGUF weights (indexing never loads the LLM).
-          # Guard both: without `set -e`, a failed rsync (e.g. /tmp out of space) or cd would
-          # otherwise let the script run on in the wrong directory and fail downstream with a
-          # misleading "heap bump no-op" instead of a clear staging error.
-          mkdir -p /tmp/bakerun
+          # Guard both: without `set -e`, a failed rsync (e.g. out of space) or cd would otherwise
+          # let the script run on in the wrong directory and fail downstream with a misleading
+          # "heap bump no-op" instead of a clear staging error.
+          mkdir -p "$GITHUB_WORKSPACE/bakerun"
           rsync -a --exclude '*.gguf' "$PRISTINE/" "$BAKE/" \
             || { echo "::error::failed to stage throwaway standalone copy under $BAKE (disk space?)"; exit 1; }
           cd "$BAKE" || { echo "::error::could not cd into throwaway copy $BAKE"; exit 1; }
@@ -479,7 +479,7 @@ jobs:
           DEST_COUNT=$(find "$DEST" -type f | wc -l)
           { [ "$SRC_COUNT" -gt 0 ] && [ "$DEST_COUNT" -eq "$SRC_COUNT" ]; } \
             || fail "baked index copy incomplete: $DEST_COUNT/$SRC_COUNT files landed in the artifact"
-          cd /tmp && rm -rf /tmp/bakerun        # leave $BAKE before removing it
+          cd "$GITHUB_WORKSPACE" && rm -rf "$GITHUB_WORKSPACE/bakerun"   # leave $BAKE before removing it
 
           echo "Bake complete: querystore Lucene index pre-seeded into the uploaded artifact ($DEST_COUNT files, $(du -sh "$DEST" | cut -f1))."
 
