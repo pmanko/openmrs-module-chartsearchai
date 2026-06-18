@@ -362,16 +362,18 @@ record_cpu_breadcrumb() {
   _model=$(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo 2>/dev/null | head -1)
   [ -n "$_model" ] || _model=$(sed -n 's/^Model[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo 2>/dev/null | head -1)
   _isa=$(grep -m1 -iE '^(flags|Features)' /proc/cpuinfo 2>/dev/null \
-    | grep -oiE 'avx512[a-z0-9_]*|avx2|avx_vnni|avx[0-9]*|amx[_a-z]*|f16c|fma|bf16|sse4[._0-9]*' \
+    | grep -oiE 'avx512[a-z0-9_]*|avx2|avx_vnni|avx[0-9]*|amx[_a-z0-9]*|f16c|fma|bf16|sse4[a-z._0-9]*' \
     | tr 'A-Z' 'a-z' | sort -u | tr '\n' ' ')
   _cores=$(nproc 2>/dev/null || echo '?')
   _mem=$(sed -n 's/^MemTotal:[[:space:]]*\([0-9]*\).*/\1/p' /proc/meminfo 2>/dev/null | head -1)
   _val="model=${_model}; cores=${_cores}; memKB=${_mem}; isa=${_isa}"
   # global_property.property_value is plain text; single-quote-escape for the SQL literal.
   _val=$(printf %s "$_val" | sed "s/'/''/g")
-  # The seed step normally leaves the DB reachable; a short retry covers the
-  # already-seeded fast path and transient unavailability without hanging start.
-  _i=0; while [ "$_i" -lt 15 ]; do seed_sql -N -e "SELECT 1" >/dev/null 2>&1 && break; _i=$((_i + 1)); sleep 2; done
+  # maybe_seed_demo_data already ran and, on every path that reaches here, already
+  # established DB reachability - so this is only a short transient-blip cushion, not a
+  # cold wait. Capped low so a DB that maybe_seed already found unreachable (its own 60s
+  # probe) doesn't add another 30s to an already-failing boot.
+  _i=0; while [ "$_i" -lt 3 ]; do seed_sql -N -e "SELECT 1" >/dev/null 2>&1 && break; _i=$((_i + 1)); sleep 2; done
   seed_sql "$DB_NAME" -e \
     "INSERT INTO global_property (property,property_value,uuid) VALUES ('chartsearchai.demo.cpuInfo','$_val',UUID()) ON DUPLICATE KEY UPDATE property_value='$_val';" >/dev/null 2>&1 \
     && echo "[cpu-breadcrumb] $_val" \
