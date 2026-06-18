@@ -54,7 +54,11 @@ env:
 jobs:
   build-standalone:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Raised from 120 to absorb the querystore index-bake step (full headless O3 boot +
+    # reindex). The bake's own internal poll ceilings (~33m readiness + ~30m indexing) sit
+    # under this so the step's diagnostic fail() — with a 250-line log tail — fires on a real
+    # hang, instead of an opaque job-level timeout kill.
+    timeout-minutes: 150
 
     steps:
       - name: Checkout chartsearchai backend module
@@ -331,6 +335,146 @@ jobs:
           rm -f "$ZIP"
           echo "Artifact tree (extracts in one step):"
           ls -1 artifact
+
+      # Bake the querystore Lucene index into the bundled appdata so the downloaded
+      # standalone serves chart-search answers instantly on the first patient open,
+      # instead of paying the cold per-patient embedding "indexing tax" the first time
+      # each chart is touched.
+      #
+      # We do this in a THROWAWAY COPY of the just-assembled standalone (under /tmp),
+      # never the artifact that gets uploaded: boot it headless against its bundled demo
+      # database, trigger a full querystore reindex over REST, wait for completion, then
+      # copy ONLY the generated appdata/querystore/lucene directory back into the pristine
+      # artifact. The published tree is therefore byte-identical to a normal build plus
+      # that one index directory — the user's first boot still imports the demo DB exactly
+      # as before, and the pre-seeded index's patient UUIDs match that bundled dump. The
+      # copy excludes the multi-GB *.gguf weights: indexing only needs the e5 embedder, and
+      # leaving the LLM out keeps the bake run well under the runner's memory ceiling.
+      #
+      # Intentionally fatal: a published download must be pre-indexed, or the build fails.
+      - name: Bake querystore Lucene index into the demo appdata
+        working-directory: standalone/target/artifact
+        run: |
+          set -uo pipefail
+          ART="referenceapplication-standalone-${REFAPP_VERSION}"
+          [ -d "$ART" ] || { echo "::error::extracted standalone dir $ART not found"; ls -1; exit 1; }
+
+          PRISTINE="$PWD/$ART"                          # uploaded artifact — only receives the index
+          BAKE="/tmp/bakerun/$ART"                      # throwaway run dir
+          BASE="http://127.0.0.1:8081/openmrs"          # tomcatport=8081, context=openmrs (shipped runtime props)
+          AUTH="admin:Admin123"
+          QS="$BASE/ws/rest/v1/querystore"
+
+          # Throwaway copy WITHOUT the GGUF weights (indexing never loads the LLM).
+          # Guard both: without `set -e`, a failed rsync (e.g. /tmp out of space) or cd would
+          # otherwise let the script run on in the wrong directory and fail downstream with a
+          # misleading "heap bump no-op" instead of a clear staging error.
+          mkdir -p /tmp/bakerun
+          rsync -a --exclude '*.gguf' "$PRISTINE/" "$BAKE/" \
+            || { echo "::error::failed to stage throwaway standalone copy under $BAKE (disk space?)"; exit 1; }
+          cd "$BAKE" || { echo "::error::could not cd into throwaway copy $BAKE"; exit 1; }
+          # Give the boot enough heap for full O3 + the e5 embedder (shipped default is 512m).
+          # Fail fast if the shipped vm_arguments string ever changes and this no-ops — otherwise
+          # the boot silently runs at 512m and surfaces only as a cryptic readiness timeout below.
+          sed -i 's/-Xmx512m -Xms512m/-Xmx3g -Xms1g/' openmrs-runtime.properties
+          grep -q -- '-Xmx3g' openmrs-runtime.properties \
+            || { echo "::error::heap bump no-op: shipped vm_arguments no longer matches '-Xmx512m -Xms512m'"; exit 1; }
+
+          stop_server() {
+            [ -f .standalone.pid ] && kill -TERM "$(cat .standalone.pid)" 2>/dev/null || true
+            # Guard the var: `kill -TERM 0` would signal the whole process group (incl. this shell),
+            # so never fall back to a literal 0 — only signal a real captured PID.
+            [ -n "${BOOT_PID:-}" ] && kill -TERM "$BOOT_PID" 2>/dev/null || true
+            pkill -f 'org.openmrs.standalone.ApplicationController' 2>/dev/null || true
+            pkill -f 'mariadbd' 2>/dev/null || true
+            pkill -f 'llama-server' 2>/dev/null || true
+          }
+          fail() {
+            echo "::error::$1"
+            echo "===== last 250 lines of standalone log ====="; tail -n 250 /tmp/standalone.log 2>/dev/null || true
+            stop_server; exit 1
+          }
+
+          # --- boot the standalone headless (auto-imports the demo DB, no GUI) ---
+          echo "Booting standalone (performs demo-DB import + module startup)..."
+          nohup java -jar openmrs-standalone.jar -commandline -noninteractive > /tmp/standalone.log 2>&1 &
+          BOOT_PID=$!
+
+          # --- wait until the querystore REST surface answers (server fully started) ---
+          echo "Waiting for OpenMRS + querystore to come up..."
+          READY=0
+          for i in $(seq 1 200); do           # ceiling ~33 min — generous for a full-O3 boot on a 2-CPU runner
+            kill -0 "$BOOT_PID" 2>/dev/null || fail "standalone process exited during startup"
+            code=$(curl -s -o /dev/null -w '%{http_code}' -u "$AUTH" "$QS/indexingstatus" || true)
+            [ "$code" = "200" ] && { READY=1; break; }
+            echo "  ...not ready (http $code), elapsed ~$((i*10))s"
+            sleep 10
+          done
+          [ "$READY" = "1" ] || fail "standalone did not become ready in time"
+          echo "Server is up."
+
+          # --- trigger the global reindex (retry while the bootstrap daemon token wires up) ---
+          echo "Requesting full reindex (scope:all)..."
+          ACC=0
+          for i in $(seq 1 10); do
+            kill -0 "$BOOT_PID" 2>/dev/null || fail "standalone process exited before reindex was accepted"
+            code=$(curl -s -o /tmp/reindex.json -w '%{http_code}' -u "$AUTH" \
+              -H 'Content-Type: application/json' -X POST -d '{"scope":"all"}' "$QS/reindex" || true)
+            echo "  reindex http $code: $(cat /tmp/reindex.json 2>/dev/null)"
+            [ "$code" = "202" ] && { ACC=1; break; }
+            sleep 15
+          done
+          [ "$ACC" = "1" ] || fail "reindex request was not accepted"
+
+          # --- poll until indexing reports complete ---
+          echo "Waiting for indexing to complete..."
+          DONE=0
+          for i in $(seq 1 360); do           # ceiling ~30 min — the demo corpus indexes in seconds-to-minutes
+            kill -0 "$BOOT_PID" 2>/dev/null || fail "standalone process exited during indexing"
+            curl -s -u "$AUTH" "$QS/indexingstatus" > /tmp/status.json || true
+            if python3 -c "import json,sys;sys.exit(0 if json.load(open('/tmp/status.json')).get('complete') else 1)" 2>/dev/null; then
+              DONE=1; break
+            fi
+            echo "  ...still indexing (elapsed ~$((i*5))s): $(cat /tmp/status.json 2>/dev/null)"
+            sleep 5
+          done
+          [ "$DONE" = "1" ] || fail "indexing did not complete in time"
+
+          # --- prove the index actually holds documents (not just an empty-but-valid dir) ---
+          curl -s -u "$AUTH" "$QS/drift" > /tmp/drift.json || true
+          echo "drift: $(cat /tmp/drift.json 2>/dev/null)"
+          python3 -c "import json;d=json.load(open('/tmp/drift.json'));tot=sum((x.get('indexedCount') or 0) for x in d.get('types',[]));print('total indexed docs:',tot);assert tot>0" \
+            || fail "querystore /drift did not report a non-empty index (unreachable, schema change, or genuinely empty after reindex)"
+
+          LUCENE_DIR=$(find . -type d -path '*/appdata/querystore/lucene' | head -1)
+          [ -n "$LUCENE_DIR" ] || fail "appdata/querystore/lucene was not created"
+          echo "Baked index at $LUCENE_DIR ($(du -sh "$LUCENE_DIR" | cut -f1))."
+
+          # --- stop the server before copying the index out ---
+          # Durability is already guaranteed: the reindex committed each per-type Lucene index
+          # before /indexingstatus reported complete, so the on-disk index is final even under a
+          # hard kill. We still stop cleanly to release file handles and the DB before the copy.
+          echo "Stopping standalone..."
+          stop_server
+          for i in $(seq 1 30); do kill -0 "$BOOT_PID" 2>/dev/null || break; sleep 2; done
+          kill -KILL "$BOOT_PID" 2>/dev/null || true
+
+          # --- copy ONLY the baked index into the pristine (uploaded) artifact ---
+          # Count the source files first, then assert the copy landed all of them BEFORE deleting
+          # the source. Without -e, an unguarded cp that fails partway (e.g. disk pressure) would
+          # otherwise leave a TRUNCATED index that still passes a bare "non-empty" check — a
+          # silently-corrupt index shipped to users. Guard the cp and match the file counts.
+          SRC_COUNT=$(find "$LUCENE_DIR" -type f | wc -l)
+          DEST="$PRISTINE/appdata/querystore/lucene"
+          rm -rf "$DEST"
+          mkdir -p "$(dirname "$DEST")"
+          cp -a "$LUCENE_DIR" "$DEST" || fail "failed to copy baked index into the artifact"
+          DEST_COUNT=$(find "$DEST" -type f | wc -l)
+          { [ "$SRC_COUNT" -gt 0 ] && [ "$DEST_COUNT" -eq "$SRC_COUNT" ]; } \
+            || fail "baked index copy incomplete: $DEST_COUNT/$SRC_COUNT files landed in the artifact"
+          cd /tmp && rm -rf /tmp/bakerun        # leave $BAKE before removing it
+
+          echo "Bake complete: querystore Lucene index pre-seeded into the uploaded artifact ($DEST_COUNT files, $(du -sh "$DEST" | cut -f1))."
 
       - name: Upload standalone as artifact
         uses: actions/upload-artifact@v4
