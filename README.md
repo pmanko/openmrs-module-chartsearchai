@@ -174,6 +174,13 @@ Set these global properties in **Admin > Settings**:
 |----------|-------------|
 | `chartsearchai.llm.modelFilePath` | Relative path (within the OpenMRS application data directory) to the `.gguf` model file. Default: `chartsearchai/gemma-4-E4B-it-Q4_K_M.gguf`. Set to your downloaded model's filename — e.g. `chartsearchai/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf` if you upgraded to 26B MoE. |
 
+**GPU acceleration.** This applies to *any* local-engine deployment — standalone, the module installed into an existing OpenMRS site, or Docker — since they all run the same bundled `llama-server`:
+
+- **Apple Silicon Macs use the GPU automatically.** The bundled macOS build has llama.cpp's Metal backend compiled in, so the whole model offloads to the GPU with no configuration (`-ngl` is already set); unified memory means there's no separate VRAM limit to manage.
+- **Linux and Windows bundled binaries are CPU-only by design.** They are single self-contained builds with no GPU backend compiled in, so they run on the CPU even on a host with an NVIDIA card, and `-ngl` is a no-op. This is deliberate: a GPU-linked binary can't double as the one universal build (it won't start without a matching GPU driver, and discrete cards differ in VRAM and CUDA version).
+- **Docker is always CPU-only**, even on an Apple Silicon host — the image is a Linux container, so it uses the Linux (CPU-only) binary and cannot reach the host's Metal GPU.
+- **To use an NVIDIA (or other) GPU on Linux/Windows/Docker**, either: (a) run the model on a GPU inference server (vLLM, Ollama, text-generation-inference) and point chartsearchai at it with the **Remote engine** below (`chartsearchai.llm.engine=remote`); or (b) supply your own GPU-built `llama-server`. The local engine uses any executable `llama-server` (`llama-server.exe` on Windows) already present at `<appdata>/chartsearchai/bin/` instead of extracting the bundled CPU build, and adds that directory to the library path — so place a GPU-enabled binary there alongside its backend libraries (e.g. `libggml-cuda.so`) and the launcher's hardcoded `-ngl 99` offloads to the GPU (recent llama.cpp builds auto-fit the layer count to the card's VRAM, so a card smaller than the model still gets a partial offload).
+
 **Remote engine** — set `chartsearchai.llm.engine` to `remote` and configure:
 
 | Property | Where | Description |
