@@ -25,16 +25,12 @@ import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.api.impl.LlmProvider.LlmResponse;
-import org.openmrs.module.chartsearchai.embedding.EmbeddingProvider;
-import org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile;
-import org.openmrs.module.chartsearchai.model.ChartEmbedding;
 import org.openmrs.module.chartsearchai.reference.DrugReferenceInjector;
 import org.openmrs.module.chartsearchai.reference.DrugSafetyValidator;
 import org.openmrs.module.chartsearchai.reference.SafetyWarning;
 import org.openmrs.module.chartsearchai.model.ChatMessage;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
-import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,11 +38,11 @@ import org.springframework.stereotype.Service;
 
 /**
  * Answers natural language questions about a patient's chart using direct
- * LLM inference. Delegates chart assembly (retrieval + concept rescue +
- * serialization) to {@link ChartBuildingStrategy} and focuses on the LLM
- * call and citation handling. The static helpers on this class are thin
- * delegates kept for backward-compatible test access; new code should
- * call the underlying class directly.
+ * LLM inference. Delegates chart assembly (querystore retrieval + serialization)
+ * to {@link ChartBuildingStrategy} and focuses on the LLM call and citation
+ * handling. The static helpers on this class are thin {@link QueryPreprocessor}
+ * delegates kept for backward-compatible test access; new code should call the
+ * underlying class directly.
  *
  * <p>The {@code protected resolve*} methods and package-private setters exposed
  * here are test seams, not an extension point. Subclassing this bean outside the
@@ -101,32 +97,6 @@ public class LlmInferenceService implements ChartSearchService {
 		this.chartBuildingStrategy = chartBuildingStrategy;
 	}
 
-	/**
-	 * Bundles the pipeline result list with the computed noise profile so
-	 * the caller can cache the profile for reuse on subsequent queries.
-	 */
-	static class FindSimilarResult {
-
-		final List<ChartEmbedding> records;
-
-		final ModelNoiseProfile noiseProfile;
-
-		final int keywordMatchCount;
-
-		FindSimilarResult(List<ChartEmbedding> records,
-				ModelNoiseProfile noiseProfile) {
-			this(records, noiseProfile, -1);
-		}
-
-		FindSimilarResult(List<ChartEmbedding> records,
-				ModelNoiseProfile noiseProfile,
-				int keywordMatchCount) {
-			this.records = records;
-			this.noiseProfile = noiseProfile;
-			this.keywordMatchCount = keywordMatchCount;
-		}
-	}
-
 	@Override
 	public ChartAnswer search(Patient patient, String question) {
 		// LOG FORMAT — stable contract: operators grep these fields for SLO dashboards
@@ -175,21 +145,19 @@ public class LlmInferenceService implements ChartSearchService {
 
 	@Override
 	public void warmup(Patient patient) {
-		// Two operational kill switches first, each as its own early-return so neither
-		// downstream call (usePreFilter — GP read; resolveQueryStoreEnabled — GP read) is
-		// evaluated when warmup is fundamentally impossible. Pre-slice these were implicit
-		// in the if-chain; the extracted helper would otherwise evaluate them eagerly.
+		// Two operational kill switches first, each as its own early-return so the downstream
+		// usePreFilter() GP read is not evaluated when warmup is fundamentally impossible.
 		if (!resolveWarmupEnabled()) {
 			return;
 		}
 		if (!llmProvider.supportsWarmup()) {
 			return;
 		}
-		// The remaining gates are about chart-byte stability — both gates make the chart
-		// prefix question-dependent, so warmup would prime a prefix no real query matches.
-		if (!shouldRunWarmup(
-				chartBuildingStrategy.usePreFilter(),
-				resolveQueryStoreEnabled())) {
+		// Chart-byte-stability gate — the single warmup-viability decision point. Post-#51 every
+		// retrieval mode yields a question-independent chart prefix, so this currently always
+		// proceeds; it is retained (and fed the preFilter GP read) so a future per-query mode can
+		// re-gate here rather than at this call site. See shouldRunWarmup.
+		if (!shouldRunWarmup(chartBuildingStrategy.usePreFilter())) {
 			return;
 		}
 		PatientChart chart = chartBuildingStrategy.buildChart(patient, "");
@@ -205,12 +173,6 @@ public class LlmInferenceService implements ChartSearchService {
 		return isWarmupEnabled();
 	}
 
-	/** Test seam wrapping {@link ChartSearchAiUtils#isQueryStoreEnabled()}; production
-	 *  delegates, tests override to control the gate without an OpenMRS context. */
-	protected boolean resolveQueryStoreEnabled() {
-		return ChartSearchAiUtils.isQueryStoreEnabled();
-	}
-
 	/** Test seam wrapping {@link ChartSearchAiUtils#isGroundingEnabled()}; production
 	 *  delegates, tests override to exercise the grounding path without an OpenMRS context. */
 	protected boolean resolveGroundingEnabled() {
@@ -218,7 +180,7 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
-	 * Pure-logic decision for whether the current pipeline mode produces a
+	 * Pure-logic decision for whether the current retrieval mode produces a
 	 * question-independent chart prefix that warmup can usefully prime. Warmup
 	 * primes the cache with one specific prompt prefix; that only pays off if
 	 * real queries will reuse those same bytes. Operational kill switches
@@ -226,28 +188,24 @@ public class LlmInferenceService implements ChartSearchService {
 	 * {@link #warmup(Patient)} call site instead, so this helper focuses
 	 * narrowly on chart-byte-stability semantics.
 	 *
-	 * <p>Three modes produce stable chart bytes today and so are warmup-viable:
+	 * <p>Since the querystore migration (#51) made querystore the only retrieval path, every
+	 * mode now produces a question-independent chart prefix, so warmup is always viable:
 	 * <ul>
-	 *   <li>{@code preFilter=false} (any backend) — chart is the patient's full indexed
-	 *       projection; bytes are a function of the patient only.</li>
-	 *   <li>{@code preFilter=true, querystore.enabled=true} — focus-hint mode:
-	 *       {@link QueryStoreChartBuilder} fetches the full chart via
-	 *       {@code getPatientChart} and renders the prefilter hits as a small
-	 *       trailing "Records ranked by similarity to the query: ..." line. The records
-	 *       section (the bulk of the prompt) is byte-identical across queries; only
-	 *       the focus-hint and the question vary, both at the very end where they
-	 *       don't break llama-server's prefix-cache match.</li>
+	 *   <li>{@code preFilter=false} — {@link QueryStoreChartBuilder} returns the patient's full
+	 *       chart via {@code getPatientChart}; bytes are a function of the patient only.</li>
+	 *   <li>{@code preFilter=true} — full chart plus a small trailing "Records ranked by
+	 *       similarity to the query: ..." focus hint. The records section (the bulk of the prompt)
+	 *       is byte-identical across queries; the hint and the question vary only at the very end,
+	 *       where they don't break llama-server's prefix-cache match.</li>
 	 * </ul>
-	 * <p>The single remaining unstable mode is {@code preFilter=true} with the
-	 * legacy embedding/lucene/elasticsearch dispatch (querystore disabled). Those
-	 * paths still filter records inline and so the chart prefix varies per query.
 	 *
-	 * <p>When adding a new pipeline mode, extend this helper (and
-	 * {@link LlmInferenceServiceWarmupTest}) — do not branch at the {@code warmup()}
-	 * call site, which would split the decision across two places.
+	 * <p>The {@code preFilter} parameter is retained as the contract for this single decision
+	 * point: if a future retrieval mode reintroduces a per-query chart prefix, gate it here (and in
+	 * {@link LlmInferenceServiceWarmupTest}) rather than at the {@code warmup()} call site,
+	 * which would split the decision across two places.
 	 */
-	static boolean shouldRunWarmup(boolean preFilterEnabled, boolean queryStoreEnabled) {
-		return !preFilterEnabled || queryStoreEnabled;
+	static boolean shouldRunWarmup(boolean preFilterEnabled) {
+		return true;
 	}
 
 	/**
@@ -264,14 +222,10 @@ public class LlmInferenceService implements ChartSearchService {
 		if (patient == null || patient.getUuid() == null) {
 			return null;
 		}
-		if (!shouldRunWarmup(chartBuildingStrategy.usePreFilter(), resolveQueryStoreEnabled())) {
+		if (!shouldRunWarmup(chartBuildingStrategy.usePreFilter())) {
 			return null;
 		}
 		return patient.getUuid();
-	}
-
-	List<ChartEmbedding> findSimilar(Patient patient, String question) {
-		return chartBuildingStrategy.findSimilar(patient, question);
 	}
 
 	@Override
@@ -497,10 +451,10 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	// =====================================================================
-	// Static delegate wrappers — kept so existing test call sites that use
-	// LlmInferenceService.X(...) continue to resolve. New code should call
-	// the underlying classes (QueryPreprocessor, SimilarityAndScoringEngine,
-	// EmbeddingRankingPipeline, ConceptRescueAndFilter) directly.
+	// Static delegate wrappers to QueryPreprocessor — kept so existing test
+	// call sites that use LlmInferenceService.X(...) continue to resolve.
+	// New code should call QueryPreprocessor directly. (The embedding/scoring
+	// delegators were removed with the legacy retrieval pipeline in issue #51.)
 	// =====================================================================
 
 	static int extractRecencyCap(String question) {
@@ -513,100 +467,5 @@ public class LlmInferenceService implements ChartSearchService {
 
 	static String[] extractQueryTerms(String normalizedQuery) {
 		return QueryPreprocessor.extractQueryTerms(normalizedQuery);
-	}
-
-	static String prepareEmbeddingInput(String question, String queryPrefix) {
-		return QueryPreprocessor.prepareEmbeddingInput(question, queryPrefix);
-	}
-
-	static double computeKeywordScore(String[] queryTerms, String textContent) {
-		return SimilarityAndScoringEngine.computeKeywordScore(queryTerms, textContent);
-	}
-
-	static double computeKeywordScoreRestricted(String[] queryTerms,
-			String prefixedText, String body,
-			Set<String> typeIndicatorTerms) {
-		return SimilarityAndScoringEngine.computeKeywordScoreRestricted(
-				queryTerms, prefixedText, body, typeIndicatorTerms);
-	}
-
-	static boolean termMatchesText(String term, String lowerText, String[] textWords) {
-		return SimilarityAndScoringEngine.termMatchesText(term, lowerText, textWords);
-	}
-
-	static double cosineSimilarity(float[] a, float[] b) {
-		return ChartSearchAiUtils.cosineSimilarity(a, b);
-	}
-
-	static List<SerializedRecord> capPerConcept(List<SerializedRecord> records,
-			int maxPerConcept) {
-		return ConceptRescueAndFilter.capPerConcept(records, maxPerConcept);
-	}
-
-	static List<SerializedRecord> groupByConcept(List<SerializedRecord> records) {
-		return ConceptRescueAndFilter.groupByConcept(records);
-	}
-
-	static String conceptKey(String text) {
-		return ConceptRescueAndFilter.conceptKey(text);
-	}
-
-	static List<ScoredEmbedding> growCluster(List<ScoredEmbedding> candidates,
-			int seedSize, double cosineThreshold) {
-		return CoherenceFilters.growCluster(candidates, seedSize, cosineThreshold);
-	}
-
-	static boolean isGapCoherent(List<ScoredEmbedding> scored, int cutoff,
-			double cosineThreshold) {
-		return CoherenceFilters.isGapCoherent(scored, cutoff, cosineThreshold);
-	}
-
-	static List<ScoredEmbedding> rescueBelowFloor(List<ScoredEmbedding> candidates,
-			List<ScoredEmbedding> scored, int adaptiveCutoff) {
-		return CoherenceFilters.rescueBelowFloor(candidates, scored, adaptiveCutoff);
-	}
-
-	static String[] expandKwTermsViaConceptSimilarity(String[] kwTerms,
-			float[] queryVector, ChartEmbedding[] embeddings,
-			EmbeddingProvider provider, PipelineConfig config) {
-		return ConceptKeywordMatching.expandKwTermsViaConceptSimilarity(
-				kwTerms, queryVector, embeddings, provider, config);
-	}
-
-	static boolean applySlimMarginGate(List<ScoredEmbedding> scored,
-			double maxSemanticScore, int queryTermCount,
-			int keywordMatchCount, boolean belowFloorRescued,
-			PipelineConfig config) {
-		return RankingPipelineGates.applySlimMarginGate(scored, maxSemanticScore,
-				queryTermCount, keywordMatchCount, belowFloorRescued, config);
-	}
-
-	static int findAdaptiveCutoff(List<ScoredEmbedding> scored, int limit, double minScore,
-			double gapMultiplier, double minGap) {
-		return EmbeddingRankingPipeline.findAdaptiveCutoff(scored, limit, minScore,
-				gapMultiplier, minGap);
-	}
-
-	static List<ChartEmbedding> filterPipeline(double[] semanticScores,
-			double[] keywordScores, ChartEmbedding[] embeddings,
-			String[] queryTerms, PipelineConfig config) {
-		return EmbeddingRankingPipeline.filterPipeline(semanticScores,
-				keywordScores, embeddings, queryTerms, config);
-	}
-
-	static FindSimilarResult findSimilar(List<ChartEmbedding> allEmbeddings,
-			EmbeddingProvider provider, String question,
-			String queryPrefix, PipelineConfig config) {
-		return RetrievalQuery.findSimilar(allEmbeddings, provider,
-				question, queryPrefix, config);
-	}
-
-	static List<SerializedRecord> findRelevantRecords(
-			List<ChartEmbedding> allEmbeddings,
-			List<SerializedRecord> allRecords,
-			EmbeddingProvider provider, String question,
-			String queryPrefix, PipelineConfig config) {
-		return RetrievalQuery.findRelevantRecords(allEmbeddings, allRecords,
-				provider, question, queryPrefix, config);
 	}
 }

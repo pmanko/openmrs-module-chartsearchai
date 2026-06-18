@@ -22,11 +22,8 @@ import org.openmrs.module.BaseModuleActivator;
 import org.openmrs.module.DaemonToken;
 import org.openmrs.module.DaemonTokenAware;
 import org.openmrs.module.chartsearchai.api.AuditLogPurgeTask;
-import org.openmrs.module.chartsearchai.api.EmbeddingIndexTask;
-import org.openmrs.module.chartsearchai.api.ElasticsearchIndexer;
 import org.openmrs.module.chartsearchai.api.impl.LlmProvider;
 import org.openmrs.module.chartsearchai.api.impl.WarmupExecutor;
-import org.openmrs.module.chartsearchai.embedding.OnnxEmbeddingProvider;
 import org.openmrs.scheduler.SchedulerService;
 import org.openmrs.scheduler.TaskDefinition;
 
@@ -37,9 +34,13 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator implements
 
 	private static final Logger log = LoggerFactory.getLogger(ChartSearchAiModuleActivator.class);
 
-	private static final String TASK_NAME = "Chart Search AI - Embedding Backfill";
-
 	private static final String PURGE_TASK_NAME = "Chart Search AI - Audit Log Purge";
+
+	/** Name of the scheduled task registered by pre-querystore versions, whose task class
+	 *  ({@code EmbeddingIndexTask}) no longer exists. Removed on startup so upgraded deployments do
+	 *  not retain a TaskDefinition pointing at a deleted class. Package-private so the activator's
+	 *  test references the same literal. */
+	static final String LEGACY_BACKFILL_TASK_NAME = "Chart Search AI - Embedding Backfill";
 
 	private static final long DAILY_INTERVAL_SECONDS = 86400L;
 
@@ -59,7 +60,7 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator implements
 		log.info("Chart Search AI Module started");
 		validateConfiguration();
 		provisionPrivilegesAndRoles();
-		registerBackfillTask();
+		removeLegacyBackfillTask();
 		registerAuditLogPurgeTask();
 	}
 
@@ -159,37 +160,6 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator implements
 		catch (Exception e) {
 			log.warn("Error closing LLM provider", e);
 		}
-		try {
-			OnnxEmbeddingProvider embeddingProvider = Context.getRegisteredComponent(
-					"chartSearchAi.embeddingProvider", OnnxEmbeddingProvider.class);
-			if (embeddingProvider != null) {
-				embeddingProvider.close();
-			}
-		}
-		catch (Exception e) {
-			log.warn("Error closing ONNX embedding provider", e);
-		}
-		try {
-			ElasticsearchIndexer esIndexer = Context.getRegisteredComponent(
-					"elasticsearchIndexer", ElasticsearchIndexer.class);
-			if (esIndexer != null) {
-				esIndexer.close();
-			}
-		}
-		catch (Exception e) {
-			log.warn("Error closing Elasticsearch indexer", e);
-		}
-		try {
-			org.openmrs.module.chartsearchai.api.LuceneIndexer luceneIndexer =
-					Context.getRegisteredComponent("luceneIndexer",
-							org.openmrs.module.chartsearchai.api.LuceneIndexer.class);
-			if (luceneIndexer != null) {
-				luceneIndexer.close();
-			}
-		}
-		catch (Exception e) {
-			log.warn("Error closing Lucene indexer", e);
-		}
 		log.info("Chart Search AI Module stopped");
 	}
 
@@ -202,16 +172,8 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator implements
 		if (!isRemote) {
 			validateModelFile(ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH, "LLM");
 		}
-
-		String preFilter = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
-		if (!"false".equalsIgnoreCase(preFilter.trim())) {
-			validateModelFile(ChartSearchAiConstants.GP_EMBEDDING_MODEL_FILE_PATH,
-					"ONNX embedding");
-			validateModelFile(ChartSearchAiConstants.GP_EMBEDDING_VOCAB_FILE_PATH,
-					"WordPiece vocabulary");
-		}
-
+		// chartsearchai no longer owns an embedding model — grounding embeds via querystore's
+		// provider (#51), so there is no ONNX model/vocab to validate here.
 	}
 
 	private void validateModelFile(String globalProperty, String label) {
@@ -240,31 +202,39 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator implements
 		}
 	}
 
-	private void registerBackfillTask() {
+	/**
+	 * Removes the "Chart Search AI - Embedding Backfill" scheduled task left behind by
+	 * pre-querystore versions. Its task class ({@code EmbeddingIndexTask}) was deleted when
+	 * chartsearchai stopped maintaining its own embedding store, so an upgraded deployment would
+	 * otherwise keep a {@link TaskDefinition} pointing at a class that no longer loads.
+	 *
+	 * <p>Idempotent and best-effort: a no-op on fresh installs, and if the scheduler cannot remove
+	 * the task (e.g. a JobRunr job left stuck in a {@code DELETED} state), it logs a WARN and leaves
+	 * the harmless task in place rather than failing module startup.
+	 */
+	void removeLegacyBackfillTask() {
 		SchedulerService schedulerService = Context.getSchedulerService();
-
-		TaskDefinition existing = schedulerService.getTaskByName(TASK_NAME);
-		if (existing != null) {
-			log.debug("Embedding backfill task already registered");
+		TaskDefinition existing = schedulerService.getTaskByName(LEGACY_BACKFILL_TASK_NAME);
+		if (existing == null) {
 			return;
 		}
-
-		TaskDefinition task = new TaskDefinition();
-		task.setName(TASK_NAME);
-		task.setDescription("Indexes patients that do not yet have embeddings. "
-				+ "Handles initial population when the module is installed on a system "
-				+ "with existing patient data. Only runs when embedding pre-filter is enabled. "
-				+ "Can be disabled from the scheduler UI once backfill is complete.");
-		task.setTaskClass(EmbeddingIndexTask.class.getName());
-		task.setRepeatInterval(0L);
-		task.setStartOnStartup(false);
-
 		try {
-			schedulerService.saveTaskDefinition(task);
-			log.info("Registered embedding backfill task");
+			// deleteTask both stops the task and removes its definition. Do NOT call shutdownTask
+			// first: on the platform-2.9 JobRunr scheduler, deleteTask internally shuts the task
+			// down, so a prior shutdownTask leaves the underlying job already DELETED and the
+			// internal shutdown then throws IllegalJobStateChangeException (DELETED -> DELETED),
+			// aborting the delete and leaving the legacy task behind.
+			schedulerService.deleteTask(existing.getId());
+			log.info("Removed legacy embedding backfill task (its EmbeddingIndexTask class no longer exists)");
 		}
 		catch (Exception e) {
-			log.error("Failed to register embedding backfill task", e);
+			// Non-fatal: the leftover task is harmless (it cannot run — its class is gone), so a
+			// failed auto-removal must not noise up startup with an ERROR/stack. WARN with an
+			// actionable next step. (Platform-2.9's JobRunr scheduler can leave a job stuck in a
+			// DELETED state that deleteTask cannot re-delete; the task can be removed by hand.)
+			log.warn("Could not auto-remove the legacy '{}' scheduled task (its EmbeddingIndexTask "
+					+ "class no longer exists). It is harmless and cannot run; delete it manually from "
+					+ "Manage Scheduler if desired. Cause: {}", LEGACY_BACKFILL_TASK_NAME, e.toString());
 		}
 	}
 

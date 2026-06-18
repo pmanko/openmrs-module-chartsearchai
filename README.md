@@ -9,7 +9,7 @@ For project background, community discussion, and roadmap, see the [wiki project
 The standalone download above includes the backend module, frontend ESM, and the following AI models — ready to run:
 
 - **LLM**: [Gemma 4 E4B Instruct (Q4_K_M)](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF) — ~5 GB, the module's default model, for answering clinical questions. (A larger Gemma 4 26B MoE bundle can be built via the workflow's `gguf_model_url` input.)
-- **Retrieval + embedding**: the [querystore module](https://github.com/openmrs/openmrs-module-querystore) with [e5-base-v2](https://huggingface.co/intfloat/e5-base-v2) (~440 MB ONNX) — the recommended hybrid retrieval path, pre-enabled (`chartsearchai.querystore.enabled=true`, Lucene backend). The module's own optional pre-filter embedder (all-MiniLM-L6-v2) is not bundled; see the `chartsearchai.embedding.modelFilePath` property description if you enable `chartsearchai.embedding.preFilter`.
+- **Retrieval + embedding**: the [querystore module](https://github.com/openmrs/openmrs-module-querystore) with [e5-base-v2](https://huggingface.co/intfloat/e5-base-v2) (~440 MB ONNX) — querystore is a required module and owns the retrieval path. chartsearchai no longer ships its own embedder; retrieval and citation grounding both use querystore's model.
 
 > **Before running the download, see [Standalone platform notes](#standalone-platform-notes)** — in particular the **Windows JDK requirement** (the local embedder won't load on an old or Oracle JDK).
 
@@ -22,12 +22,11 @@ The standalone download above includes the backend module, frontend ESM, and the
 - [Setup](#setup)
   - [1. Build](#1-build)
   - [2. Download the LLM model](#2-download-the-llm-model-local-mode-only)
-  - [3. Download the embedding model](#3-download-the-embedding-model-optional-two-variants)
+  - [3. Download the embedding model](#3-download-the-embedding-model-optional)
   - [4. Install](#4-install)
   - [5. Configure](#5-configure)
   - [6. Grant privileges](#6-grant-privileges)
   - [7. Indexing](#7-indexing)
-  - [Testing the Elasticsearch pipeline locally](#testing-the-elasticsearch-pipeline-locally)
 - [Query behavior](#query-behavior)
 - [API](#api)
   - [Search](#search)
@@ -69,8 +68,8 @@ Notes:
 Per-platform setup for the [downloaded standalone](#chart-search-ai-module) (Java 21+ required; see the Windows note for *which* JDK):
 
 - **Windows:** run it with a JDK whose bundled MSVC runtime is **≥ 14.40** (Visual Studio 2022 17.10+) — [**Microsoft Build of OpenJDK 21.0.8+**](https://learn.microsoft.com/en-us/java/openjdk/download) (recommended), a current [**Eclipse Temurin 21**](https://adoptium.net/temurin/releases/?version=21), or **Azul Zulu**. The local ONNX embedder (querystore retrieval) is compiled against that runtime; an older JDK — **Oracle JDK in particular ships an outdated `msvcp140.dll` and fails even at 21/24** — makes ONNX fail to initialize (`onnxruntime.dll: A dynamic link library (DLL) initialization routine failed`) and chart queries error out. Check yours with `java -version` (vendor matters more than the number). See [onnxruntime#24287](https://github.com/microsoft/onnxruntime/issues/24287).
-- **macOS:** if a downloaded build fails to start with a `libpcre2` dyld error, run `xattr -dr com.apple.quarantine <extracted-directory>` once and retry. Current builds handle this automatically at launcher startup, rebuild the patient search index on first run, and land directly on the login page — all verified end-to-end against a quarantined download.
-- **Intel (x86_64) Mac:** Apple Silicon Macs run the bundled database out of the box. Intel Macs have no bundled MariaDB (no maintained x86_64 macOS build exists), so install one first with `brew install mariadb`; the standalone then uses it automatically.
+- **macOS — requires macOS 14 (Sonoma) or newer.** The bundled native binaries (llama-server, MariaDB, the embedder dylibs) are built for the macOS 14 SDK, so older releases — e.g. High Sierra 10.13 — can't launch them and the standalone exits at startup. On an unsupported macOS, use [Docker](#docker) or the [demo server](#try-it-on-the-demo-server) instead. If a (supported) build fails to start with a `libpcre2` dyld error, run `xattr -dr com.apple.quarantine <extracted-directory>` once and retry — current builds self-heal this at launcher startup, rebuild the patient search index on first run, and land on the login page.
+- **Apple Silicon vs Intel Mac:** Apple Silicon is the supported Mac target and runs the bundled database out of the box. Intel (x86_64) Macs ship without a bundled MariaDB — there's no prebuilt x86_64 macOS binary to bundle (Homebrew publishes no x86_64 bottle, MariaDB has no macOS `.pkg`, and the bundleable `mariaDB4j-db-mac64` stops at 10.2.11) — so install one with `brew install mariadb` (on Intel, Homebrew builds a current MariaDB from source) and the standalone uses it automatically. This still requires macOS 14+; otherwise prefer Apple Silicon, Windows, or Docker.
 
 ## Requirements
 
@@ -80,7 +79,7 @@ Per-platform setup for the [downloaded standalone](#chart-search-ai-module) (Jav
 - RAM for local LLM inference (not required when using a remote LLM):
   - **~6–8GB RAM** for the module's default model — Gemma 4 E4B (~5GB GGUF), as bundled with the standalone download. Suitable for most deployments adding the module to an existing OpenMRS site.
   - **~24GB+ RAM** for the production-grade Gemma 4 26B MoE (optional; build the standalone bundle with the workflow's `gguf_model_url` input and point `chartsearchai.llm.modelFilePath` at the downloaded filename).
-- Elasticsearch 8.14+ *(optional, for the hybrid retrieval pipeline; the default embedding and Lucene pipelines require no external services)*
+- The [openmrs-module-querystore](https://github.com/openmrs/openmrs-module-querystore) module — required; it owns all retrieval, indexing, and embedding.
 
 ## Docker
 
@@ -90,7 +89,7 @@ cd openmrs-module-chartsearchai
 docker compose up --build
 ```
 
-No JDK or model downloads needed — the Docker build handles everything. On first start, the e5-base-v2 sentence embedder (~440MB), the default LLM (Gemma 4 E4B, ~5GB), and a standby Gemma 4 E2B (~3GB, for operator-driven A/B latency testing via `chartsearchai.llm.modelFilePath`) are downloaded automatically from HuggingFace and persisted in a Docker volume (~8GB total LLM footprint). The embedder is provisioned for the recommended [querystore deployment](#querystore-deployment-recommended) — set `chartsearchai.querystore.enabled=true` and the matching querystore GPs after first start (see that section for the exact wiring).
+No JDK or model downloads needed — the Docker build handles everything. On first start, the e5-base-v2 sentence embedder (~440MB), the default LLM (Gemma 4 E4B, ~5GB), and a standby Gemma 4 E2B (~3GB, for operator-driven A/B latency testing via `chartsearchai.llm.modelFilePath`) are downloaded automatically from HuggingFace and persisted in a Docker volume (~8GB total LLM footprint). The embedder is provisioned for the [querystore deployment](#querystore-deployment) — set the matching querystore GPs after first start (see that section for the exact wiring).
 
 First startup takes 5–15 minutes (model downloads + database initialization). Once the logs show that OpenMRS has started, open http://localhost/openmrs/spa (default credentials: `admin` / `Admin123`). Subsequent starts are fast since the data volume persists.
 
@@ -138,24 +137,22 @@ To switch models, update `chartsearchai.llm.modelFilePath` — no rebuild needed
 | Gemma 4 E4B | ~194 s | not measured (KV-cache reuse would help here too, just less in relative terms) |
 | Gemma 4 E2B | ~63 s | ~8.5 s |
 
-Swapping the served model from E4B to E2B cut cold-query latency by ~3× on this CPU-only deployment. The warm number reflects llama.cpp reusing the prompt's KV cache when an identical question is re-issued; diverse production traffic only partially benefits (the chart prefix reuses, the per-question suffix re-prefills). The same KV-cache mechanism also accelerates *different* follow-up questions on the same patient when the chart prefix is stable across calls — see the [Prompt-stability caveat](#querystore-deployment-recommended) under Querystore deployment for the measured ~4–7 s follow-up numbers. Quality also diverges on the same prompt: E4B cited 2 `condition` resources, E2B cited 3 `diagnosis` resources with additional metadata in the answer text. A single observation isn't a quality verdict — run the [Evals](#evals) suite before promoting E2B as the served default.
+Swapping the served model from E4B to E2B cut cold-query latency by ~3× on this CPU-only deployment. The warm number reflects llama.cpp reusing the prompt's KV cache when an identical question is re-issued; diverse production traffic only partially benefits (the chart prefix reuses, the per-question suffix re-prefills). The same KV-cache mechanism also accelerates *different* follow-up questions on the same patient when the chart prefix is stable across calls — see the [Prompt-stability caveat](#querystore-deployment) under Querystore deployment for the measured ~4–7 s follow-up numbers. Quality also diverges on the same prompt: E4B cited 2 `condition` resources, E2B cited 3 `diagnosis` resources with additional metadata in the answer text. A single observation isn't a quality verdict — run the [Evals](#evals) suite before promoting E2B as the served default.
 
 Gemma 4 26B MoE is recommended for production deployments because it follows the system prompt rules (never infer, cite every record, complete enumeration on list queries) reliably without needing reasoning as a safety scaffold. Smaller models work but trade off either safety or list completeness depending on the query. The MoE architecture activates only ~3.8B parameters per token, so per-token speed is comparable to a 4B dense model despite the 26B total size.
 
-### 3. Download the embedding model *(optional, two variants)*
+### 3. Download the embedding model *(optional)*
 
-The embedder is only needed when retrieval is pre-filtered. Two configurations use it, with different model choices for different architectural reasons:
+The embedding model belongs to querystore — chartsearchai no longer ships its own. It is used both for querystore's retrieval index and for chartsearchai's citation grounding (the verifier embeds with the same model that built the index).
 
-**Querystore-backed retrieval (recommended)** — set `chartsearchai.querystore.enabled=true`. The querystore module handles retrieval; the LLM filters the top-K it returns. See [Querystore deployment](#querystore-deployment-recommended) below for the global properties this path expects and [ADR Decision 22](docs/adr.md#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path) for the model rationale. The LLM is still required (see [step 2](#2-download-the-llm-model-local-mode-only) or use a remote engine). Download `intfloat/e5-base-v2` (~440MB):
+**Querystore-backed retrieval** — the querystore module handles retrieval; the LLM filters the top-K it returns. See [Querystore deployment](#querystore-deployment) below for the global properties this path expects and [ADR Decision 22](docs/adr.md#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path) for the model rationale. The LLM is still required (see [step 2](#2-download-the-llm-model-local-mode-only) or use a remote engine). Download `intfloat/e5-base-v2` (~440MB):
 
 - ONNX model: https://huggingface.co/Xenova/e5-base-v2/resolve/main/onnx/model.onnx *(self-contained — see [ADR Decision 22](docs/adr.md#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path) for why this source over the canonical `intfloat/e5-base-v2`)*
 - Vocab: https://huggingface.co/Xenova/e5-base-v2/resolve/main/vocab.txt
 
-Place both at `<openmrs-application-data-directory>/querystore/` and wire the global properties documented in [Querystore deployment](#querystore-deployment-recommended) below.
+Place both at `<openmrs-application-data-directory>/querystore/` and wire the global properties documented in [Querystore deployment](#querystore-deployment) below.
 
-**Chartsearchai-side pre-filter pipeline (legacy)** — set `chartsearchai.embedding.preFilter=true` and leave `chartsearchai.querystore.enabled` at `false`. This pipeline runs chartsearchai's own adaptive filtering stage (similarity ratio, gap detection, z-score gates) whose thresholds are tuned for `all-MiniLM-L6-v2`'s score-distribution geometry. Download both `model.onnx` and `vocab.txt` (~90MB total) from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 and place them at `<openmrs-application-data-directory>/chartsearchai/`. See [ADR Decision 19](docs/adr.md#decision-19-retain-all-minilm-l6-v2-as-the-embedding-model) for why this pipeline retains L6-v2 and [ADR Decision 22](docs/adr.md#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path) for why the querystore path doesn't.
-
-The default — full chart, no retrieval pre-filtering — uses neither embedder and needs no download.
+> chartsearchai's own embedding/Lucene/Elasticsearch pre-filter pipelines were removed in the querystore migration (#51); querystore is now the only retrieval and grounding embedder.
 
 ### 4. Install
 
@@ -195,56 +192,35 @@ The remote engine works with any server that implements the OpenAI chat completi
 
 For Anthropic's OpenAI-compat endpoint, point `chartsearchai.llm.remote.endpointUrl` at it and set `chartsearchai.llm.remote.modelName` to a Claude model identifier (e.g. `claude-opus-4-7`). The module emits Anthropic-compatible request bodies automatically: `response_format: json_schema` (Anthropic's compat endpoint rejects `json_object`) and, on Claude Opus 4.7, `top_k: 1` instead of `temperature` (Anthropic deprecated `temperature`/`top_p` on that model). Other Claude models (Opus 4.5/4.6, Haiku 4.5) keep using `temperature: 0`.
 
-#### Querystore deployment *(recommended)*
+#### Querystore deployment
 
-When `chartsearchai.querystore.enabled=true`, chartsearchai delegates retrieval to the [openmrs-module-querystore](https://github.com/openmrs/openmrs-module-querystore) module — querystore handles indexing and top-K retrieval, and the local LLM filters the result set. The chartsearchai-side embedding pipeline (`chartsearchai.embedding.preFilter`, similarity ratio, gap detection, z-score gates) is bypassed entirely. This is the path the Docker image (`Dockerfile.backend` + `backend-init.sh`) provisions by default. See [ADR Decision 22](docs/adr.md#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path) for the full architectural narration.
+chartsearchai delegates all retrieval to the [openmrs-module-querystore](https://github.com/openmrs/openmrs-module-querystore) module (a required dependency) — querystore handles indexing and top-K retrieval, and the local LLM reasons over the result set. chartsearchai's own embedding/Lucene/Elasticsearch pipelines were removed in the querystore migration (#51), so this is the only retrieval path. It is what the Docker image (`Dockerfile.backend` + `backend-init.sh`) provisions by default. See [ADR Decision 22](docs/adr.md#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path) for the full architectural narration.
 
 **Deployment checklist:**
 
 1. LLM available — local GGUF ([step 2](#2-download-the-llm-model-local-mode-only)) or remote engine.
-2. e5-base-v2 ONNX + vocab placed at `<openmrs-application-data-directory>/querystore/` ([step 3](#3-download-the-embedding-model-optional-two-variants)).
+2. e5-base-v2 ONNX + vocab placed at `<openmrs-application-data-directory>/querystore/` ([step 3](#3-download-the-embedding-model-optional)).
 3. Global properties set per the table below.
 4. Indexing is lazy on first chart access — no backfill task needed.
 
 | Property | Value | Description |
 |----------|-------|-------------|
-| `chartsearchai.querystore.enabled` | `true` | Route retrieval through the querystore module |
-| `chartsearchai.querystore.topK` | `30` | Number of records querystore returns per query; the LLM then filters them |
+| `chartsearchai.querystore.topK` | `30` | Number of records querystore returns per query; the LLM then filters them. querystore is a required module and is always the retrieval path — there is no toggle to disable it |
 | `querystore.embedding.modelFilePath` | `querystore/model.onnx` | Path to the ONNX embedder, relative to `<openmrs-application-data-directory>`. Querystore ships this with an empty default (the module is model-agnostic), so a fresh install must set it |
 | `querystore.embedding.vocabFilePath` | `querystore/vocab.txt` | Path to the WordPiece vocab, same convention |
 | `querystore.embedding.queryModelFilePath` | *(empty)* | Leave empty for `e5-base-v2`; set only for dual-encoder models like MedCPT |
 
-**Migration caveat — treat the off→on flip as one-way.** If you previously ran the chartsearchai embedding pipelines (`chartsearchai.querystore.enabled=false` + `chartsearchai.embedding.preFilter=true`), flipping querystore on does not refresh the pre-existing Lucene/Elasticsearch/MySQL embedding indices — chartsearchai's AOP advice + backfill task short-circuit on the querystore path to avoid double-indexing. The legacy indices then stop receiving updates. If you later flip querystore back off, retrieval falls back to a stale snapshot (and any patient merges that happened while querystore was on never reached the legacy indices, which leaks the merged patient's data through retrieval). Production deployments should treat the transition as a one-way migration; if you need to retain the option to fall back, run `EmbeddingIndexTask` to rebuild the legacy indices before disabling querystore again.
+**Migration caveat — the legacy embedding pipelines are no longer self-maintaining.** chartsearchai no longer refreshes its own Lucene/Elasticsearch/MySQL embedding indices when charts change: the per-service AOP advice now only invalidates the answer cache, and the bulk backfill task has been removed (querystore owns retrieval-index freshness via core events). If you run the legacy preFilter pipelines (`chartsearchai.querystore.enabled=false` + `chartsearchai.embedding.preFilter=true`), embeddings are still built lazily on first chart access but then go progressively stale on every subsequent edit, and patient merges leak the merged patient's data through retrieval. There is no longer a rebuild task, so treat the querystore-backed path (`chartsearchai.querystore.enabled=true`) as the supported configuration for retrieval that stays current with edits.
 
 **Prompt-stability caveat — when full-chart mode is actually faster on small charts.** When `chartsearchai.querystore.enabled=true` and `chartsearchai.embedding.preFilter=false` (the recommended production shape), `ChartBuildingStrategy` routes to `QueryStoreService.getPatientChart` (querystore Decision 15) — the chart bytes are byte-identical across consecutive queries on the same patient, so the `<system> + <chart>` prefix stays stable and the KV cache reuses it. The payoff is contingent on the [Warmup](#warmup) endpoint priming that prefix before the user's first question — without it, the first question still pays the full cold-prefill cost. When `chartsearchai.querystore.enabled=true` and `chartsearchai.embedding.preFilter=true`, querystore selects a different top-K record set for each question, so the prompt body changes between consecutive queries — breaking the KV-cache reuse. On large charts the per-question top-K is the right trade (small top-K is cheaper to prefill from scratch than the whole chart); on *small* charts that fit comfortably in the LLM context, full-chart mode is faster overall. The legacy `chartsearchai.querystore.enabled=false` + `chartsearchai.embedding.preFilter=false` path also produces byte-identical chart prefixes (the in-process `chartSerializer.serialize(patient)` is deterministic), so the KV cache still reuses across follow-ups, but each call pays an extra 300–500 ms of serialization that the querystore path avoids. Pre-Decision-15 measured numbers (CPU-only Gemma 4 E2B, Betty's ~1.8K-token chart, warmup primed): legacy serializer path first ask ~10 s, follow-ups ~4–7 s across three different questions in sequence (the KV cache caught the byte-identical prompt prefix). The querystore + preFilter=false path is expected to match those follow-up numbers — the chart prefix is byte-identical on the same shape — minus the ~300–500 ms per-call serialize cost that querystore avoids. Not re-measured against the post-Decision-15 dispatch; the older 11s-with-flat-follow-ups number was attributable to the pre-dispatch behaviour (querystore on = question-conditioned top-K) and no longer applies.
 
-A follow-up will populate these defaults in the querystore module's `config.xml` so fresh deploys work without manual GP wiring. The GPs are already declared there with empty values, which is why they appear in **Admin > Settings** today; until the defaults land, set them yourself after first start. See [ADR Decision 22](docs/adr.md#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path) for why this path uses `e5-base-v2` instead of the `all-MiniLM-L6-v2` that the chartsearchai-side pipeline retains.
+A follow-up will populate these defaults in the querystore module's `config.xml` so fresh deploys work without manual GP wiring. The GPs are already declared there with empty values, which is why they appear in **Admin > Settings** today; until the defaults land, set them yourself after first start. See [ADR Decision 22](docs/adr.md#decision-22-e5-base-v2-for-the-querystore-backed-retrieval-path) for why this path uses `e5-base-v2`.
 
-#### Retrieval pipeline
-
-| Property | Default | Description |
-|----------|---------|-------------|
-| `chartsearchai.embedding.preFilter` | `false` | When `true`, uses the selected retrieval pipeline to narrow patient records to the most relevant ones before sending to the LLM. The default is `false` (full chart) — pre-filtering is faster on huge charts but can omit records the LLM needs for negative reasoning (e.g. correctly answering "any allergies?" requires having seen the empty allergy section, not just an absence of matches in the filtered set). Enable only when context-window size is the binding constraint |
-| `chartsearchai.retrieval.pipeline` | `embedding` | Selects the retrieval pipeline: `embedding` (default) uses vector similarity via an ONNX model with custom scoring; `lucene` uses Apache Lucene BM25 text search; `hybrid` combines Lucene BM25 and embedding kNN search using Reciprocal Rank Fusion (RRF) — same quality as the Elasticsearch pipeline but with no external services required; `elasticsearch` uses Elasticsearch hybrid search combining BM25 text and kNN vector search via RRF (requires Elasticsearch 8.14+ configured in OpenMRS). All require `preFilter` to be `true`. Records are indexed automatically on first access. Changing this setting takes effect on the next query |
-
-#### Embedding pipeline tuning
-
-These settings apply when `chartsearchai.retrieval.pipeline` is `embedding` (the default). The Elasticsearch pipeline also uses `scoreGapMultiplier`, `minScoreGap`, `gapValidationCosineThreshold`, `keywordWeight`, and `similarityRatio` in its post-retrieval filter pipeline. They have no effect on the Lucene or hybrid pipelines.
+#### Retrieval
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `chartsearchai.embedding.topK` | `10` | Maximum number of records sent to the LLM per query. When the query mentions a specific clinical type (e.g., "medications", "allergies", "lab results"), all records of that type are included regardless of topK, and remaining slots are filled with contextual records from other types. For other queries, topK is applied only when some candidates lack keyword matches; when every candidate has a keyword match, topK is bypassed because gap detection and ratio filtering already identified the relevant cluster. Type detection uses keyword matching — for example, "medications" and "drugs" both match drug orders, while "blood pressure" and "bp" both match observations |
-| `chartsearchai.embedding.similarityRatio` | `0.80` | Minimum similarity score as a fraction of the top result's score. Records scoring below this ratio are excluded even if within the topK limit. Must be between 0 and 1 |
-| `chartsearchai.embedding.scoreGapMultiplier` | `2.5` | Controls adaptive topK by detecting natural cluster boundaries in similarity scores. Higher values include more records; lower values cut more aggressively. Set to a very large value (e.g. 999) to disable gap detection |
-| `chartsearchai.embedding.minScoreGap` | `0.10` | Minimum absolute gap between consecutive similarity scores required for the adaptive cutoff detector to trigger. Prevents premature cutting when a relatively large gap (compared to a tight cluster's running average) is still small in absolute terms. Only applies when gap detection is active |
-| `chartsearchai.embedding.gapValidationCosineThreshold` | `0.47` | Cosine similarity threshold for validating whether a detected gap is intra-topic or inter-topic. When the average cosine between records above and below the gap meets or exceeds this value, the gap is considered intra-topic and the cut is skipped. Must be between 0 and 1 |
-| `chartsearchai.embedding.keywordWeight` | `0.3` | Additive keyword bonus weight in the hybrid retrieval formula: `finalScore = semanticScore + weight × keywordScore`. Keyword overlap can only increase the score, never decrease it. Set to `0` to disable keyword matching |
-| `chartsearchai.embedding.typeBoostFactor` | `1.0` | Score multiplier applied to records whose resource type matches the query intent (e.g., drug orders when the query is about medications). Set to `1.0` to disable type boosting (default). Values like `1.2`–`1.5` provide moderate boosting. Must be between 1.0 and 3.0 |
-| `chartsearchai.embedding.queryPrefix` | *(empty)* | Prefix prepended to the user query before embedding. Leave empty for models like all-MiniLM-L6-v2 that were not trained with instruction prefixes. Set to `search_query: ` or `Represent this sentence for searching relevant passages: ` for models that support instruction-aware queries (e.g., BGE) |
-| `chartsearchai.embedding.maxSequenceLength` | `256` | Maximum WordPiece token sequence length for embedding input. Increase when using models that support longer contexts (e.g., 512 for BGE models). Must be between 32 and 8192 |
-| `chartsearchai.embedding.modelFilePath` | — | Required when using the embedding, hybrid, or elasticsearch pipeline. Relative path to the ONNX model file (all-MiniLM-L6-v2), e.g. `chartsearchai/all-MiniLM-L6-v2.onnx`. Not needed for the Lucene pipeline |
-| `chartsearchai.embedding.queryModelFilePath` | *(empty)* | Optional separate query-encoder ONNX model for dual-encoder architectures (e.g. MedCPT). When set, queries are embedded with this model while records use `chartsearchai.embedding.modelFilePath`. Leave empty to use a single encoder for both. Example for MedCPT: `chartsearchai/MedCPT/Query-Encoder/model.onnx` |
-| `chartsearchai.embedding.vocabFilePath` | — | Required when using the embedding, hybrid, or elasticsearch pipeline. Relative path to the WordPiece `vocab.txt` file, e.g. `chartsearchai/vocab.txt`. Not needed for the Lucene pipeline |
+| `chartsearchai.embedding.preFilter` | `false` | When `true`, narrows the patient's records to querystore's top-K before sending them to the LLM; when `false` (default), the full chart is sent. querystore is a required module and always the retrieval path. Pre-filtering is faster on huge charts but can omit records the LLM needs for negative reasoning (e.g. correctly answering "any allergies?" requires having seen the empty allergy section, not just an absence of matches in the filtered set). Enable only when context-window size is the binding constraint |
 
 #### LLM tuning
 
@@ -267,7 +243,7 @@ After the LLM answers, each citation can be verified against the record it point
 | Property | Default | Description |
 |----------|---------|-------------|
 | `chartsearchai.grounding.enabled` | `false` | Master switch. When `true`, every cited record is checked for grounding after the answer is produced; citations that fail are flagged as unverified. The answer is never blocked or rewritten |
-| `chartsearchai.grounding.minCosine` | `0.40` | Tier-1 floor: minimum cosine similarity between a cited record's text and the answer sentence that cites it. Catches grossly off-topic citations, not subtle subject/negation flips. Model-dependent — `0.40` suits all-MiniLM-L6-v2 but is far too low for e5; set ~`0.82` on an e5/querystore deployment (the verifier reuses querystore's embedder when `chartsearchai.querystore.enabled=true`). Must be between 0 and 1 |
+| `chartsearchai.grounding.minCosine` | `0.40` | Tier-1 floor: minimum cosine similarity between a cited record's text and the answer sentence that cites it. Catches grossly off-topic citations, not subtle subject/negation flips. Model-dependent — the verifier embeds with querystore's model; the default `0.40` is far too low for `e5-base-v2`, so set ~`0.82` on an e5 deployment. Must be between 0 and 1 |
 | `chartsearchai.grounding.entailment.enabled` | `false` | Tier-2: confirm each citation with a yes/no LLM entailment judgement of whether the record actually supports the sentence citing it. Catches high-overlap-but-false citations (the record says a *relative* had X, or negates X) that cosine cannot separate. Verified in a batched LLM call. Tier-1 cosine is computed lazily in this mode, so Tier-2 works even when no embedding model is configured. Requires `chartsearchai.grounding.enabled` |
 | `chartsearchai.grounding.async` | `false` | *(Streaming only)* Emit the `done` event as soon as the answer is complete (references unverified) and deliver verdicts afterward in a trailing `grounded` event — moving the Tier-2 tail off the user's perceived completion time. Clients must keep consuming the SSE stream after `done`. The blocking `/search` endpoint is unaffected and always returns final verdicts. Requires `chartsearchai.grounding.enabled`. See [Streaming search (SSE)](#streaming-search-sse) |
 | `chartsearchai.grounding.clauseScoped` | `false` | When `true`, a citation in a sentence that cites multiple records is checked against the answer text up to and including its own `[N]` marker, rather than the whole compound sentence — flagging a citation that supports its own clause but not a later clause cited by a different record. Only affects which text a citation is verified against; never changes the answer or which records are cited |
@@ -314,150 +290,17 @@ The `drugSafety.*` checks require both `chartsearchai.drugReference.enabled` and
 
 ### 7. Indexing
 
-When `chartsearchai.querystore.enabled` is `true` (the recommended deployment), the querystore module performs its own lazy per-patient projection on first chart access and bypasses chartsearchai's own indexing — querystore deployers can stop here and consult the [openmrs-module-querystore](https://github.com/openmrs/openmrs-module-querystore) repo for the indexing details. The rest of this section describes the chartsearchai-side indexing that runs only when querystore is disabled.
-
-When `chartsearchai.querystore.enabled` is `false` and `chartsearchai.embedding.preFilter` is `true`, chartsearchai indexes patient records itself on first chart access for whichever retrieval pipeline is active (see the per-pipeline subsections below). Subsequent data changes trigger automatic re-indexing via AOP hooks on encounter, obs, condition, diagnosis, allergy, order, program enrollment, medication dispense, and patient merge operations. With both flags off (the module defaults), indexing is skipped entirely — full-chart mode does not need an embedding index.
-
-**Embedding pipeline** (default for the chartsearchai-side pre-filter path): Uses an ONNX embedding model for vector similarity search. A bulk backfill task (**"Chart Search AI - Embedding Backfill"**) is available in **Admin > Scheduler > Manage Scheduler** to pre-index all patients. The default model is all-MiniLM-L6-v2 (general-purpose, 384 dimensions); see [ADR Decision 19](docs/adr.md#decision-19-retain-all-minilm-l6-v2-as-the-embedding-model) for why this pipeline retains it. Any BERT-based ONNX embedding model can be used as a drop-in replacement by updating `chartsearchai.embedding.modelFilePath` and `chartsearchai.embedding.vocabFilePath`, but the pipeline's threshold constants are tuned to L6-v2's score-distribution geometry — model swaps may require re-tuning (see `PipelineConfig` in the api source for the per-model defaults). Embedding dimensions are auto-detected from the model output, so models with any dimension size work without code changes. After switching models, existing embeddings are incompatible — run the backfill task to re-index all patients with the new model.
-
-**Lucene pipeline** (`chartsearchai.retrieval.pipeline=lucene`): Uses Apache Lucene BM25 text search with English stemming. No ONNX model files are required. The Lucene index is stored at `<openmrs-application-data-directory>/chartsearchai/lucene-index/` and is built automatically on first patient access. This pipeline is simpler to set up (no model download needed) and may be preferred for environments where the ONNX model is unavailable.
-
-**Hybrid pipeline** (`chartsearchai.retrieval.pipeline=hybrid`): Combines Lucene BM25 text search with embedding kNN semantic search using Reciprocal Rank Fusion (RRF), the same algorithm used by the Elasticsearch pipeline. Provides Elasticsearch-quality hybrid retrieval without requiring any external services — everything runs in-process. Requires the ONNX embedding model (same as the embedding pipeline) for the kNN side. Both the Lucene index and embedding vectors are built automatically on first patient access. This is the best option when you want hybrid BM25+semantic search quality but don't have an Elasticsearch cluster.
-
-**Elasticsearch pipeline** (`chartsearchai.retrieval.pipeline=elasticsearch`): Uses Elasticsearch hybrid search combining BM25 text search with kNN dense vector search via Reciprocal Rank Fusion (RRF). Requires Elasticsearch 8.14+ configured in OpenMRS (set `hibernate.search.backend.uris` in runtime properties). Also requires the ONNX embedding model (same as the embedding pipeline) to compute vectors for the kNN side of the hybrid search. Patient records are indexed into a shared `chartsearchai-patient-records` Elasticsearch index with both text and embedding vector fields. The RRF algorithm fuses rankings from both signals — this means queries like "any cancer?" can find semantic matches (e.g. Kaposi sarcoma) via kNN even when the literal term is absent from the records, while also benefiting from BM25's lexical matching. If Elasticsearch is not available at query time, the pipeline automatically falls back to the embedding pipeline. After switching embedding models, delete the `chartsearchai-patient-records` index from Elasticsearch — it will be recreated with the new model's dimensions on the next patient access.
-
-**Choosing a pipeline:**
-
-| Consideration | Embedding *(default)* | Lucene | Hybrid | Elasticsearch |
-|--------------|----------------------|--------|--------|---------------|
-| External dependencies | ONNX model files only | None | ONNX model files only | Elasticsearch 8.14+ cluster + ONNX model files |
-| Semantic matching (e.g., "cancer" finds "Kaposi sarcoma") | Yes | No | Yes (via kNN) | Yes (via kNN) |
-| Absent-data detection (returns "no records about X" instead of false positives) | Yes (z-score gate) | No | No | Yes (via post-filter pipeline) |
-| Type-aware auto-expand (e.g., "any conditions?" returns all conditions) | Yes | No | No | No |
-| Adaptive result filtering (gap detection, similarity ratio) | Yes | No | No | Yes (post-retrieval filter pipeline) |
-| Keyword matching | Yes (hybrid scoring) | Yes (BM25 with stemming) | Yes (BM25 + kNN via RRF) | Yes (BM25 + kNN via RRF) |
-| Tunable parameters | Many (topK, similarityRatio, scoreGapMultiplier, keywordWeight, etc.) | Few (topK only) | Few (topK only) | Few (topK only; scoring delegated to Elasticsearch) |
-| Compute location | In-process (JVM) | In-process (JVM) | In-process (JVM) | Elasticsearch cluster |
-| Graceful fallback | N/A (default) | Falls back to full chart on error | Falls back to full chart on error | Falls back to embedding pipeline |
-
-The **embedding pipeline** is recommended for most deployments — it runs entirely in-process, has the most sophisticated filtering (z-score gate for absent-data detection, gap detection for adaptive result cutoff, type-aware expansion), and requires no external services. The **Lucene pipeline** is the simplest option when the ONNX model is unavailable, but lacks semantic understanding. The **hybrid pipeline** combines Lucene BM25 with embedding kNN via RRF, but it underperforms the embedding pipeline on the eval dataset because its fixed-size `topK` output cannot adapt: it always returns exactly `topK` records, failing on adversarial queries (can't return empty) and broad queries like blood pressure where more than `topK` records are relevant. The embedding pipeline's adaptive filtering (gap detection, floor gates, type-aware expansion) handles these cases. The **Elasticsearch pipeline** is best when you already have an ES cluster in your infrastructure and want to offload retrieval compute. ES results are post-filtered through the same scoring and gap detection pipeline as the embedding pipeline, so queries like "any cancer?" return only genuinely relevant records (e.g. Kaposi sarcoma) rather than the full RRF result set.
-
-### Testing the Elasticsearch pipeline locally
-
-The module auto-detects whether the backend is Elasticsearch or OpenSearch and adapts its queries accordingly. **OpenSearch is recommended** because RRF is free; Elasticsearch requires a paid Platinum or Enterprise subscription for RRF.
-
-To test the Elasticsearch pipeline with the OpenMRS SDK:
-
-**1. Start OpenSearch 2.19+ (recommended) or Elasticsearch 8.14+ with Docker:**
-
-OpenSearch (RRF is free):
-
-```
-docker run -d --name opensearch \
-  -p 9200:9200 \
-  -e "discovery.type=single-node" \
-  -e "DISABLE_SECURITY_PLUGIN=true" \
-  opensearchproject/opensearch:2.19.0
-```
-
-Install the **analysis-phonetic** plugin (required by the OpenMRS platform for Soundex-based person name search):
-
-```
-docker exec opensearch bin/opensearch-plugin install analysis-phonetic
-docker restart opensearch
-```
-
-<details>
-<summary>Alternatively, use Elasticsearch (requires paid license for RRF)</summary>
-
-```
-docker run -d --name elasticsearch \
-  -p 9200:9200 \
-  -e "discovery.type=single-node" \
-  -e "xpack.security.enabled=false" \
-  elasticsearch:8.17.2
-```
-
-```
-docker exec elasticsearch bin/elasticsearch-plugin install analysis-phonetic
-docker restart elasticsearch
-```
-
-Start a 30-day trial to enable RRF:
-
-```
-curl -X POST 'http://localhost:9200/_license/start_trial?acknowledge=true'
-```
-
-</details>
-
-Verify it's running: `curl http://localhost:9200/_cluster/health`
-
-**2. Configure OpenMRS to use Elasticsearch:**
-
-Add to your OpenMRS runtime properties file (e.g., `~/openmrs/openmrs-runtime.properties`):
-
-```
-hibernate.search.backend.type=elasticsearch
-hibernate.search.backend.analysis.configurer=elasticsearchConfig
-hibernate.search.backend.uris=http://localhost:9200
-hibernate.search.backend.discovery.enabled=false
-```
-
-> **Notes:**
-> - The `analysis.configurer` must match the backend type — use `elasticsearchConfig` for Elasticsearch and `luceneConfig` for Lucene (the default). If you see `Unknown filter type [phonetic]` errors, the `analysis-phonetic` plugin is missing from your Elasticsearch instance.
-> - Set `discovery.enabled=false` when running a single local node. When enabled, Hibernate Search may discover and connect to internal Docker network IPs (e.g., `172.17.x.x`) that are unreachable from the host, causing `Timeout connecting` errors.
-
-Or if using the SDK with Docker, pass the environment variable when running the server:
-
-```
-OMRS_SEARCH=elasticsearch mvn openmrs-sdk:run
-```
-
-**3. Set the retrieval pipeline:**
-
-In **Admin > Settings**, set:
-
-| Property | Value |
-|----------|-------|
-| `chartsearchai.retrieval.pipeline` | `elasticsearch` |
-
-Also ensure the ONNX embedding model and vocab files are configured (same as the default embedding pipeline).
-
-**4. Query a patient** — records are indexed automatically on first access. To verify indexing, check the ES index:
-
-```
-curl http://localhost:9200/chartsearchai-patient-records/_count
-```
-
-### Elasticsearch unavailability
-
-If Elasticsearch is unreachable (not running, network issue, misconfigured URI), the module continues to work normally:
-
-- **Startup:** The module starts successfully without checking Elasticsearch connectivity. The client is created lazily on first use.
-- **Queries:** Each query calls `GET /_cluster/health` to check availability. If the check fails, the query automatically falls back to the embedding pipeline. No error is returned to the caller — users still get search results.
-- **Indexing:** When patient data changes (new obs, conditions, orders, etc.), the module attempts to re-index in Elasticsearch. If the connection fails, the error is logged and swallowed — the data change proceeds normally.
-- **Recovery:** There is no retry or circuit-breaker logic. Each request independently checks availability, so if Elasticsearch comes back online, the next query automatically uses it.
-
-In short, the Elasticsearch pipeline is a best-effort enhancement. The module never fails because of Elasticsearch — it silently degrades to the embedding pipeline and silently recovers when Elasticsearch becomes available again.
-
-**5. To reset and re-index**, delete the ES index:
-
-```
-curl -X DELETE http://localhost:9200/chartsearchai-patient-records
-```
-
-Records will be re-indexed on the next patient access.
+Retrieval indexing is owned entirely by the [openmrs-module-querystore](https://github.com/openmrs/openmrs-module-querystore) module — it performs its own lazy per-patient projection on first chart access and keeps the retrieval index current via core events. There is no chartsearchai-side index to build or maintain; see the querystore repo for indexing details.
 
 ## Query behavior
 
 ### Absent-data detection
 
-When the embedding pipeline is active and a query has no keyword matches in the patient's records (e.g., asking "any cancer?" for a patient with no cancer-related records), the system uses a z-score gate to detect whether the top semantic match is a genuine result or just noise. If the patient has 30+ records and the best semantic score is not a statistical outlier (z-score < 1.5), the query returns "There are no records about [topic] in this patient's chart" instead of false positives. This prevents the system from returning unrelated records that happen to have slightly elevated similarity scores.
+chartsearchai does not run its own relevance gate. The LLM is given the patient's chart (the full chart by default, or querystore's top-K when `chartsearchai.embedding.preFilter` is `true`) and reasons over what is present and what is absent — when nothing in the chart addresses the question (e.g., asking "any cancer?" for a patient with no cancer-related records), the system prompt instructs it to answer that there are no records about the topic rather than inferring one. querystore-backed retrieval narrows what reaches the LLM, and the optional [citation grounding](#citation-grounding) pass verifies that each cited record actually supports the claim, catching off-topic or unsupported citations after the answer is produced.
 
 ### Recency cap
 
-Questions with numeric recency constraints are automatically detected and honored. For example, "last 3 blood pressure readings" or "most recent 5 lab results" will cap the results per concept group to the specified number, keeping only the most recent measurements. This applies across all retrieval pipelines.
+Questions with numeric recency constraints are automatically detected and honored. For example, "last 3 blood pressure readings" or "most recent 5 lab results" will cap the results per concept group to the specified number, keeping only the most recent measurements.
 
 ### Input validation
 
@@ -470,7 +313,7 @@ When `chartsearchai.grounding.enabled` is `true` (off by default), every citatio
 - **Tier-1 (cosine)** — the cited record's text must be semantically close (cosine ≥ `chartsearchai.grounding.minCosine`) to the answer sentence that cites it. This catches grossly off-topic citations (a blood-pressure record cited for a diabetes claim) cheaply, with no extra LLM call.
 - **Tier-2 (entailment)** — with `chartsearchai.grounding.entailment.enabled=true`, a yes/no LLM judgement confirms the record actually entails the sentence. This catches high-overlap-but-false citations that cosine cannot separate — e.g. "the patient has X [5]" where record 5 says a *relative* had X, or negates X. Citations are verified in a single batched LLM call, and Tier-1 cosine is computed lazily in this mode (only where the LLM produced no verdict), so Tier-2 works even when no embedding model is configured.
 
-Each reference in the response carries a `grounded` verdict (`true` / `false` / `null` when not checked), which clients should surface by rendering any citation whose verdict is `false` or `null` as unverified. Grounding never rewrites or blocks the answer — it only annotates which citations could be confirmed. The cosine floor is embedding-model-dependent (≈`0.40` for all-MiniLM-L6-v2, ≈`0.82` for e5); on a querystore deployment the verifier reuses querystore's e5 embedder. On CPU-only servers the Tier-2 pass adds seconds after the answer is already readable, so `chartsearchai.grounding.async=true` moves it into a trailing `grounded` SSE event (see [Streaming search (SSE)](#streaming-search-sse)). See [ADR Decision 25](docs/adr.md#decision-25-citation-grounding-tier-1-cosine--tier-2-entailment) for the design rationale.
+Each reference in the response carries a `grounded` verdict (`true` / `false` / `null` when not checked), which clients should surface by rendering any citation whose verdict is `false` or `null` as unverified. Grounding never rewrites or blocks the answer — it only annotates which citations could be confirmed. The verifier embeds with querystore's model, so the cosine floor is model-dependent (≈`0.82` for `e5-base-v2`; see `chartsearchai.grounding.minCosine`). On CPU-only servers the Tier-2 pass adds seconds after the answer is already readable, so `chartsearchai.grounding.async=true` moves it into a trailing `grounded` SSE event (see [Streaming search (SSE)](#streaming-search-sse)). See [ADR Decision 25](docs/adr.md#decision-25-citation-grounding-tier-1-cosine--tier-2-entailment) for the design rationale.
 
 ### Drug-reference injection & safety validation
 
@@ -557,9 +400,9 @@ Content-Type: application/json
 
 No-op when `chartsearchai.llm.engine` is `remote` and when `chartsearchai.embedding.preFilter` is `true`. Disable entirely with `chartsearchai.warmupEnabled=false`. Concurrent warmups for different patients are coalesced — only the most recently submitted patient runs, since llama-server processes one request at a time.
 
-**Disk-persisted KV cache (the biggest CPU-only first-query win).** The plain warmup above primes the prompt cache *in RAM* — it helps only until the model is evicted (another patient's query takes the single slot) or the llama-server process restarts, after which the next visit pays the full chart prefill again (tens of seconds to minutes on a GPU-less host). The disk-persisted KV cache fixes that and is **on by default** (`chartsearchai.llm.kvCacheDir` empty → `<appdata>/chartsearchai/kvcache`; set a path to relocate it, or `off` to disable): llama-server is launched with `--slot-save-path`, so both the warmup **and the streaming query path save and restore** each patient's prefilled chart KV (~tens of ms of disk I/O) instead of recomputing. Because the prefill is the entire pre-answer wait on a CPU-only server, this turns a slow first query into a fast one (measured on the standalone in CPU-only mode: ~19–60 s to first token → ~0.9 s after a disk restore), and it survives restarts and evictions that the RAM cache does not. The restored KV is byte-for-byte identical to a fresh prefill, so answers and citations are unchanged (verified: identical answer text and grounding verdicts for the same question on the restore vs. prefill paths). Only the first-ever visit to a patient pays a prefill (to create the file); subsequent visits restore. See `chartsearchai.llm.kvCacheDir` / `chartsearchai.llm.kvCacheMaxEntries` in the [config table](#configuration).
+**Disk-persisted KV cache (the biggest CPU-only first-query win).** The plain warmup above primes the prompt cache *in RAM* — it helps only until the model is evicted (another patient's query takes the single slot) or the llama-server process restarts, after which the next visit pays the full chart prefill again (tens of seconds to minutes on a GPU-less host). The disk-persisted KV cache fixes that and is **on by default** (`chartsearchai.llm.kvCacheDir` empty → `<appdata>/chartsearchai/kvcache`; set a path to relocate it, or `off` to disable): llama-server is launched with `--slot-save-path`, so both the warmup **and the streaming query path save and restore** each patient's prefilled chart KV (~tens of ms of disk I/O) instead of recomputing. Because the prefill is the entire pre-answer wait on a CPU-only server, this turns a slow first query into a fast one (measured on the standalone in CPU-only mode: ~19–60 s to first token → ~0.9 s after a disk restore), and it survives restarts and evictions that the RAM cache does not. The restored KV is byte-for-byte identical to a fresh prefill, so answers and citations are unchanged (verified: identical answer text and grounding verdicts for the same question on the restore vs. prefill paths). Only the first-ever visit to a patient pays a prefill (to create the file); subsequent visits restore. See `chartsearchai.llm.kvCacheDir` / `chartsearchai.llm.kvCacheMaxEntries` in the [config table](#5-configure).
 
-Restore is **not** confined to the chart-open warmup — the streaming query path restores too. When a query arrives and the patient's chart prefix is not resident in this llama-server process's RAM prompt-cache pool (after a process restart / idle-unload, a prompt-cache overflow, or simply because no warmup fired or finished before the question), the query restores the KV from disk (~tens of ms) on the request thread instead of re-prefilling the whole chart. A genuinely cold query (no disk entry yet) prefills as before and then **saves** its KV, so the next visit is fast even if `/warmup` is never called; a warm or alternating-patient query (chart already in the RAM pool) does no extra disk I/O. Measured on the standalone in CPU-only mode: a cold-RAM query that previously re-prefilled (~20 s small chart, ~100 s large chart to first token) now restores in ~tens of ms (≈1 s to first token plus any one-time llama-server process startup). The restore is gated by the same chart-byte-stability condition as the warmup (`preFilter=false`, or `querystore.enabled=true`); in `preFilter=true` mode the per-question record set varies, so no per-patient entry is keyed. One limitation remains on busy hosts: **`kvCacheMaxEntries` bounds the file *count*, not total bytes** — since each file scales with chart length, worst-case disk use is roughly `kvCacheMaxEntries × your largest chart`, and under heavy multi-patient churn the count-cap eviction (oldest by mtime) can evict another patient's still-current entry (harmless — they re-prefill on next visit).
+Restore is **not** confined to the chart-open warmup — the streaming query path restores too. When a query arrives and the patient's chart prefix is not resident in this llama-server process's RAM prompt-cache pool (after a process restart / idle-unload, a prompt-cache overflow, or simply because no warmup fired or finished before the question), the query restores the KV from disk (~tens of ms) on the request thread instead of re-prefilling the whole chart. A genuinely cold query (no disk entry yet) prefills as before and then **saves** its KV, so the next visit is fast even if `/warmup` is never called; a warm or alternating-patient query (chart already in the RAM pool) does no extra disk I/O. Measured on the standalone in CPU-only mode: a cold-RAM query that previously re-prefilled (~20 s small chart, ~100 s large chart to first token) now restores in ~tens of ms (≈1 s to first token plus any one-time llama-server process startup). The restore is gated by the same chart-byte-stability condition as the warmup, which holds in every querystore retrieval mode (with `preFilter=true` the focus hint is a small trailing payload that doesn't break the chart-prefix match), so a per-patient KV entry is keyed for any patient. One limitation remains on busy hosts: **`kvCacheMaxEntries` bounds the file *count*, not total bytes** — since each file scales with chart length, worst-case disk use is roughly `kvCacheMaxEntries × your largest chart`, and under heavy multi-patient churn the count-cap eviction (oldest by mtime) can evict another patient's still-current entry (harmless — they re-prefill on next visit).
 
 ### Feedback
 
@@ -607,7 +450,7 @@ This overrides the default permissive implementation.
 
 ## Evals
 
-The project includes an eval framework that tests retrieval quality, citation accuracy, absent-data detection, and prompt injection resistance without requiring a running LLM or external services.
+The project includes an eval framework that tests citation accuracy, absent-data answering, and prompt injection resistance without requiring a running LLM or external services.
 
 ### Running evals
 
@@ -618,7 +461,6 @@ mvn test -pl api -Dtest="*EvalTest"
 Or run a specific suite:
 
 ```
-mvn test -pl api -Dtest="RetrievalQualityEvalTest"
 mvn test -pl api -Dtest="CitationEvalTest"
 mvn test -pl api -Dtest="AbsentDataEvalTest"
 mvn test -pl api -Dtest="PromptInjectionEvalTest" -Dchartsearchai.prompt.injection.test=true
@@ -630,7 +472,6 @@ Each suite is driven by a JSON dataset in `api/src/test/resources/eval/`. To add
 
 | File | What it tests |
 |------|---------------|
-| `retrieval-eval-dataset.json` | Query → expected record indices (recall\@30) |
 | `citation-eval-dataset.json` | Simulated LLM JSON → expected citation indices (F1) |
 | `absent-data-eval-dataset.json` | Query → expected keywords in "no records" answer |
 | `prompt-injection-eval-dataset.json` | Adversarial payload → LLM produces safe JSON, no system prompt leakage |

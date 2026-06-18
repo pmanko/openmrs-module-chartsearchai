@@ -20,8 +20,9 @@ import org.openmrs.api.APIException;
 import org.openmrs.api.context.Context;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
-import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
+import org.openmrs.module.chartsearchai.serializer.SerializedRecord;
 import org.openmrs.module.chartsearchai.util.DateFormatUtil;
+import org.openmrs.module.querystore.QueryStoreConstants;
 import org.openmrs.module.querystore.api.QueryStoreService;
 import org.openmrs.module.querystore.model.QueryDocument;
 import org.slf4j.Logger;
@@ -30,10 +31,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
- * Bridge to the querystore module's read API. Resolves the service lazily via
- * {@link Context#getService(Class)} so chartsearchai still starts when the
- * querystore omod isn't installed — lookup failure surfaces as an empty chart,
- * same outcome as a search returning no hits.
+ * Bridge to the querystore module's read API. querystore is a required module, so it is present at
+ * runtime; the service is still resolved lazily via {@link Context#getService(Class)} (rather than
+ * injected) as defense-in-depth — a resolution failure degrades to an empty chart, the same outcome
+ * as a search returning no hits, instead of breaking chart assembly.
  *
  * <p>Always fetches the full patient chart via
  * {@link QueryStoreService#getPatientChart(String)} so the chart bytes sent to
@@ -108,11 +109,11 @@ class QueryStoreChartBuilder {
 			// LinkageError covers NoClassDefFoundError when the querystore-api jar
 			// is absent at runtime — the QueryStoreService.class literal forces
 			// JVM linkage, which APIException doesn't catch.
-			// WARN (not INFO): default org.openmrs.* log level is WARN, and a misconfigured
-			// querystore.enabled=true silently produces empty-chart LLM responses if this
-			// fires. Operators need this to surface, with an actionable next step.
-			log.warn("chartsearchai.querystore.enabled=true but QueryStoreService is unavailable — "
-					+ "install openmrs-module-querystore or set chartsearchai.querystore.enabled=false. "
+			// WARN (not INFO): default org.openmrs.* log level is WARN, and an unavailable
+			// QueryStoreService silently produces empty-chart LLM responses if this fires.
+			// Operators need this to surface, with an actionable next step.
+			log.warn("QueryStoreService is unavailable — querystore is a required module, so this "
+					+ "indicates a querystore startup failure; check the querystore module. "
 					+ "Returning empty chart.");
 			log.info("[timing] querystoreBuild patient={} mode={} hits=0 focusHits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=unavailable",
 					patient.getPatientId(), mode, System.currentTimeMillis() - buildStart);
@@ -162,7 +163,7 @@ class QueryStoreChartBuilder {
 
 		List<SerializedRecord> records = toSerializedRecords(chartDocs);
 		long serializeStart = System.currentTimeMillis();
-		PatientChart chart = chartSerializer.serialize(patient, records, focusUuids);
+		PatientChart chart = chartSerializer.serialize(patient, records, focusUuids, resolveDedupGroupLabels());
 		long serializeMs = System.currentTimeMillis() - serializeStart;
 		long totalMs = System.currentTimeMillis() - buildStart;
 		log.info("[timing] querystoreBuild patient={} mode={} hits={} focusHits={} rpcMs={} serializeMs={} totalMs={} outcome=ok",
@@ -205,10 +206,32 @@ class QueryStoreChartBuilder {
 				continue;
 			}
 			String text = doc.getText() == null ? "" : doc.getText();
+			// Carry the obs-group metadata (a lab panel, a vital-signs set, etc.) through so the
+			// serializer can surface group membership to the LLM. querystore stores the group identity
+			// ONLY in metadata, never in the doc text (ADR Decision 6: keeps citations clean, no sibling
+			// duplication), and makes clustering the consumer's responsibility. Dropping it here is
+			// exactly what made group membership invisible to the LLM.
 			out.add(new SerializedRecord(doc.getResourceType(), doc.getResourceUuid(),
-					text, DateFormatUtil.toLegacyDate(doc.getDate())));
+					text, DateFormatUtil.toLegacyDate(doc.getDate()), Collections.<String>emptyList(),
+					metadataString(doc, QueryStoreConstants.FIELD_OBS_GROUP_UUID),
+					metadataString(doc, QueryStoreConstants.FIELD_OBS_GROUP_CONCEPT_NAME)));
 		}
 		return out;
+	}
+
+	/** Reads a metadata value as a trimmed String, or {@code null} when absent or blank.
+	 *  querystore stores these values as Strings (see ObsRecordSerializer.putGroupFields); the
+	 *  defensive toString()/blank handling keeps a malformed upstream value from leaking an empty
+	 *  or non-string token into the LLM prompt. Relies on {@link QueryDocument#getMetadata()} being
+	 *  contractually non-null (it returns an unmodifiable view of a field initialized to an empty
+	 *  map) — a regression making it nullable would NPE here and degrade the whole chart to empty. */
+	private static String metadataString(QueryDocument doc, String key) {
+		Object value = doc.getMetadata().get(key);
+		if (value == null) {
+			return null;
+		}
+		String s = value.toString().trim();
+		return s.isEmpty() ? null : s;
 	}
 
 	/** Seam for tests: production resolves via the OpenMRS context. */
@@ -224,5 +247,9 @@ class QueryStoreChartBuilder {
 	/** Seam for tests: production reads the global property. */
 	protected boolean resolveUsePreFilter() {
 		return PipelineSettings.usePreFilter();
+	}
+
+	protected boolean resolveDedupGroupLabels() {
+		return PipelineSettings.dedupGroupLabels();
 	}
 }

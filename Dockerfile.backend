@@ -19,6 +19,27 @@ RUN git clone --depth 1 https://github.com/openmrs/openmrs-module-querystore.git
 WORKDIR /build
 RUN mvn clean package -DskipTests -B
 
+# Fetch the OpenMRS 2.9.0-SNAPSHOT core war. The reference-app base image below ships
+# core 2.8.7, but querystore's events consumer references core #6084 service-event classes
+# (org.openmrs.aop.event.VoidServiceEvent et al.) that exist only in 2.9.x. On 2.8.7 the
+# querystore module fails to load (NoClassDefFoundError: VoidServiceEvent), which aborts the
+# entire OpenMRS startup. The build-time platform is already 2.9.0-SNAPSHOT (pom.xml); this
+# aligns the *runtime* war to match. The exact snapshot is resolved from maven-metadata so
+# this tracks the current 2.9.0-SNAPSHOT rather than pinning a soon-purged timestamp.
+FROM eclipse-temurin:21-jre AS core-war
+ARG CACHE_BUST
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN set -eu; \
+    REPO=https://openmrs.jfrog.io/artifactory/public/org/openmrs/web/openmrs-webapp/2.9.0-SNAPSHOT; \
+    curl -fsSL "$REPO/maven-metadata.xml" -o /tmp/md.xml; \
+    WAR_VER=$(grep -A4 '<extension>war</extension>' /tmp/md.xml | grep -m1 '<value>' \
+        | sed -E 's@.*<value>(.*)</value>.*@\1@'); \
+    test -n "$WAR_VER"; \
+    echo "Overlaying core war: openmrs-webapp-$WAR_VER.war"; \
+    curl -fSL "$REPO/openmrs-webapp-$WAR_VER.war" -o /openmrs.war; \
+    test -s /openmrs.war
+
 # Copy the OpenMRS distribution from the official image
 FROM openmrs/openmrs-reference-application-3-backend:nightly AS openmrs-dist
 
@@ -37,6 +58,11 @@ WORKDIR /openmrs
 # Copy everything from the official OpenMRS backend image
 COPY --from=openmrs-dist /openmrs /openmrs
 COPY --from=openmrs-dist /usr/local/tomcat /usr/local/tomcat
+
+# Replace the distro's bundled core war (2.8.7) with 2.9.0-SNAPSHOT so the runtime core
+# carries the #6084 service-event classes querystore requires. startup.sh deploys this via
+# `cp -r ${OMRS_DISTRO_CORE}/. webapps`, so overwriting openmrs_core/openmrs.war is sufficient.
+COPY --from=core-war /openmrs.war /openmrs/distribution/openmrs_core/openmrs.war
 
 # Add the chartsearchai module + the querystore module it is aware-of-bound to.
 COPY --from=chartsearchai-builder /build/omod/target/chartsearchai-*.omod /openmrs/distribution/openmrs_modules/

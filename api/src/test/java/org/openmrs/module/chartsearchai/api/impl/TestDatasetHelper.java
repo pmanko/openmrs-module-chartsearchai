@@ -17,26 +17,22 @@ import java.util.List;
 import java.util.Map;
 
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
-import org.openmrs.module.chartsearchai.serializer.PatientRecordLoader.SerializedRecord;
+import org.openmrs.module.chartsearchai.serializer.SerializedRecord;
 
 /**
  * Shared helpers for tests that use the {@code FULL_PATIENT_DATASET} test
  * dataset. Consolidates the dataset-parsing logic that was previously
  * duplicated across multiple test files.
+ *
+ * <p><strong>Format caveat:</strong> each string is the <em>embedding/retrieval</em> representation,
+ * NOT the LLM chart text — a resource-type prefix ({@code "Clinical observation: "}) + date + an
+ * enriched body that may carry a {@code "Test — "} concept-class prefix and {@code " / "}-separated
+ * category hints, all of which feed retrieval (and {@code stripCategoryHints}). The production chart
+ * line is leaner: querystore's {@code ObsRecordSerializer} emits just {@code "<concept>: <value>
+ * <units>"} (the concept class lives in metadata, the resource prefix/hints are retrieval-only). So
+ * do NOT estimate chart/prompt token counts from these strings — they overcount.
  */
 final class TestDatasetHelper {
-
-	static final String MODEL_DIR = System.getProperty(
-			"chartsearchai.embedding.model.dir", "../models/all-MiniLM-L6-v2");
-
-	static final String MODEL_PATH = MODEL_DIR + "/model.onnx";
-
-	static final String VOCAB_PATH = MODEL_DIR + "/vocab.txt";
-
-	static boolean modelFilesExist() {
-		return new java.io.File(MODEL_PATH).exists()
-				&& new java.io.File(VOCAB_PATH).exists();
-	}
 
 	// Full 153-record dataset from a real 16-year-old Male patient chart.
 	static final String[] FULL_PATIENT_DATASET = {
@@ -787,11 +783,11 @@ final class TestDatasetHelper {
 
 	/**
 	 * Strips the dataset-format prefix and optional date to recover the raw
-	 * serializer output that production stores as
-	 * {@link org.openmrs.module.chartsearchai.model.ChartEmbedding#getTextContent()}.
+	 * serializer output (the record's {@code text} as produced by the
+	 * {@code *TextSerializer}s).
 	 *
 	 * <p>Dataset format: {@code "Clinical observation: (2025-10-30) Test — Weight (kg): 94.0 kg"}
-	 * <br>Production textContent: {@code "Test — Weight (kg): 94.0 kg"}
+	 * <br>Production text: {@code "Test — Weight (kg): 94.0 kg"}
 	 */
 	static String stripDatasetPrefixAndDate(String datasetText) {
 		String text = datasetText;
@@ -810,8 +806,7 @@ final class TestDatasetHelper {
 
 	/**
 	 * Infers resource type from the serialized text prefix, matching the
-	 * resource types assigned by
-	 * {@link org.openmrs.module.chartsearchai.serializer.PatientRecordLoader}.
+	 * resource-type prefixes querystore's serializers assign.
 	 */
 	static String inferResourceType(String text) {
 		if (text.startsWith("Medication prescription:")
@@ -836,278 +831,9 @@ final class TestDatasetHelper {
 		return ChartSearchAiConstants.RESOURCE_TYPE_OBS;
 	}
 
-	/**
-	 * Builds embeddings for a dataset, caching the result to disk so that
-	 * subsequent test runs skip ONNX inference entirely. The cache file is
-	 * keyed by a hash of the model identity, dataset content, and hints —
-	 * any change to the model, data, or hints triggers a fresh computation.
-	 *
-	 * <p>Cache files are stored under {@code target/embedding-cache/}.
-	 */
-	static List<org.openmrs.module.chartsearchai.model.ChartEmbedding> buildOrLoadCachedEmbeddings(
-			List<SerializedRecord> records,
-			org.openmrs.module.chartsearchai.embedding.EmbeddingProvider provider) {
-		String cacheKey = computeCacheKey(records, provider);
-		java.io.File cacheDir = new java.io.File("src/test/resources/embedding-cache");
-		java.io.File cacheFile = new java.io.File(cacheDir, cacheKey + ".bin");
-
-		if (cacheFile.exists()) {
-			try {
-				List<org.openmrs.module.chartsearchai.model.ChartEmbedding> cached =
-						loadEmbeddingsFromDisk(cacheFile, records);
-				if (cached != null) {
-					return cached;
-				}
-			}
-			catch (Exception e) {
-				// Corrupted cache — recompute
-			}
-		}
-
-		List<org.openmrs.module.chartsearchai.model.ChartEmbedding> embeddings =
-				org.openmrs.module.chartsearchai.api.EmbeddingIndexer.buildEmbeddings(
-						records, provider);
-
-		try {
-			cacheDir.mkdirs();
-			saveEmbeddingsToDisk(cacheFile, embeddings);
-		}
-		catch (Exception e) {
-			// Cache write failure is non-fatal
-		}
-		return embeddings;
-	}
-
-	private static String computeCacheKey(List<SerializedRecord> records,
-			org.openmrs.module.chartsearchai.embedding.EmbeddingProvider provider) {
-		try {
-			java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-1");
-			// Include model identity
-			String modelId = provider.identifyModel();
-			if (modelId == null) {
-				modelId = provider.getModelName();
-			}
-			if (modelId != null) {
-				md.update(modelId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-			}
-			// Include record text + hints
-			for (SerializedRecord r : records) {
-				md.update(r.getText().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-				if (r.getCategoryHints() != null) {
-					for (String h : r.getCategoryHints()) {
-						md.update(h.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-					}
-				}
-			}
-			byte[] hash = md.digest();
-			StringBuilder sb = new StringBuilder();
-			for (byte b : hash) {
-				sb.append(String.format("%02x", b & 0xff));
-			}
-			return sb.toString();
-		}
-		catch (java.security.NoSuchAlgorithmException e) {
-			throw new RuntimeException(e);
-		}
-	}
-
-	private static void saveEmbeddingsToDisk(java.io.File file,
-			List<org.openmrs.module.chartsearchai.model.ChartEmbedding> embeddings)
-			throws java.io.IOException {
-		try (java.io.DataOutputStream out = new java.io.DataOutputStream(
-				new java.io.BufferedOutputStream(new java.io.FileOutputStream(file)))) {
-			out.writeInt(embeddings.size());
-			for (org.openmrs.module.chartsearchai.model.ChartEmbedding ce : embeddings) {
-				// resourceType
-				out.writeUTF(ce.getResourceType());
-				// resourceUuid
-				out.writeUTF(ce.getResourceUuid());
-				// textContent
-				out.writeUTF(ce.getTextContent());
-				// embedding vector
-				float[] vec = ce.getEmbeddingVector();
-				out.writeInt(vec.length);
-				for (float v : vec) {
-					out.writeFloat(v);
-				}
-			}
-		}
-	}
-
-	private static List<org.openmrs.module.chartsearchai.model.ChartEmbedding> loadEmbeddingsFromDisk(
-			java.io.File file, List<SerializedRecord> records) throws java.io.IOException {
-		try (java.io.DataInputStream in = new java.io.DataInputStream(
-				new java.io.BufferedInputStream(new java.io.FileInputStream(file)))) {
-			int count = in.readInt();
-			if (count != records.size()) {
-				return null; // stale cache
-			}
-			List<org.openmrs.module.chartsearchai.model.ChartEmbedding> result =
-					new ArrayList<>(count);
-			for (int i = 0; i < count; i++) {
-				org.openmrs.module.chartsearchai.model.ChartEmbedding ce =
-						new org.openmrs.module.chartsearchai.model.ChartEmbedding();
-				ce.setResourceType(in.readUTF());
-				ce.setResourceUuid(in.readUTF());
-				ce.setTextContent(in.readUTF());
-				int vecLen = in.readInt();
-				float[] vec = new float[vecLen];
-				for (int j = 0; j < vecLen; j++) {
-					vec[j] = in.readFloat();
-				}
-				ce.setEmbeddingVector(vec);
-				result.add(ce);
-			}
-			return result;
-		}
-	}
-
-	private static final java.io.File CACHE_DIR =
-			new java.io.File("src/test/resources/embedding-cache");
 
 	/**
-	 * Computes or loads a cached noise profile for a set of embeddings.
-	 * The noise profile involves re-embedding ~30 unique concepts; caching
-	 * avoids this ONNX inference on subsequent runs.
-	 */
-	static org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile
-			buildOrLoadCachedNoiseProfile(
-					List<org.openmrs.module.chartsearchai.model.ChartEmbedding> embeddings,
-					org.openmrs.module.chartsearchai.embedding.EmbeddingProvider provider) {
-		String modelId = provider.identifyModel();
-		if (modelId == null) modelId = provider.getModelName();
-		String key;
-		try {
-			java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-1");
-			md.update(("noise:" + modelId).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-			for (org.openmrs.module.chartsearchai.model.ChartEmbedding ce : embeddings) {
-				md.update(ce.getTextContent().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-			}
-			byte[] hash = md.digest();
-			StringBuilder sb = new StringBuilder();
-			for (byte b : hash) sb.append(String.format("%02x", b & 0xff));
-			key = sb.toString();
-		} catch (java.security.NoSuchAlgorithmException e) {
-			throw new RuntimeException(e);
-		}
-
-		java.io.File cacheFile = new java.io.File(CACHE_DIR, key + ".noise.bin");
-		if (cacheFile.exists()) {
-			try (java.io.DataInputStream in = new java.io.DataInputStream(
-					new java.io.BufferedInputStream(new java.io.FileInputStream(cacheFile)))) {
-				return new org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile(
-						in.readDouble(), in.readDouble(), in.readDouble(),
-						in.readDouble(), in.readDouble(), in.readDouble(),
-						in.readDouble());
-			} catch (Exception e) { /* recompute */ }
-		}
-
-		org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile noise =
-				org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile.compute(
-						embeddings.toArray(
-								new org.openmrs.module.chartsearchai.model.ChartEmbedding[0]),
-						provider);
-		try {
-			CACHE_DIR.mkdirs();
-			try (java.io.DataOutputStream out = new java.io.DataOutputStream(
-					new java.io.BufferedOutputStream(new java.io.FileOutputStream(cacheFile)))) {
-				out.writeDouble(noise.noiseMean);
-				out.writeDouble(noise.noiseStd);
-				out.writeDouble(noise.noiseMedian);
-				out.writeDouble(noise.noiseQ1);
-				out.writeDouble(noise.noiseP95);
-				out.writeDouble(noise.intraConceptMean);
-				out.writeDouble(noise.intraConceptStd);
-			}
-		} catch (Exception e) { /* non-fatal */ }
-		return noise;
-	}
-
-	/**
-	 * Embeds a query string, caching the result to disk. Each unique
-	 * (model, query) combination produces a cached vector file.
-	 */
-	static float[] embedQueryCached(
-			org.openmrs.module.chartsearchai.embedding.EmbeddingProvider provider,
-			String queryText) {
-		String modelId = provider.identifyModel();
-		if (modelId == null) modelId = provider.getModelName();
-		String key;
-		try {
-			java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-1");
-			md.update(("query:" + modelId + ":" + queryText)
-					.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-			byte[] hash = md.digest();
-			StringBuilder sb = new StringBuilder();
-			for (byte b : hash) sb.append(String.format("%02x", b & 0xff));
-			key = sb.toString();
-		} catch (java.security.NoSuchAlgorithmException e) {
-			throw new RuntimeException(e);
-		}
-
-		java.io.File cacheFile = new java.io.File(CACHE_DIR, key + ".query.bin");
-		if (cacheFile.exists()) {
-			try (java.io.DataInputStream in = new java.io.DataInputStream(
-					new java.io.BufferedInputStream(new java.io.FileInputStream(cacheFile)))) {
-				int dims = in.readInt();
-				float[] vec = new float[dims];
-				for (int i = 0; i < dims; i++) vec[i] = in.readFloat();
-				return vec;
-			} catch (Exception e) { /* recompute */ }
-		}
-
-		float[] vec = provider.embedQuery(queryText);
-		try {
-			CACHE_DIR.mkdirs();
-			try (java.io.DataOutputStream out = new java.io.DataOutputStream(
-					new java.io.BufferedOutputStream(new java.io.FileOutputStream(cacheFile)))) {
-				out.writeInt(vec.length);
-				for (float v : vec) out.writeFloat(v);
-			}
-		} catch (Exception e) { /* non-fatal */ }
-		return vec;
-	}
-
-	/**
-	 * Wraps an EmbeddingProvider with disk caching for query embeddings.
-	 * Record embeddings ({@link #embed}) delegate directly; query embeddings
-	 * ({@link #embedQuery}) are cached to disk via {@link #embedQueryCached}.
-	 */
-	static org.openmrs.module.chartsearchai.embedding.EmbeddingProvider
-			cachingProvider(
-					org.openmrs.module.chartsearchai.embedding.EmbeddingProvider delegate) {
-		return new org.openmrs.module.chartsearchai.embedding.EmbeddingProvider() {
-			@Override
-			public float[] embed(String text) {
-				return delegate.embed(text);
-			}
-
-			@Override
-			public float[] embedQuery(String text) {
-				return embedQueryCached(delegate, text);
-			}
-
-			@Override
-			public int getDimensions() {
-				return delegate.getDimensions();
-			}
-
-			@Override
-			public String getModelName() {
-				return delegate.getModelName();
-			}
-
-			@Override
-			public String identifyModel() {
-				return delegate.identifyModel();
-			}
-		};
-	}
-
-	/**
-	 * Converts a raw dataset array into {@link SerializedRecord} objects
-	 * suitable for passing to
-	 * {@link org.openmrs.module.chartsearchai.api.EmbeddingIndexer#buildEmbeddings}.
+	 * Converts a raw dataset array into {@link SerializedRecord} objects.
 	 */
 	static List<SerializedRecord> toSerializedRecords(String[] dataset) {
 		return toSerializedRecords(dataset, null);

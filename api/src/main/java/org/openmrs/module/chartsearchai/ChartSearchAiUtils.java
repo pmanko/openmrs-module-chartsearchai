@@ -9,13 +9,6 @@
  */
 package org.openmrs.module.chartsearchai;
 
-import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.ADAPTIVE_MIN_RECORDS;
-import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.COHERENCE_ADAPTIVE_GAP_RATIO;
-import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.COHERENCE_REFERENCE_N;
-import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.COHERENCE_SAME_TOPIC_FLOOR;
-import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.GP_QUERYSTORE_ENABLED;
-import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.PIPELINE_HYBRID;
-import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.PIPELINE_LUCENE;
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.RESOURCE_TYPE_ALLERGY;
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.RESOURCE_TYPE_CONDITION;
 import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.RESOURCE_TYPE_DIAGNOSIS;
@@ -141,12 +134,11 @@ public class ChartSearchAiUtils {
 
 	/**
 	 * Prepends category hints to the body text without adding a structural
-	 * prefix. Used to enrich {@code ChartEmbedding.textContent} so downstream
-	 * consumers (keyword scoring, concept-name extraction) see the same
-	 * hint-augmented text that was used for embedding. The 2-arg
+	 * prefix. Used to enrich a record's serialized text so any consumer that
+	 * re-prefixes the hint-augmented body gets a consistent string. The 2-arg
 	 * {@link #buildPrefixedText(String, String)} called on hint-injected body
 	 * produces the same prefixed text as the 3-arg overload called on the
-	 * raw body with hints — so embeddings and keyword text stay consistent.
+	 * raw body with hints.
 	 *
 	 * <p>Empty or null hints return the body unchanged.</p>
 	 *
@@ -177,9 +169,6 @@ public class ChartSearchAiUtils {
 	 * the original body by scanning for the first occurrence of a known
 	 * record-body pattern (em-dash for Obs, "Condition:", "Diagnosis:",
 	 * etc.) and taking the " / " boundary just before it.
-	 *
-	 * <p>Used by {@link org.openmrs.module.chartsearchai.embedding.ModelNoiseProfile}
-	 * to compute stable noise statistics unaffected by enrichment.</p>
 	 *
 	 * @param text the potentially hint-enriched text
 	 * @return the original body without hint prefixes, or the input
@@ -335,156 +324,6 @@ public class ChartSearchAiUtils {
 		}
 		double denom = Math.sqrt(normA) * Math.sqrt(normB);
 		return denom == 0 ? 0 : dot / denom;
-	}
-
-	/**
-	 * Computes a dynamic similarity floor using z-score gating. Returns
-	 * the higher of {@code absoluteFloor} and {@code mean + zThreshold * stddev}.
-	 *
-	 * @param scores all scores in the distribution
-	 * @param absoluteFloor minimum floor regardless of distribution
-	 * @param zThreshold number of standard deviations above mean
-	 * @return the effective minimum score threshold
-	 */
-	public static double zScoreFloor(double[] scores, double absoluteFloor,
-			double zThreshold) {
-		if (scores.length == 0) {
-			return absoluteFloor;
-		}
-		double sum = 0;
-		for (double s : scores) {
-			sum += s;
-		}
-		double mean = sum / scores.length;
-		double variance = 0;
-		for (double s : scores) {
-			variance += (s - mean) * (s - mean);
-		}
-		double stddev = Math.sqrt(variance / scores.length);
-		double zFloor = mean + zThreshold * stddev;
-		return Math.max(absoluteFloor, zFloor);
-	}
-
-	/**
-	 * Filters a set of embedding vectors by pairwise coherence, removing
-	 * topic outliers. Returns a boolean array where {@code true} means
-	 * the vector at that index should be kept.
-	 *
-	 * <p>Computes average pairwise cosine similarity for each vector against
-	 * all others. Detects a gap in the coherence distribution using the
-	 * same gap-multiplier approach as the embedding pipeline's coherence
-	 * filter: a gap must exceed both {@code COHERENCE_GAP_MULTIPLIER} times
-	 * the running average gap AND an adaptive minimum gap proportional to
-	 * the coherence range. Vectors below the gap are marked for removal.
-	 *
-	 * @param vectors the embedding vectors to filter
-	 * @return boolean array indicating which vectors to keep
-	 */
-	public static boolean[] filterByCoherence(float[][] vectors) {
-		int n = vectors.length;
-		boolean[] keep = new boolean[n];
-		if (n < 3) {
-			java.util.Arrays.fill(keep, true);
-			return keep;
-		}
-
-		// Compute average coherence per vector without allocating O(n^2)
-		// matrix -- accumulate pairwise sums directly into per-vector totals.
-		double[] coherence = new double[n];
-		double[] pairSum = new double[n];
-		for (int i = 0; i < n; i++) {
-			for (int j = i + 1; j < n; j++) {
-				double sim = cosineSimilarity(vectors[i], vectors[j]);
-				pairSum[i] += sim;
-				pairSum[j] += sim;
-			}
-		}
-		for (int i = 0; i < n; i++) {
-			coherence[i] = pairSum[i] / (n - 1);
-		}
-
-		// Sort by coherence descending
-		Integer[] sortedIdx = new Integer[n];
-		for (int i = 0; i < n; i++) {
-			sortedIdx[i] = i;
-		}
-		java.util.Arrays.sort(sortedIdx, new java.util.Comparator<Integer>() {
-			@Override
-			public int compare(Integer a, Integer b) {
-				return Double.compare(coherence[b], coherence[a]);
-			}
-		});
-
-		// Gap detection
-		double maxCoherence = coherence[sortedIdx[0]];
-
-		// Gap multiplier: Gumbel extreme value theory — the
-		// coherence filter has n*(n-1)/2 pairwise comparisons
-		// feeding each average. Using sqrt(2*ln(nPairs)) as the
-		// gap multiplier means we only trigger on gaps that would
-		// be extreme across that many comparisons.
-		double nPairs = n * (n - 1.0) / 2.0;
-		double gapMultiplier = Math.sqrt(
-				2.0 * Math.log(Math.max(2.0, nPairs)));
-
-		double minCoherence = coherence[sortedIdx[n - 1]];
-		double coherenceRange = maxCoherence - minCoherence;
-		int refPairs = COHERENCE_REFERENCE_N - 1;
-		double scaleFactor = Math.max(1.0,
-				Math.sqrt((double) refPairs / (n - 1)));
-		double base = n <= COHERENCE_REFERENCE_N
-				? coherenceRange : maxCoherence;
-		double coherenceMinGap = base
-				* COHERENCE_ADAPTIVE_GAP_RATIO * scaleFactor;
-
-		int keepCount = n;
-		double gapSum = 0;
-		for (int i = 1; i < n; i++) {
-			double gap = coherence[sortedIdx[i - 1]] - coherence[sortedIdx[i]];
-			if (i >= ADAPTIVE_MIN_RECORDS && i >= 2) {
-				double avgGap = gapSum / (i - 1);
-				if (gap > avgGap * gapMultiplier
-						&& gap > coherenceMinGap) {
-					keepCount = i;
-					break;
-				}
-			}
-			gapSum += gap;
-		}
-
-		// Same-topic floor check
-		if (keepCount < n) {
-			double highestRemovedCoherence = coherence[sortedIdx[keepCount]];
-			if (highestRemovedCoherence >= COHERENCE_SAME_TOPIC_FLOOR) {
-				keepCount = n;
-			}
-		}
-
-		java.util.Arrays.fill(keep, false);
-		for (int i = 0; i < keepCount; i++) {
-			keep[sortedIdx[i]] = true;
-		}
-		return keep;
-	}
-
-	/**
-	 * Returns true if the given pipeline value uses a Lucene index
-	 * (either the pure Lucene pipeline or the hybrid pipeline that
-	 * combines Lucene BM25 with embedding kNN).
-	 */
-	public static boolean usesLuceneIndex(String pipeline) {
-		if (pipeline == null) {
-			return false;
-		}
-		String trimmed = pipeline.trim();
-		return PIPELINE_LUCENE.equalsIgnoreCase(trimmed)
-				|| PIPELINE_HYBRID.equalsIgnoreCase(trimmed);
-	}
-
-	public static boolean isQueryStoreEnabled() {
-		String value = org.openmrs.api.context.Context.getAdministrationService()
-				.getGlobalProperty(GP_QUERYSTORE_ENABLED, "false");
-		return "true".equalsIgnoreCase(value.trim());
 	}
 
 	/**

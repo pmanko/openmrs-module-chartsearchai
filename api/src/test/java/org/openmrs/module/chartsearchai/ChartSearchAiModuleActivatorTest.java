@@ -10,6 +10,7 @@
 package org.openmrs.module.chartsearchai;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -17,17 +18,25 @@ import org.openmrs.Privilege;
 import org.openmrs.Role;
 import org.openmrs.api.UserService;
 import org.openmrs.api.context.Context;
+import org.openmrs.scheduler.SchedulerService;
+import org.openmrs.scheduler.TaskDefinition;
 import org.openmrs.test.jupiter.BaseModuleContextSensitiveTest;
 
 /**
- * Verifies that the activator idempotently provisions the chartsearchai
- * privileges and binds them to admin roles. This is the safety net for the
- * scenario where a demo-data SQL dump (or any DB restore that predates the
- * module) wipes the privilege table — without this fix, the AI button
- * silently disappears from the SPA because the SPA's privilege gate has no
- * privilege to find.
+ * Context-sensitive tests for {@link ChartSearchAiModuleActivator}. Covers two startup
+ * responsibilities:
+ * <ul>
+ *   <li>idempotent provisioning of the chartsearchai privileges + admin-role bindings — the safety
+ *       net for when a demo-data SQL dump (or any DB restore predating the module) wipes the
+ *       privilege table, which would otherwise make the AI button silently disappear from the SPA;</li>
+ *   <li>removal of the legacy "Embedding Backfill" scheduled task, whose task class no
+ *       longer exists.</li>
+ * </ul>
  */
 public class ChartSearchAiModuleActivatorTest extends BaseModuleContextSensitiveTest {
+
+	private static final String LEGACY_BACKFILL_TASK_NAME =
+			ChartSearchAiModuleActivator.LEGACY_BACKFILL_TASK_NAME;
 
 	private final ChartSearchAiModuleActivator activator = new ChartSearchAiModuleActivator();
 
@@ -72,5 +81,31 @@ public class ChartSearchAiModuleActivatorTest extends BaseModuleContextSensitive
 		activator.provisionPrivilegesAndRoles();
 
 		assertNotNull(Context.getUserService().getPrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA));
+	}
+
+	@Test
+	public void removeLegacyBackfillTask_shouldDeleteLeftoverTaskAndBeIdempotent() {
+		SchedulerService scheduler = Context.getSchedulerService();
+
+		// Simulate an upgraded deployment: a pre-querystore version persisted this task, whose class
+		// (EmbeddingIndexTask) no longer exists. saveTaskDefinition only persists the row — it does
+		// not instantiate the class — so a now-deleted class name is fine to seed.
+		TaskDefinition legacy = new TaskDefinition();
+		legacy.setName(LEGACY_BACKFILL_TASK_NAME);
+		legacy.setDescription("Leftover backfill task from a pre-querystore version");
+		legacy.setTaskClass("org.openmrs.module.chartsearchai.api.EmbeddingIndexTask");
+		legacy.setStartOnStartup(false);
+		legacy.setRepeatInterval(0L);
+		scheduler.saveTaskDefinition(legacy);
+		assertNotNull(scheduler.getTaskByName(LEGACY_BACKFILL_TASK_NAME),
+				"precondition: legacy task should be registered");
+
+		activator.removeLegacyBackfillTask();
+		assertNull(scheduler.getTaskByName(LEGACY_BACKFILL_TASK_NAME),
+				"legacy backfill task should be deleted on startup");
+
+		// Idempotent: on a fresh install (task absent) the call is a no-op, not an error.
+		activator.removeLegacyBackfillTask();
+		assertNull(scheduler.getTaskByName(LEGACY_BACKFILL_TASK_NAME));
 	}
 }
