@@ -97,15 +97,15 @@ public class PatientChartSerializer {
 
 	/**
 	 * As {@link #serialize(Patient, List, Set)} but, when {@code dedupGroupLabels} is true, applies
-	 * run-length de-dup to the obs-group (panel) label exactly as the date prefix is run-length de-duped:
-	 * a group member renders {@code " (part of: <panel>)"} only when its group differs from the
+	 * run-length de-dup to the obs-group membership label exactly as the date prefix is run-length
+	 * de-duped: a group member renders {@code " (part of: <group>)"} only when its group differs from the
 	 * immediately-preceding record's group, so the label is dropped on consecutive same-group members (a
 	 * non-member, or a different group, resets the run). The grounding {@link RecordMapping} text always
 	 * carries the full label, so citation verification is unchanged. Default (false) keeps the legacy
 	 * every-member labelling that the small-model clustering signal relies on. Gated in production by
-	 * {@code chartsearchai.serializer.dedupPanelLabels}.
+	 * {@code chartsearchai.serializer.dedupGroupLabels}.
 	 *
-	 * @param dedupGroupLabels whether to run-length de-dup the panel label on consecutive same-group members
+	 * @param dedupGroupLabels whether to run-length de-dup the obs-group label on consecutive same-group members
 	 */
 	public PatientChart serialize(Patient patient, List<SerializedRecord> records, Set<String> focusUuids,
 			boolean dedupGroupLabels) {
@@ -171,7 +171,7 @@ public class PatientChartSerializer {
 			// record's group differs from the previous line's group (a non-member or a different group
 			// resets the run), so every member's panel stays visible on its own line or the line directly
 			// above. Measured saving is only ~2% of prompt tokens, and safe ONLY on E4B+ (the small E2B
-			// model fails to cluster the thinned-label members — see GP_SERIALIZER_DEDUP_PANEL_LABELS).
+			// model fails to cluster the thinned-label members — see GP_SERIALIZER_DEDUP_GROUP_LABELS).
 			String currentGroupUuid = record.getObsGroupUuid();
 			boolean dropGroupLabel = dedupGroupLabels && !groupLabel.isEmpty()
 					&& currentGroupUuid != null && currentGroupUuid.equals(previousGroupUuid);

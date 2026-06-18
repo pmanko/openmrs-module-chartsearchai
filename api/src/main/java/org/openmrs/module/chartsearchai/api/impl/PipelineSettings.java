@@ -33,9 +33,9 @@ final class PipelineSettings {
 		return !"false".equalsIgnoreCase(mode.trim());
 	}
 
-	static boolean dedupPanelLabels() {
+	static boolean dedupGroupLabels() {
 		String mode = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_SERIALIZER_DEDUP_PANEL_LABELS, "false");
+				.getGlobalProperty(ChartSearchAiConstants.GP_SERIALIZER_DEDUP_GROUP_LABELS, "false");
 		return "true".equalsIgnoreCase(mode.trim());
 	}
 

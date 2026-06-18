@@ -163,7 +163,7 @@ class QueryStoreChartBuilder {
 
 		List<SerializedRecord> records = toSerializedRecords(chartDocs);
 		long serializeStart = System.currentTimeMillis();
-		PatientChart chart = chartSerializer.serialize(patient, records, focusUuids, resolveDedupPanelLabels());
+		PatientChart chart = chartSerializer.serialize(patient, records, focusUuids, resolveDedupGroupLabels());
 		long serializeMs = System.currentTimeMillis() - serializeStart;
 		long totalMs = System.currentTimeMillis() - buildStart;
 		log.info("[timing] querystoreBuild patient={} mode={} hits={} focusHits={} rpcMs={} serializeMs={} totalMs={} outcome=ok",
@@ -249,7 +249,7 @@ class QueryStoreChartBuilder {
 		return PipelineSettings.usePreFilter();
 	}
 
-	protected boolean resolveDedupPanelLabels() {
-		return PipelineSettings.dedupPanelLabels();
+	protected boolean resolveDedupGroupLabels() {
+		return PipelineSettings.dedupGroupLabels();
 	}
 }

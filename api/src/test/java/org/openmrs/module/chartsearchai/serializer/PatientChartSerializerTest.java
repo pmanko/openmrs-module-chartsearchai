@@ -139,11 +139,11 @@ public class PatientChartSerializerTest {
 	}
 
 	@Test
-	public void serialize_dropsRepeatedPanelLabelOnConsecutiveSameGroupMembers_whenDedupEnabled() {
+	public void serialize_dropsRepeatedGroupLabelOnConsecutiveSameGroupMembers_whenDedupEnabled() {
 		// Adjacency run-length de-dup of the obs-group label, gated by the dedupGroupLabels flag and
-		// mirroring the date-run compression: a member repeats its panel label only when it is NOT the
+		// mirroring the date-run compression: a member repeats its group label only when it is NOT the
 		// immediately-preceding line's group. The label stays on the run-leader and on the first member
-		// after any non-member (which resets the run), so every member's panel is visible on its own line
+		// after any non-member (which resets the run), so every member's group is visible on its own line
 		// or the line directly above. The grounding mapping ALWAYS carries the full label (like dates), so
 		// citation verification is unaffected. Real token saving measured ~2% (E4B-safe; E2B regresses).
 		List<String> noHints = java.util.Collections.<String>emptyList();
@@ -157,7 +157,7 @@ public class PatientChartSerializerTest {
 		String text = chart.getText();
 
 		assertTrue(text.contains("[1] Sodium: 140 mmol/L (part of: Basic metabolic panel)"),
-				"run-leader keeps the panel label; chart was:\n" + text);
+				"run-leader keeps the group label; chart was:\n" + text);
 		assertTrue(text.contains("[2] Potassium: 4.2 mmol/L\n"),
 				"a consecutive same-group member drops the repeated label; chart was:\n" + text);
 		assertFalse(text.contains("[2] Potassium: 4.2 mmol/L (part of:"),
@@ -170,7 +170,7 @@ public class PatientChartSerializerTest {
 	}
 
 	@Test
-	public void serialize_keepsEveryPanelLabel_whenDedupDisabled() {
+	public void serialize_keepsEveryGroupLabel_whenDedupDisabled() {
 		// Default (flag off) preserves the legacy every-member labelling the clustering signal relies on.
 		List<String> noHints = java.util.Collections.<String>emptyList();
 		SerializedRecord a = new SerializedRecord("obs", "obs-na", "Sodium: 140 mmol/L", null, noHints, "grp-bmp", "Basic metabolic panel");
