@@ -189,37 +189,6 @@ public class LocalLlmEngineTest {
 		assertEquals("/var/kvcache", cmd.get(idx + 1));
 	}
 
-	@Test
-	public void buildServerCommand_shouldIncludeMlockByDefault() {
-		// The default-arg overloads must keep pinning the model in RAM (--mlock); the mlock-off
-		// path is opt-in only, so a deployment that doesn't touch the GP behaves exactly as before.
-		assertTrue(LocalLlmEngine.buildServerCommand(
-				"/bin/llama-server", "/data/model.gguf", 9999, 32768).contains("--mlock"),
-				"--mlock must be present by default so the model cannot be paged out under memory "
-				+ "pressure (the established behavior the mlock GP defaults to preserving)");
-	}
-
-	@Test
-	public void buildServerCommand_shouldIncludeMlockWhenEnabled() {
-		List<String> cmd = LocalLlmEngine.buildServerCommand(
-				"/bin/llama-server", "/data/model.gguf", 9999, 32768, "/var/kvcache", true);
-		assertTrue(cmd.contains("--mlock"),
-				"mlock=true must add --mlock so the model stays resident in RAM");
-	}
-
-	@Test
-	public void buildServerCommand_shouldOmitMlockWhenDisabled() {
-		// On a RAM-starved host, pinning a ~5GB model with --mlock can starve the OS page cache
-		// and tip the box into a swapping/degraded state (the documented prefill-throughput
-		// variance). Disabling mlock lets those pages be reclaimed and lets the model page in
-		// lazily on a cold load. The flag exists so this can be A/B'd against the default.
-		List<String> cmd = LocalLlmEngine.buildServerCommand(
-				"/bin/llama-server", "/data/model.gguf", 9999, 32768, "/var/kvcache", false);
-		assertFalse(cmd.contains("--mlock"),
-				"mlock=false must omit --mlock entirely (not pass it with a value) so the model "
-				+ "weights are not pinned resident");
-	}
-
 	private static final String DISC = "/models/e2b.gguf 32768";
 
 	@Test
@@ -482,23 +451,6 @@ public class LocalLlmEngineTest {
 	public void serverNeedsRestart_shouldNotRestartBeforeAnythingLoaded() {
 		assertFalse(LocalLlmEngine.serverNeedsRestart(null, -1, null, "/m.gguf", 32768, "/kv"),
 				"with nothing loaded yet the initial start handles it, not a restart");
-	}
-
-	@Test
-	public void serverNeedsRestart_shouldRestartWhenMlockChanges() {
-		// --mlock is a launch-time flag, so toggling the GP must relaunch llama-server for the
-		// change to take effect — exactly like a context-size or KV-dir change. Without this,
-		// flipping chartsearchai.llm.mlock over REST would be a silent no-op until the next
-		// natural restart, making a controlled A/B impossible.
-		assertTrue(LocalLlmEngine.serverNeedsRestart("/m.gguf", 32768, "/kv", true,
-				"/m.gguf", 32768, "/kv", false),
-				"disabling mlock at runtime must relaunch the server without --mlock");
-		assertTrue(LocalLlmEngine.serverNeedsRestart("/m.gguf", 32768, "/kv", false,
-				"/m.gguf", 32768, "/kv", true),
-				"enabling mlock at runtime must relaunch the server with --mlock");
-		assertFalse(LocalLlmEngine.serverNeedsRestart("/m.gguf", 32768, "/kv", true,
-				"/m.gguf", 32768, "/kv", true),
-				"an unchanged mlock setting (and nothing else changed) must not restart");
 	}
 
 	@Test

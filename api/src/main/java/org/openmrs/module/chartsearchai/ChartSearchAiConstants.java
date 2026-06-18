@@ -73,20 +73,6 @@ public class ChartSearchAiConstants {
 	public static final int DEFAULT_LLM_MAX_OUTPUT_TOKENS = 4096;
 
 	/**
-	 * Whether the local engine launches llama-server with {@code --mlock} (pin the model weights
-	 * resident in RAM). Default {@code true} preserves the established behavior — the model cannot
-	 * be paged out under memory pressure, avoiding multi-second decode stalls on a busy host. Set to
-	 * {@code false} on a RAM-starved host where pinning a multi-GB model can starve the OS page cache
-	 * and tip the box into a swapping/degraded state (the documented cold-prefill throughput
-	 * variance): without the pin those pages can be reclaimed and the model pages in lazily on a cold
-	 * load. This is a launch-time flag, so changing it relaunches llama-server on the next query (see
-	 * {@link org.openmrs.module.chartsearchai.api.impl.LocalLlmEngine#serverNeedsRestart}).
-	 */
-	public static final String GP_LLM_MLOCK = "chartsearchai.llm.mlock";
-
-	public static final boolean DEFAULT_LLM_MLOCK = true;
-
-	/**
 	 * Directory where the local engine persists each patient's prefilled KV cache (one file per
 	 * distinct chart prefix). When set, llama-server is launched with {@code --slot-save-path} and
 	 * both the chart-open warmup and the streaming query path restore a patient's KV from disk

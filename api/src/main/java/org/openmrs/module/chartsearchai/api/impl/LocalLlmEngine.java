@@ -100,11 +100,6 @@ public class LocalLlmEngine implements LlmEngine {
 
 	private int loadedContextSize = -1;
 
-	/** Whether the running server was launched with {@code --mlock}. Part of the restart decision so
-	 *  toggling {@link ChartSearchAiConstants#GP_LLM_MLOCK} relaunches the server (the flag only takes
-	 *  effect at launch). */
-	private boolean loadedMlock = true;
-
 	/** The resolved KV-cache directory the running server was configured for (the
 	 *  {@link #resolveKvCacheDir()} value at launch; null when disabled). Used ONLY for the restart
 	 *  decision — it must reflect intent, not whether the directory could be created, otherwise a
@@ -637,22 +632,21 @@ public class LocalLlmEngine implements LlmEngine {
 	private void ensureServerRunning() {
 		String modelPath = resolveModelPath();
 		int currentContextSize = getContextSize();
-		boolean currentMlock = getMlock();
 		// The CONFIGURED (intended) directory, not the effective --slot-save-path. The restart
 		// decision must compare intent so a one-time mkdirs failure (which nulls the effective path)
 		// does not differ on every call and loop. Do not swap this for loadedSlotSavePath.
 		String configuredKvCacheDir = resolveKvCacheDir();
 
 		if (serverProcess != null && serverProcess.isAlive()
-				&& !serverNeedsRestart(loadedModelPath, loadedContextSize, loadedKvCacheDir, loadedMlock,
-						modelPath, currentContextSize, configuredKvCacheDir, currentMlock)) {
+				&& !serverNeedsRestart(loadedModelPath, loadedContextSize, loadedKvCacheDir,
+						modelPath, currentContextSize, configuredKvCacheDir)) {
 			return;
 		}
 
 		if (serverProcess != null && serverProcess.isAlive()) {
-			log.info("LLM config changed (model {}→{}, ctx {}→{}, kvCacheDir {}→{}, mlock {}→{}), restarting server",
+			log.info("LLM config changed (model {}→{}, ctx {}→{}, kvCacheDir {}→{}), restarting server",
 					loadedModelPath, modelPath, loadedContextSize, currentContextSize,
-					loadedKvCacheDir, configuredKvCacheDir, loadedMlock, currentMlock);
+					loadedKvCacheDir, configuredKvCacheDir);
 			stopServer();
 		}
 
@@ -691,24 +685,6 @@ public class LocalLlmEngine implements LlmEngine {
 	}
 
 	/**
-	 * As {@link #serverNeedsRestart(String, int, String, String, int, String)} but also restarts when
-	 * the {@code --mlock} setting changed. {@code --mlock} is a launch-time flag, so a runtime toggle
-	 * of {@link ChartSearchAiConstants#GP_LLM_MLOCK} only takes effect by relaunching the server —
-	 * exactly like a context-size or KV-directory change. Returns false when nothing is loaded yet
-	 * (the caller handles the initial start).
-	 */
-	static boolean serverNeedsRestart(String loadedModel, int loadedCtx, String loadedKvCacheDir,
-			boolean loadedMlock, String currentModel, int currentCtx, String currentKvCacheDir,
-			boolean currentMlock) {
-		if (loadedModel == null) {
-			return false;
-		}
-		return serverNeedsRestart(loadedModel, loadedCtx, loadedKvCacheDir,
-				currentModel, currentCtx, currentKvCacheDir)
-				|| loadedMlock != currentMlock;
-	}
-
-	/**
 	 * Builds the llama-server argument list. Tuned for chart-search workloads:
 	 * long input prompts (whole patient charts), single-user latency-sensitive
 	 * generation.
@@ -721,10 +697,7 @@ public class LocalLlmEngine implements LlmEngine {
 	 *       process; the default 4 slots add LRU eviction noise that interferes with prefix-cache
 	 *       reuse for no benefit.</li>
 	 *   <li>{@code --mlock} — pin model weights in RAM so the OS cannot page them out under
-	 *       memory pressure, avoiding multi-second stalls on a busy host. Default-on but gated by
-	 *       {@link ChartSearchAiConstants#GP_LLM_MLOCK}: a RAM-starved host can disable it so the
-	 *       model is not pinned (see the GP doc and {@link #buildServerCommand(String, String, int,
-	 *       int, String, boolean)}).</li>
+	 *       memory pressure, avoiding multi-second stalls on a busy host.</li>
 	 *   <li>{@code -b 4096 -ub 1024} — large batch sizes for prompt processing. Default 2048/512
 	 *       leaves prompt-processing parallelism on the table for chart-length inputs.</li>
 	 *   <li>{@code --cache-reuse 0} + {@code cache_prompt=true} (in request body) — reuse the
@@ -764,18 +737,6 @@ public class LocalLlmEngine implements LlmEngine {
 	 */
 	static List<String> buildServerCommand(String binaryPath, String modelPath, int port,
 			int contextSize, String slotSavePath) {
-		return buildServerCommand(binaryPath, modelPath, port, contextSize, slotSavePath, true);
-	}
-
-	/**
-	 * As {@link #buildServerCommand(String, String, int, int, String)} but with explicit control over
-	 * {@code --mlock}. When {@code mlock} is false the flag is omitted entirely, so the model weights
-	 * are not pinned resident and the OS may reclaim/lazily page them — the escape hatch for
-	 * RAM-starved hosts (see {@link ChartSearchAiConstants#GP_LLM_MLOCK}). The default-arg overloads
-	 * pass {@code true}, preserving the established pin-in-RAM behavior.
-	 */
-	static List<String> buildServerCommand(String binaryPath, String modelPath, int port,
-			int contextSize, String slotSavePath, boolean mlock) {
 		List<String> cmd = new ArrayList<>();
 		cmd.add(binaryPath);
 		cmd.add("-m");
@@ -790,9 +751,7 @@ public class LocalLlmEngine implements LlmEngine {
 		cmd.add(String.valueOf(contextSize));
 		cmd.add("--parallel");
 		cmd.add("1");
-		if (mlock) {
-			cmd.add("--mlock");
-		}
+		cmd.add("--mlock");
 		cmd.add("-b");
 		cmd.add("4096");
 		cmd.add("-ub");
@@ -835,11 +794,10 @@ public class LocalLlmEngine implements LlmEngine {
 			}
 		}
 
-		boolean mlock = getMlock();
 		List<String> command = buildServerCommand(serverBinaryPath, modelPath, serverPort,
-				getContextSize(), slotSavePath, mlock);
+				getContextSize(), slotSavePath);
 
-		log.info("Starting llama-server on port {} with model {} (mlock={})", serverPort, modelPath, mlock);
+		log.info("Starting llama-server on port {} with model {}", serverPort, modelPath);
 
 		try {
 			ProcessBuilder pb = new ProcessBuilder(command);
@@ -873,7 +831,6 @@ public class LocalLlmEngine implements LlmEngine {
 			loadedContextSize = getContextSize();
 			loadedKvCacheDir = configuredKvCacheDir;
 			loadedSlotSavePath = slotSavePath;
-			loadedMlock = mlock;
 			log.info("llama-server started successfully on port {}", serverPort);
 		}
 		catch (IOException e) {
@@ -1069,28 +1026,6 @@ public class LocalLlmEngine implements LlmEngine {
 			}
 		}
 		return ChartSearchAiConstants.DEFAULT_LLM_CONTEXT_SIZE;
-	}
-
-	/**
-	 * Whether to launch llama-server with {@code --mlock}. Reads
-	 * {@link ChartSearchAiConstants#GP_LLM_MLOCK}; an unset/blank or unrecognized value falls back to
-	 * {@link ChartSearchAiConstants#DEFAULT_LLM_MLOCK} (true), so the model stays pinned in RAM unless
-	 * an operator explicitly sets the GP to {@code false}.
-	 */
-	boolean getMlock() {
-		String value = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_MLOCK);
-		if (value != null && !value.trim().isEmpty()) {
-			String trimmed = value.trim();
-			if (trimmed.equalsIgnoreCase("true")) {
-				return true;
-			}
-			if (trimmed.equalsIgnoreCase("false")) {
-				return false;
-			}
-			log.warn("Invalid mlock value '{}', using default", value);
-		}
-		return ChartSearchAiConstants.DEFAULT_LLM_MLOCK;
 	}
 
 	int getServerPort() {
