@@ -347,4 +347,36 @@ SQL
 
 maybe_seed_demo_data || echo "[demo-seed] seed step errored; continuing to start OpenMRS."
 
+# ---- CPU / RAM breadcrumb (diagnostic) -------------------------------------
+# Records the host CPU model, the ISA-extension subset that matters for
+# llama.cpp's prefill GEMM throughput (AVX/AVX-512/VNNI/AMX/etc.), core count,
+# and total RAM into a global property readable over REST at
+#   GET /ws/rest/v1/systemsetting?q=chartsearchai.demo.cpuInfo
+# No shell/log access to the demo is needed to answer the open build question:
+# is the published x86_64 binary (compiled -march=native on the GitHub runner)
+# leaving ISA on the table on THIS box, and is RAM the constraint behind the
+# cold-prefill variance. Runs every start (cheap) so it always reflects the
+# current host. Reads only /proc (always present); independent of the seed.
+record_cpu_breadcrumb() {
+  command -v mariadb >/dev/null 2>&1 || { echo "[cpu-breadcrumb] mariadb client absent; skipping."; return 0; }
+  _model=$(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo 2>/dev/null | head -1)
+  [ -n "$_model" ] || _model=$(sed -n 's/^Model[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo 2>/dev/null | head -1)
+  _isa=$(grep -m1 -iE '^(flags|Features)' /proc/cpuinfo 2>/dev/null \
+    | grep -oiE 'avx512[a-z0-9_]*|avx2|avx_vnni|avx[0-9]*|amx[_a-z]*|f16c|fma|bf16|sse4[._0-9]*' \
+    | tr 'A-Z' 'a-z' | sort -u | tr '\n' ' ')
+  _cores=$(nproc 2>/dev/null || echo '?')
+  _mem=$(sed -n 's/^MemTotal:[[:space:]]*\([0-9]*\).*/\1/p' /proc/meminfo 2>/dev/null | head -1)
+  _val="model=${_model}; cores=${_cores}; memKB=${_mem}; isa=${_isa}"
+  # global_property.property_value is plain text; single-quote-escape for the SQL literal.
+  _val=$(printf %s "$_val" | sed "s/'/''/g")
+  # The seed step normally leaves the DB reachable; a short retry covers the
+  # already-seeded fast path and transient unavailability without hanging start.
+  _i=0; while [ "$_i" -lt 15 ]; do seed_sql -N -e "SELECT 1" >/dev/null 2>&1 && break; _i=$((_i + 1)); sleep 2; done
+  seed_sql "$DB_NAME" -e \
+    "INSERT INTO global_property (property,property_value,uuid) VALUES ('chartsearchai.demo.cpuInfo','$_val',UUID()) ON DUPLICATE KEY UPDATE property_value='$_val';" >/dev/null 2>&1 \
+    && echo "[cpu-breadcrumb] $_val" \
+    || echo "[cpu-breadcrumb] could not write GP (DB unreachable?); continuing."
+}
+record_cpu_breadcrumb || true
+
 exec /openmrs/startup.sh

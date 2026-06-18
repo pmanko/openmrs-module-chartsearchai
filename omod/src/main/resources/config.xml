@@ -104,6 +104,12 @@
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.llm.mlock</property>
+		<defaultValue>true</defaultValue>
+		<description>Whether the embedded llama-server is launched with --mlock, which pins the model weights resident in RAM so the OS cannot page them out (local engine only). Default true preserves the established behavior — no multi-second decode stalls from the model being paged out under memory pressure. Set to false on a RAM-starved host: pinning a multi-GB model (e.g. ~5GB for Gemma 4 E4B) can starve the OS page cache and tip the box into a swapping/degraded state, which is the suspected cause of the high cold-prefill latency variance on small CPU-only deployments; without the pin those pages can be reclaimed and the model pages in lazily on a cold load. This is a launch-time flag, so changing it relaunches llama-server on the next query (no redeploy needed). Only applies when chartsearchai.llm.engine is "local". Accepts true/false.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.llm.kvCacheDir</property>
 		<defaultValue></defaultValue>
 		<description>Directory where the local engine persists each patient's prefilled chart KV cache to disk (one file per distinct chart prefix), via llama-server's --slot-save-path. The warmup that fires on chart-open restores a patient's KV from disk (I/O-bound, tens of ms) instead of recomputing the full chart prefill (CPU-bound, tens of seconds to minutes on a GPU-less host) — turning the slow first query on a patient into a fast one, and surviving llama-server restarts and single-slot evictions that the in-RAM prompt cache does not. The restored KV is byte-for-byte what a fresh prefill produces, so answer quality is unchanged (verified: identical answers and citations on the standalone). The first-ever visit to a patient still pays one prefill (to create the file). ENABLED BY DEFAULT: an empty value resolves to &lt;appdata&gt;/chartsearchai/kvcache. Set an explicit path to relocate it onto faster or larger storage, or set it to "off" (or false/none/disabled) to turn the feature off — do that on hosts where the on-disk KV files (which contain the model's encoding of the patient chart) or their disk footprint are unwanted. Only applies when chartsearchai.llm.engine is "local". Each file is large (tens to a few hundred MB, proportional to the chart's token count) — see chartsearchai.llm.kvCacheMaxEntries for the disk cap, and prefer fast local storage.</description>
