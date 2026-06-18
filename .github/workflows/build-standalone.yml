@@ -499,7 +499,12 @@ jobs:
           DEST_COUNT=$(find "$DEST" -type f | wc -l)
           { [ "$SRC_COUNT" -gt 0 ] && [ "$DEST_COUNT" -eq "$SRC_COUNT" ]; } \
             || fail "baked index copy incomplete: $DEST_COUNT/$SRC_COUNT files landed in the artifact"
-          cd "$GITHUB_WORKSPACE" && rm -rf "$GITHUB_WORKSPACE/bakerun"   # leave $BAKE before removing it
+          # Best-effort throwaway cleanup — MUST NOT fail the build here. The index is already
+          # copied into the artifact above; bakerun is not in the upload path and the runner is
+          # ephemeral. `rm -rf` can race the standalone's still-finishing shutdown (Tomcat/MariaDB
+          # writing into tomcat/ -> "Directory not empty"), which under GitHub Actions' default
+          # `bash -e` would otherwise fail the step after a successful bake.
+          cd "$GITHUB_WORKSPACE" && rm -rf "$GITHUB_WORKSPACE/bakerun" 2>/dev/null || true
 
           echo "Bake complete: querystore Lucene index pre-seeded into the uploaded artifact ($DEST_COUNT files, $(du -sh "$DEST" | cut -f1))."
 
