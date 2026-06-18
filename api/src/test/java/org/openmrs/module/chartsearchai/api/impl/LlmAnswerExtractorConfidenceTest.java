@@ -29,8 +29,8 @@ import org.openmrs.module.chartsearchai.api.impl.LlmProvider.LlmResponse;
  *       nested {level,note} structure.</li>
  *   <li>Return {@code null} when the field is absent (LM Studio / parity lane / legacy rows) — not
  *       an empty map that would render a phantom tag.</li>
- *   <li>The token-count overload must thread confidence through, not drop it (the same regression
- *       that once dropped blocks).</li>
+ *   <li>The token-count overload must thread confidence through, not drop it, the same way it
+ *       must not drop blocks.</li>
  * </ol>
  */
 public class LlmAnswerExtractorConfidenceTest {
@@ -75,8 +75,8 @@ public class LlmAnswerExtractorConfidenceTest {
 	@SuppressWarnings("unchecked")
 	public void tokenCountOverloadShouldPreserveConfidence() {
 		// The chat / search paths flow through extractResponse(json, in, out, cached) to attach
-		// token counts. That overload must thread confidence through — the exact shape of the
-		// regression that once silently dropped blocks.
+		// token counts. That overload must thread confidence through, the same way it must not
+		// drop blocks.
 		String json = "{\"answer\":\"prose\",\"citations\":[],"
 				+ "\"confidence\":{\"answer\":{\"level\":\"red\",\"note\":\"unresolved\"}}}";
 

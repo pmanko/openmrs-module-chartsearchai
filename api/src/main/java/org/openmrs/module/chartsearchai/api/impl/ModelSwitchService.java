@@ -36,9 +36,8 @@ import org.springframework.stereotype.Component;
  * {@code GET /v1/models}, and switches the active model by updating the
  * {@code chartsearchai.llm.remote.modelName} global property.
  *
- * <p>POC scope: lists raw model IDs from the active endpoint. An operator-
- * curated allowlist with display names / per-model context sizes is a
- * follow-up iteration (see plan).
+ * <p>Lists raw model IDs from the active endpoint; there is no operator-curated
+ * allowlist with display names or per-model context sizes.
  *
  * <p>This service does NOT touch LM Studio's model loading state — switching
  * models on the GP is purely a routing change. If the newly selected model is
@@ -213,7 +212,7 @@ public class ModelSwitchService {
 	 *
 	 * <p>For {@code engine=local}, returns an empty list with engine="local"
 	 * so the SPA can hide the picker — model-switching only applies to the
-	 * remote engine in this iteration.
+	 * remote engine.
 	 *
 	 * @throws APIException if the endpoint URL is misconfigured or the
 	 *         {@code /v1/models} call fails
@@ -720,7 +719,7 @@ public class ModelSwitchService {
 	 *
 	 * <p>HTTP errors on the v1 probe (404, connection refused, malformed JSON)
 	 * are non-fatal — they trigger the fallback. Errors on the OpenAI-compat
-	 * fallback propagate as {@link APIException} matching today's behavior.
+	 * fallback propagate as {@link APIException}.
 	 *
 	 * @param chatUrl the configured chat-completions URL (the same value the
 	 *                {@code chartsearchai.llm.remote.endpointUrl} GP holds).

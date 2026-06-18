@@ -18,8 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.openmrs.module.chartsearchai.api.impl.LlmProvider.LlmResponse;
 
 /**
- * Contract tests for the structured {@code blocks} field added in the
- * tabular-display iteration. The parser must:
+ * Contract tests for the structured {@code blocks} field. The parser must:
  *
  * <ol>
  *   <li>Populate {@link LlmResponse#getBlocks()} from the JSON {@code blocks}
@@ -31,8 +30,7 @@ import org.openmrs.module.chartsearchai.api.impl.LlmProvider.LlmResponse;
  *
  * <p>If these assertions hold but the parser actually ignores {@code blocks},
  * the SPA would render only prose and the tabular feature is silently broken
- * end-to-end. The RED-then-GREEN cycle for this test is enforced by stubbing
- * the parser's block-handling branch and confirming the assertions fail.
+ * end-to-end.
  */
 public class LlmAnswerExtractorBlocksTest {
 
@@ -97,10 +95,9 @@ public class LlmAnswerExtractorBlocksTest {
 
 	@Test
 	public void legacyResponseWithoutBlocksShouldReturnEmptyBlocksList() {
-		// Pre-tabular-iteration responses don't carry the `blocks` field at
-		// all. The parser must accept these and return an empty list rather
-		// than null — otherwise the hydration path on legacy chat_message
-		// rows blows up.
+		// Legacy responses don't carry the `blocks` field at all. The parser
+		// must accept these and return an empty list rather than null —
+		// otherwise the hydration path on legacy chat_message rows blows up.
 		String json = "{\"answer\":\"The patient is 47 years old.\",\"citations\":[1]}";
 
 		LlmResponse parsed = LlmAnswerExtractor.extractResponse(json);
@@ -126,12 +123,11 @@ public class LlmAnswerExtractorBlocksTest {
 
 	@Test
 	public void tokenCountOverloadShouldPreserveBlocks() {
-		// Regression: the 4-arg extractResponse(json, in, out, cached) used to
-		// re-wrap the parsed LlmResponse with the 5-arg constructor, which
-		// dropped the blocks field. The chat / search code paths all flow
+		// The 4-arg extractResponse(json, in, out, cached) must carry the blocks
+		// field through, not drop it. The chat / search code paths all flow
 		// through this overload (so they can attach token counts from the
-		// transport layer), so dropping blocks here was silently masking
-		// every populated block the model emitted.
+		// transport layer), so a dropped blocks field here silently masks every
+		// populated block the model emitted.
 		String json = "{"
 				+ "\"answer\":\"prose summary\",\"citations\":[1],\"blocks\":["
 				+ "{\"kind\":\"table\",\"title\":\"Meds\","

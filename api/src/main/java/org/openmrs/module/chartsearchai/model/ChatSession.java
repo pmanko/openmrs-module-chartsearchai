@@ -52,9 +52,9 @@ public class ChatSession implements Serializable {
 	/**
 	 * Patient chart text snapshot, frozen at session create. Replayed verbatim
 	 * as the first user message on every turn of this session so the LLM's
-	 * prompt cache hits on a stable system+chart prefix. Null only on rows
-	 * created before changeset chartsearchai-008 or when the chart-building
-	 * pipeline returned an empty chart (deferred to lazy build on first chat).
+	 * prompt cache hits on a stable system+chart prefix. Null only when the
+	 * chart-building pipeline returned an empty chart, deferring it to a lazy
+	 * build on first chat.
 	 */
 	private String chartSnapshot;
 

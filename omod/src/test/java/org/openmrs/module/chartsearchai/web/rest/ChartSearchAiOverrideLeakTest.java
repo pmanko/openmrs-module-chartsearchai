@@ -56,7 +56,7 @@ public class ChartSearchAiOverrideLeakTest {
 
 	@AfterEach
 	public void clearOverride() {
-		// Belt-and-suspenders: a RED run leaves the leak in place; don't poison
+		// A failing run can leave the override set; clear it so it can't poison
 		// sibling tests sharing this thread.
 		RequestLlmOverride.clear();
 	}
@@ -118,8 +118,8 @@ public class ChartSearchAiOverrideLeakTest {
 			ctx.when(Context::getAdministrationService).thenReturn(adminService);
 			ctx.when(Context::getAuthenticatedUser).thenReturn(user);
 
-			// getOutputStream() at line 921 is OUTSIDE the streaming try (924), so
-			// the IOException propagates out of chatStream (declared throws IOException).
+			// getOutputStream() is OUTSIDE the streaming try, so the IOException
+			// propagates out of chatStream (declared throws IOException).
 			assertThrows(IOException.class, () -> controller.chatStream(body, response));
 		}
 

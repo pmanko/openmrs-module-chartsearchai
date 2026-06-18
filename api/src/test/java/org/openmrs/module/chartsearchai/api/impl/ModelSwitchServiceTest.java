@@ -85,8 +85,7 @@ public class ModelSwitchServiceTest {
 	}
 
 	// --- LM Studio /api/v1/models support ---------------------------------
-	// These tests pin the shape of LM Studio's v1 REST API per
-	// specs/artifacts/planning/lm-studio-api-reference.md. The picker uses
+	// These tests pin the shape of LM Studio's v1 REST API. The picker uses
 	// this shape to render an "LM Studio" sub-category with per-entry
 	// loaded-vs-not-loaded state, and to filter out embedding-only models
 	// that would 400 from /v1/chat/completions.

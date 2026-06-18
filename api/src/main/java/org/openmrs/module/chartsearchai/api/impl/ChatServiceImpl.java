@@ -197,8 +197,8 @@ public class ChatServiceImpl implements ChatService {
 	}
 
 	/**
-	 * Backfill chart snapshot for legacy sessions (created before
-	 * chartsearchai-008) on first chat() call. Idempotent.
+	 * Backfill chart snapshot for sessions that lack one on first chat() call.
+	 * Idempotent.
 	 */
 	protected void ensureChartSnapshot(ChatSession session) {
 		if (session.getChartSnapshot() != null) {
@@ -306,8 +306,8 @@ public class ChatServiceImpl implements ChatService {
 	 *
 	 * <p>When blocks is empty, we still store JSON (not plaintext) so the
 	 * hydration parser only has to handle one canonical shape on newly-
-	 * created rows. Legacy plaintext rows from before this iteration are
-	 * detected and handled separately in {@link #extractProseAnswer}.
+	 * created rows. Legacy plaintext rows are detected and handled
+	 * separately in {@link #extractProseAnswer}.
 	 */
 	private static String serializeAssistantContent(ChartAnswer answer) {
 		Map<String, Object> wire = new LinkedHashMap<>();
@@ -378,7 +378,7 @@ public class ChatServiceImpl implements ChatService {
 	 * for LLM-replay. Handles both shapes:
 	 * <ul>
 	 *   <li>New: {@code {"answer": "<prose>", "blocks": [...]}}</li>
-	 *   <li>Legacy: plain string (rows persisted before this iteration)</li>
+	 *   <li>Legacy: plain string</li>
 	 * </ul>
 	 * Sending the JSON envelope to the LLM in prior assistant turns confuses
 	 * small models; the prose summary is enough context for follow-ups.

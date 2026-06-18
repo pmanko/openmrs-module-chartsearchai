@@ -1356,8 +1356,8 @@ public class ChartSearchAiRestController {
 			// Assistant rows persist a JSON envelope ({answer, blocks}); user
 			// rows are plaintext. Parse JSON when present, surface prose +
 			// blocks separately so the SPA can rehydrate the same view it
-			// had during streaming. Legacy plaintext rows from before the
-			// tabular iteration fall through with blocks=[].
+			// had during streaming. Legacy plaintext rows fall through
+			// with blocks=[].
 			if (ChatMessage.ROLE_ASSISTANT.equals(m.getRole())) {
 				String stored = m.getContent();
 				String prose = stored;

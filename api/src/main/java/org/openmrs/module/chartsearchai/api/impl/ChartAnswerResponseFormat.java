@@ -162,11 +162,10 @@ final class ChartAnswerResponseFormat {
 		// not in `properties`, but we accept that limitation in exchange for
 		// strict structural validation; vendors using strict mode need to
 		// match the columns array exactly.)
-		// For now: model emits cells under whatever keys it chooses from
+		// The model emits cells under whatever keys it chooses from
 		// `columns[].key`. The schema allows the values to be Cell-shaped but
 		// permits any string key by setting additionalProperties to the Cell
-		// definition (LM Studio supports this; OpenAI strict does not, but
-		// for POC against LM Studio that's acceptable).
+		// definition (LM Studio supports this; OpenAI strict does not).
 		ObjectNode cellsMap = mapper.createObjectNode();
 		cellsMap.put("type", "object");
 		cellsMap.set("additionalProperties", cell);
