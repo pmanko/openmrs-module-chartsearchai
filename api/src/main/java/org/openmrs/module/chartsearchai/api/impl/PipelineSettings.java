@@ -33,6 +33,12 @@ final class PipelineSettings {
 		return !"false".equalsIgnoreCase(mode.trim());
 	}
 
+	static boolean dedupPanelLabels() {
+		String mode = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_SERIALIZER_DEDUP_PANEL_LABELS, "false");
+		return "true".equalsIgnoreCase(mode.trim());
+	}
+
 	static int getQueryStoreTopK() {
 		String value = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_QUERYSTORE_TOP_K);

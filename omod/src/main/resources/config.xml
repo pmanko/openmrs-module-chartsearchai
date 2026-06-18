@@ -68,6 +68,12 @@
 	</globalProperty>
 
 	<globalProperty>
+		<property>chartsearchai.serializer.dedupPanelLabels</property>
+		<defaultValue>false</defaultValue>
+		<description>When true, the chart serializer run-length de-dups the obs-group (panel) label: a group member renders " (part of: &lt;panel&gt;)" only when its group differs from the immediately-preceding record's group, so the label is dropped on consecutive same-group members (a non-member or a different group resets the run) — exactly mirroring the date-run compression. The grounding citation mapping always keeps the full label, so citation verification is unaffected. VERIFIED 2026-06-18 (real tokenizer measurement + clustering eval): the saving is only ~2% of prompt tokens, and it is SAFE ONLY ON LARGER MODELS — E4B clusters the de-duped members correctly, but the small E2B model suffers a clustering FAILURE (it returns a false "no results found" for a panel whose members' labels were thinned). Therefore do NOT enable on E2B deployments; only worth enabling on E4B-or-larger, where ~2% is a minor prefill win. Default: false (legacy every-member labelling). Changing this setting takes effect on the next query.</description>
+	</globalProperty>
+
+	<globalProperty>
 		<property>chartsearchai.llm.systemPrompt</property>
 		<defaultValue></defaultValue>
 		<description>Custom system prompt sent to the LLM before patient records and the question. If empty (the default), the module uses its built-in prompt — which is iterated on alongside the rest of the pipeline and is what the eval suite tests against. Set this only to override the built-in default for this deployment (e.g. to adjust tone, citation format, or add site-specific guidance).</description>

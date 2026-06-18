@@ -92,6 +92,23 @@ public class PatientChartSerializer {
 	 * @return the serialized chart with numbered records, index mapping, and focus indices
 	 */
 	public PatientChart serialize(Patient patient, List<SerializedRecord> records, Set<String> focusUuids) {
+		return serialize(patient, records, focusUuids, false);
+	}
+
+	/**
+	 * As {@link #serialize(Patient, List, Set)} but, when {@code dedupGroupLabels} is true, applies
+	 * run-length de-dup to the obs-group (panel) label exactly as the date prefix is run-length de-duped:
+	 * a group member renders {@code " (part of: <panel>)"} only when its group differs from the
+	 * immediately-preceding record's group, so the label is dropped on consecutive same-group members (a
+	 * non-member, or a different group, resets the run). The grounding {@link RecordMapping} text always
+	 * carries the full label, so citation verification is unchanged. Default (false) keeps the legacy
+	 * every-member labelling that the small-model clustering signal relies on. Gated in production by
+	 * {@code chartsearchai.serializer.dedupPanelLabels}.
+	 *
+	 * @param dedupGroupLabels whether to run-length de-dup the panel label on consecutive same-group members
+	 */
+	public PatientChart serialize(Patient patient, List<SerializedRecord> records, Set<String> focusUuids,
+			boolean dedupGroupLabels) {
 		StringBuilder sb = new StringBuilder();
 		List<RecordMapping> mappings = new ArrayList<RecordMapping>();
 		List<Integer> focusIndices = new ArrayList<Integer>();
@@ -117,43 +134,58 @@ public class PatientChartSerializer {
 		// legacy undated record. So the format demonstration in DEFAULT_SYSTEM_PROMPT still mirrors it and
 		// needs no change.
 		String previousDateLabel = null;
+		String previousGroupUuid = null;
 		for (int i = 0; i < records.size(); i++) {
 			SerializedRecord record = records.get(i);
 			int index = i + 1;
 			String dateLabel = record.getDate() != null ? DateFormatUtil.formatDate(record.getDate()) : null;
 
-			// Body = synonym-stripped text + any obs-group (panel) label + live age — everything after
-			// the "[N] " index EXCEPT the leading date parenthetical.
+			// Body = synonym-stripped text + live age. The obs-group (panel) label is computed SEPARATELY
+			// below (not appended here) so the chart line can drop a repeated label while the grounding
+			// mapping keeps it — everything after "[N] " EXCEPT the leading date and the trailing group label.
 			StringBuilder body = new StringBuilder();
 			body.append(trimTrailingZeroDecimals(ConceptNameUtil.stripSynonyms(record.getText())));
-			// Surface obs-group (e.g. lab-panel / vital-signs-set) membership inline so the LLM can
-			// cluster atomic members of the same group. querystore carries the group identity only in
-			// metadata, never in the doc text (ADR Decision 6), and leaves clustering to the consumer.
-			appendGroupMembership(body, record);
 			// Age is the one demographic that must be computed live: baking it into querystore's
 			// indexed patient record would go stale as the patient ages (the index carries only
 			// birthdate). Merge the current age into that same citable line so "how old is the
-			// patient?" answers directly instead of echoing a birthdate.
+			// patient?" answers directly instead of echoing a birthdate. No-op for non-patient records,
+			// which never co-occur with a group label (a group member is never the patient record).
 			appendLiveAge(body, record, patient);
-			String bodyText = body.toString();
+			String bodyBase = body.toString();
+			// Obs-group (e.g. lab-panel / vital-signs-set) membership label, " (part of: <panel>)" or "",
+			// surfaced inline so the LLM can cluster atomic members of the same group. querystore carries
+			// the group identity only in metadata, never in the doc text (ADR Decision 6).
+			String groupLabel = groupMembershipLabel(record);
 
-			// The RecordMapping text the grounding verifier compares cited records against ALWAYS carries
-			// the inline date (when the record has one), even when the chart line below drops it as a
-			// same-date repeat: the model can cite a date it read from an earlier record in the run, so
-			// the verifier's per-record view must still contain it. This is unchanged from the legacy
-			// format, so grounding behaviour is identical.
-			String renderedText = dateLabelPrefix(dateLabel) + bodyText;
+			// The RecordMapping the grounding verifier compares cited records against ALWAYS carries the
+			// inline date AND the group label, even when the chart line below drops either as a run repeat:
+			// the model can cite a date/panel it read from an earlier record in the run, so the verifier's
+			// per-record view must still contain it. Grounding behaviour is therefore unchanged.
+			String renderedText = dateLabelPrefix(dateLabel) + bodyBase + groupLabel;
 			mappings.add(new RecordMapping(index, record.getResourceType(), record.getResourceUuid(),
 					record.getDate(), renderedText));
 
 			// Chart line: show the date only on the first record of a same-date run (an undated record
-			// resets the run, so the next dated record shows its date again); otherwise drop it.
+			// resets the run, so the next dated record shows its date again); otherwise drop it. With
+			// dedupGroupLabels, run-length de-dup the group label the same way: render it only when this
+			// record's group differs from the previous line's group (a non-member or a different group
+			// resets the run), so every member's panel stays visible on its own line or the line directly
+			// above. Measured saving is only ~2% of prompt tokens, and safe ONLY on E4B+ (the small E2B
+			// model fails to cluster the thinned-label members — see GP_SERIALIZER_DEDUP_PANEL_LABELS).
+			String currentGroupUuid = record.getObsGroupUuid();
+			boolean dropGroupLabel = dedupGroupLabels && !groupLabel.isEmpty()
+					&& currentGroupUuid != null && currentGroupUuid.equals(previousGroupUuid);
 			sb.append("[").append(index).append("] ");
 			if (dateLabel != null && !dateLabel.equals(previousDateLabel)) {
 				sb.append(dateLabelPrefix(dateLabel));
 			}
-			sb.append(bodyText).append("\n");
+			sb.append(bodyBase);
+			if (!dropGroupLabel) {
+				sb.append(groupLabel);
+			}
+			sb.append("\n");
 			previousDateLabel = dateLabel;
+			previousGroupUuid = currentGroupUuid;
 
 			if (focusUuids != null && focusUuids.contains(record.getResourceUuid())) {
 				focusIndices.add(index);
@@ -185,23 +217,24 @@ public class PatientChartSerializer {
 	}
 
 	/**
-	 * Appends the obs-group label so co-grouped atomic records (a lab panel, a vital-signs set, an
-	 * exam) are clusterable by the LLM. The group's concept name carries the clinical term verbatim
-	 * (e.g. {@code "Basic metabolic panel"}, {@code "Vital signs"}) — we deliberately do not inject a
-	 * fixed word like "panel", since OpenMRS models these uniformly as obs groups and the grouping is
-	 * not always a lab panel. {@link SerializedRecord#getObsGroupUuid()} is the authoritative
-	 * membership flag; the concept name is the label. No-op when the record is not a group member or
-	 * the group concept has no preferred name (nothing LLM-meaningful to show).
+	 * Returns the obs-group label (e.g. {@code " (part of: Basic metabolic panel)"}) so co-grouped
+	 * atomic records (a lab panel, a vital-signs set, an exam) are clusterable by the LLM, or {@code ""}
+	 * when the record is not a group member or the group concept has no preferred name (nothing
+	 * LLM-meaningful to show). The group's concept name carries the clinical term verbatim — we
+	 * deliberately do not inject a fixed word like "panel", since OpenMRS models these uniformly as obs
+	 * groups and the grouping is not always a lab panel. {@link SerializedRecord#getObsGroupUuid()} is
+	 * the authoritative membership flag; the concept name is the label. Returned (not appended) so the
+	 * caller can place it in the grounding mapping unconditionally while dropping it from the chart line
+	 * on consecutive same-group members (the {@code dedupGroupLabels} path in
+	 * {@link #serialize(Patient, List, Set, boolean)}).
 	 */
-	private static void appendGroupMembership(StringBuilder rendered, SerializedRecord record) {
+	private static String groupMembershipLabel(SerializedRecord record) {
 		if (record == null || record.getObsGroupUuid() == null) {
-			return;
+			return "";
 		}
 		String groupName = record.getObsGroupConceptName() == null
 				? "" : record.getObsGroupConceptName().trim();
-		if (!groupName.isEmpty()) {
-			rendered.append(" (part of: ").append(groupName).append(")");
-		}
+		return groupName.isEmpty() ? "" : " (part of: " + groupName + ")";
 	}
 
 	/**

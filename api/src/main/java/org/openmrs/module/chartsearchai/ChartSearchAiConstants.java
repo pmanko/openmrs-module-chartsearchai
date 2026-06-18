@@ -19,6 +19,16 @@ public class ChartSearchAiConstants {
 
 	public static final String GP_EMBEDDING_PRE_FILTER = "chartsearchai.embedding.preFilter";
 
+	/**
+	 * When {@code true}, the chart serializer run-length de-dups the obs-group (panel) label: a member
+	 * renders {@code " (part of: <panel>)"} only when its group differs from the immediately-preceding
+	 * record's group (mirrors the date-run compression). VERIFIED 2026-06-18: real saving is only ~2%
+	 * of prompt tokens (a chars/4 estimate had overstated it ~3x), and it is SAFE ONLY ON E4B+ — on the
+	 * small E2B model it causes a clustering failure (false "no results" for a thinned-label panel). So
+	 * only enable on E4B-or-larger deployments. Default {@code false} (legacy every-member labelling).
+	 */
+	public static final String GP_SERIALIZER_DEDUP_PANEL_LABELS = "chartsearchai.serializer.dedupPanelLabels";
+
 	/** Number of top results the querystore retrieval path requests for the
 	 *  focus-hint pass; tunes that path independently of any default. */
 	public static final String GP_QUERYSTORE_TOP_K = "chartsearchai.querystore.topK";

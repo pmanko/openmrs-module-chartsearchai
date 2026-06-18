@@ -163,7 +163,7 @@ class QueryStoreChartBuilder {
 
 		List<SerializedRecord> records = toSerializedRecords(chartDocs);
 		long serializeStart = System.currentTimeMillis();
-		PatientChart chart = chartSerializer.serialize(patient, records, focusUuids);
+		PatientChart chart = chartSerializer.serialize(patient, records, focusUuids, resolveDedupPanelLabels());
 		long serializeMs = System.currentTimeMillis() - serializeStart;
 		long totalMs = System.currentTimeMillis() - buildStart;
 		log.info("[timing] querystoreBuild patient={} mode={} hits={} focusHits={} rpcMs={} serializeMs={} totalMs={} outcome=ok",
@@ -247,5 +247,18 @@ class QueryStoreChartBuilder {
 	/** Seam for tests: production reads the global property. */
 	protected boolean resolveUsePreFilter() {
 		return PipelineSettings.usePreFilter();
+	}
+
+	/** Test seam (guarded): whether the serializer run-length de-dups the obs-group (panel) label.
+	 *  Reads {@code chartsearchai.serializer.dedupPanelLabels} in production; degrades to {@code false}
+	 *  (legacy every-member labelling) when no OpenMRS context is available (unit tests) or the lookup
+	 *  fails, matching this class's fail-safe-to-legacy style. */
+	protected boolean resolveDedupPanelLabels() {
+		try {
+			return PipelineSettings.dedupPanelLabels();
+		}
+		catch (RuntimeException e) {
+			return false;
+		}
 	}
 }

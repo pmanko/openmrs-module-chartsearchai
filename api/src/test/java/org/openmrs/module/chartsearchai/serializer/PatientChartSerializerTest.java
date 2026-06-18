@@ -139,6 +139,51 @@ public class PatientChartSerializerTest {
 	}
 
 	@Test
+	public void serialize_dropsRepeatedPanelLabelOnConsecutiveSameGroupMembers_whenDedupEnabled() {
+		// Adjacency run-length de-dup of the obs-group label, gated by the dedupGroupLabels flag and
+		// mirroring the date-run compression: a member repeats its panel label only when it is NOT the
+		// immediately-preceding line's group. The label stays on the run-leader and on the first member
+		// after any non-member (which resets the run), so every member's panel is visible on its own line
+		// or the line directly above. The grounding mapping ALWAYS carries the full label (like dates), so
+		// citation verification is unaffected. Real token saving measured ~2% (E4B-safe; E2B regresses).
+		List<String> noHints = java.util.Collections.<String>emptyList();
+		SerializedRecord a = new SerializedRecord("obs", "obs-na", "Sodium: 140 mmol/L", null, noHints, "grp-bmp", "Basic metabolic panel");
+		SerializedRecord b = new SerializedRecord("obs", "obs-k", "Potassium: 4.2 mmol/L", null, noHints, "grp-bmp", "Basic metabolic panel");
+		SerializedRecord c = new SerializedRecord("obs", "obs-temp", "Temperature: 36.7 C", null); // non-member resets the run
+		SerializedRecord d = new SerializedRecord("obs", "obs-cl", "Chloride: 102 mmol/L", null, noHints, "grp-bmp", "Basic metabolic panel");
+
+		PatientChart chart = new PatientChartSerializer().serialize(
+				null, Arrays.asList(a, b, c, d), java.util.Collections.<String>emptySet(), true);
+		String text = chart.getText();
+
+		assertTrue(text.contains("[1] Sodium: 140 mmol/L (part of: Basic metabolic panel)"),
+				"run-leader keeps the panel label; chart was:\n" + text);
+		assertTrue(text.contains("[2] Potassium: 4.2 mmol/L\n"),
+				"a consecutive same-group member drops the repeated label; chart was:\n" + text);
+		assertFalse(text.contains("[2] Potassium: 4.2 mmol/L (part of:"),
+				"the dropped member must NOT carry the label on its chart line; chart was:\n" + text);
+		assertTrue(text.contains("[4] Chloride: 102 mmol/L (part of: Basic metabolic panel)"),
+				"a non-member ([3]) resets the run, so the next member re-shows the label; chart was:\n" + text);
+		assertEquals("Potassium: 4.2 mmol/L (part of: Basic metabolic panel)",
+				chart.getMappings().get(1).getText(),
+				"the grounding mapping must keep the full label even when the chart line drops it");
+	}
+
+	@Test
+	public void serialize_keepsEveryPanelLabel_whenDedupDisabled() {
+		// Default (flag off) preserves the legacy every-member labelling the clustering signal relies on.
+		List<String> noHints = java.util.Collections.<String>emptyList();
+		SerializedRecord a = new SerializedRecord("obs", "obs-na", "Sodium: 140 mmol/L", null, noHints, "grp-bmp", "Basic metabolic panel");
+		SerializedRecord b = new SerializedRecord("obs", "obs-k", "Potassium: 4.2 mmol/L", null, noHints, "grp-bmp", "Basic metabolic panel");
+
+		PatientChart chart = new PatientChartSerializer().serialize(
+				null, Arrays.asList(a, b), java.util.Collections.<String>emptySet(), false);
+
+		assertTrue(chart.getText().contains("[2] Potassium: 4.2 mmol/L (part of: Basic metabolic panel)"),
+				"with dedup disabled every member keeps its label; chart was:\n" + chart.getText());
+	}
+
+	@Test
 	public void serialize_addsDemographicsHeader_whenNoPatientRecordPresent() {
 		// Fallback: PatientRecordSerializer skips a nameless patient, yielding no querystore "patient"
 		// document, so the computed header stays the only demographics source and must still be emitted.
