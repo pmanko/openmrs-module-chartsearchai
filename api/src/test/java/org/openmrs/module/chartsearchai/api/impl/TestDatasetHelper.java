@@ -23,6 +23,14 @@ import org.openmrs.module.chartsearchai.serializer.SerializedRecord;
  * Shared helpers for tests that use the {@code FULL_PATIENT_DATASET} test
  * dataset. Consolidates the dataset-parsing logic that was previously
  * duplicated across multiple test files.
+ *
+ * <p><strong>Format caveat:</strong> each string is the <em>embedding/retrieval</em> representation,
+ * NOT the LLM chart text — a resource-type prefix ({@code "Clinical observation: "}) + date + an
+ * enriched body that may carry a {@code "Test — "} concept-class prefix and {@code " / "}-separated
+ * category hints, all of which feed retrieval (and {@code stripCategoryHints}). The production chart
+ * line is leaner: querystore's {@code ObsRecordSerializer} emits just {@code "<concept>: <value>
+ * <units>"} (the concept class lives in metadata, the resource prefix/hints are retrieval-only). So
+ * do NOT estimate chart/prompt token counts from these strings — they overcount.
  */
 final class TestDatasetHelper {
 
