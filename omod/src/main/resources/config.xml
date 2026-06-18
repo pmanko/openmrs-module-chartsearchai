@@ -98,12 +98,6 @@
 	</globalProperty>
 
 	<globalProperty>
-		<property>chartsearchai.llm.threads</property>
-		<defaultValue></defaultValue>
-		<description>Thread count for the embedded llama-server's generation (-t) AND batch/prefill (-tb) pools (local engine only). Blank (default) pins both to the JVM's Runtime.availableProcessors(), which is cgroup-aware and so respects a container's CPU quota — unlike llama-server's own auto-detect, which uses the HOST's logical core count and oversubscribes a cgroup-limited container, collapsing prefill throughput. Set to "auto" (or 0) to revert to llama-server's auto-detect, or to a positive integer to pin explicitly (e.g. for tuning to physical-cores-minus-headroom). Changing this at runtime relaunches the server on the next query. Only applies when chartsearchai.llm.engine is "local".</description>
-	</globalProperty>
-
-	<globalProperty>
 		<property>chartsearchai.llm.kvCacheDir</property>
 		<defaultValue></defaultValue>
 		<description>Directory where the local engine persists each patient's prefilled chart KV cache to disk (one file per distinct chart prefix), via llama-server's --slot-save-path. The warmup that fires on chart-open restores a patient's KV from disk (I/O-bound, tens of ms) instead of recomputing the full chart prefill (CPU-bound, tens of seconds to minutes on a GPU-less host) — turning the slow first query on a patient into a fast one, and surviving llama-server restarts and single-slot evictions that the in-RAM prompt cache does not. The restored KV is byte-for-byte what a fresh prefill produces, so answer quality is unchanged (verified: identical answers and citations on the standalone). The first-ever visit to a patient still pays one prefill (to create the file). ENABLED BY DEFAULT: an empty value resolves to &lt;appdata&gt;/chartsearchai/kvcache. Set an explicit path to relocate it onto faster or larger storage, or set it to "off" (or false/none/disabled) to turn the feature off — do that on hosts where the on-disk KV files (which contain the model's encoding of the patient chart) or their disk footprint are unwanted. Only applies when chartsearchai.llm.engine is "local". Each file is large (tens to a few hundred MB, proportional to the chart's token count) — see chartsearchai.llm.kvCacheMaxEntries for the disk cap, and prefer fast local storage.</description>

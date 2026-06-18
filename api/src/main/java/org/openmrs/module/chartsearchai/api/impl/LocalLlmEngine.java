@@ -100,10 +100,6 @@ public class LocalLlmEngine implements LlmEngine {
 
 	private int loadedContextSize = -1;
 
-	/** Thread count (-t/-tb) the running server was launched with; -1 until first start. Part of the
-	 *  restart decision so a {@code chartsearchai.llm.threads} change relaunches with the new pools. */
-	private int loadedThreads = -1;
-
 	/** The resolved KV-cache directory the running server was configured for (the
 	 *  {@link #resolveKvCacheDir()} value at launch; null when disabled). Used ONLY for the restart
 	 *  decision — it must reflect intent, not whether the directory could be created, otherwise a
@@ -636,23 +632,21 @@ public class LocalLlmEngine implements LlmEngine {
 	private void ensureServerRunning() {
 		String modelPath = resolveModelPath();
 		int currentContextSize = getContextSize();
-		int currentThreads = getServerThreads();
 		// The CONFIGURED (intended) directory, not the effective --slot-save-path. The restart
 		// decision must compare intent so a one-time mkdirs failure (which nulls the effective path)
 		// does not differ on every call and loop. Do not swap this for loadedSlotSavePath.
 		String configuredKvCacheDir = resolveKvCacheDir();
 
 		if (serverProcess != null && serverProcess.isAlive()
-				&& !serverNeedsRestart(loadedModelPath, loadedContextSize, loadedThreads, loadedKvCacheDir,
-						modelPath, currentContextSize, currentThreads, configuredKvCacheDir)) {
+				&& !serverNeedsRestart(loadedModelPath, loadedContextSize, loadedKvCacheDir,
+						modelPath, currentContextSize, configuredKvCacheDir)) {
 			return;
 		}
 
 		if (serverProcess != null && serverProcess.isAlive()) {
-			log.info("LLM config changed (model {}→{}, ctx {}→{}, threads {}→{}, kvCacheDir {}→{}), "
-					+ "restarting server", loadedModelPath, modelPath, loadedContextSize,
-					currentContextSize, loadedThreads, currentThreads, loadedKvCacheDir,
-					configuredKvCacheDir);
+			log.info("LLM config changed (model {}→{}, ctx {}→{}, kvCacheDir {}→{}), restarting server",
+					loadedModelPath, modelPath, loadedContextSize, currentContextSize,
+					loadedKvCacheDir, configuredKvCacheDir);
 			stopServer();
 		}
 
@@ -667,21 +661,10 @@ public class LocalLlmEngine implements LlmEngine {
 	 */
 	static boolean shouldRestartServer(String loadedPath, int loadedCtx,
 			String currentPath, int currentCtx) {
-		return shouldRestartServer(loadedPath, loadedCtx, 0, currentPath, currentCtx, 0);
-	}
-
-	/**
-	 * As {@link #shouldRestartServer(String, int, String, int)} but also relaunches when the
-	 * configured thread count changes (a launch-time {@code -t}/{@code -tb} flag). Returns false when
-	 * nothing has been loaded yet — the caller handles the initial start.
-	 */
-	static boolean shouldRestartServer(String loadedPath, int loadedCtx, int loadedThreads,
-			String currentPath, int currentCtx, int currentThreads) {
 		if (loadedPath == null) {
 			return false;
 		}
-		return !loadedPath.equals(currentPath) || loadedCtx != currentCtx
-				|| loadedThreads != currentThreads;
+		return !loadedPath.equals(currentPath) || loadedCtx != currentCtx;
 	}
 
 	/**
@@ -694,24 +677,11 @@ public class LocalLlmEngine implements LlmEngine {
 	 */
 	static boolean serverNeedsRestart(String loadedModel, int loadedCtx, String loadedKvCacheDir,
 			String currentModel, int currentCtx, String currentKvCacheDir) {
-		return serverNeedsRestart(loadedModel, loadedCtx, 0, loadedKvCacheDir,
-				currentModel, currentCtx, 0, currentKvCacheDir);
-	}
-
-	/**
-	 * As {@link #serverNeedsRestart(String, int, String, String, int, String)} but also relaunches
-	 * when the configured thread count changes — the mechanism that lets a
-	 * {@code chartsearchai.llm.threads} change take effect (and that drives the prefill thread-sweep)
-	 * without an external restart. Returns false when nothing is loaded yet.
-	 */
-	static boolean serverNeedsRestart(String loadedModel, int loadedCtx, int loadedThreads,
-			String loadedKvCacheDir, String currentModel, int currentCtx, int currentThreads,
-			String currentKvCacheDir) {
 		if (loadedModel == null) {
 			return false;
 		}
-		return shouldRestartServer(loadedModel, loadedCtx, loadedThreads, currentModel, currentCtx,
-				currentThreads) || !Objects.equals(loadedKvCacheDir, currentKvCacheDir);
+		return shouldRestartServer(loadedModel, loadedCtx, currentModel, currentCtx)
+				|| !Objects.equals(loadedKvCacheDir, currentKvCacheDir);
 	}
 
 	/**
@@ -748,17 +718,14 @@ public class LocalLlmEngine implements LlmEngine {
 	 *       constrain it and Gemma 4 burns thousands of tokens before the answer.</li>
 	 * </ul>
 	 *
-	 * <p>KV-cache dtype is left to llama-server's auto-detect (KV quantization via
-	 * {@code --cache-type-k/v q4_0} regresses where the backend's native KV path beats the
-	 * dequantize-on-read kernel). Thread count is NOT left to auto-detect — see the {@code threads}
-	 * overload {@link #buildServerCommand(String, String, int, int, int, String)} and
-	 * {@link #getServerThreads()}: llama's own {@code hardware_concurrency()} reports HOST logical
-	 * cores and oversubscribes a cgroup-limited container, collapsing prefill. This 4-arg form passes
-	 * {@code threads=0} (defer to auto-detect) for callers/tests that don't tune it.
+	 * <p>Thread count and KV-cache dtype are left to llama-server's auto-detect. Explicit
+	 * pinning (e.g. {@code -t/--tb}) and KV quantization (e.g. {@code --cache-type-k/v q4_0})
+	 * regress prefill on hosts where logical-core count exceeds physical cores or where the
+	 * backend's native KV path is faster than the dequantize-on-read kernel — both common.
 	 */
 	static List<String> buildServerCommand(String binaryPath, String modelPath, int port,
 			int contextSize) {
-		return buildServerCommand(binaryPath, modelPath, port, contextSize, 0, null);
+		return buildServerCommand(binaryPath, modelPath, port, contextSize, null);
 	}
 
 	/**
@@ -770,19 +737,6 @@ public class LocalLlmEngine implements LlmEngine {
 	 */
 	static List<String> buildServerCommand(String binaryPath, String modelPath, int port,
 			int contextSize, String slotSavePath) {
-		return buildServerCommand(binaryPath, modelPath, port, contextSize, 0, slotSavePath);
-	}
-
-	/**
-	 * As {@link #buildServerCommand(String, String, int, int, String)} but pins the llama-server
-	 * thread pools when {@code threads > 0}: {@code -t} (generation/decode) AND {@code -tb}
-	 * (batch/prefill). {@code threads <= 0} omits both, deferring to llama-server's own auto-detect.
-	 * Prefill is the cold-query bottleneck, so the batch pool (-tb) must be pinned alongside -t —
-	 * left unset, llama auto-detects the prefill pool back to HOST logical cores and oversubscribes a
-	 * cgroup-limited container. See {@link #getServerThreads()} for how the value is resolved.
-	 */
-	static List<String> buildServerCommand(String binaryPath, String modelPath, int port,
-			int contextSize, int threads, String slotSavePath) {
 		List<String> cmd = new ArrayList<>();
 		cmd.add(binaryPath);
 		cmd.add("-m");
@@ -806,12 +760,6 @@ public class LocalLlmEngine implements LlmEngine {
 		cmd.add("0");
 		cmd.add("--reasoning-budget");
 		cmd.add("0");
-		if (threads > 0) {
-			cmd.add("-t");
-			cmd.add(String.valueOf(threads));
-			cmd.add("-tb");
-			cmd.add(String.valueOf(threads));
-		}
 		if (slotSavePath != null && !slotSavePath.trim().isEmpty()) {
 			cmd.add("--slot-save-path");
 			cmd.add(slotSavePath.trim());
@@ -846,9 +794,8 @@ public class LocalLlmEngine implements LlmEngine {
 			}
 		}
 
-		int threads = getServerThreads();
 		List<String> command = buildServerCommand(serverBinaryPath, modelPath, serverPort,
-				getContextSize(), threads, slotSavePath);
+				getContextSize(), slotSavePath);
 
 		log.info("Starting llama-server on port {} with model {}", serverPort, modelPath);
 
@@ -882,7 +829,6 @@ public class LocalLlmEngine implements LlmEngine {
 			waitForServerReady();
 			loadedModelPath = modelPath;
 			loadedContextSize = getContextSize();
-			loadedThreads = threads;
 			loadedKvCacheDir = configuredKvCacheDir;
 			loadedSlotSavePath = slotSavePath;
 			log.info("llama-server started successfully on port {}", serverPort);
@@ -1080,42 +1026,6 @@ public class LocalLlmEngine implements LlmEngine {
 			}
 		}
 		return ChartSearchAiConstants.DEFAULT_LLM_CONTEXT_SIZE;
-	}
-
-	/**
-	 * Resolves the llama-server thread count for {@code -t}/{@code -tb} from
-	 * {@link ChartSearchAiConstants#GP_LLM_THREADS}:
-	 * <ul>
-	 *   <li>blank/unset → {@link Runtime#availableProcessors()} — cgroup-aware on JDK 10+, so it
-	 *       respects a container's CPU quota; the container-safe default.</li>
-	 *   <li>{@code "auto"} or {@code 0} → {@code 0}: omit the flags, deferring to llama-server's own
-	 *       auto-detect ({@code hardware_concurrency()} = host logical cores) — the legacy behavior
-	 *       and the sweep baseline.</li>
-	 *   <li>positive integer → that exact count.</li>
-	 * </ul>
-	 * A value {@code <= 0} signals {@link #buildServerCommand} to omit {@code -t}/{@code -tb}.
-	 */
-	int getServerThreads() {
-		String value = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_THREADS);
-		if (value == null || value.trim().isEmpty()) {
-			return Runtime.getRuntime().availableProcessors();
-		}
-		String trimmed = value.trim();
-		if ("auto".equalsIgnoreCase(trimmed)) {
-			return 0;
-		}
-		try {
-			int parsed = Integer.parseInt(trimmed);
-			if (parsed >= 0) {
-				return parsed;
-			}
-			log.warn("Negative llm threads '{}', using availableProcessors()", value);
-		}
-		catch (NumberFormatException e) {
-			log.warn("Invalid llm threads '{}', using availableProcessors()", value);
-		}
-		return Runtime.getRuntime().availableProcessors();
 	}
 
 	int getServerPort() {

@@ -189,35 +189,6 @@ public class LocalLlmEngineTest {
 		assertEquals("/var/kvcache", cmd.get(idx + 1));
 	}
 
-	@Test
-	public void buildServerCommand_shouldPinThreadsWhenPositive() {
-		// On a cgroup-limited container, llama-server's own thread auto-detect uses the HOST's logical
-		// core count (std::thread::hardware_concurrency ignores the cgroup CPU quota), oversubscribing
-		// the few cores the container actually has and collapsing prefill throughput. Passing an
-		// explicit -t/-tb derived from Runtime.availableProcessors() (which IS cgroup-aware) pins both
-		// the generation and the batch/prefill thread pools to the real quota.
-		List<String> cmd = LocalLlmEngine.buildServerCommand(
-				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 6, null);
-		int t = cmd.indexOf("-t");
-		assertTrue(t >= 0, "-t must be present when a positive thread count is configured");
-		assertEquals("6", cmd.get(t + 1), "-t must carry the configured thread count");
-		int tb = cmd.indexOf("-tb");
-		assertTrue(tb >= 0, "-tb (batch/prefill threads) must be pinned too, since prefill is the "
-				+ "cold-query bottleneck; without it llama would auto-detect the prefill pool back to "
-				+ "host cores");
-		assertEquals("6", cmd.get(tb + 1), "-tb must carry the configured thread count");
-	}
-
-	@Test
-	public void buildServerCommand_shouldOmitThreadFlagsWhenZero() {
-		// 0 means "let llama-server auto-detect" (the legacy behavior) — used as the sweep baseline
-		// and as the escape hatch when chartsearchai.llm.threads=auto.
-		List<String> cmd = LocalLlmEngine.buildServerCommand(
-				"/bin/llama-server", "/data/model.gguf", 9999, 32768, 0, null);
-		assertFalse(cmd.contains("-t"), "-t must be absent when threads<=0 (defer to auto-detect)");
-		assertFalse(cmd.contains("-tb"), "-tb must be absent when threads<=0 (defer to auto-detect)");
-	}
-
 	private static final String DISC = "/models/e2b.gguf 32768";
 
 	@Test
@@ -480,20 +451,6 @@ public class LocalLlmEngineTest {
 	public void serverNeedsRestart_shouldNotRestartBeforeAnythingLoaded() {
 		assertFalse(LocalLlmEngine.serverNeedsRestart(null, -1, null, "/m.gguf", 32768, "/kv"),
 				"with nothing loaded yet the initial start handles it, not a restart");
-	}
-
-	@Test
-	public void serverNeedsRestart_shouldRestartWhenThreadCountChanges() {
-		// Thread count is a launch-time llama-server flag, so changing chartsearchai.llm.threads at
-		// runtime must relaunch the server. This is also what lets the prefill thread-sweep be driven
-		// entirely by flipping the GP and firing one query (the next ensureServerRunning sees the
-		// changed value and restarts before serving).
-		assertTrue(LocalLlmEngine.serverNeedsRestart("/m.gguf", 32768, 4, "/kv",
-				"/m.gguf", 32768, 8, "/kv"),
-				"a thread-count change must relaunch the server with the new -t/-tb");
-		assertFalse(LocalLlmEngine.serverNeedsRestart("/m.gguf", 32768, 4, "/kv",
-				"/m.gguf", 32768, 4, "/kv"),
-				"identical config (including threads) must not relaunch");
 	}
 
 	@Test

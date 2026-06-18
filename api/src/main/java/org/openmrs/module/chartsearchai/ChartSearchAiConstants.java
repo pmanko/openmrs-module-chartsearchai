@@ -59,17 +59,6 @@ public class ChartSearchAiConstants {
 
 	public static final int DEFAULT_LLM_CONTEXT_SIZE = 32768;
 
-	/**
-	 * Thread count for the embedded llama-server's generation AND batch/prefill pools (local engine
-	 * only). Blank (the default) pins both to {@code Runtime.availableProcessors()}, which is
-	 * cgroup-aware on JDK 10+ and so respects a container's CPU quota — unlike llama-server's own
-	 * auto-detect ({@code std::thread::hardware_concurrency()}), which reports the HOST's logical core
-	 * count and oversubscribes a cgroup-limited container, collapsing prefill throughput. {@code "auto"}
-	 * (or {@code 0}) reverts to llama-server's auto-detect (omits {@code -t}/{@code -tb}); a positive
-	 * integer pins explicitly. See {@code LocalLlmEngine.getServerThreads}.
-	 */
-	public static final String GP_LLM_THREADS = "chartsearchai.llm.threads";
-
 	public static final int DEFAULT_LLM_MAX_OUTPUT_TOKENS = 4096;
 
 	/**
