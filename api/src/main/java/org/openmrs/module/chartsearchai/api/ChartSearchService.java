@@ -116,6 +116,37 @@ public interface ChartSearchService {
 			Consumer<ChartAnswer> ungroundedAnswerConsumer);
 
 	/**
+	 * Streaming variant that additionally routes the progressive-reasoning PREVIEW pass's reasoning
+	 * to {@code preliminaryReasoningConsumer} — a separate channel from {@code reasoningConsumer} —
+	 * so a caller can render it as provisional (clearly an in-progress preview, not the answer) and
+	 * replace it the moment the committed full-chart reasoning begins arriving on
+	 * {@code reasoningConsumer}. Only fires when
+	 * {@code chartsearchai.progressiveReasoning.enabled} is on (otherwise the preliminary channel is
+	 * never called and this behaves exactly like the six-arg overload).
+	 *
+	 * <p>The default delegates to the six-arg overload, which routes any preview reasoning to
+	 * {@code reasoningConsumer} (merged, not separated) — so an implementation that does not override
+	 * this still SHOWS preview reasoning, it just does not split it onto its own channel. Concrete
+	 * streaming implementations and delegating wrappers (the caching router) override this to route
+	 * the preliminary channel explicitly, the same discipline the six-arg overload's abstractness
+	 * enforces for the ungrounded-answer channel.
+	 *
+	 * <p><strong>Override discipline:</strong> an implementation whose six-arg overload delegates
+	 * <em>up</em> to this seven-arg (as the inference service and the caching router do) MUST also
+	 * override this seven-arg — relying on this default while the six-arg delegates up would recurse
+	 * (default → six-arg → this default → …).
+	 *
+	 * @param preliminaryReasoningConsumer called with each preview-reasoning fragment; never called
+	 *        when progressive reasoning is off or no relevant records are found
+	 */
+	default ChartAnswer searchStreaming(Patient patient, String question, Consumer<String> tokenConsumer,
+			Consumer<String> reasoningConsumer, Consumer<List<RecordReference>> citationsConsumer,
+			Consumer<ChartAnswer> ungroundedAnswerConsumer, Consumer<String> preliminaryReasoningConsumer) {
+		return searchStreaming(patient, question, tokenConsumer, reasoningConsumer, citationsConsumer,
+				ungroundedAnswerConsumer);
+	}
+
+	/**
 	 * Pre-warm any patient-specific caches (serialized chart, LLM prompt cache) so the
 	 * first real query on this patient does not pay cold-start cost. Implementations
 	 * that don't support warmup may return immediately. Callers should treat this as
