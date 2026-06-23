@@ -144,8 +144,8 @@ public class ChartSearchServiceRouter implements ChartSearchService {
 	}
 
 	/**
-	 * Whether the answer cache is currently active (TTL &gt; 0). Lets the AOP write-advice decide,
-	 * without resolving the affected patient, whether a chart write needs to invalidate anything —
+	 * Whether the answer cache is currently active (TTL &gt; 0). Lets the chart-write event listener
+	 * decide, without resolving the affected patient, whether a chart write needs to invalidate anything —
 	 * preserving the hot path when caching is off.
 	 */
 	@Override
