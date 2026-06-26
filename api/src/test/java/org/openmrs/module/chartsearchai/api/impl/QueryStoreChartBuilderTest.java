@@ -21,22 +21,18 @@ import org.junit.jupiter.api.Test;
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
-import org.openmrs.module.querystore.api.QueryStoreService;
-import org.openmrs.module.querystore.backend.WriteResult;
-import org.openmrs.module.querystore.model.QueryDocument;
 
 /**
  * Pure unit tests for {@link QueryStoreChartBuilder}.
  *
- * <p>Focus-hint mode contract: the builder always calls
- * {@code QueryStoreService.getPatientChart} so the chart bytes are a function of the
- * patient only (the property llama-server's KV-cache reuse needs). When
- * {@code preFilter=true} with a non-blank question, it additionally calls
- * {@code QueryStoreService.searchByPatient} to get a relevance ranking; the matching
- * record UUIDs flow through {@code PatientChart.getFocusIndices()} for rendering as a
- * small "Records ranked by similarity to the query: ..." line in the LLM prompt. These tests
- * pin the dispatch correctness, the input-guard contract (null patient / null uuid),
- * and the record-conversion loop.
+ * <p>Focus-hint mode contract: the builder always calls {@link QueryStoreClient#getPatientChart}
+ * so the chart bytes are a function of the patient only (the property llama-server's KV-cache reuse
+ * needs). When {@code preFilter=true} with a non-blank question, it additionally calls
+ * {@link QueryStoreClient#searchByPatient} to get a relevance ranking; the matching record UUIDs flow
+ * through {@code PatientChart.getFocusIndices()} for rendering as a small "Records ranked by similarity
+ * to the query: ..." line in the LLM prompt. These tests pin the dispatch correctness, the input-guard
+ * contract (null patient / null uuid), and the record-conversion loop — and, via the exact rendered
+ * chart text, the byte-stability the prompt-cache depends on across the QueryStoreClient seam.
  */
 public class QueryStoreChartBuilderTest {
 
@@ -47,12 +43,12 @@ public class QueryStoreChartBuilderTest {
 		return p;
 	}
 
-	private CountingQueryStore queryStore;
+	private CountingQueryStoreClient queryStore;
 	private TestableQueryStoreChartBuilder builder;
 
 	@BeforeEach
 	public void setUp() {
-		queryStore = new CountingQueryStore();
+		queryStore = new CountingQueryStoreClient();
 		builder = new TestableQueryStoreChartBuilder(queryStore);
 		builder.setChartSerializer(new PatientChartSerializer());
 	}
@@ -164,15 +160,15 @@ public class QueryStoreChartBuilderTest {
 		// End-to-end focus-hint wiring: searchByPatient hits → resource UUIDs collected →
 		// matched against chart record UUIDs → exposed as 1-based PatientChart focus indices
 		// for LlmProvider.buildUserMessage to render as the trailing focus-hint line.
-		QueryDocument chartDoc1 = new QueryDocument();
+		QueryRecord chartDoc1 = new QueryRecord();
 		chartDoc1.setResourceType("Condition");
 		chartDoc1.setResourceUuid("cond-uuid-1");
 		chartDoc1.setText("Hypertension");
-		QueryDocument chartDoc2 = new QueryDocument();
+		QueryRecord chartDoc2 = new QueryRecord();
 		chartDoc2.setResourceType("Obs");
 		chartDoc2.setResourceUuid("obs-uuid-2");
 		chartDoc2.setText("BP 140/90");
-		QueryDocument chartDoc3 = new QueryDocument();
+		QueryRecord chartDoc3 = new QueryRecord();
 		chartDoc3.setResourceType("Obs");
 		chartDoc3.setResourceUuid("obs-uuid-3");
 		chartDoc3.setText("Heart rate 72");
@@ -181,7 +177,7 @@ public class QueryStoreChartBuilderTest {
 		queryStore.stubChart.add(chartDoc2);
 		queryStore.stubChart.add(chartDoc3);
 
-		QueryDocument focusHit = new QueryDocument();
+		QueryRecord focusHit = new QueryRecord();
 		focusHit.setResourceType("Obs");
 		focusHit.setResourceUuid("obs-uuid-2");
 		queryStore.stubHits = new ArrayList<>();
@@ -202,11 +198,11 @@ public class QueryStoreChartBuilderTest {
 	public void build_shouldExposeEmptyFocus_whenPreFilterFalseEvenWithSearchHitsStub() {
 		// preFilter=false must skip the searchByPatient call entirely. The stub holds hits
 		// but the builder must not consult them — focus indices on the chart must be empty.
-		QueryDocument focusHit = new QueryDocument();
+		QueryRecord focusHit = new QueryRecord();
 		focusHit.setResourceType("Obs");
 		focusHit.setResourceUuid("obs-uuid-1");
 		queryStore.stubHits.add(focusHit);
-		QueryDocument chartDoc = new QueryDocument();
+		QueryRecord chartDoc = new QueryRecord();
 		chartDoc.setResourceType("Obs");
 		chartDoc.setResourceUuid("obs-uuid-1");
 		chartDoc.setText("BP");
@@ -261,7 +257,7 @@ public class QueryStoreChartBuilderTest {
 		// at the point searchByPatient runs, and is usable on its own (equivalent to
 		// fullChart mode). A regression that propagated the throw would turn a focus-hint
 		// outage into a chart outage, which is much worse.
-		QueryDocument chartDoc = new QueryDocument();
+		QueryRecord chartDoc = new QueryRecord();
 		chartDoc.setResourceType("Obs");
 		chartDoc.setResourceUuid("obs-uuid-1");
 		chartDoc.setText("BP");
@@ -282,23 +278,23 @@ public class QueryStoreChartBuilderTest {
 		// End-to-end panel-grouping wiring (issue #51, ADR Decision 6): querystore indexes each
 		// group-obs member as an atomic doc carrying obs_group_uuid + obs_group_concept_name in
 		// METADATA (never in the stored text, to keep citations clean). The consumer is responsible
-		// for clustering. This locks the full production path — getPatientChart docs ->
+		// for clustering. This locks the full production path — getPatientChart records ->
 		// toSerializedRecords (must read the metadata) -> PatientChartSerializer (must render the
 		// panel label) — so the LLM can see which atomic obs belong to the same panel. Before this
-		// fix toSerializedRecords dropped doc.getMetadata() entirely and the membership was invisible.
-		QueryDocument sodium = new QueryDocument();
+		// fix toSerializedRecords dropped the metadata entirely and the membership was invisible.
+		QueryRecord sodium = new QueryRecord();
 		sodium.setResourceType("Obs");
 		sodium.setResourceUuid("obs-na");
 		sodium.setText("Sodium: 140 mmol/L");
 		sodium.putMetadata("obs_group_uuid", "grp-bmp-1");
 		sodium.putMetadata("obs_group_concept_name", "Basic metabolic panel");
-		QueryDocument potassium = new QueryDocument();
+		QueryRecord potassium = new QueryRecord();
 		potassium.setResourceType("Obs");
 		potassium.setResourceUuid("obs-k");
 		potassium.setText("Potassium: 4.0 mmol/L");
 		potassium.putMetadata("obs_group_uuid", "grp-bmp-1");
 		potassium.putMetadata("obs_group_concept_name", "Basic metabolic panel");
-		QueryDocument standalone = new QueryDocument();
+		QueryRecord standalone = new QueryRecord();
 		standalone.setResourceType("Obs");
 		standalone.setResourceUuid("obs-temp");
 		standalone.setText("Temperature: 36.7 C");
@@ -329,13 +325,13 @@ public class QueryStoreChartBuilderTest {
 		// serializer, which run-length de-dups the obs-group label on a consecutive same-group member. The
 		// flag-OFF invariant (every member labelled) is build_shouldRenderPanelMembership above; this pins
 		// the flag-ON path and the grounding-mapping guarantee (mapping keeps the full label).
-		QueryDocument sodium = new QueryDocument();
+		QueryRecord sodium = new QueryRecord();
 		sodium.setResourceType("Obs");
 		sodium.setResourceUuid("obs-na");
 		sodium.setText("Sodium: 140 mmol/L");
 		sodium.putMetadata("obs_group_uuid", "grp-bmp-1");
 		sodium.putMetadata("obs_group_concept_name", "Basic metabolic panel");
-		QueryDocument potassium = new QueryDocument();
+		QueryRecord potassium = new QueryRecord();
 		potassium.setResourceType("Obs");
 		potassium.setResourceUuid("obs-k");
 		potassium.setText("Potassium: 4.2 mmol/L");
@@ -367,7 +363,7 @@ public class QueryStoreChartBuilderTest {
 		// obs_group_concept_name when the parent concept has a non-empty preferred name. With a uuid
 		// but no name there is no human/LLM-meaningful label to show, so the suffix must be omitted
 		// rather than leaking a raw uuid or an empty "(part of panel: )" into the prompt.
-		QueryDocument member = new QueryDocument();
+		QueryRecord member = new QueryRecord();
 		member.setResourceType("Obs");
 		member.setResourceUuid("obs-x");
 		member.setText("Glucose: 90 mg/dL");
@@ -390,7 +386,7 @@ public class QueryStoreChartBuilderTest {
 		// malformed upstream obs_group_concept_name can't leak an empty "(part of: )" into the prompt.
 		// querystore itself never writes a blank name (putGroupFields guards on !name.isEmpty()), so
 		// this exercises the guard on a value only a malformed producer could emit.
-		QueryDocument member = new QueryDocument();
+		QueryRecord member = new QueryRecord();
 		member.setResourceType("Obs");
 		member.setResourceUuid("obs-y");
 		member.setText("Creatinine: 1.0 mg/dL");
@@ -414,40 +410,40 @@ public class QueryStoreChartBuilderTest {
 		// Locks the record-conversion loop: a refactor that breaks SerializedRecord field
 		// order, drops the null-text guard, or removes a skip clause would silently corrupt
 		// the chart sent to the LLM without any test failing.
-		QueryDocument valid1 = new QueryDocument();
+		QueryRecord valid1 = new QueryRecord();
 		valid1.setResourceType("Condition");
 		valid1.setResourceUuid("cond-1");
 		valid1.setText("Condition: Hypertension. Status: ACTIVE");
-		QueryDocument valid2 = new QueryDocument();
+		QueryRecord valid2 = new QueryRecord();
 		valid2.setResourceType("Obs");
 		valid2.setResourceUuid("obs-1");
 		valid2.setText("Systolic blood pressure: 140 mmHg");
-		QueryDocument malformedNoType = new QueryDocument();
+		QueryRecord malformedNoType = new QueryRecord();
 		malformedNoType.setResourceUuid("dropped-no-type");
 		// resourceType deliberately left null
 		malformedNoType.setText("should be dropped");
-		QueryDocument malformedNoUuid = new QueryDocument();
+		QueryRecord malformedNoUuid = new QueryRecord();
 		malformedNoUuid.setResourceType("Condition");
 		// resourceUuid deliberately left null
 		malformedNoUuid.setText("should be dropped");
-		List<QueryDocument> mixed = new ArrayList<>();
+		List<QueryRecord> mixed = new ArrayList<>();
 		mixed.add(valid1);
-		mixed.add(null);                // null doc → skip
+		mixed.add(null);                // null record → skip
 		mixed.add(malformedNoType);     // missing type → skip
 		mixed.add(valid2);
 		mixed.add(malformedNoUuid);     // missing uuid → skip
 		// Focus-hint mode: the chart records come from getPatientChart (stubChart), not
 		// from searchByPatient (stubHits). The malformed-record loop is what converts
-		// stubChart docs into SerializedRecords.
+		// stubChart records into SerializedRecords.
 		queryStore.stubChart = mixed;
 
 		PatientChart chart = builder.build(patient(1), "any allergies?");
 
 		assertEquals(2, chart.getMappings().size(),
-				"only the two well-formed QueryDocuments must reach the chart — null/missing-type/"
-				+ "missing-uuid docs are logged at WARN and dropped from the conversion loop");
+				"only the two well-formed QueryRecords must reach the chart — null/missing-type/"
+				+ "missing-uuid records are logged at WARN and dropped from the conversion loop");
 		// Pin the resource uuids that survived so a future serializer change can't silently
-		// reshuffle which doc maps to which mapping index.
+		// reshuffle which record maps to which mapping index.
 		assertEquals("cond-1", chart.getMappings().get(0).getResourceUuid(),
 				"first surviving record should be valid1 (Condition cond-1) — order preserved from the stub");
 		assertEquals("obs-1", chart.getMappings().get(1).getResourceUuid(),
@@ -455,29 +451,29 @@ public class QueryStoreChartBuilderTest {
 	}
 
 	/**
-	 * Subclass that bypasses {@code Context.getService} so this test runs without
-	 * a live OpenMRS context. The {@code resolve*} overrides are the seam — every
-	 * other code path goes through the real builder.
+	 * Subclass that bypasses {@code Context.getRegisteredComponent} so this test runs without
+	 * a live OpenMRS context. The {@code resolve*} overrides are the seam — every other code
+	 * path goes through the real builder.
 	 *
-	 * <p>Defaults {@code resolveUsePreFilter()} to {@code true} so the legacy tests
-	 * (written when {@code searchByPatient} was the only dispatch target) continue to
-	 * exercise the preFilter path without explicit per-test wiring. Tests that need
-	 * the full-chart branch flip it via {@link #usePreFilter}.
+	 * <p>Defaults {@code resolveUsePreFilter()} to {@code true} so the legacy tests (written
+	 * when {@code searchByPatient} was the only dispatch target) continue to exercise the
+	 * preFilter path without explicit per-test wiring. Tests that need the full-chart branch
+	 * flip it via {@link #usePreFilter}.
 	 */
 	private static final class TestableQueryStoreChartBuilder extends QueryStoreChartBuilder {
 
-		private final QueryStoreService stub;
+		private final QueryStoreClient stub;
 
 		boolean usePreFilter = true;
 
 		boolean dedupGroupLabels = false;
 
-		TestableQueryStoreChartBuilder(QueryStoreService stub) {
+		TestableQueryStoreChartBuilder(QueryStoreClient stub) {
 			this.stub = stub;
 		}
 
 		@Override
-		protected QueryStoreService resolveQueryStoreService() {
+		protected QueryStoreClient resolveQueryStoreClient() {
 			return stub;
 		}
 
@@ -497,15 +493,18 @@ public class QueryStoreChartBuilderTest {
 		}
 	}
 
-	private static final class CountingQueryStore implements QueryStoreService {
+	/** A counting {@link QueryStoreClient} test double: records call counts and returns canned
+	 *  {@link QueryRecord} lists, so the builder's dispatch + conversion is exercised without a
+	 *  live querystore. (Retrieval correctness itself is querystore's concern, tested there.) */
+	private static final class CountingQueryStoreClient implements QueryStoreClient {
 
 		int searchByPatientCalls = 0;
 
 		int getPatientChartCalls = 0;
 
-		List<QueryDocument> stubHits = new ArrayList<QueryDocument>();
+		List<QueryRecord> stubHits = new ArrayList<QueryRecord>();
 
-		List<QueryDocument> stubChart = new ArrayList<QueryDocument>();
+		List<QueryRecord> stubChart = new ArrayList<QueryRecord>();
 
 		boolean throwOnSearch = false;
 
@@ -516,7 +515,7 @@ public class QueryStoreChartBuilderTest {
 		}
 
 		@Override
-		public List<QueryDocument> searchByPatient(String patientUuid, String question, int topK) {
+		public List<QueryRecord> searchByPatient(String patientUuid, String question, int limit) {
 			searchByPatientCalls++;
 			if (throwOnSearch) {
 				throw new RuntimeException("simulated focus-hint RPC failure");
@@ -525,37 +524,9 @@ public class QueryStoreChartBuilderTest {
 		}
 
 		@Override
-		public List<QueryDocument> getPatientChart(String patientUuid) {
+		public List<QueryRecord> getPatientChart(String patientUuid) {
 			getPatientChartCalls++;
 			return stubChart;
-		}
-
-		@Override
-		public List<QueryDocument> search(String question, int topK) {
-			throw new UnsupportedOperationException("not used by chartsearchai");
-		}
-
-		@Override
-		public WriteResult index(QueryDocument doc) {
-			throw new UnsupportedOperationException();
-		}
-
-		@Override
-		public void delete(String resourceType, String resourceUuid) {
-			throw new UnsupportedOperationException();
-		}
-
-		@Override
-		public void bulkDeleteByPatient(String patientUuid) {
-			throw new UnsupportedOperationException();
-		}
-
-		@Override
-		public void onStartup() {
-		}
-
-		@Override
-		public void onShutdown() {
 		}
 	}
 }
