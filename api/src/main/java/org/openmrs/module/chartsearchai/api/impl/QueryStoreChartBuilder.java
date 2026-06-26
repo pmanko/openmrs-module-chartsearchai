@@ -23,26 +23,27 @@ import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.Patien
 import org.openmrs.module.chartsearchai.serializer.SerializedRecord;
 import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.openmrs.module.querystore.QueryStoreConstants;
-import org.openmrs.module.querystore.api.QueryStoreService;
-import org.openmrs.module.querystore.model.QueryDocument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
- * Bridge to the querystore module's read API. querystore is a required module, so it is present at
- * runtime; the service is still resolved lazily via {@link Context#getService(Class)} (rather than
- * injected) as defense-in-depth — a resolution failure degrades to an empty chart, the same outcome
- * as a search returning no hits, instead of breaking chart assembly.
+ * Bridge to the querystore module's read API, via the {@link QueryStoreClient} seam. The default
+ * in-process client ({@link InProcessQueryStoreClient}) wraps querystore's {@code QueryStoreService};
+ * the seam returns {@link QueryRecord}s (the embedding-free DTO), so this builder is decoupled from
+ * querystore's {@code QueryDocument} model and an HTTP-backed client can slot in for the future
+ * thin-client split. The client is resolved lazily via {@link Context#getRegisteredComponent} (rather
+ * than injected) as defense-in-depth — a resolution failure degrades to an empty chart, the same
+ * outcome as a search returning no hits, instead of breaking chart assembly.
  *
  * <p>Always fetches the full patient chart via
- * {@link QueryStoreService#getPatientChart(String)} so the chart bytes sent to
+ * {@link QueryStoreClient#getPatientChart(String)} so the chart bytes sent to
  * the LLM are a function of the patient only — that's the property
  * llama-server's KV-cache reuse needs in order to skip ~99% of the prefill on
  * subsequent queries for the same patient. When
  * {@code chartsearchai.embedding.preFilter=true} and the question is non-blank,
- * additionally calls {@link QueryStoreService#searchByPatient(String, String, int)}
+ * additionally calls {@link QueryStoreClient#searchByPatient(String, String, int)}
  * to obtain a relevance ranking, then renders those hits as a short
  * "Records ranked by similarity to the query: ..." focus-hint line in the LLM prompt
  * (handled in {@code LlmProvider.buildUserMessage} via the
@@ -77,7 +78,7 @@ class QueryStoreChartBuilder {
 	/** Test seam: production wires {@link PatientChartSerializer} via {@link Autowired}.
 	 *  Package-private so {@code QueryStoreChartBuilderTest} can inject a real serializer
 	 *  without bringing up Spring; matches the {@code resolveX()} method-override seam
-	 *  pattern used for {@link QueryStoreService} and topK. */
+	 *  pattern used for {@link QueryStoreClient} and topK. */
 	void setChartSerializer(PatientChartSerializer chartSerializer) {
 		this.chartSerializer = chartSerializer;
 	}
@@ -101,18 +102,18 @@ class QueryStoreChartBuilder {
 		// dispatch (extra searchByPatient call) from plain fullChart dispatch.
 		String mode = usePreFilter ? MODE_PRE_FILTER : MODE_FULL_CHART;
 
-		QueryStoreService queryStore;
+		QueryStoreClient queryStore;
 		try {
-			queryStore = resolveQueryStoreService();
+			queryStore = resolveQueryStoreClient();
 		}
 		catch (APIException | LinkageError e) {
-			// LinkageError covers NoClassDefFoundError when the querystore-api jar
-			// is absent at runtime — the QueryStoreService.class literal forces
-			// JVM linkage, which APIException doesn't catch.
-			// WARN (not INFO): default org.openmrs.* log level is WARN, and an unavailable
-			// QueryStoreService silently produces empty-chart LLM responses if this fires.
-			// Operators need this to surface, with an actionable next step.
-			log.warn("QueryStoreService is unavailable — querystore is a required module, so this "
+			// LinkageError covers NoClassDefFoundError when the querystore-api jar is absent at
+			// runtime — resolving the client (which references querystore types) forces JVM linkage,
+			// which APIException doesn't catch.
+			// WARN (not INFO): default org.openmrs.* log level is WARN, and an unavailable querystore
+			// silently produces empty-chart LLM responses if this fires. Operators need this to
+			// surface, with an actionable next step.
+			log.warn("QueryStoreClient is unavailable — querystore is a required module, so this "
 					+ "indicates a querystore startup failure; check the querystore module. "
 					+ "Returning empty chart.");
 			log.info("[timing] querystoreBuild patient={} mode={} hits=0 focusHits=0 rpcMs=0 serializeMs=0 totalMs={} outcome=unavailable",
@@ -124,11 +125,13 @@ class QueryStoreChartBuilder {
 		// prefix. Always called regardless of mode so the chart bytes are a function of
 		// the patient only.
 		long rpcStart = System.currentTimeMillis();
-		List<QueryDocument> chartDocs;
+		List<QueryRecord> chartDocs;
 		try {
 			chartDocs = queryStore.getPatientChart(patient.getUuid());
 		}
-		catch (RuntimeException e) {
+		catch (RuntimeException | LinkageError e) {
+			// LinkageError too: with the in-process client the querystore service is linked lazily on
+			// this first read, so an absent querystore-api surfaces here rather than at resolve time.
 			log.error("QueryStore.getPatientChart failed for patient [uuid={}]", patient.getUuid(), e);
 			long failMs = System.currentTimeMillis() - rpcStart;
 			log.info("[timing] querystoreBuild patient={} mode={} hits=0 focusHits=0 rpcMs={} serializeMs=0 totalMs={} outcome=error errorClass={}",
@@ -146,7 +149,7 @@ class QueryStoreChartBuilder {
 			try {
 				String preprocessedQuestion = QueryPreprocessor.stripQueryStopwords(question);
 				int topK = resolveQueryStoreTopK();
-				List<QueryDocument> hits = queryStore.searchByPatient(patient.getUuid(),
+				List<QueryRecord> hits = queryStore.searchByPatient(patient.getUuid(),
 						preprocessedQuestion, topK);
 				focusUuids = collectFocusUuids(hits);
 				focusHits = focusUuids.size();
@@ -171,15 +174,15 @@ class QueryStoreChartBuilder {
 		return chart;
 	}
 
-	/** Collects {@code resource_uuid}s from a hit list, skipping nulls and malformed docs.
+	/** Collects {@code resource_uuid}s from a hit list, skipping nulls and malformed records.
 	 *  These uuids are mapped to 1-based chart indices in {@code PatientChartSerializer.serialize}
 	 *  to render the LLM-facing focus hint. */
-	private Set<String> collectFocusUuids(List<QueryDocument> hits) {
+	private Set<String> collectFocusUuids(List<QueryRecord> hits) {
 		if (hits == null || hits.isEmpty()) {
 			return Collections.<String>emptySet();
 		}
 		Set<String> uuids = new HashSet<String>(hits.size() * 2);
-		for (QueryDocument doc : hits) {
+		for (QueryRecord doc : hits) {
 			if (doc != null && doc.getResourceUuid() != null) {
 				uuids.add(doc.getResourceUuid());
 			}
@@ -188,20 +191,20 @@ class QueryStoreChartBuilder {
 	}
 
 	/** Converts a querystore hit list into the chartsearchai serializer's input shape,
-	 *  dropping null and malformed docs with a WARN so operators can spot upstream
+	 *  dropping null and malformed records with a WARN so operators can spot upstream
 	 *  serialization regressions without losing the rest of the chart. */
-	private List<SerializedRecord> toSerializedRecords(List<QueryDocument> docs) {
+	private List<SerializedRecord> toSerializedRecords(List<QueryRecord> docs) {
 		if (docs == null || docs.isEmpty()) {
 			return Collections.<SerializedRecord>emptyList();
 		}
 		List<SerializedRecord> out = new ArrayList<SerializedRecord>(docs.size());
-		for (QueryDocument doc : docs) {
+		for (QueryRecord doc : docs) {
 			if (doc == null) {
-				log.warn("Skipping null QueryDocument");
+				log.warn("Skipping null QueryRecord");
 				continue;
 			}
 			if (doc.getResourceType() == null || doc.getResourceUuid() == null) {
-				log.warn("Skipping malformed QueryDocument: type={} uuid={}",
+				log.warn("Skipping malformed QueryRecord: type={} uuid={}",
 						doc.getResourceType(), doc.getResourceUuid());
 				continue;
 			}
@@ -222,10 +225,10 @@ class QueryStoreChartBuilder {
 	/** Reads a metadata value as a trimmed String, or {@code null} when absent or blank.
 	 *  querystore stores these values as Strings (see ObsRecordSerializer.putGroupFields); the
 	 *  defensive toString()/blank handling keeps a malformed upstream value from leaking an empty
-	 *  or non-string token into the LLM prompt. Relies on {@link QueryDocument#getMetadata()} being
-	 *  contractually non-null (it returns an unmodifiable view of a field initialized to an empty
-	 *  map) — a regression making it nullable would NPE here and degrade the whole chart to empty. */
-	private static String metadataString(QueryDocument doc, String key) {
+	 *  or non-string token into the LLM prompt. Relies on {@link QueryRecord#getMetadata()} being
+	 *  non-null (it returns a field initialized to an empty map) — a regression making it nullable
+	 *  would NPE here and degrade the whole chart to empty. */
+	private static String metadataString(QueryRecord doc, String key) {
 		Object value = doc.getMetadata().get(key);
 		if (value == null) {
 			return null;
@@ -234,9 +237,9 @@ class QueryStoreChartBuilder {
 		return s.isEmpty() ? null : s;
 	}
 
-	/** Seam for tests: production resolves via the OpenMRS context. */
-	protected QueryStoreService resolveQueryStoreService() {
-		return Context.getService(QueryStoreService.class);
+	/** Seam for tests: production resolves the in-process client component via the OpenMRS context. */
+	protected QueryStoreClient resolveQueryStoreClient() {
+		return Context.getRegisteredComponent("chartSearchAi.inProcessQueryStoreClient", QueryStoreClient.class);
 	}
 
 	/** Seam for tests: production reads the global property. */
