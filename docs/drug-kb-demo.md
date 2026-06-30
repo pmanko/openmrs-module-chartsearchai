@@ -293,6 +293,57 @@ the external-file mechanism (no rebuild):
 
 ---
 
+## Knowledge base entry schema
+
+Reference for authoring a custom KB (the `json` source format). The top-level file is
+`{ "version": ..., "source": ..., "description": ..., "entries": [ ... ] }` — `version` /
+`source` / `description` are informational; `entries` is the array of drug objects below.
+
+**Per-drug entry**
+
+| Field | Type | Read by | Purpose / notes |
+|-------|------|---------|-----------------|
+| `id` | string | injection | Stable identifier; surfaced as the citation's `resourceUuid` (e.g. `naproxen`). Keep unique. |
+| `name` | string | injection, validator | Display name shown in the injected reference and in `safetyWarnings[].drug`. |
+| `drugClass` | string | injection | Human-readable class label rendered in the reference text (e.g. "NSAID"). Informational only — class **logic** uses `atcCodes`, not this. |
+| `aliases` | string[] | injection, validator | Lowercase names matched **whole-word, case-insensitive** against the question and the answer ("advil" matches "is advil safe?"; "amox" won't spuriously match). Drives question-driven injection and which drug a warning is attributed to. |
+| `atcCodes` | string[] | injection, validator | WHO-ATC codes. Used two ways: **exact code** → order-driven injection / interaction match against an active order's ATC; **level-4 prefix** (`M01AE01` → `M01AE`) → the class-based cross-reactivity & duplicate-therapy checks. Two drugs are "same class" iff their level-4 subgroups intersect. |
+| `ageBands` | object[] | injection, overdose | Age-banded dosing (below). The band whose range contains the patient's age is selected; **no matching band → no numeric dosing rendered and no overdose check** (this is the age-gating that stops a pediatric max being shown for an adult). |
+| `interactions` | object[] | interaction warning | Drug–drug interaction rules (below). |
+| `contraindications` | object[] | contraindication warning | Allergy/condition rules (below). |
+| `source` | string | injection | Provenance string rendered in the reference text. |
+
+**`ageBands[]` object**
+
+| Field | Type | Purpose / notes |
+|-------|------|-----------------|
+| `minYears`, `maxYears` | number | Inclusive age range (years) the band applies to. |
+| `mgPerKgMin`, `mgPerKgMax` | number | Per-dose mg/kg range rendered in the reference text. |
+| `maxDailyDoseMg` | number | Daily maximum for the overdose check. **`0` is a sentinel meaning "no published maximum"** — dosing is still rendered but no overdose warning fires for that band. The overdose parser reads the literal unit `mg` only (grams are not flagged). |
+
+**`interactions[]` object**
+
+| Field | Type | Purpose / notes |
+|-------|------|-----------------|
+| `token` | string | Substring matched (case-insensitive) against the patient's active-order drug names. |
+| `atc` | string | ATC code matched against the active order's ATC mapping (an alternative to `token`). |
+| `note` | string | Free text appended to the interaction warning (e.g. "increased risk of GI bleeding"). |
+
+**`contraindications[]` object**
+
+| Field | Type | Purpose / notes |
+|-------|------|-----------------|
+| `type` | string | Must be exactly `allergy` or `condition` — selects whether `token` is matched against the patient's **allergies** or **active conditions**. |
+| `token` | string | Substring matched (case-insensitive) against that patient data (e.g. `nsaid`, `peptic ulcer`). |
+| `note` | string | Free text shown in the contraindication warning. |
+
+> The hand-authored `interactions` / `contraindications` rules are **additive** to the ATC
+> class-based checks: with only `atcCodes` (and no rules), the validator still derives
+> cross-reactivity and duplicate-therapy warnings from ATC class membership — which is how the
+> rule-less `atc` source format produces warnings at all.
+
+---
+
 ## Query cheat-sheet
 
 Run on **Margaret Holloway** (`dkb00000-0000-0000-0000-000000000001`) unless noted. Each
