@@ -241,6 +241,24 @@ SELECT order_number, (SELECT cn.name FROM concept_name cn WHERE cn.concept_id=o.
 
 ## Step 4 — cross-reactivity custom KB
 
+> **What "the knowledge base" is.** The knowledge base is the **drug dataset** the feature
+> reads — drug entries with aliases, ATC codes, age-banded doses, and interaction/contraindication
+> rules. It is *data*, not logic: the code that injects citations, parses doses, and derives the
+> ATC-class warnings lives in the module, not in the file. The active dataset comes from one of
+> two sources:
+> - **Bundled default** — `drug-reference.json` shipped inside the module (the four drugs above).
+>   Used automatically when no override is configured.
+> - **External override** — any file `chartsearchai.drugReference.dataFilePath` points at (within
+>   the app-data directory). When set, it **replaces** the bundled dataset entirely — it does
+>   **not** merge with it. So a custom file must contain *all* the drugs you want, not just the
+>   additions.
+>
+> `drug-reference-custom.json` below is such an override (the bundled four **plus** Naproxen);
+> while `dataFilePath` points at it, it *is* the live knowledge base and the bundled one is
+> dormant. Clearing the GP (and restarting) reverts to the bundled dataset. *(A third option:
+> `sourceFormat=atc` reads a WHO-ATC classification export instead of JSON — classification only,
+> no hand-authored rules; the default `json` format is the curated, rule-bearing KB.)*
+
 Cross-reactivity (path 8) needs two KB drugs sharing an ATC subgroup. The bundled four are all
 in different subgroups, so this path is unreachable by patient data alone. Extend the KB via
 the external-file mechanism (no rebuild):
