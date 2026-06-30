@@ -79,5 +79,7 @@ curl -s -H "Authorization: Basic $A" "$B/chartsearchai/prewarmstatus"
 - `chartsearchai.prewarm.autostart` — resume the sweep on module startup.
 - `chartsearchai.prewarm.throttleMs` — pause between patients (default 500) so the single inference slot isn't monopolised.
 - `chartsearchai.llm.kvCache.maxPinnedEntries` — cap the pinned corpus (`0` = unlimited).
+- `chartsearchai.prewarm.refreshOnEdit` — when on, a chart edit to an *already-pinned* patient schedules a debounced single-patient re-pin so the pin tracks the new chart instead of eroding. Independent of `prewarm.enabled`; only refreshes existing pins, never grows the corpus. **Trade-off:** each re-pin is a full prefill on the single inference slot and there is **no inter-patient throttle** (unlike the bulk sweep), so on busy multi-user CPU hosts prefer a periodic manual re-sweep instead.
+- `chartsearchai.prewarm.refreshDebounceMs` — quiet-period (default 5000) before a `refreshOnEdit` re-pin fires, collapsing a burst of writes to one patient into a single re-pin.
 
-> Note: a pinned entry becomes stale when that patient's chart changes; the next query re-prefills and re-saves it as an ordinary (unpinned) entry, so the pinned corpus erodes over time — re-run the sweep to refresh it. Only meaningful with `engine=local`.
+> Note: a pinned entry becomes stale when that patient's chart changes; the next query re-prefills and re-saves it as an ordinary (unpinned) entry, so the pinned corpus erodes over time — re-run the sweep (or enable `prewarm.refreshOnEdit`) to refresh it. Only meaningful with `engine=local`.
