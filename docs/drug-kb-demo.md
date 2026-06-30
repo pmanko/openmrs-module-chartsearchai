@@ -263,8 +263,10 @@ Cross-reactivity (path 8) needs two KB drugs sharing an ATC subgroup. The bundle
 in different subgroups, so this path is unreachable by patient data alone. Extend the KB via
 the external-file mechanism (no rebuild):
 
-1. Copy the bundled `api/src/main/resources/chartsearchai/drug-reference.json` to
-   `<application-data-directory>/drug-reference-custom.json` and append this fifth entry
+1. Copy a KB file with the extra drug to `<application-data-directory>/drug-reference-custom.json`.
+   A ready-made one is committed alongside this doc at [`docs/drug-reference-custom.json`](drug-reference-custom.json)
+   (the bundled four **plus** Naproxen) — just copy it into the app-data dir. Equivalently, copy the
+   bundled `api/src/main/resources/chartsearchai/drug-reference.json` and append this fifth entry
    (Naproxen shares ibuprofen's `M01AE` subgroup; it carries **no** contraindications/interactions
    of its own, so a naproxen query surfaces *only* the cross-reactivity warning):
 
