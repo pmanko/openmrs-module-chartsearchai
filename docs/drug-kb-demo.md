@@ -72,7 +72,7 @@ gp chartsearchai.drugReference.injectFromQuery true
 
 ## Step 2 — seed the test patient (`seed_drugkb.sql`)
 
-Creates **Drugkb Testpatient** (UUID `dkb00000-0000-0000-0000-000000000001`), an adult so the
+Creates **Margaret Holloway** (UUID `dkb00000-0000-0000-0000-000000000001`), an adult so the
 adult dose bands apply. Idempotent — re-running wipes and recreates. Run with:
 
 ```bash
@@ -82,7 +82,7 @@ adult dose bands apply. Idempotent — re-running wipes and recreates. Run with:
 ```sql
 -- ============================================================================
 -- Drug Knowledge Base test patient seed (idempotent).
--- Creates one dedicated patient "Drugkb Testpatient" with the allergies,
+-- Creates one dedicated patient "Margaret Holloway" with the allergies,
 -- conditions and active drug orders needed to fire every name/token-based
 -- drug-KB path against the 4 KB drugs (ibuprofen, paracetamol, amoxicillin,
 -- gentamicin). All rows carry uuids prefixed 'dkb' for easy teardown.
@@ -108,7 +108,7 @@ VALUES ('F','1985-01-01',0,0,0,1,NOW(),0,@puuid);
 SET @pid := LAST_INSERT_ID();
 
 INSERT INTO person_name (preferred, person_id, given_name, family_name, creator, date_created, voided, uuid)
-VALUES (1,@pid,'Drugkb','Testpatient',1,NOW(),0,'dkb00000-0000-0000-0000-0000000000n1');
+VALUES (1,@pid,'Margaret','Holloway',1,NOW(),0,'dkb00000-0000-0000-0000-0000000000n1');
 
 INSERT INTO patient (patient_id, creator, date_created, voided, allergy_status)
 VALUES (@pid,1,NOW(),0,'Unknown');
@@ -275,7 +275,7 @@ the external-file mechanism (no rebuild):
 
 ## Query cheat-sheet
 
-Run on **Drugkb Testpatient** (`dkb00000-0000-0000-0000-000000000001`) unless noted. Each
+Run on **Margaret Holloway** (`dkb00000-0000-0000-0000-000000000001`) unless noted. Each
 query surfaces only the warnings for the drug named.
 
 | Query | Expected `safetyWarnings` / injection |
