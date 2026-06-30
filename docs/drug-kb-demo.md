@@ -113,8 +113,10 @@ VALUES (1,@pid,'Margaret','Holloway',1,NOW(),0,'dkb00000-0000-0000-0000-00000000
 INSERT INTO patient (patient_id, creator, date_created, voided, allergy_status)
 VALUES (@pid,1,NOW(),0,'Unknown');
 
+-- OpenMRS ID (type 3) for a neutral, demo-friendly banner. '1007427' = base '100742'
+-- plus the idgen Luhn-mod-30 check digit '7'; if you change it, recompute the check digit.
 INSERT INTO patient_identifier (patient_id, identifier, identifier_type, preferred, location_id, creator, date_created, voided, uuid)
-VALUES (@pid,'DRUGKB-TEST',2,1,1,1,NOW(),0,'dkb00000-0000-0000-0000-0000000000i1');
+VALUES (@pid,'1007427',3,1,1,1,NOW(),0,'dkb00000-0000-0000-0000-0000000000i1');
 
 -- ---- allergies (contraindication path) ------------------------------------
 -- coded_allergen is NOT NULL; the non-coded aminoglycoside uses the "Other" concept (5622) + free text.
@@ -461,7 +463,7 @@ SELECT CONCAT('removed patient_id=', IFNULL(@pid,'(none)'), ' + ATC maps/terms +
 
 - **`order_type_id=2`** (Drug Order), **`care_setting=1`** (Outpatient), **`location_id=1`**,
   **`encounter_type=3`** (Consultation), **`orderer=1`**, allergen/condition **concept UUIDs**,
-  and **identifier_type=2** are all from the stock RefApp demo metadata — verify if your distro
-  differs.
+  and **identifier_type=3** (OpenMRS ID) are all from the stock RefApp demo metadata — verify if
+  your distro differs. The OpenMRS ID value needs a valid idgen Luhn-mod-30 check digit.
 - **Gotcha:** the stock RefApp demo DB has 0 allergies and 0 drug orders out of the box; this
   seed is what makes the patient-driven paths demonstrable.
