@@ -167,6 +167,13 @@ public interface ChartSearchService {
 		 */
 		private final java.util.Map<String, Object> confidence;
 
+		/**
+		 * Staged answer review lifecycle metadata ({@code {status,label,summary,issues,...}})
+		 * emitted by the med-agent-hub answer-review leg; opaque pass-through metadata the SPA
+		 * renders as the clinician-facing check badge. {@code null} for legacy/synchronous rows.
+		 */
+		private final java.util.Map<String, Object> answerValidation;
+
 		private final int inputTokens;
 
 		private final int outputTokens;
@@ -193,8 +200,8 @@ public interface ChartSearchService {
 		public ChartAnswer(String answer, List<RecordReference> references,
 				int inputTokens, int outputTokens, int cachedTokens,
 				List<SafetyWarning> safetyWarnings) {
-			this(answer, references, java.util.Collections.emptyList(),
-					inputTokens, outputTokens, cachedTokens);
+			this(answer, references, java.util.Collections.emptyList(), null, null,
+					inputTokens, outputTokens, cachedTokens, safetyWarnings);
 		}
 
 		public ChartAnswer(String answer, List<RecordReference> references,
@@ -207,6 +214,26 @@ public interface ChartSearchService {
 				List<org.openmrs.module.chartsearchai.api.impl.ResponseBlock> blocks,
 				java.util.Map<String, Object> confidence,
 				int inputTokens, int outputTokens, int cachedTokens) {
+			this(answer, references, blocks, confidence, null,
+					inputTokens, outputTokens, cachedTokens);
+		}
+
+		public ChartAnswer(String answer, List<RecordReference> references,
+				List<org.openmrs.module.chartsearchai.api.impl.ResponseBlock> blocks,
+				java.util.Map<String, Object> confidence,
+				java.util.Map<String, Object> answerValidation,
+				int inputTokens, int outputTokens, int cachedTokens) {
+			this(answer, references, blocks, confidence, answerValidation,
+					inputTokens, outputTokens, cachedTokens,
+					java.util.Collections.<SafetyWarning> emptyList());
+		}
+
+		public ChartAnswer(String answer, List<RecordReference> references,
+				List<org.openmrs.module.chartsearchai.api.impl.ResponseBlock> blocks,
+				java.util.Map<String, Object> confidence,
+				java.util.Map<String, Object> answerValidation,
+				int inputTokens, int outputTokens, int cachedTokens,
+				List<SafetyWarning> safetyWarnings) {
 			this.answer = answer;
 			this.references = java.util.Collections.unmodifiableList(
 					new java.util.ArrayList<>(references));
@@ -214,10 +241,13 @@ public interface ChartSearchService {
 					? java.util.Collections.emptyList()
 					: java.util.Collections.unmodifiableList(new java.util.ArrayList<>(blocks));
 			this.confidence = confidence;
+			this.answerValidation = answerValidation;
 			this.inputTokens = inputTokens;
 			this.outputTokens = outputTokens;
 			this.cachedTokens = cachedTokens;
-			this.safetyWarnings = java.util.Collections.emptyList();
+			this.safetyWarnings = safetyWarnings == null
+					? java.util.Collections.emptyList()
+					: java.util.Collections.unmodifiableList(new java.util.ArrayList<>(safetyWarnings));
 		}
 
 		/**
@@ -249,6 +279,13 @@ public interface ChartSearchService {
 		 */
 		public java.util.Map<String, Object> getConfidence() {
 			return confidence;
+		}
+
+		/**
+		 * Answer review lifecycle metadata, or {@code null} when no staged review has run.
+		 */
+		public java.util.Map<String, Object> getAnswerValidation() {
+			return answerValidation;
 		}
 
 		/**

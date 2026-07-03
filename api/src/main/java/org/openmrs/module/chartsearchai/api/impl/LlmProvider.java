@@ -877,6 +877,8 @@ public class LlmProvider {
 		 */
 		private final Map<String, Object> confidence;
 
+		private final Map<String, Object> answerValidation;
+
 		private final int inputTokens;
 
 		private final int outputTokens;
@@ -898,17 +900,24 @@ public class LlmProvider {
 
 		LlmResponse(String answer, List<Integer> citations, List<ResponseBlock> blocks,
 				int inputTokens, int outputTokens, int cachedTokens) {
-			this(answer, citations, blocks, null, inputTokens, outputTokens, cachedTokens);
+			this(answer, citations, blocks, null, null, inputTokens, outputTokens, cachedTokens);
 		}
 
 		LlmResponse(String answer, List<Integer> citations, List<ResponseBlock> blocks,
 				Map<String, Object> confidence, int inputTokens, int outputTokens, int cachedTokens) {
+			this(answer, citations, blocks, confidence, null, inputTokens, outputTokens, cachedTokens);
+		}
+
+		LlmResponse(String answer, List<Integer> citations, List<ResponseBlock> blocks,
+				Map<String, Object> confidence, Map<String, Object> answerValidation,
+				int inputTokens, int outputTokens, int cachedTokens) {
 			this.answer = answer;
 			this.citations = Collections.unmodifiableList(new ArrayList<>(citations));
 			this.blocks = blocks == null
 					? Collections.emptyList()
 					: Collections.unmodifiableList(new ArrayList<>(blocks));
 			this.confidence = confidence;
+			this.answerValidation = answerValidation;
 			this.inputTokens = inputTokens;
 			this.outputTokens = outputTokens;
 			this.cachedTokens = cachedTokens;
@@ -928,6 +937,10 @@ public class LlmProvider {
 
 		Map<String, Object> getConfidence() {
 			return confidence;
+		}
+
+		Map<String, Object> getAnswerValidation() {
+			return answerValidation;
 		}
 
 		int getInputTokens() {

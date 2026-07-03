@@ -16,8 +16,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Field;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -55,6 +60,8 @@ import org.springframework.beans.factory.annotation.Autowired;
  * already-persisted rows remain queryable.
  */
 public class ChatServiceStreamingAbortTest extends BaseModuleContextSensitiveTest {
+
+	private static final ObjectMapper MAPPER = new ObjectMapper();
 
 	@Autowired
 	private ChatService chatService;
@@ -151,6 +158,60 @@ public class ChatServiceStreamingAbortTest extends BaseModuleContextSensitiveTes
 		}
 	}
 
+	@Test
+	public void stagedChat_attachesInDepthToSameAssistantRowWithoutFakeUserTurn()
+			throws Exception {
+		ChatSession session = chatService.openOrLoadActiveSession(patient);
+		Context.flushSession();
+		assertEquals(0, chatService.getMessages(session).size(), "precondition: empty transcript");
+
+		ChatServiceImpl staged = newServiceWith(new StagedStreamStub());
+		StringBuilder answerTokens = new StringBuilder();
+		ChatService.ChatTurnResult answer = staged.chatStagedAnswer(session,
+				"What medications?", answerTokens::append);
+		Context.flushSession();
+
+		assertEquals("The patient is taking aspirin [1].", answerTokens.toString());
+		List<ChatMessage> afterAnswer = chatService.getMessages(session);
+		assertEquals(2, afterAnswer.size(), "answer leg persists one user and one assistant row");
+			JsonNode pending = MAPPER.readTree(afterAnswer.get(1).getContent());
+			assertEquals("The patient is taking aspirin [1].", pending.get("answer").asText());
+			assertEquals("validating", pending.get("answerValidation").get("status").asText());
+			assertEquals("pending", pending.get("inDepth").get("status").asText());
+
+			staged.completeStagedAnswerValidation(session, answer.getAssistantMessageUuid(),
+					"What medications?", token -> { });
+			Context.flushSession();
+
+			List<ChatMessage> afterValidation = chatService.getMessages(session);
+			assertEquals(2, afterValidation.size(),
+					"staged Answer validation updates the assistant row instead of appending a turn");
+			JsonNode reviewed = MAPPER.readTree(afterValidation.get(1).getContent());
+			assertEquals("The patient is taking lisinopril [1].", reviewed.get("answer").asText());
+			assertEquals("edited", reviewed.get("answerValidation").get("status").asText());
+			assertEquals("The patient is taking aspirin [1].",
+					reviewed.get("answerValidation").get("originalAnswer").asText());
+			assertEquals("pending", reviewed.get("inDepth").get("status").asText());
+
+			StringBuilder inDepthTokens = new StringBuilder();
+		staged.completeStagedInDepth(session, answer.getAssistantMessageUuid(),
+				"Now provide the in-depth clinical background for that answer.",
+				inDepthTokens::append);
+		Context.flushSession();
+
+		List<ChatMessage> afterInDepth = chatService.getMessages(session);
+		assertEquals(2, afterInDepth.size(),
+				"staged In-Depth updates the assistant row instead of appending another user turn");
+			JsonNode complete = MAPPER.readTree(afterInDepth.get(1).getContent());
+			assertEquals("The patient is taking lisinopril [1].", complete.get("answer").asText());
+			assertEquals("edited", complete.get("answerValidation").get("status").asText());
+			assertEquals("complete", complete.get("inDepth").get("status").asText());
+		assertEquals("- Aspirin is an antiplatelet medication.",
+				complete.get("inDepth").get("answer").asText());
+			assertEquals("The patient is taking lisinopril [1].",
+					ChatServiceImpl.extractProseAnswer(afterInDepth.get(1).getContent()));
+	}
+
 	/** Emits two tokens through the consumer, then throws as if the client hung up. */
 	private static final class AbortingStreamStub extends LlmInferenceService {
 
@@ -177,6 +238,32 @@ public class ChatServiceStreamingAbortTest extends BaseModuleContextSensitiveTes
 				List<ChatMessage> priorTurns, String question, Consumer<String> tokenConsumer) {
 			tokenConsumer.accept("Lisinopril 10mg daily.");
 			return new ChartAnswer("Lisinopril 10mg daily.", Collections.emptyList());
+		}
+	}
+
+	private static final class StagedStreamStub extends LlmInferenceService {
+
+		@Override
+		public ChartAnswer chatStreaming(String chartEnvelope, List<RecordMapping> mappings,
+				List<ChatMessage> priorTurns, String question, Consumer<String> tokenConsumer) {
+				if (question.startsWith("Now provide")) {
+					tokenConsumer.accept("**In Depth**\n- Aspirin is an antiplatelet medication.");
+					return new ChartAnswer(
+							"**In Depth**\n- Aspirin is an antiplatelet medication.",
+							Collections.emptyList());
+				}
+				if (question.contains("\"schema_version\":\"answer_to_review.v1\"")) {
+					Map<String, Object> validation = new LinkedHashMap<String, Object>();
+					validation.put("status", "edited");
+					validation.put("label", "Updated after check");
+					validation.put("summary", "Corrected medication.");
+					validation.put("originalAnswer", "The patient is taking aspirin [1].");
+					return new ChartAnswer("The patient is taking lisinopril [1].",
+							Collections.emptyList(), Collections.emptyList(), null,
+							validation, 0, 0, 0);
+				}
+				tokenConsumer.accept("The patient is taking aspirin [1].");
+			return new ChartAnswer("The patient is taking aspirin [1].", Collections.emptyList());
 		}
 	}
 }

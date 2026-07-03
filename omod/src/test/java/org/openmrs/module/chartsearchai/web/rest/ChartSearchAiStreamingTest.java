@@ -252,6 +252,91 @@ public class ChartSearchAiStreamingTest {
 				"must not leak the raw exception or open the SSE stream, got:\n" + body);
 	}
 
+	@Test
+	public void chatStream_stagedTeamModel_emitsAnswerThenPendingInDepthThenDone()
+			throws Exception {
+		Fixture f = newFixture(true);
+		Map<String, String> body = chatBody();
+		body.put("endpointUrl", "http://hub/v1/chat/completions");
+		body.put("modelName", "med-agent-team-high-validated");
+		body.put("staged", "true");
+		when(f.adminService.getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE))
+				.thenReturn(ChartSearchAiConstants.LLM_ENGINE_REMOTE);
+		when(f.modelSwitchService.validateEndpointAndModel(
+				"http://hub/v1/chat/completions", "med-agent-team-high-validated"))
+				.thenReturn(new String[] { "http://hub/v1/chat/completions", "med-agent-team-high-validated" });
+			when(f.modelSwitchService.validateEndpointAndModel(
+					"http://hub/v1/chat/completions", "answer:gemma-4-12b@synthesis-answer~enforce~temp0"))
+					.thenReturn(new String[] { "http://hub/v1/chat/completions",
+							"answer:gemma-4-12b@synthesis-answer~enforce~temp0" });
+			when(f.modelSwitchService.validateEndpointAndModel(
+					"http://hub/v1/chat/completions", "answer-review:qwen2.5-14b"))
+					.thenReturn(new String[] { "http://hub/v1/chat/completions", "answer-review:qwen2.5-14b" });
+			when(f.modelSwitchService.validateEndpointAndModel(
+					"http://hub/v1/chat/completions", "indepth-only:med-agent-team-high-validated"))
+					.thenReturn(new String[] { "http://hub/v1/chat/completions", "indepth-only:med-agent-team-high-validated" });
+
+			Map<String, Object> validation = new HashMap<String, Object>();
+			validation.put("status", "checked");
+			validation.put("label", "Checked");
+			validation.put("summary", "Checked against chart.");
+			ChartAnswer answer = new ChartAnswer("Direct answer [1].",
+					Collections.singletonList(new RecordReference(1, "Observation", "obs-uuid", null)));
+			ChartAnswer checkedAnswer = new ChartAnswer("Direct answer [1].",
+					Collections.singletonList(new RecordReference(1, "Observation", "obs-uuid", null)),
+					Collections.emptyList(), null, validation, 0, 0, 0);
+			ChartAnswer inDepth = new ChartAnswer("**In Depth**\n- Background claim.",
+					Collections.emptyList());
+		when(f.chatService.chatStagedAnswer(eq(f.session), eq("What medications is this patient taking?"), any()))
+				.thenAnswer(inv -> {
+						inv.<Consumer<String>>getArgument(2).accept("Direct answer [1].");
+						return new ChatTurnResult(answer, "session-uuid", "assistant-msg-uuid");
+					});
+			when(f.chatService.completeStagedAnswerValidation(
+					eq(f.session), eq("assistant-msg-uuid"), eq("What medications is this patient taking?"), any()))
+					.thenReturn(new ChatTurnResult(checkedAnswer, "session-uuid", "assistant-msg-uuid"));
+			when(f.chatService.completeStagedInDepth(
+					eq(f.session), eq("assistant-msg-uuid"), any(), any()))
+				.thenAnswer(inv -> {
+					inv.<Consumer<String>>getArgument(3).accept("**In Depth**\n- Background claim.");
+					return new ChatTurnResult(inDepth, "session-uuid", "assistant-msg-uuid");
+				});
+
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		try (MockedStatic<Context> ctx = mockStatic(Context.class)) {
+			ctx.when(() -> Context.requirePrivilege(
+					ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA)).then(inv -> null);
+			ctx.when(Context::getPatientService).thenReturn(f.patientService);
+			ctx.when(Context::getAdministrationService).thenReturn(f.adminService);
+			ctx.when(Context::getAuthenticatedUser).thenReturn(f.user);
+
+			f.controller.chatStream(body, response);
+		}
+
+		String sse = response.getContentAsString();
+			int tokenIdx = sse.indexOf("event: token");
+			int answerDoneIdx = sse.indexOf("event: answer_done");
+			int validationIdx = sse.indexOf("event: answer_validation");
+			int pendingIdx = sse.indexOf("event: indepth_pending");
+		int indepthTokenIdx = sse.indexOf("event: indepth_token");
+		int indepthDoneIdx = sse.indexOf("event: indepth_done");
+			int doneIdx = sse.indexOf("event: done");
+			assertTrue(tokenIdx >= 0 && answerDoneIdx > tokenIdx, "answer_done follows answer tokens:\n" + sse);
+			assertTrue(validationIdx > answerDoneIdx, "answer_validation follows answer_done:\n" + sse);
+			assertTrue(pendingIdx > validationIdx, "indepth_pending follows answer_validation:\n" + sse);
+			assertTrue(indepthTokenIdx > pendingIdx, "indepth_token follows pending:\n" + sse);
+		assertTrue(indepthDoneIdx > indepthTokenIdx, "indepth_done follows indepth tokens:\n" + sse);
+		assertTrue(doneIdx > indepthDoneIdx, "final done follows staged In-Depth:\n" + sse);
+
+		JsonNode done = parseDoneEvent(sse);
+			assertEquals("Direct answer [1].", done.get("answer").asText());
+			assertEquals("checked", done.get("answerValidation").get("status").asText());
+			assertEquals("complete", done.get("inDepth").get("status").asText());
+		assertEquals("- Background claim.", done.get("inDepth").get("answer").asText());
+		verify(f.chatService, never()).chatStreaming(any(), any(), any());
+	}
+
 	/**
 	 * Extracts and parses the JSON object carried by the terminal {@code done}
 	 * SSE event. The controller emits {@code data: <json>} lines after

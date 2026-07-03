@@ -347,11 +347,11 @@ public class LlmInferenceService implements ChartSearchService {
 			List<ChatMessage> priorTurns, String question) {
 		LlmResponse response = llmProvider.chat(chartEnvelope, priorTurns, question);
 
-		return new ChartAnswer(response.getAnswer(),
-				extractCitedReferences(response.getCitations(), mappings),
-				response.getBlocks(), response.getConfidence(),
-				response.getInputTokens(), response.getOutputTokens(),
-				response.getCachedTokens());
+			return new ChartAnswer(response.getAnswer(),
+					extractCitedReferences(response.getCitations(), mappings),
+					response.getBlocks(), response.getConfidence(), response.getAnswerValidation(),
+					response.getInputTokens(), response.getOutputTokens(),
+					response.getCachedTokens());
 	}
 
 	/**
@@ -362,11 +362,11 @@ public class LlmInferenceService implements ChartSearchService {
 		LlmResponse response = llmProvider.chatStreaming(
 				chartEnvelope, priorTurns, question, tokenConsumer);
 
-		return new ChartAnswer(response.getAnswer(),
-				extractCitedReferences(response.getCitations(), mappings),
-				response.getBlocks(), response.getConfidence(),
-				response.getInputTokens(), response.getOutputTokens(),
-				response.getCachedTokens());
+			return new ChartAnswer(response.getAnswer(),
+					extractCitedReferences(response.getCitations(), mappings),
+					response.getBlocks(), response.getConfidence(), response.getAnswerValidation(),
+					response.getInputTokens(), response.getOutputTokens(),
+					response.getCachedTokens());
 	}
 
 	/**

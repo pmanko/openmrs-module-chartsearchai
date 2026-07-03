@@ -80,7 +80,8 @@ final class LlmAnswerExtractor {
 			int cachedTokens) {
 		LlmResponse parsed = extractResponse(response);
 		return new LlmResponse(parsed.getAnswer(), parsed.getCitations(),
-				parsed.getBlocks(), parsed.getConfidence(), inputTokens, outputTokens, cachedTokens);
+				parsed.getBlocks(), parsed.getConfidence(), parsed.getAnswerValidation(),
+				inputTokens, outputTokens, cachedTokens);
 	}
 
 	static LlmResponse extractResponse(String response) {
@@ -117,7 +118,8 @@ final class LlmAnswerExtractor {
 				String answer = normalizeSlashCitations(answerNode.asText().trim(), citations);
 				List<ResponseBlock> blocks = parseBlocks(root.get("blocks"));
 				Map<String, Object> confidence = parseConfidence(root.get("confidence"));
-				return new LlmResponse(answer, citations, blocks, confidence, 0, 0, 0);
+				Map<String, Object> answerValidation = parseObject(root.get("answerValidation"));
+				return new LlmResponse(answer, citations, blocks, confidence, answerValidation, 0, 0, 0);
 			}
 		}
 		catch (IOException e) {
@@ -186,10 +188,15 @@ final class LlmAnswerExtractor {
 	 */
 	@SuppressWarnings("unchecked")
 	private static Map<String, Object> parseConfidence(JsonNode confidenceNode) {
-		if (confidenceNode == null || !confidenceNode.isObject()) {
+		return parseObject(confidenceNode);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> parseObject(JsonNode objectNode) {
+		if (objectNode == null || !objectNode.isObject()) {
 			return null;
 		}
-		return MAPPER.convertValue(confidenceNode, Map.class);
+		return MAPPER.convertValue(objectNode, Map.class);
 	}
 
 	private static List<ResponseBlock> parseBlocks(JsonNode blocksNode) {

@@ -25,8 +25,10 @@ import org.openmrs.Patient;
 import org.openmrs.User;
 import org.openmrs.api.APIException;
 import org.openmrs.api.context.Context;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.ChartAnswer;
+import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
 import org.openmrs.module.chartsearchai.api.ChatService;
 import org.openmrs.module.chartsearchai.api.db.ChartSearchAiDAO;
 import org.openmrs.module.chartsearchai.api.db.ChatDAO;
@@ -35,6 +37,7 @@ import org.openmrs.module.chartsearchai.model.ChatMessage;
 import org.openmrs.module.chartsearchai.model.ChatSession;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
+import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -184,6 +187,139 @@ public class ChatServiceImpl implements ChatService {
 		return new ChatTurnResult(answer, session.getUuid(), assistant.getUuid());
 	}
 
+	@Override
+	public ChatTurnResult chatStagedAnswer(ChatSession session, String question,
+			Consumer<String> tokenConsumer) {
+		ensureChartSnapshot(session);
+		String chartEnvelope = session.getChartSnapshot();
+		List<RecordMapping> mappings = deserializeMappings(session.getChartMappingsJson());
+
+		List<ChatMessage> priorTurns = priorsForLlm(chatDAO.getMessages(session));
+		int nextOrdinal = chatDAO.getLastOrdinal(session) + 1;
+		persistUserMessage(session, question, nextOrdinal);
+
+		StringBuilder streamed = new StringBuilder();
+		Consumer<String> accumulating = token -> {
+			streamed.append(token);
+			tokenConsumer.accept(token);
+		};
+
+		long startedMs = System.currentTimeMillis();
+		ChartAnswer answer;
+		try {
+			answer = llmInferenceService.chatStreaming(
+					chartEnvelope, mappings, priorTurns, question, accumulating);
+		}
+		catch (RuntimeException e) {
+			long abortedMs = System.currentTimeMillis() - startedMs;
+			ChartAnswer partial = new ChartAnswer(streamed.toString(), Collections.emptyList());
+			persistAssistantTurn(session, partial, nextOrdinal + 1,
+					ChatMessage.FINISH_ABORTED, question, abortedMs,
+					answerValidationWire("unavailable",
+							"Answer check unavailable because the answer stream aborted.",
+							Collections.emptyList(), null),
+					inDepthWire("failed", "", "Answer stream aborted before In-Depth could start."));
+			touchSession(session);
+			throw e;
+		}
+		long elapsedMs = System.currentTimeMillis() - startedMs;
+
+		ChatMessage assistant = persistAssistantTurn(session, answer, nextOrdinal + 1,
+				ChatMessage.FINISH_STOP, question, elapsedMs,
+				answerValidationWire("validating", "Checking answer against chart and temporal/date rules.",
+						Collections.emptyList(), null),
+				inDepthWire("pending", "", ""));
+		touchSession(session);
+
+		return new ChatTurnResult(answer, session.getUuid(), assistant.getUuid());
+	}
+
+	@Override
+	public ChatTurnResult completeStagedAnswerValidation(ChatSession session, String assistantMessageUuid,
+			String originalQuestion, Consumer<String> tokenConsumer) {
+		ensureChartSnapshot(session);
+		ChatMessage assistant = chatDAO.getMessageByUuid(assistantMessageUuid);
+		requireAssistantInSession(session, assistant, "Answer validation");
+
+		String chartEnvelope = session.getChartSnapshot();
+		List<RecordMapping> mappings = deserializeMappings(session.getChartMappingsJson());
+		List<ChatMessage> priorTurns = priorsForLlm(chatDAO.getMessages(session));
+		Map<String, Object> stored = assistantWire(assistant.getContent());
+		String prompt = answerReviewPrompt(originalQuestion, stored);
+
+		long startedMs = System.currentTimeMillis();
+		ChartAnswer reviewed;
+		try {
+			reviewed = llmInferenceService.chatStreaming(
+					chartEnvelope, mappings, priorTurns, prompt, tokenConsumer);
+		}
+		catch (RuntimeException e) {
+			updateAssistantAnswerValidation(assistant,
+					answerValidationWire("unavailable",
+							"Answer check unavailable; the review model failed or timed out.",
+							Collections.singletonList(e.getMessage()), null));
+			touchSession(session);
+			throw e;
+		}
+		long elapsedMs = System.currentTimeMillis() - startedMs;
+		Map<String, Object> answerValidation = reviewed.getAnswerValidation();
+		if (answerValidation == null) {
+			answerValidation = answerValidationWire("checked",
+					"Answer check completed, but the reviewer did not return lifecycle metadata.",
+					Collections.emptyList(), null);
+		}
+		updateAssistantReviewedAnswer(assistant, reviewed, answerValidation);
+		assistant.setOutputTokens((assistant.getOutputTokens() == null ? 0 : assistant.getOutputTokens())
+				+ reviewed.getOutputTokens());
+		touchSession(session);
+		log.info("[timing] stagedAnswerValidation session={} message={} llmMs={} inputTokens={} outputTokens={}",
+				session.getUuid(), assistant.getUuid(), elapsedMs,
+				reviewed.getInputTokens(), reviewed.getOutputTokens());
+		return new ChatTurnResult(reviewed, session.getUuid(), assistant.getUuid());
+	}
+
+	@Override
+	public ChatTurnResult completeStagedInDepth(ChatSession session, String assistantMessageUuid,
+			String prompt, Consumer<String> tokenConsumer) {
+		ensureChartSnapshot(session);
+		ChatMessage assistant = chatDAO.getMessageByUuid(assistantMessageUuid);
+		requireAssistantInSession(session, assistant, "In-Depth");
+
+		String chartEnvelope = session.getChartSnapshot();
+		List<RecordMapping> mappings = deserializeMappings(session.getChartMappingsJson());
+		List<ChatMessage> priorTurns = priorsForLlm(chatDAO.getMessages(session));
+
+		StringBuilder streamed = new StringBuilder();
+		Consumer<String> accumulating = token -> {
+			streamed.append(token);
+			tokenConsumer.accept(token);
+		};
+
+		long startedMs = System.currentTimeMillis();
+		ChartAnswer inDepth;
+		try {
+			inDepth = llmInferenceService.chatStreaming(
+					chartEnvelope, mappings, priorTurns, prompt, accumulating);
+		}
+		catch (RuntimeException e) {
+			updateAssistantInDepth(assistant,
+					inDepthWire("failed", stripInDepthHeader(streamed.toString()),
+							"In-Depth generation failed before completion."));
+			touchSession(session);
+			throw e;
+		}
+		long elapsedMs = System.currentTimeMillis() - startedMs;
+		updateAssistantInDepth(assistant,
+				inDepthWire("complete", stripInDepthHeader(inDepth.getAnswer()), ""));
+		assistant.setOutputTokens((assistant.getOutputTokens() == null ? 0 : assistant.getOutputTokens())
+				+ inDepth.getOutputTokens());
+		touchSession(session);
+		log.info("[timing] stagedInDepth session={} message={} llmMs={} inputTokens={} outputTokens={}",
+				session.getUuid(), assistant.getUuid(), elapsedMs,
+				inDepth.getInputTokens(), inDepth.getOutputTokens());
+		return new ChatTurnResult(inDepth, session.getUuid(), assistant.getUuid());
+	}
+
 	protected ChatSession createSession(Patient patient, User user) {
 		ChatSession session = new ChatSession();
 		session.setPatient(patient);
@@ -282,6 +418,20 @@ public class ChatServiceImpl implements ChatService {
 
 	protected ChatMessage persistAssistantTurn(ChatSession session, ChartAnswer answer, int ordinal,
 			String finishReason, String questionForAudit, long responseTimeMs) {
+		return persistAssistantTurn(session, answer, ordinal, finishReason, questionForAudit,
+				responseTimeMs, null);
+	}
+
+	protected ChatMessage persistAssistantTurn(ChatSession session, ChartAnswer answer, int ordinal,
+			String finishReason, String questionForAudit, long responseTimeMs,
+			Map<String, Object> inDepth) {
+		return persistAssistantTurn(session, answer, ordinal, finishReason, questionForAudit,
+				responseTimeMs, answer.getAnswerValidation(), inDepth);
+	}
+
+	protected ChatMessage persistAssistantTurn(ChatSession session, ChartAnswer answer, int ordinal,
+			String finishReason, String questionForAudit, long responseTimeMs,
+			Map<String, Object> answerValidation, Map<String, Object> inDepth) {
 		ChartSearchAuditLog audit = buildAuditRow(session, questionForAudit, answer, responseTimeMs);
 		auditDAO.saveAuditLog(audit);
 
@@ -289,7 +439,7 @@ public class ChatServiceImpl implements ChatService {
 		msg.setSession(session);
 		msg.setOrdinal(ordinal);
 		msg.setRole(ChatMessage.ROLE_ASSISTANT);
-		msg.setContent(serializeAssistantContent(answer));
+		msg.setContent(serializeAssistantContent(answer, answerValidation, inDepth));
 		msg.setCreatedAt(new Date());
 		msg.setAuditLog(audit);
 		msg.setInputTokens(answer.getInputTokens());
@@ -310,8 +460,18 @@ public class ChatServiceImpl implements ChatService {
 	 * separately in {@link #extractProseAnswer}.
 	 */
 	private static String serializeAssistantContent(ChartAnswer answer) {
+		return serializeAssistantContent(answer, answer.getAnswerValidation(), null);
+	}
+
+	private static String serializeAssistantContent(ChartAnswer answer, Map<String, Object> inDepth) {
+		return serializeAssistantContent(answer, answer.getAnswerValidation(), inDepth);
+	}
+
+	private static String serializeAssistantContent(ChartAnswer answer,
+			Map<String, Object> answerValidation, Map<String, Object> inDepth) {
 		Map<String, Object> wire = new LinkedHashMap<>();
 		wire.put("answer", answer.getAnswer());
+		wire.put("references", referencesToWire(answer.getReferences()));
 		// blocks rendered via the same helper used by the REST controller —
 		// keep wire format identical across persistence and live response so
 		// SPA hydration and SSE done events parse the same way.
@@ -320,6 +480,12 @@ public class ChatServiceImpl implements ChatService {
 		// stream showed; omitted when absent (LM Studio / parity lane) so no phantom tag.
 		if (answer.getConfidence() != null) {
 			wire.put("confidence", answer.getConfidence());
+		}
+		if (answerValidation != null) {
+			wire.put("answerValidation", answerValidation);
+		}
+		if (inDepth != null) {
+			wire.put("inDepth", inDepth);
 		}
 		try {
 			return MAPPER.writeValueAsString(wire);
@@ -333,6 +499,204 @@ public class ChatServiceImpl implements ChatService {
 					ioe.getMessage());
 			return answer.getAnswer();
 		}
+	}
+
+	private static Map<String, Object> inDepthWire(String status, String answer, String error) {
+		Map<String, Object> wire = new LinkedHashMap<>();
+		wire.put("status", status);
+		wire.put("answer", answer == null ? "" : answer);
+		if (error != null && !error.isEmpty()) {
+			wire.put("error", error);
+		}
+		return wire;
+	}
+
+	private static Map<String, Object> answerValidationWire(String status, String summary,
+			List<?> issues, String originalAnswer) {
+		Map<String, Object> wire = new LinkedHashMap<>();
+		wire.put("status", status);
+		wire.put("label", answerValidationLabel(status));
+		wire.put("summary", summary == null ? "" : summary);
+		wire.put("issues", issues == null ? Collections.emptyList() : issues);
+		if (!"validating".equals(status)) {
+			java.text.SimpleDateFormat fmt = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
+			fmt.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+			wire.put("completedAt", fmt.format(new Date()));
+		}
+		if (originalAnswer != null) {
+			wire.put("originalAnswer", originalAnswer);
+		}
+		return wire;
+	}
+
+	private static String answerValidationLabel(String status) {
+		if ("validating".equals(status)) {
+			return "Checking answer";
+		}
+		if ("checked".equals(status)) {
+			return "Checked";
+		}
+		if ("edited".equals(status)) {
+			return "Updated after check";
+		}
+		if ("needs_review".equals(status)) {
+			return "Needs review";
+		}
+		if ("unavailable".equals(status)) {
+			return "Check unavailable";
+		}
+		return status;
+	}
+
+	private ChatMessage updateAssistantInDepth(ChatMessage assistant, Map<String, Object> inDepth) {
+		Map<String, Object> wire = assistantWire(assistant.getContent());
+		wire.put("inDepth", inDepth);
+		return saveAssistantWire(assistant, wire, "staged In-Depth");
+	}
+
+	private ChatMessage updateAssistantAnswerValidation(ChatMessage assistant,
+			Map<String, Object> answerValidation) {
+		Map<String, Object> wire = assistantWire(assistant.getContent());
+		wire.put("answerValidation", answerValidation);
+		return saveAssistantWire(assistant, wire, "staged Answer validation");
+	}
+
+	private ChatMessage updateAssistantReviewedAnswer(ChatMessage assistant, ChartAnswer answer,
+			Map<String, Object> answerValidation) {
+		Map<String, Object> wire = assistantWire(assistant.getContent());
+		wire.put("answer", answer.getAnswer());
+		wire.put("references", referencesToWire(answer.getReferences()));
+		wire.put("blocks", blocksToWire(answer.getBlocks()));
+		if (answer.getConfidence() != null) {
+			wire.put("confidence", answer.getConfidence());
+		} else {
+			wire.remove("confidence");
+		}
+		wire.put("answerValidation", answerValidation);
+		return saveAssistantWire(assistant, wire, "staged Answer validation");
+	}
+
+	private ChatMessage saveAssistantWire(ChatMessage assistant, Map<String, Object> wire,
+			String context) {
+		try {
+			assistant.setContent(MAPPER.writeValueAsString(wire));
+		}
+		catch (IOException ioe) {
+			throw new APIException("Failed to serialize " + context + ": " + ioe.getMessage(), ioe);
+		}
+		return chatDAO.saveMessage(assistant);
+	}
+
+	private static Map<String, Object> assistantWire(String stored) {
+		Map<String, Object> wire = new LinkedHashMap<>();
+		if (stored != null && stored.trim().startsWith("{")) {
+			try {
+				wire.putAll(MAPPER.readValue(stored,
+						new TypeReference<Map<String, Object>>() {}));
+			}
+			catch (IOException ignored) {
+				wire.clear();
+				wire.put("answer", stored);
+				wire.put("blocks", Collections.emptyList());
+			}
+		} else {
+			wire.put("answer", stored == null ? "" : stored);
+			wire.put("blocks", Collections.emptyList());
+		}
+		if (!wire.containsKey("blocks")) {
+			wire.put("blocks", Collections.emptyList());
+		}
+		if (!wire.containsKey("references")) {
+			wire.put("references", Collections.emptyList());
+		}
+		return wire;
+	}
+
+	private static List<Map<String, Object>> referencesToWire(List<RecordReference> references) {
+		List<Map<String, Object>> out = new ArrayList<>();
+		if (references == null) {
+			return out;
+		}
+		for (RecordReference ref : references) {
+			Map<String, Object> refMap = new LinkedHashMap<>();
+			refMap.put("index", ref.getIndex());
+			refMap.put("resourceType", ref.getResourceType());
+			refMap.put("resourceUuid", ref.getResourceUuid());
+			refMap.put("date", ref.getDate() == null ? null : DateFormatUtil.formatDate(ref.getDate()));
+			out.add(refMap);
+		}
+		return out;
+	}
+
+	@SuppressWarnings("unchecked")
+	private static String answerReviewPrompt(String originalQuestion, Map<String, Object> stored) {
+		Map<String, Object> payload = new LinkedHashMap<>();
+		payload.put("schema_version", "answer_to_review.v1");
+		payload.put("original_question", originalQuestion == null ? "" : originalQuestion);
+		payload.put("answer", stored.get("answer") == null ? "" : stored.get("answer"));
+		payload.put("citations", citationIndicesFromStoredWire(stored));
+		payload.put("blocks", stored.get("blocks") instanceof List ? stored.get("blocks") : Collections.emptyList());
+		if (stored.get("references") instanceof List) {
+			payload.put("references", stored.get("references"));
+		}
+		if (stored.get("confidence") instanceof Map) {
+			payload.put("confidence", stored.get("confidence"));
+		}
+		try {
+			return "Review the already-visible clinical answer below. Return the chart_answer JSON "
+					+ "envelope with answerValidation metadata.\n\n```json\n"
+					+ MAPPER.writeValueAsString(payload) + "\n```";
+		}
+		catch (IOException ioe) {
+			throw new APIException("Failed to serialize answer review payload: " + ioe.getMessage(), ioe);
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private static List<Integer> citationIndicesFromStoredWire(Map<String, Object> stored) {
+		java.util.Set<Integer> seen = new java.util.LinkedHashSet<Integer>();
+		Object answer = stored.get("answer");
+		if (answer instanceof String) {
+			java.util.regex.Matcher marker = ChartSearchAiUtils.INLINE_CITATION.matcher((String) answer);
+			while (marker.find()) {
+				seen.add(Integer.valueOf(marker.group(1)));
+			}
+		}
+		Object blocks = stored.get("blocks");
+		collectBlockRefs(blocks, seen);
+		return new ArrayList<Integer>(seen);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static void collectBlockRefs(Object value, java.util.Set<Integer> out) {
+		if (value instanceof Map) {
+			for (Object entryValue : ((Map<Object, Object>) value).values()) {
+				collectBlockRefs(entryValue, out);
+			}
+		} else if (value instanceof List) {
+			for (Object item : (List<Object>) value) {
+				collectBlockRefs(item, out);
+			}
+		} else if (value instanceof Number) {
+			out.add(((Number) value).intValue());
+		}
+	}
+
+	private void requireAssistantInSession(ChatSession session, ChatMessage assistant, String operation) {
+		requireOk(assistant != null, "Assistant message not found");
+		requireOk(ChatMessage.ROLE_ASSISTANT.equals(assistant.getRole()),
+				operation + " can only be attached to an assistant message");
+		requireOk(assistant.getSession() != null
+				&& session.getSessionId() != null
+				&& session.getSessionId().equals(assistant.getSession().getSessionId()),
+				"Assistant message does not belong to this chat session");
+	}
+
+	private static String stripInDepthHeader(String answer) {
+		if (answer == null) {
+			return "";
+		}
+		return answer.replaceFirst("(?is)^\\s*\\*\\*In\\s*Depth\\*\\*\\s*", "").trim();
 	}
 
 	private static List<Map<String, Object>> blocksToWire(List<ResponseBlock> blocks) {

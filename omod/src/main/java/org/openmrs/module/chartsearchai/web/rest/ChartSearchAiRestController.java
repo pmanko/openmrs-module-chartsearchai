@@ -85,6 +85,12 @@ public class ChartSearchAiRestController {
 
 	private static final int MAX_QUESTION_LENGTH = 1000;
 
+	private static final String STAGED_IN_DEPTH_PROMPT =
+			"Now provide the in-depth clinical background for that answer.";
+
+	private static final String STAGED_FAST_ANSWER_MODEL =
+			"answer:gemma-4-12b@synthesis-answer~enforce~temp0";
+
 	private static final Pattern CONTROL_CHARS = Pattern.compile("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]");
 
 	private static String formatDate(Date date) {
@@ -1003,17 +1009,32 @@ public class ChartSearchAiRestController {
 		// Per-request backend override (see /chat): resolved engine-aware, validated
 		// before the stream opens; cleared in finally after streaming so it can't
 		// leak to a pooled thread.
-		boolean overridden = false;
-		String answeredModel;
-		try {
-			OverrideResolution overrideRes = resolveOverride(body);
-			answeredModel = overrideRes.answeredModel;
-			overridden = overrideRes.overridden;
-		}
-		catch (IllegalArgumentException e) {
-			writeJsonError(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
-			return;
-		}
+			boolean overridden = false;
+			OverrideResolution overrideRes;
+			String answeredModel;
+			try {
+				overrideRes = resolveOverride(body);
+				answeredModel = overrideRes.answeredModel;
+				overridden = overrideRes.overridden;
+			}
+			catch (IllegalArgumentException e) {
+				writeJsonError(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+				return;
+			}
+			boolean staged = wantsStaged(body) && canStage(overrideRes);
+			if (staged) {
+				if (overridden) {
+					RequestLlmOverride.clear();
+					overridden = false;
+				}
+				try {
+					validateStagedModels(overrideRes);
+				}
+				catch (IllegalArgumentException e) {
+					writeJsonError(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+					return;
+				}
+			}
 
 		// Everything from session resolution through the final flush runs under an
 		// outer finally that clears any per-request override — opening the stream
@@ -1045,11 +1066,15 @@ public class ChartSearchAiRestController {
 		unwrapped.setBufferSize(0);
 
 		final OutputStream out = unwrapped.getOutputStream();
-		unwrapped.flushBuffer();
+			unwrapped.flushBuffer();
 
-		try {
-			ChatTurnResult result = chatService.chatStreaming(
-					session, sanitizedQuestion, new java.util.function.Consumer<String>() {
+			try {
+				if (staged) {
+					streamStagedChat(out, session, sanitizedQuestion, overrideRes);
+					return;
+				}
+				ChatTurnResult result = chatService.chatStreaming(
+						session, sanitizedQuestion, new java.util.function.Consumer<String>() {
 						@Override
 						public void accept(String token) {
 							try {
@@ -1080,6 +1105,9 @@ public class ChartSearchAiRestController {
 			doneData.put("blocks", blocksToJson(answer.getBlocks()));
 			if (answer.getConfidence() != null) {
 				doneData.put("confidence", answer.getConfidence());
+			}
+			if (answer.getAnswerValidation() != null) {
+				doneData.put("answerValidation", answer.getAnswerValidation());
 			}
 			doneData.put("session", result.getSessionUuid());
 			doneData.put("messageId", result.getAssistantMessageUuid());
@@ -1271,6 +1299,9 @@ public class ChartSearchAiRestController {
 		if (answer.getConfidence() != null) {
 			response.put("confidence", answer.getConfidence());
 		}
+		if (answer.getAnswerValidation() != null) {
+			response.put("answerValidation", answer.getAnswerValidation());
+		}
 		response.put("session", result.getSessionUuid());
 		response.put("messageId", result.getAssistantMessageUuid());
 		response.put("model", answeredModel);
@@ -1359,14 +1390,17 @@ public class ChartSearchAiRestController {
 			// had during streaming. Legacy plaintext rows fall through
 			// with blocks=[].
 			if (ChatMessage.ROLE_ASSISTANT.equals(m.getRole())) {
-				String stored = m.getContent();
-				String prose = stored;
-				List<Object> blocks = new ArrayList<Object>();
-				Map<String, Object> confidence = null;
-				if (stored != null && stored.trim().startsWith("{")) {
-					try {
-						com.fasterxml.jackson.databind.JsonNode root =
-								hydrateMapper.readTree(stored);
+					String stored = m.getContent();
+					String prose = stored;
+					List<Object> blocks = new ArrayList<Object>();
+					List<Object> references = new ArrayList<Object>();
+					Map<String, Object> confidence = null;
+					Map<String, Object> answerValidation = null;
+					Map<String, Object> inDepth = null;
+					if (stored != null && stored.trim().startsWith("{")) {
+						try {
+							com.fasterxml.jackson.databind.JsonNode root =
+									hydrateMapper.readTree(stored);
 						com.fasterxml.jackson.databind.JsonNode answerNode = root.get("answer");
 						if (answerNode != null && answerNode.isTextual()) {
 							prose = answerNode.asText();
@@ -1375,21 +1409,40 @@ public class ChartSearchAiRestController {
 						if (blocksNode != null && blocksNode.isArray()) {
 							blocks = hydrateMapper.convertValue(blocksNode, List.class);
 						}
-						com.fasterxml.jackson.databind.JsonNode confNode = root.get("confidence");
-						if (confNode != null && confNode.isObject()) {
-							confidence = hydrateMapper.convertValue(confNode, Map.class);
+						com.fasterxml.jackson.databind.JsonNode refsNode = root.get("references");
+						if (refsNode != null && refsNode.isArray()) {
+							references = hydrateMapper.convertValue(refsNode, List.class);
 						}
-					}
-					catch (IOException ignored) {
-						// Treat as plaintext.
+						com.fasterxml.jackson.databind.JsonNode confNode = root.get("confidence");
+							if (confNode != null && confNode.isObject()) {
+								confidence = hydrateMapper.convertValue(confNode, Map.class);
+							}
+							com.fasterxml.jackson.databind.JsonNode answerValidationNode = root.get("answerValidation");
+							if (answerValidationNode != null && answerValidationNode.isObject()) {
+								answerValidation = hydrateMapper.convertValue(answerValidationNode, Map.class);
+							}
+							com.fasterxml.jackson.databind.JsonNode inDepthNode = root.get("inDepth");
+							if (inDepthNode != null && inDepthNode.isObject()) {
+								inDepth = hydrateMapper.convertValue(inDepthNode, Map.class);
+							}
+						}
+						catch (IOException ignored) {
+							// Treat as plaintext.
 					}
 				}
 				entry.put("content", prose);
 				entry.put("blocks", blocks);
-				if (confidence != null) {
-					entry.put("confidence", confidence);
-				}
-			} else {
+				entry.put("references", references);
+					if (confidence != null) {
+						entry.put("confidence", confidence);
+					}
+					if (answerValidation != null) {
+						entry.put("answerValidation", answerValidation);
+					}
+					if (inDepth != null) {
+						entry.put("inDepth", inDepth);
+					}
+				} else {
 				entry.put("content", m.getContent());
 			}
 
@@ -1654,6 +1707,229 @@ public class ChartSearchAiRestController {
 		writeSseEventOrThrow(out, "references", json);
 	}
 
+	private void streamStagedChat(OutputStream out, ChatSession session, String question,
+			OverrideResolution overrideRes) throws IOException {
+		ObjectMapper mapper = new ObjectMapper();
+		String answerModel = stagedAnswerModel(overrideRes.answeredModel);
+		String validationModel = stagedValidationModel(overrideRes.answeredModel);
+		String inDepthModel = stagedInDepthModel(overrideRes.answeredModel);
+
+		ChatTurnResult answerResult;
+		RequestLlmOverride.set(overrideRes.endpointUrl, answerModel);
+		try {
+			answerResult = chatService.chatStagedAnswer(session, question,
+					token -> writeSseEventOrThrow(out, "token", token));
+		}
+		finally {
+			RequestLlmOverride.clear();
+		}
+
+		Map<String, Object> answerDone = chatDoneData(
+				answerResult.getAnswer(), answerResult.getSessionUuid(),
+				answerResult.getAssistantMessageUuid(), overrideRes.answeredModel);
+		answerDone.put("answerValidation", answerValidationWire("validating",
+				"Checking answer against chart and temporal/date rules.", null));
+		answerDone.put("inDepth", inDepthWire("pending", "", null));
+		writeSseEvent(out, "answer_done", mapper.writeValueAsString(answerDone));
+
+		ChartAnswer finalAnswer = answerResult.getAnswer();
+		Map<String, Object> answerValidation;
+		RequestLlmOverride.set(overrideRes.endpointUrl, validationModel);
+		try {
+			ChatTurnResult validationResult = chatService.completeStagedAnswerValidation(
+					session, answerResult.getAssistantMessageUuid(), question,
+					token -> { });
+			finalAnswer = validationResult.getAnswer();
+			answerValidation = finalAnswer.getAnswerValidation() != null
+					? finalAnswer.getAnswerValidation()
+					: answerValidationWire("checked", "Answer check completed.", null);
+			Map<String, Object> validationDone = chatDoneData(
+					finalAnswer, validationResult.getSessionUuid(),
+					validationResult.getAssistantMessageUuid(), overrideRes.answeredModel);
+			validationDone.put("answerValidation", answerValidation);
+			writeSseEvent(out, "answer_validation", mapper.writeValueAsString(validationDone));
+		}
+		catch (RuntimeException e) {
+			log.warn("Staged Answer validation failed for session {} message {}",
+					session.getUuid(), answerResult.getAssistantMessageUuid(), e);
+			answerValidation = answerValidationWire("unavailable",
+					"Answer check unavailable. The direct answer remains visible.", null);
+			Map<String, Object> validationDone = chatDoneData(
+					finalAnswer, answerResult.getSessionUuid(),
+					answerResult.getAssistantMessageUuid(), overrideRes.answeredModel);
+			validationDone.put("answerValidation", answerValidation);
+			writeSseEvent(out, "answer_validation", mapper.writeValueAsString(validationDone));
+		}
+		finally {
+			RequestLlmOverride.clear();
+		}
+
+		Map<String, Object> pending = new LinkedHashMap<String, Object>();
+		pending.put("messageId", answerResult.getAssistantMessageUuid());
+		pending.put("inDepth", inDepthWire("pending", "", null));
+		writeSseEvent(out, "indepth_pending", mapper.writeValueAsString(pending));
+
+		Map<String, Object> inDepth;
+		RequestLlmOverride.set(overrideRes.endpointUrl, inDepthModel);
+		try {
+			ChatTurnResult inDepthResult = chatService.completeStagedInDepth(
+					session, answerResult.getAssistantMessageUuid(), STAGED_IN_DEPTH_PROMPT,
+					token -> writeSseEventOrThrow(out, "indepth_token", token));
+			inDepth = inDepthWire("complete",
+					stripInDepthHeader(inDepthResult.getAnswer().getAnswer()), null);
+			writeSseEvent(out, "indepth_done", mapper.writeValueAsString(inDepth));
+		}
+		catch (RuntimeException e) {
+			log.warn("Staged In-Depth failed for session {} message {}",
+					session.getUuid(), answerResult.getAssistantMessageUuid(), e);
+			inDepth = inDepthWire("failed", "",
+					"In-Depth generation failed. The direct answer is still available.");
+			writeSseEvent(out, "indepth_error", mapper.writeValueAsString(inDepth));
+		}
+		finally {
+			RequestLlmOverride.clear();
+		}
+
+		Map<String, Object> done = chatDoneData(
+				finalAnswer, answerResult.getSessionUuid(),
+				answerResult.getAssistantMessageUuid(), overrideRes.answeredModel);
+		done.put("answerValidation", answerValidation);
+		done.put("inDepth", inDepth);
+		writeSseEvent(out, "done", mapper.writeValueAsString(done));
+	}
+
+	private Map<String, Object> chatDoneData(ChartAnswer answer, String sessionUuid,
+			String assistantMessageUuid, String model) {
+		Map<String, Object> doneData = new LinkedHashMap<String, Object>();
+		doneData.put("answer", answer.getAnswer());
+		doneData.put("disclaimer", DISCLAIMER);
+		doneData.put("references", serializeReferences(answer.getReferences()));
+		doneData.put("blocks", blocksToJson(answer.getBlocks()));
+		if (answer.getConfidence() != null) {
+			doneData.put("confidence", answer.getConfidence());
+		}
+		if (answer.getAnswerValidation() != null) {
+			doneData.put("answerValidation", answer.getAnswerValidation());
+		}
+		doneData.put("session", sessionUuid);
+		doneData.put("messageId", assistantMessageUuid);
+		doneData.put("model", model);
+		return doneData;
+	}
+
+	private Map<String, Object> inDepthWire(String status, String answer, String error) {
+		Map<String, Object> wire = new LinkedHashMap<String, Object>();
+		wire.put("status", status);
+		wire.put("answer", answer == null ? "" : answer);
+		if (error != null && !error.isEmpty()) {
+			wire.put("error", error);
+		}
+		return wire;
+	}
+
+	private Map<String, Object> answerValidationWire(String status, String summary, String originalAnswer) {
+		Map<String, Object> wire = new LinkedHashMap<String, Object>();
+		wire.put("status", status);
+		wire.put("label", answerValidationLabel(status));
+		wire.put("summary", summary == null ? "" : summary);
+		wire.put("issues", new ArrayList<Object>());
+		if (!"validating".equals(status)) {
+			java.text.SimpleDateFormat fmt = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
+			fmt.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+			wire.put("completedAt", fmt.format(new Date()));
+		}
+		if (originalAnswer != null) {
+			wire.put("originalAnswer", originalAnswer);
+		}
+		return wire;
+	}
+
+	private String answerValidationLabel(String status) {
+		if ("validating".equals(status)) {
+			return "Checking answer";
+		}
+		if ("checked".equals(status)) {
+			return "Checked";
+		}
+		if ("edited".equals(status)) {
+			return "Updated after check";
+		}
+		if ("needs_review".equals(status)) {
+			return "Needs review";
+		}
+		if ("unavailable".equals(status)) {
+			return "Check unavailable";
+		}
+		return status;
+	}
+
+	private boolean wantsStaged(Map<String, String> body) {
+		return "true".equalsIgnoreCase(body.get("staged"));
+	}
+
+	private boolean canStage(OverrideResolution overrideRes) {
+		return overrideRes != null
+				&& overrideRes.endpointUrl != null
+				&& overrideRes.answeredModel != null
+				&& isStageableModel(overrideRes.answeredModel);
+	}
+
+	private boolean isStageableModel(String modelName) {
+		if (modelName == null || modelName.startsWith("answer-review:")) {
+			return false;
+		}
+		if (modelName.startsWith("med-agent-team-parity")) {
+			return false;
+		}
+		return modelName.startsWith("med-agent-team-") || modelName.startsWith("answer:");
+	}
+
+	private void validateStagedModels(OverrideResolution overrideRes) {
+		modelSwitchService.validateEndpointAndModel(
+				overrideRes.endpointUrl, stagedAnswerModel(overrideRes.answeredModel));
+		modelSwitchService.validateEndpointAndModel(
+				overrideRes.endpointUrl, stagedValidationModel(overrideRes.answeredModel));
+		modelSwitchService.validateEndpointAndModel(
+				overrideRes.endpointUrl, stagedInDepthModel(overrideRes.answeredModel));
+	}
+
+	private String stagedAnswerModel(String modelName) {
+		if (modelName != null && modelName.startsWith("answer:")) {
+			return modelName;
+		}
+		return STAGED_FAST_ANSWER_MODEL;
+	}
+
+	private String stagedValidationModel(String modelName) {
+		return "answer-review:qwen2.5-14b";
+	}
+
+	private String stagedInDepthModel(String modelName) {
+		if (modelName != null && modelName.startsWith("answer:")) {
+			String rest = modelName.substring("answer:".length());
+			int at = rest.indexOf('@');
+			int tilde = rest.indexOf('~');
+			int cut = -1;
+			if (at >= 0 && tilde >= 0) {
+				cut = Math.min(at, tilde);
+			} else if (at >= 0) {
+				cut = at;
+			} else if (tilde >= 0) {
+				cut = tilde;
+			}
+			String writer = cut >= 0 ? rest.substring(0, cut) : rest;
+			return "indepth-only:" + writer;
+		}
+		return "indepth-only:" + modelName;
+	}
+
+	private static String stripInDepthHeader(String answer) {
+		if (answer == null) {
+			return "";
+		}
+		return answer.replaceFirst("(?is)^\\s*\\*\\*In\\s*Depth\\*\\*\\s*", "").trim();
+	}
+
 	private void writeSseEvent(OutputStream out, String event, String data) throws IOException {
 		StringBuilder sb = new StringBuilder();
 		sb.append("event: ").append(event).append('\n');
@@ -1700,11 +1976,14 @@ public class ChartSearchAiRestController {
 	 */
 	private static final class OverrideResolution {
 
+		private final String endpointUrl;
+
 		private final String answeredModel;
 
 		private final boolean overridden;
 
-		OverrideResolution(String answeredModel, boolean overridden) {
+		OverrideResolution(String endpointUrl, String answeredModel, boolean overridden) {
+			this.endpointUrl = endpointUrl;
 			this.answeredModel = answeredModel;
 			this.overridden = overridden;
 		}
@@ -1743,18 +2022,20 @@ public class ChartSearchAiRestController {
 						"Per-request backend override requires the remote engine; active engine is '"
 								+ (engine != null ? engine.trim() : "") + "'.");
 			}
-			return new OverrideResolution(localModelName(), false);
-		}
+				return new OverrideResolution(null, localModelName(), false);
+			}
 
-		String answeredModel = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
-		if (hasOverride) {
-			String[] valid = modelSwitchService.validateEndpointAndModel(overrideUrl, overrideModel);
-			RequestLlmOverride.set(valid[0], valid[1]);
-			return new OverrideResolution(valid[1], true);
+			String endpointUrl = Context.getAdministrationService()
+					.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
+			String answeredModel = Context.getAdministrationService()
+					.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
+			if (hasOverride) {
+				String[] valid = modelSwitchService.validateEndpointAndModel(overrideUrl, overrideModel);
+				RequestLlmOverride.set(valid[0], valid[1]);
+				return new OverrideResolution(valid[0], valid[1], true);
+			}
+			return new OverrideResolution(endpointUrl, answeredModel, false);
 		}
-		return new OverrideResolution(answeredModel, false);
-	}
 
 	/**
 	 * The local (bundled) engine's model name for the per-response tag — the

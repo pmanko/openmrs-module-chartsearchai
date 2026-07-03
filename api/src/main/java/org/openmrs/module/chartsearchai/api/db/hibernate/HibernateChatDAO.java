@@ -71,6 +71,16 @@ public class HibernateChatDAO implements ChatDAO {
 
 	@Override
 	@SuppressWarnings("unchecked")
+	public ChatMessage getMessageByUuid(String uuid) {
+		List<ChatMessage> results = sessionFactory.getCurrentSession()
+				.createQuery("from ChatMessage where uuid = :uuid")
+				.setParameter("uuid", uuid)
+				.list();
+		return results.isEmpty() ? null : results.get(0);
+	}
+
+	@Override
+	@SuppressWarnings("unchecked")
 	public List<ChatMessage> getMessages(ChatSession session) {
 		if (session == null) {
 			return Collections.emptyList();

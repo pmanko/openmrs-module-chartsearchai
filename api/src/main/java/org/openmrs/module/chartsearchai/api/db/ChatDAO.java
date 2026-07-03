@@ -38,6 +38,8 @@ public interface ChatDAO {
 
 	ChatMessage saveMessage(ChatMessage message);
 
+	ChatMessage getMessageByUuid(String uuid);
+
 	/**
 	 * List all non-summary messages for a session in ascending ordinal order.
 	 * This is the canonical "rebuild conversation history for the next LLM call"

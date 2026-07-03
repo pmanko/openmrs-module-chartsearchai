@@ -83,6 +83,32 @@ public interface ChatService {
 			Consumer<String> tokenConsumer);
 
 	/**
+	 * Staged chat Answer leg: persists the user message and the direct assistant
+	 * answer, but stores the assistant envelope with {@code inDepth.status=pending}
+	 * so a caller can stream the answer immediately and attach the In-Depth leg
+	 * later without appending a fake second user turn.
+	 */
+	ChatTurnResult chatStagedAnswer(ChatSession session, String question,
+			Consumer<String> tokenConsumer);
+
+	/**
+	 * Staged chat Answer validation leg: reviews the already-persisted direct answer and updates the
+	 * named assistant message with {@code answerValidation} plus any safe answer/block/reference edit.
+	 * No new user or assistant turn is appended.
+	 */
+	ChatTurnResult completeStagedAnswerValidation(ChatSession session, String assistantMessageUuid,
+			String originalQuestion, Consumer<String> tokenConsumer);
+
+	/**
+	 * Staged chat In-Depth leg: runs an unpersisted follow-up prompt against the
+	 * existing transcript and updates the named assistant message's stored envelope
+	 * with {@code inDepth.status=complete}. The returned answer is the In-Depth
+	 * text itself; the assistant message uuid is unchanged.
+	 */
+	ChatTurnResult completeStagedInDepth(ChatSession session, String assistantMessageUuid,
+			String prompt, Consumer<String> tokenConsumer);
+
+	/**
 	 * Container for the controller's response: the ChartAnswer (text +
 	 * references + tokens), plus the session uuid and the newly-created
 	 * assistant message uuid for client-side threading.
