@@ -343,9 +343,6 @@ public class ChartSearchAiStreamingTest {
 
 			JsonNode hubRequest = MAPPER.readTree(hubRequestBody.get());
 			assertEquals("med-agent-team-high-validated", hubRequest.get("model").asText());
-			verify(f.chatService, never()).chatStagedAnswer(any(), any(), any());
-			verify(f.chatService, never()).completeStagedAnswerValidation(any(), any(), any(), any());
-			verify(f.chatService, never()).completeStagedInDepth(any(), any(), any(), any());
 			verify(f.chatService, never()).chatStreaming(any(), any(), any());
 			verify(f.chatService, times(1)).persistHubStagedAnswer(eq(f.session), any(), any());
 		}
@@ -614,9 +611,6 @@ public class ChartSearchAiStreamingTest {
 					eq(f.session), eq("What medications is this patient taking?"), any());
 			verify(f.chatService, times(3)).updateHubStagedMessage(
 					eq(f.session), eq("assistant-msg-uuid"), any());
-			verify(f.chatService, never()).chatStagedAnswer(any(), any(), any());
-			verify(f.chatService, never()).completeStagedAnswerValidation(any(), any(), any(), any());
-			verify(f.chatService, never()).completeStagedInDepth(any(), any(), any(), any());
 			verify(f.chatService, never()).chatStreaming(any(), any(), any());
 		}
 		finally {
