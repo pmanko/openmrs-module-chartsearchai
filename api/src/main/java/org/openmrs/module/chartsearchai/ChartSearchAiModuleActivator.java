@@ -9,7 +9,6 @@
  */
 package org.openmrs.module.chartsearchai;
 
-import java.io.File;
 import java.util.Arrays;
 import java.util.List;
 
@@ -19,7 +18,6 @@ import org.openmrs.api.UserService;
 import org.openmrs.api.context.Context;
 import org.openmrs.module.BaseModuleActivator;
 import org.openmrs.module.chartsearchai.api.AuditLogPurgeTask;
-import org.openmrs.module.chartsearchai.api.impl.LlmProvider;
 import org.openmrs.scheduler.SchedulerService;
 import org.openmrs.scheduler.TaskDefinition;
 
@@ -43,7 +41,6 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 	@Override
 	public void started() {
 		log.info("Chart Search AI Module started");
-		validateConfiguration();
 		provisionPrivilegesAndRoles();
 		removeLegacyBackfillTask();
 		registerAuditLogPurgeTask();
@@ -130,60 +127,6 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 		}
 		catch (Exception e) {
 			log.warn("Failed to bind privilege '{}' to role '{}'", privilege, roleName, e);
-		}
-	}
-
-	@Override
-	public void stopped() {
-		log.info("Chart Search AI Module stopping");
-		try {
-			LlmProvider llmProvider = Context.getRegisteredComponent("llmProvider", LlmProvider.class);
-			if (llmProvider != null) {
-				llmProvider.shutdown();
-			}
-		}
-		catch (Exception e) {
-			log.warn("Error closing LLM provider", e);
-		}
-		log.info("Chart Search AI Module stopped");
-	}
-
-	private void validateConfiguration() {
-		String engineType = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE);
-		boolean isRemote = ChartSearchAiConstants.LLM_ENGINE_REMOTE.equalsIgnoreCase(
-				engineType != null ? engineType.trim() : "");
-
-		if (!isRemote) {
-			validateModelFile(ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH, "LLM");
-		}
-		// chartsearchai no longer owns an embedding model — grounding embeds via querystore's
-		// provider (#51), so there is no ONNX model/vocab to validate here.
-	}
-
-	private void validateModelFile(String globalProperty, String label) {
-		String configuredPath = Context.getAdministrationService()
-				.getGlobalProperty(globalProperty);
-		if (configuredPath == null || configuredPath.trim().isEmpty()) {
-			log.warn("Chart Search AI: {} model path not configured. "
-					+ "Set '{}' before using the module.", label, globalProperty);
-			return;
-		}
-
-		try {
-			String resolvedPath = ChartSearchAiUtils.resolveModelPath(
-					configuredPath.trim(), globalProperty);
-			File modelFile = new File(resolvedPath);
-			if (!modelFile.canRead()) {
-				log.warn("Chart Search AI: {} model file is not readable: {}",
-						label, resolvedPath);
-			} else {
-				log.info("Chart Search AI: {} model file validated: {}", label, resolvedPath);
-			}
-		}
-		catch (IllegalStateException e) {
-			log.warn("Chart Search AI: {} model file validation failed: {}",
-					label, e.getMessage());
 		}
 	}
 

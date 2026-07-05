@@ -16,9 +16,9 @@ import java.util.Map;
 
 /**
  * Structured "block" the LLM can emit alongside its prose answer — currently
- * just tables. The schema is defined in {@link ChartAnswerResponseFormat};
- * the parser ({@link LlmAnswerExtractor}) reads these out of the JSON
- * response into {@link LlmProvider.LlmResponse#getBlocks()}.
+ * just tables. The hub emits these in its answer JSON; chartsearchai parses
+ * them generically (Jackson) rather than through a dedicated schema class,
+ * since it relays the hub's wire shape rather than generating it itself.
  *
  * <p>Single concrete type today is {@code table}; the {@code kind}
  * discriminator gives us room to add {@code list}, {@code timeline},

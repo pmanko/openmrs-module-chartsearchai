@@ -33,7 +33,6 @@ import java.util.Properties;
 import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
@@ -50,7 +49,6 @@ import org.openmrs.module.chartsearchai.api.ChatService;
 import org.openmrs.module.chartsearchai.api.ChatService.ChatTurnResult;
 import org.openmrs.module.chartsearchai.api.PatientAccessCheck;
 import org.openmrs.module.chartsearchai.api.impl.ModelSwitchService;
-import org.openmrs.module.chartsearchai.api.impl.RequestLlmOverride;
 import org.openmrs.module.chartsearchai.model.ChatMessage;
 import org.openmrs.module.chartsearchai.model.ChatSession;
 import org.springframework.http.HttpStatus;
@@ -77,11 +75,6 @@ import com.sun.net.httpserver.HttpServer;
 public class ChartSearchAiStreamingTest {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
-
-	@AfterEach
-	public void clearOverride() {
-		RequestLlmOverride.clear();
-	}
 
 	/**
 	 * Wires the four collaborators the controller autowires, plus the

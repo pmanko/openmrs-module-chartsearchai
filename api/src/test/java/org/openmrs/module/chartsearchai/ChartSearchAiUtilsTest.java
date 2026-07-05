@@ -10,67 +10,15 @@
 package org.openmrs.module.chartsearchai;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.File;
-import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.test.jupiter.BaseModuleContextSensitiveTest;
-import org.openmrs.util.OpenmrsUtil;
 
 public class ChartSearchAiUtilsTest extends BaseModuleContextSensitiveTest {
-
-	private static final String GP_NAME = "chartsearchai.test.modelPath";
-
-	@Test
-	public void resolveModelPath_shouldRejectPathContainingDotDot() {
-		assertThrows(IllegalStateException.class,
-				() -> ChartSearchAiUtils.resolveModelPath("../etc/passwd", GP_NAME));
-	}
-
-	@Test
-	public void resolveModelPath_shouldRejectAbsolutePath() {
-		assertThrows(IllegalStateException.class,
-				() -> ChartSearchAiUtils.resolveModelPath("/etc/passwd", GP_NAME));
-	}
-
-	@Test
-	public void resolveModelPath_shouldRejectPathThatEscapesDataDirectory() {
-		assertThrows(IllegalStateException.class,
-				() -> ChartSearchAiUtils.resolveModelPath("subdir/../../outside", GP_NAME));
-	}
-
-	@Test
-	public void resolveModelPath_shouldThrowWhenFileDoesNotExist() {
-		assertThrows(IllegalStateException.class,
-				() -> ChartSearchAiUtils.resolveModelPath("chartsearchai/nonexistent-model.gguf", GP_NAME));
-	}
-
-	@Test
-	public void resolveModelPath_shouldResolveValidRelativePathWhenFileExists() throws IOException {
-		String appDataDir = OpenmrsUtil.getApplicationDataDirectory();
-		File subDir = new File(appDataDir, "chartsearchai");
-		subDir.mkdirs();
-		File tempFile = new File(subDir, "test-model.gguf");
-		try {
-			assertTrue(tempFile.createNewFile(), "Temp file should be created");
-
-			String resolved = ChartSearchAiUtils.resolveModelPath("chartsearchai/test-model.gguf", GP_NAME);
-
-			assertNotNull(resolved);
-			assertTrue(resolved.endsWith("chartsearchai" + File.separator + "test-model.gguf"));
-		}
-		finally {
-			tempFile.delete();
-			subDir.delete();
-		}
-	}
 
 	// --- Category-hint enrichment ---
 	// These tests guard the metadata flow that makes category-name queries
