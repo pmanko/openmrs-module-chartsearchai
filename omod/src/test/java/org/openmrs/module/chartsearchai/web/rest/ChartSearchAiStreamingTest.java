@@ -48,6 +48,7 @@ import org.openmrs.module.chartsearchai.api.ChatService.ChatTurnResult;
 import org.openmrs.module.chartsearchai.api.PatientAccessCheck;
 import org.openmrs.module.chartsearchai.api.impl.ModelSwitchService;
 import org.openmrs.module.chartsearchai.api.impl.RequestLlmOverride;
+import org.openmrs.module.chartsearchai.model.ChatMessage;
 import org.openmrs.module.chartsearchai.model.ChatSession;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -103,6 +104,7 @@ public class ChartSearchAiStreamingTest {
 		lenient().when(f.auditLogService.getQueryCountByUserSince(any(), any())).thenReturn(0L);
 		lenient().when(f.chatService.openOrLoadActiveSession(f.patient)).thenReturn(f.session);
 		lenient().when(f.session.getUuid()).thenReturn("session-uuid");
+		lenient().when(f.chatService.priorTurnsForRelay(any())).thenReturn(Collections.emptyList());
 
 		f.controller = new ChartSearchAiRestController();
 		ReflectionTestUtils.setField(f.controller, "patientAccessCheck", f.patientAccessCheck);
@@ -461,6 +463,93 @@ public class ChartSearchAiStreamingTest {
 			verify(f.chatService, never()).completeStagedAnswerValidation(any(), any(), any(), any());
 			verify(f.chatService, never()).completeStagedInDepth(any(), any(), any(), any());
 			verify(f.chatService, never()).chatStreaming(any(), any(), any());
+		}
+		finally {
+			hub.stop(0);
+		}
+	}
+
+	/**
+	 * Gate 5: the hub relay must thread prior conversation turns (prose-only, never the raw stored
+	 * JSON envelope) into the hub request, with the CURRENT question last — a follow-up question
+	 * ("what was the ISO date in your last answer?") is unanswerable from the chart alone, so
+	 * without this the hub-native default path silently loses multi-turn context.
+	 */
+	@Test
+	public void chatStream_hubNativeSingleProfile_threadsPriorConversationTurnsBeforeTheQuestion()
+			throws Exception {
+		Fixture f = newFixture(true);
+		ChatMessage priorUser = new ChatMessage();
+		priorUser.setRole(ChatMessage.ROLE_USER);
+		priorUser.setContent("What was the most recent visit date?");
+		ChatMessage priorAssistant = new ChatMessage();
+		priorAssistant.setRole(ChatMessage.ROLE_ASSISTANT);
+		priorAssistant.setContent("2026-01-26"); // priorTurnsForRelay's contract: prose, not JSON
+		when(f.chatService.priorTurnsForRelay(f.session))
+				.thenReturn(java.util.Arrays.asList(priorUser, priorAssistant));
+
+		AtomicReference<String> hubRequestBody = new AtomicReference<String>();
+		HttpServer hub = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		hub.createContext("/v1/chat/completions", exchange -> {
+			hubRequestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			String sse = ""
+					+ "event: answer_done\n"
+					+ "data: {\"answer\":\"2026-01-26.\",\"references\":[],\"blocks\":[],"
+					+ "\"inDepth\":{\"status\":\"pending\",\"answer\":\"\"}}\n\n"
+					+ "event: indepth_pending\ndata: {\"status\":\"pending\",\"answer\":\"\"}\n\n"
+					+ "event: indepth_done\ndata: {\"status\":\"complete\",\"answer\":\"\"}\n\n"
+					+ "event: done\n"
+					+ "data: {\"answer\":\"2026-01-26.\",\"references\":[],\"blocks\":[],"
+					+ "\"inDepth\":{\"status\":\"complete\",\"answer\":\"\"}}\n\n";
+			byte[] bytes = sse.getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+			exchange.sendResponseHeaders(200, bytes.length);
+			try (OutputStream body = exchange.getResponseBody()) {
+				body.write(bytes);
+			}
+		});
+		hub.start();
+		String hubUrl = "http://127.0.0.1:" + hub.getAddress().getPort() + "/v1/chat/completions";
+		try {
+			Map<String, String> body = chatBody();
+			body.put("question", "Repeat just the ISO date from your previous answer.");
+			body.put("endpointUrl", hubUrl);
+			body.put("modelName", "single-12b-checked");
+			body.put("staged", "true");
+			when(f.adminService.getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE))
+					.thenReturn(ChartSearchAiConstants.LLM_ENGINE_REMOTE);
+			when(f.modelSwitchService.validateEndpointAndModel(hubUrl, "single-12b-checked"))
+					.thenReturn(new String[] { hubUrl, "single-12b-checked" });
+			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any()))
+					.thenReturn(new ChatTurnResult(new ChartAnswer("2026-01-26.", Collections.emptyList()),
+							"session-uuid", "assistant-msg-uuid"));
+			when(f.chatService.updateHubStagedMessage(eq(f.session), eq("assistant-msg-uuid"), any()))
+					.thenReturn(new ChatTurnResult(new ChartAnswer("2026-01-26.", Collections.emptyList()),
+							"session-uuid", "assistant-msg-uuid"));
+
+			MockHttpServletResponse response = new MockHttpServletResponse();
+
+			try (MockedStatic<Context> ctx = mockStatic(Context.class)) {
+				ctx.when(() -> Context.requirePrivilege(
+						ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA)).then(inv -> null);
+				ctx.when(Context::getPatientService).thenReturn(f.patientService);
+				ctx.when(Context::getAdministrationService).thenReturn(f.adminService);
+				ctx.when(Context::getAuthenticatedUser).thenReturn(f.user);
+				ctx.when(Context::getRuntimeProperties).thenReturn(new Properties());
+
+				f.controller.chatStream(body, response);
+			}
+
+			JsonNode hubRequest = MAPPER.readTree(hubRequestBody.get());
+			JsonNode messages = hubRequest.get("messages");
+			assertEquals(3, messages.size(), "expected 2 prior turns + the current question");
+			assertEquals("user", messages.get(0).get("role").asText());
+			assertEquals("What was the most recent visit date?", messages.get(0).get("content").asText());
+			assertEquals("assistant", messages.get(1).get("role").asText());
+			assertEquals("2026-01-26", messages.get(1).get("content").asText());
+			assertEquals("user", messages.get(2).get("role").asText());
+			assertEquals("Repeat just the ISO date from your previous answer.",
+					messages.get(2).get("content").asText());
 		}
 		finally {
 			hub.stop(0);

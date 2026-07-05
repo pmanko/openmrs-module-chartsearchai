@@ -351,6 +351,11 @@ public class ChatServiceImpl implements ChatService {
 		return new ChatTurnResult(answer, session.getUuid(), assistant.getUuid());
 	}
 
+	@Override
+	public List<ChatMessage> priorTurnsForRelay(ChatSession session) {
+		return priorsForLlm(chatDAO.getMessages(session));
+	}
+
 	protected ChatSession createSession(Patient patient, User user) {
 		ChatSession session = new ChatSession();
 		session.setPatient(patient);

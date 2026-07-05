@@ -123,6 +123,13 @@ public interface ChatService {
 			Map<String, Object> updateWire);
 
 	/**
+	 * Prior conversation turns for a hub-relay request: chronological, non-summary rows with
+	 * assistant content reduced to prose (never the raw stored JSON envelope) — the shape the
+	 * hub's messages array should see. Excludes the current turn; the caller appends that.
+	 */
+	List<ChatMessage> priorTurnsForRelay(ChatSession session);
+
+	/**
 	 * Container for the controller's response: the ChartAnswer (text +
 	 * references + tokens), plus the session uuid and the newly-created
 	 * assistant message uuid for client-side threading.

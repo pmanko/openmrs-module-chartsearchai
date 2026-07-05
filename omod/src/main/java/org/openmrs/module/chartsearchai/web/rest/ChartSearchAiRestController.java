@@ -1727,7 +1727,8 @@ public class ChartSearchAiRestController {
 
 	private void streamHubStagedChat(OutputStream out, ChatSession session, String patientUuid,
 			String question, OverrideResolution overrideRes) throws IOException {
-		String requestJson = hubStagedRequestJson(overrideRes.answeredModel, patientUuid, question);
+		List<ChatMessage> priorTurns = chatService.priorTurnsForRelay(session);
+		String requestJson = hubStagedRequestJson(overrideRes.answeredModel, patientUuid, priorTurns, question);
 		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
 				.uri(URI.create(overrideRes.endpointUrl))
 				.version(HttpClient.Version.HTTP_1_1)
@@ -1856,12 +1857,24 @@ public class ChartSearchAiRestController {
 		writeSseEvent(out, event, MAPPER.writeValueAsString(payload));
 	}
 
-	private String hubStagedRequestJson(String model, String patientUuid, String question) throws IOException {
+	private String hubStagedRequestJson(String model, String patientUuid, List<ChatMessage> priorTurns,
+			String question) throws IOException {
 		Map<String, Object> root = new LinkedHashMap<String, Object>();
 		root.put("model", model);
 		root.put("stream", true);
 		root.put("patient", patientUuid);
 		List<Map<String, Object>> messages = new ArrayList<Map<String, Object>>();
+		// Prior turns: prose-only (priorTurnsForRelay's contract — never the raw stored JSON
+		// envelope), chronological, excluding the current turn. The hub owns the chart and the
+		// system prompt; it inserts both itself, so the relay sends conversation content only.
+		if (priorTurns != null) {
+			for (ChatMessage prior : priorTurns) {
+				Map<String, Object> turn = new LinkedHashMap<String, Object>();
+				turn.put("role", prior.getRole());
+				turn.put("content", prior.getContent());
+				messages.add(turn);
+			}
+		}
 		Map<String, Object> user = new LinkedHashMap<String, Object>();
 		user.put("role", "user");
 		user.put("content", question);
