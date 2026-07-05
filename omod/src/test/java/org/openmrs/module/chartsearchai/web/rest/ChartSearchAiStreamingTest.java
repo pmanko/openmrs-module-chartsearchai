@@ -17,13 +17,19 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Properties;
 import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -48,6 +54,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpServer;
 
 /**
  * Behavioral tests for the SSE chat-streaming endpoint
@@ -337,6 +344,129 @@ public class ChartSearchAiStreamingTest {
 		verify(f.chatService, never()).chatStreaming(any(), any(), any());
 	}
 
+	@Test
+	public void chatStream_hubNativeSingleProfile_relaysOneHubStreamAndUpdatesSameMessage()
+			throws Exception {
+		Fixture f = newFixture(true);
+		AtomicReference<String> hubRequestBody = new AtomicReference<String>();
+		AtomicReference<String> hubRequestProtocol = new AtomicReference<String>();
+		AtomicReference<String> hubRequestAccept = new AtomicReference<String>();
+		AtomicReference<String> hubRequestContentType = new AtomicReference<String>();
+		HttpServer hub = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		hub.createContext("/v1/chat/completions", exchange -> {
+			hubRequestProtocol.set(exchange.getProtocol());
+			hubRequestAccept.set(exchange.getRequestHeaders().getFirst("Accept"));
+			hubRequestContentType.set(exchange.getRequestHeaders().getFirst("Content-Type"));
+			hubRequestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			String sse = ""
+					+ "event: answer_done\n"
+					+ "data: {\"answer\":\"Initial answer [1].\",\"references\":[{\"index\":1,"
+					+ "\"resourceType\":\"Observation\",\"resourceUuid\":\"obs-1\","
+					+ "\"groundingStatus\":\"checking\",\"grounded\":null}],\"blocks\":[],"
+					+ "\"answerValidation\":{\"status\":\"validating\"},"
+					+ "\"inDepth\":{\"status\":\"pending\",\"answer\":\"\"}}\n\n"
+					+ "event: answer_validation\n"
+					+ "data: {\"answer\":\"Edited answer [2].\",\"references\":[{\"index\":2,"
+					+ "\"resourceType\":\"Order\",\"resourceUuid\":\"ord-2\","
+					+ "\"groundingStatus\":\"checking\",\"grounded\":null}],\"blocks\":[],"
+					+ "\"answerValidation\":{\"status\":\"edited\",\"originalAnswer\":\"Initial answer [1].\"},"
+					+ "\"inDepth\":{\"status\":\"pending\",\"answer\":\"\"}}\n\n"
+					+ "event: indepth_pending\n"
+					+ "data: {\"status\":\"pending\",\"answer\":\"\"}\n\n"
+					+ "event: indepth_done\n"
+					+ "data: {\"status\":\"complete\",\"answer\":\"Deep details.\"}\n\n"
+					+ "event: done\n"
+					+ "data: {\"answer\":\"Edited answer [2].\",\"references\":[{\"index\":2,"
+					+ "\"resourceType\":\"Order\",\"resourceUuid\":\"ord-2\","
+					+ "\"groundingStatus\":\"verified\",\"grounded\":true}],\"blocks\":[],"
+					+ "\"answerValidation\":{\"status\":\"edited\",\"originalAnswer\":\"Initial answer [1].\"},"
+					+ "\"inDepth\":{\"status\":\"complete\",\"answer\":\"Deep details.\"}}\n\n";
+			byte[] bytes = sse.getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+			exchange.sendResponseHeaders(200, bytes.length);
+			try (OutputStream body = exchange.getResponseBody()) {
+				body.write(bytes);
+			}
+		});
+		hub.start();
+		String hubUrl = "http://127.0.0.1:" + hub.getAddress().getPort() + "/v1/chat/completions";
+		try {
+			Map<String, String> body = chatBody();
+			body.put("endpointUrl", hubUrl);
+			body.put("modelName", "single-12b-checked");
+			body.put("staged", "true");
+			when(f.adminService.getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE))
+					.thenReturn(ChartSearchAiConstants.LLM_ENGINE_REMOTE);
+			when(f.modelSwitchService.validateEndpointAndModel(hubUrl, "single-12b-checked"))
+					.thenReturn(new String[] { hubUrl, "single-12b-checked" });
+			when(f.chatService.persistHubStagedAnswer(
+					eq(f.session), eq("What medications is this patient taking?"), any()))
+					.thenReturn(new ChatTurnResult(new ChartAnswer("Initial answer [1].",
+							Collections.emptyList()), "session-uuid", "assistant-msg-uuid"));
+			when(f.chatService.updateHubStagedMessage(eq(f.session), eq("assistant-msg-uuid"), any()))
+					.thenReturn(new ChatTurnResult(new ChartAnswer("Edited answer [2].",
+							Collections.emptyList()), "session-uuid", "assistant-msg-uuid"));
+
+			MockHttpServletResponse response = new MockHttpServletResponse();
+
+			try (MockedStatic<Context> ctx = mockStatic(Context.class)) {
+				ctx.when(() -> Context.requirePrivilege(
+						ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA)).then(inv -> null);
+				ctx.when(Context::getPatientService).thenReturn(f.patientService);
+				ctx.when(Context::getAdministrationService).thenReturn(f.adminService);
+				ctx.when(Context::getAuthenticatedUser).thenReturn(f.user);
+				ctx.when(Context::getRuntimeProperties).thenReturn(new Properties());
+
+				f.controller.chatStream(body, response);
+			}
+
+			String sse = response.getContentAsString();
+			assertTrue(sse.indexOf("event: answer_done") >= 0, "answer_done missing:\n" + sse);
+			assertTrue(sse.indexOf("event: answer_validation") > sse.indexOf("event: answer_done"),
+					"answer_validation must follow answer_done:\n" + sse);
+			assertTrue(sse.indexOf("event: indepth_done") > sse.indexOf("event: indepth_pending"),
+					"indepth_done must follow pending:\n" + sse);
+			assertTrue(sse.indexOf("event: done") > sse.indexOf("event: indepth_done"),
+					"done must follow indepth_done:\n" + sse);
+
+			JsonNode answerDone = parseEvent(sse, "answer_done");
+			assertEquals("assistant-msg-uuid", answerDone.get("messageId").asText());
+			assertEquals("checking", answerDone.get("references").get(0).get("groundingStatus").asText());
+			JsonNode done = parseDoneEvent(sse);
+			assertEquals("Edited answer [2].", done.get("answer").asText());
+			assertEquals("verified", done.get("references").get(0).get("groundingStatus").asText());
+			assertEquals("single-12b-checked", done.get("model").asText());
+
+			JsonNode hubRequest = MAPPER.readTree(hubRequestBody.get());
+			assertEquals("HTTP/1.1", hubRequestProtocol.get());
+			assertEquals("text/event-stream", hubRequestAccept.get());
+			assertTrue(hubRequestContentType.get().startsWith("application/json"));
+			assertTrue(hubRequestBody.get().length() > 0, "hub request JSON body must not be empty");
+			assertEquals("single-12b-checked", hubRequest.get("model").asText());
+			assertEquals("patient-uuid", hubRequest.get("patient").asText());
+			assertEquals("What medications is this patient taking?",
+					hubRequest.get("messages").get(0).get("content").asText());
+			verify(f.modelSwitchService, times(2)).validateEndpointAndModel(hubUrl, "single-12b-checked");
+			verify(f.modelSwitchService, never()).validateEndpointAndModel(
+					eq(hubUrl), eq("answer:gemma-4-12b@synthesis-answer~enforce~temp0"));
+			verify(f.modelSwitchService, never()).validateEndpointAndModel(
+					eq(hubUrl), eq("answer-review:qwen2.5-14b"));
+			verify(f.modelSwitchService, never()).validateEndpointAndModel(
+					eq(hubUrl), eq("indepth-only:single-12b-checked"));
+			verify(f.chatService, times(1)).persistHubStagedAnswer(
+					eq(f.session), eq("What medications is this patient taking?"), any());
+			verify(f.chatService, times(3)).updateHubStagedMessage(
+					eq(f.session), eq("assistant-msg-uuid"), any());
+			verify(f.chatService, never()).chatStagedAnswer(any(), any(), any());
+			verify(f.chatService, never()).completeStagedAnswerValidation(any(), any(), any(), any());
+			verify(f.chatService, never()).completeStagedInDepth(any(), any(), any(), any());
+			verify(f.chatService, never()).chatStreaming(any(), any(), any());
+		}
+		finally {
+			hub.stop(0);
+		}
+	}
+
 	/**
 	 * Extracts and parses the JSON object carried by the terminal {@code done}
 	 * SSE event. The controller emits {@code data: <json>} lines after
@@ -348,6 +478,21 @@ public class ChartSearchAiStreamingTest {
 		String afterDone = sse.substring(doneIdx);
 		StringBuilder json = new StringBuilder();
 		for (String line : afterDone.split("\n")) {
+			if (line.startsWith("data: ")) {
+				json.append(line.substring("data: ".length()));
+			} else if (line.startsWith("event: ") && json.length() > 0) {
+				break;
+			}
+		}
+		return MAPPER.readTree(json.toString());
+	}
+
+	private static JsonNode parseEvent(String sse, String eventName) throws Exception {
+		int eventIdx = sse.indexOf("event: " + eventName);
+		assertTrue(eventIdx >= 0, "no " + eventName + " event to parse");
+		String afterEvent = sse.substring(eventIdx);
+		StringBuilder json = new StringBuilder();
+		for (String line : afterEvent.split("\n")) {
 			if (line.startsWith("data: ")) {
 				json.append(line.substring("data: ".length()));
 			} else if (line.startsWith("event: ") && json.length() > 0) {

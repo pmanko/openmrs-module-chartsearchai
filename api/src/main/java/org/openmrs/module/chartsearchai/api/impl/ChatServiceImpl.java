@@ -10,6 +10,7 @@
 package org.openmrs.module.chartsearchai.api.impl;
 
 import java.io.IOException;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
@@ -320,6 +321,36 @@ public class ChatServiceImpl implements ChatService {
 		return new ChatTurnResult(inDepth, session.getUuid(), assistant.getUuid());
 	}
 
+	@Override
+	public ChatTurnResult persistHubStagedAnswer(ChatSession session, String question,
+			Map<String, Object> answerWire) {
+		int nextOrdinal = chatDAO.getLastOrdinal(session) + 1;
+		persistUserMessage(session, question, nextOrdinal);
+
+		Map<String, Object> wire = normalizedHubWire(answerWire);
+		ChartAnswer answer = chartAnswerFromWire(wire);
+		ChatMessage assistant = persistAssistantWireTurn(session, wire, answer, nextOrdinal + 1,
+				ChatMessage.FINISH_STOP, question, 0);
+		touchSession(session);
+		return new ChatTurnResult(answer, session.getUuid(), assistant.getUuid());
+	}
+
+	@Override
+	public ChatTurnResult updateHubStagedMessage(ChatSession session, String assistantMessageUuid,
+			Map<String, Object> updateWire) {
+		ChatMessage assistant = chatDAO.getMessageByUuid(assistantMessageUuid);
+		requireAssistantInSession(session, assistant, "Hub staged update");
+
+		Map<String, Object> merged = assistantWire(assistant.getContent());
+		if (updateWire != null) {
+			merged.putAll(updateWire);
+		}
+		saveAssistantWire(assistant, merged, "hub staged update");
+		ChartAnswer answer = chartAnswerFromWire(merged);
+		touchSession(session);
+		return new ChatTurnResult(answer, session.getUuid(), assistant.getUuid());
+	}
+
 	protected ChatSession createSession(Patient patient, User user) {
 		ChatSession session = new ChatSession();
 		session.setPatient(patient);
@@ -446,6 +477,108 @@ public class ChatServiceImpl implements ChatService {
 		msg.setOutputTokens(answer.getOutputTokens());
 		msg.setFinishReason(finishReason);
 		return chatDAO.saveMessage(msg);
+	}
+
+	private ChatMessage persistAssistantWireTurn(ChatSession session, Map<String, Object> wire,
+			ChartAnswer answer, int ordinal, String finishReason, String questionForAudit,
+			long responseTimeMs) {
+		ChartSearchAuditLog audit = buildAuditRow(session, questionForAudit, answer, responseTimeMs);
+		auditDAO.saveAuditLog(audit);
+
+		ChatMessage msg = new ChatMessage();
+		msg.setSession(session);
+		msg.setOrdinal(ordinal);
+		msg.setRole(ChatMessage.ROLE_ASSISTANT);
+		msg.setContent(serializeWire(wire, "hub staged answer"));
+		msg.setCreatedAt(new Date());
+		msg.setAuditLog(audit);
+		msg.setInputTokens(answer.getInputTokens());
+		msg.setOutputTokens(answer.getOutputTokens());
+		msg.setFinishReason(finishReason);
+		return chatDAO.saveMessage(msg);
+	}
+
+	private static String serializeWire(Map<String, Object> wire, String context) {
+		try {
+			return MAPPER.writeValueAsString(wire);
+		}
+		catch (IOException ioe) {
+			throw new APIException("Failed to serialize " + context + ": " + ioe.getMessage(), ioe);
+		}
+	}
+
+	private static Map<String, Object> normalizedHubWire(Map<String, Object> wire) {
+		Map<String, Object> out = new LinkedHashMap<>();
+		if (wire != null) {
+			out.putAll(wire);
+		}
+		if (!out.containsKey("answer")) {
+			out.put("answer", "");
+		}
+		if (!out.containsKey("references")) {
+			out.put("references", Collections.emptyList());
+		}
+		if (!out.containsKey("blocks")) {
+			out.put("blocks", Collections.emptyList());
+		}
+		return out;
+	}
+
+	@SuppressWarnings("unchecked")
+	private static ChartAnswer chartAnswerFromWire(Map<String, Object> wire) {
+		String answer = wire.get("answer") == null ? "" : String.valueOf(wire.get("answer"));
+		List<RecordReference> references = referencesFromWire(wire.get("references"));
+		Map<String, Object> confidence = wire.get("confidence") instanceof Map
+				? new LinkedHashMap<>((Map<String, Object>) wire.get("confidence"))
+				: null;
+		Map<String, Object> answerValidation = wire.get("answerValidation") instanceof Map
+				? new LinkedHashMap<>((Map<String, Object>) wire.get("answerValidation"))
+				: null;
+		return new ChartAnswer(answer, references, Collections.emptyList(),
+				confidence, answerValidation, 0, 0, 0);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static List<RecordReference> referencesFromWire(Object raw) {
+		if (!(raw instanceof List)) {
+			return Collections.emptyList();
+		}
+		List<RecordReference> out = new ArrayList<>();
+		for (Object item : (List<Object>) raw) {
+			if (!(item instanceof Map)) {
+				continue;
+			}
+			Map<String, Object> ref = (Map<String, Object>) item;
+			Object index = ref.get("index");
+			if (!(index instanceof Number)) {
+				continue;
+			}
+			Boolean grounded = ref.get("grounded") instanceof Boolean
+					? (Boolean) ref.get("grounded")
+					: null;
+			out.add(new RecordReference(
+					((Number) index).intValue(),
+					ref.get("resourceType") == null ? null : String.valueOf(ref.get("resourceType")),
+					ref.get("resourceUuid") == null ? null : String.valueOf(ref.get("resourceUuid")),
+					parseWireDate(ref.get("date")),
+					grounded));
+		}
+		return out;
+	}
+
+	private static Date parseWireDate(Object raw) {
+		if (raw instanceof Number) {
+			return new Date(((Number) raw).longValue());
+		}
+		if (!(raw instanceof String) || ((String) raw).trim().isEmpty()) {
+			return null;
+		}
+		try {
+			return DateFormatUtil.toLegacyDate(LocalDate.parse(((String) raw).trim()));
+		}
+		catch (RuntimeException ignored) {
+			return null;
+		}
 	}
 
 	/**

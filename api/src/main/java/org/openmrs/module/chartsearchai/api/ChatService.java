@@ -10,6 +10,7 @@
 package org.openmrs.module.chartsearchai.api;
 
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import org.openmrs.Patient;
@@ -107,6 +108,19 @@ public interface ChatService {
 	 */
 	ChatTurnResult completeStagedInDepth(ChatSession session, String assistantMessageUuid,
 			String prompt, Consumer<String> tokenConsumer);
+
+	/**
+	 * Hub-relay staged Answer leg: persist the user message and the hub-provided assistant wire
+	 * payload without re-running local chart serialization or Java-side grounding.
+	 */
+	ChatTurnResult persistHubStagedAnswer(ChatSession session, String question,
+			Map<String, Object> answerWire);
+
+	/**
+	 * Hub-relay staged update: merge a later hub phase payload into the same assistant row.
+	 */
+	ChatTurnResult updateHubStagedMessage(ChatSession session, String assistantMessageUuid,
+			Map<String, Object> updateWire);
 
 	/**
 	 * Container for the controller's response: the ChartAnswer (text +

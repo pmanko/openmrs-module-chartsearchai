@@ -10,19 +10,31 @@
 package org.openmrs.module.chartsearchai.web.rest;
 
 import java.io.IOException;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpServletResponseWrapper;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.openmrs.Patient;
@@ -82,6 +94,8 @@ import org.springframework.web.bind.annotation.ResponseBody;
 public class ChartSearchAiRestController {
 
 	private static final Logger log = LoggerFactory.getLogger(ChartSearchAiRestController.class);
+
+	private static final ObjectMapper MAPPER = new ObjectMapper();
 
 	private static final int MAX_QUESTION_LENGTH = 1000;
 
@@ -1070,6 +1084,10 @@ public class ChartSearchAiRestController {
 
 			try {
 				if (staged) {
+					if (isHubNativeStagedModel(overrideRes.answeredModel)) {
+						streamHubStagedChat(out, session, patientUuid, sanitizedQuestion, overrideRes);
+						return;
+					}
 					streamStagedChat(out, session, sanitizedQuestion, overrideRes);
 					return;
 				}
@@ -1707,6 +1725,178 @@ public class ChartSearchAiRestController {
 		writeSseEventOrThrow(out, "references", json);
 	}
 
+	private void streamHubStagedChat(OutputStream out, ChatSession session, String patientUuid,
+			String question, OverrideResolution overrideRes) throws IOException {
+		String requestJson = hubStagedRequestJson(overrideRes.answeredModel, patientUuid, question);
+		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+				.uri(URI.create(overrideRes.endpointUrl))
+				.version(HttpClient.Version.HTTP_1_1)
+				.timeout(Duration.ofSeconds(300))
+				.header("Content-Type", "application/json")
+				.header("Accept", "text/event-stream")
+				.POST(HttpRequest.BodyPublishers.ofByteArray(
+						requestJson.getBytes(StandardCharsets.UTF_8)));
+		String apiKey = runtimeApiKey();
+		if (apiKey != null && !apiKey.trim().isEmpty()) {
+			requestBuilder.header("Authorization", "Bearer " + apiKey.trim());
+		}
+		HttpResponse<InputStream> hubResponse;
+		try {
+			hubResponse = HttpClient.newHttpClient().send(requestBuilder.build(),
+					HttpResponse.BodyHandlers.ofInputStream());
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new IOException("Hub staged stream interrupted", e);
+		}
+		if (hubResponse.statusCode() < 200 || hubResponse.statusCode() >= 300) {
+			String body = new String(hubResponse.body().readAllBytes(), StandardCharsets.UTF_8);
+			log.warn("Hub staged stream returned HTTP {}: {}", hubResponse.statusCode(), body);
+			writeSseEvent(out, "error", "Hub staged stream failed: HTTP " + hubResponse.statusCode());
+			return;
+		}
+
+		final String[] assistantMessageUuid = new String[1];
+		final boolean[] doneSeen = new boolean[1];
+		try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+				hubResponse.body(), StandardCharsets.UTF_8))) {
+			String event = "";
+			StringBuilder data = new StringBuilder();
+			String line;
+			while ((line = reader.readLine()) != null) {
+				if (line.isEmpty()) {
+					handleHubStagedEvent(out, session, question, overrideRes.answeredModel,
+							assistantMessageUuid, doneSeen, event, data.toString());
+					event = "";
+					data.setLength(0);
+				} else if (line.startsWith("event:")) {
+					event = line.substring("event:".length()).trim();
+				} else if (line.startsWith("data:")) {
+					if (data.length() > 0) {
+						data.append('\n');
+					}
+					String raw = line.substring("data:".length());
+					data.append(raw.startsWith(" ") ? raw.substring(1) : raw);
+				}
+			}
+			if (data.length() > 0) {
+				handleHubStagedEvent(out, session, question, overrideRes.answeredModel,
+						assistantMessageUuid, doneSeen, event, data.toString());
+			}
+		}
+		if (!doneSeen[0]) {
+			writeSseEvent(out, "error", "Hub staged stream ended before final response.");
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private void handleHubStagedEvent(OutputStream out, ChatSession session, String question,
+			String model, String[] assistantMessageUuid, boolean[] doneSeen, String event,
+			String data) throws IOException {
+		if (event == null || event.isEmpty() || data == null || data.isEmpty()) {
+			return;
+		}
+		if ("token".equals(event) || "indepth_token".equals(event) || "error".equals(event)) {
+			if ("error".equals(event)) {
+				doneSeen[0] = true;
+			}
+			writeSseEvent(out, event, data);
+			return;
+		}
+		Map<String, Object> payload = MAPPER.readValue(data,
+				new TypeReference<Map<String, Object>>() {});
+		if ("answer_done".equals(event)) {
+			ChatTurnResult result = chatService.persistHubStagedAnswer(session, question, payload);
+			assistantMessageUuid[0] = result.getAssistantMessageUuid();
+			writeHubPayload(out, event, payload, result.getSessionUuid(), assistantMessageUuid[0], model);
+			return;
+		}
+		if ("answer_validation".equals(event)) {
+			ChatTurnResult result = chatService.updateHubStagedMessage(
+					session, assistantMessageUuid[0], payload);
+			writeHubPayload(out, event, payload, result.getSessionUuid(), assistantMessageUuid[0], model);
+			return;
+		}
+		if ("indepth_pending".equals(event)) {
+			payload.put("messageId", assistantMessageUuid[0]);
+			writeSseEvent(out, event, MAPPER.writeValueAsString(payload));
+			return;
+		}
+		if ("indepth_done".equals(event) || "indepth_error".equals(event)) {
+			Map<String, Object> update = new LinkedHashMap<String, Object>();
+			update.put("inDepth", payload);
+			if (assistantMessageUuid[0] != null) {
+				chatService.updateHubStagedMessage(session, assistantMessageUuid[0], update);
+			}
+			payload.put("messageId", assistantMessageUuid[0]);
+			writeSseEvent(out, event, MAPPER.writeValueAsString(payload));
+			return;
+		}
+		if ("done".equals(event)) {
+			doneSeen[0] = true;
+			ChatTurnResult result;
+			if (assistantMessageUuid[0] == null) {
+				result = chatService.persistHubStagedAnswer(session, question, payload);
+				assistantMessageUuid[0] = result.getAssistantMessageUuid();
+			} else {
+				result = chatService.updateHubStagedMessage(session, assistantMessageUuid[0], payload);
+			}
+			writeHubPayload(out, event, payload, result.getSessionUuid(), assistantMessageUuid[0], model);
+			return;
+		}
+		writeSseEvent(out, event, data);
+	}
+
+	private void writeHubPayload(OutputStream out, String event, Map<String, Object> payload,
+			String sessionUuid, String assistantMessageUuid, String model) throws IOException {
+		payload.put("session", sessionUuid);
+		payload.put("messageId", assistantMessageUuid);
+		payload.put("model", model);
+		payload.put("disclaimer", DISCLAIMER);
+		writeSseEvent(out, event, MAPPER.writeValueAsString(payload));
+	}
+
+	private String hubStagedRequestJson(String model, String patientUuid, String question) throws IOException {
+		Map<String, Object> root = new LinkedHashMap<String, Object>();
+		root.put("model", model);
+		root.put("stream", true);
+		root.put("patient", patientUuid);
+		List<Map<String, Object>> messages = new ArrayList<Map<String, Object>>();
+		Map<String, Object> user = new LinkedHashMap<String, Object>();
+		user.put("role", "user");
+		user.put("content", question);
+		messages.add(user);
+		root.put("messages", messages);
+		root.put("response_format", chartAnswerResponseFormat());
+		return MAPPER.writeValueAsString(root);
+	}
+
+	private Map<String, Object> chartAnswerResponseFormat() {
+		Map<String, Object> root = new LinkedHashMap<String, Object>();
+		root.put("type", "json_schema");
+		Map<String, Object> jsonSchema = new LinkedHashMap<String, Object>();
+		jsonSchema.put("name", "chart_answer");
+		Map<String, Object> schema = new LinkedHashMap<String, Object>();
+		schema.put("type", "object");
+		Map<String, Object> properties = new LinkedHashMap<String, Object>();
+		properties.put("answer", Collections.singletonMap("type", "string"));
+		Map<String, Object> citations = new LinkedHashMap<String, Object>();
+		citations.put("type", "array");
+		citations.put("items", Collections.singletonMap("type", "integer"));
+		properties.put("citations", citations);
+		properties.put("blocks", Collections.singletonMap("type", "array"));
+		schema.put("properties", properties);
+		schema.put("required", java.util.Arrays.asList("answer", "citations", "blocks"));
+		jsonSchema.put("schema", schema);
+		root.put("json_schema", jsonSchema);
+		return root;
+	}
+
+	private String runtimeApiKey() {
+		Properties props = Context.getRuntimeProperties();
+		return props == null ? null : props.getProperty(ChartSearchAiConstants.RP_LLM_REMOTE_API_KEY);
+	}
+
 	private void streamStagedChat(OutputStream out, ChatSession session, String question,
 			OverrideResolution overrideRes) throws IOException {
 		ObjectMapper mapper = new ObjectMapper();
@@ -1878,13 +2068,25 @@ public class ChartSearchAiRestController {
 		if (modelName == null || modelName.startsWith("answer-review:")) {
 			return false;
 		}
+		if (isHubNativeStagedModel(modelName)) {
+			return true;
+		}
 		if (modelName.startsWith("med-agent-team-parity")) {
 			return false;
 		}
 		return modelName.startsWith("med-agent-team-") || modelName.startsWith("answer:");
 	}
 
+	private boolean isHubNativeStagedModel(String modelName) {
+		return modelName != null && modelName.startsWith("single-");
+	}
+
 	private void validateStagedModels(OverrideResolution overrideRes) {
+		if (isHubNativeStagedModel(overrideRes.answeredModel)) {
+			modelSwitchService.validateEndpointAndModel(
+					overrideRes.endpointUrl, overrideRes.answeredModel);
+			return;
+		}
 		modelSwitchService.validateEndpointAndModel(
 				overrideRes.endpointUrl, stagedAnswerModel(overrideRes.answeredModel));
 		modelSwitchService.validateEndpointAndModel(
