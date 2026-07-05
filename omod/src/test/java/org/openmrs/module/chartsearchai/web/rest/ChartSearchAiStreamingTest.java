@@ -10,6 +10,7 @@
 package org.openmrs.module.chartsearchai.web.rest;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -343,6 +344,76 @@ public class ChartSearchAiStreamingTest {
 			verify(f.chatService, never()).chatStagedAnswer(any(), any(), any());
 			verify(f.chatService, never()).completeStagedAnswerValidation(any(), any(), any(), any());
 			verify(f.chatService, never()).completeStagedInDepth(any(), any(), any(), any());
+			verify(f.chatService, never()).chatStreaming(any(), any(), any());
+			verify(f.chatService, times(1)).persistHubStagedAnswer(eq(f.session), any(), any());
+		}
+		finally {
+			hub.stop(0);
+		}
+	}
+
+	/**
+	 * Gate 2/11: a NON-staged remote model (e.g. bare parity, no phased decomposition) must still
+	 * relay through the hub — the hub retrieves the chart itself (patient ref, not a locally
+	 * assembled snapshot) and resolves references — instead of the local chatService.chatStreaming
+	 * orchestration. Only the fully-local bundled engine (no remote endpoint at all) keeps using
+	 * chatService.chatStreaming.
+	 */
+	@Test
+	public void chatStream_nonStagedRemoteModel_relaysToHubInsteadOfLocalOrchestration() throws Exception {
+		Fixture f = newFixture(true);
+		AtomicReference<String> hubRequestBody = new AtomicReference<String>();
+		HttpServer hub = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		hub.createContext("/v1/chat/completions", exchange -> {
+			hubRequestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			String completion = "{\"choices\":[{\"message\":{\"content\":"
+					+ "\"{\\\"answer\\\":\\\"Bare answer [1].\\\",\\\"references\\\":"
+					+ "[{\\\"index\\\":1,\\\"resourceType\\\":\\\"Observation\\\",\\\"resourceUuid\\\":\\\"obs-1\\\"}],"
+					+ "\\\"blocks\\\":[]}\"}}]}";
+			byte[] bytes = completion.getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().add("Content-Type", "application/json");
+			exchange.sendResponseHeaders(200, bytes.length);
+			try (OutputStream body = exchange.getResponseBody()) {
+				body.write(bytes);
+			}
+		});
+		hub.start();
+		String hubUrl = "http://127.0.0.1:" + hub.getAddress().getPort() + "/v1/chat/completions";
+		try {
+			Map<String, String> body = chatBody();
+			body.put("endpointUrl", hubUrl);
+			body.put("modelName", "med-agent-team-parity");
+			when(f.adminService.getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE))
+					.thenReturn(ChartSearchAiConstants.LLM_ENGINE_REMOTE);
+			when(f.modelSwitchService.validateEndpointAndModel(hubUrl, "med-agent-team-parity"))
+					.thenReturn(new String[] { hubUrl, "med-agent-team-parity" });
+			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any()))
+					.thenReturn(new ChatTurnResult(new ChartAnswer("Bare answer [1].", Collections.emptyList()),
+							"session-uuid", "assistant-msg-uuid"));
+
+			MockHttpServletResponse response = new MockHttpServletResponse();
+
+			try (MockedStatic<Context> ctx = mockStatic(Context.class)) {
+				ctx.when(() -> Context.requirePrivilege(
+						ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA)).then(inv -> null);
+				ctx.when(Context::getPatientService).thenReturn(f.patientService);
+				ctx.when(Context::getAdministrationService).thenReturn(f.adminService);
+				ctx.when(Context::getAuthenticatedUser).thenReturn(f.user);
+				ctx.when(Context::getRuntimeProperties).thenReturn(new Properties());
+
+				f.controller.chatStream(body, response);
+			}
+
+			String sse = response.getContentAsString();
+			JsonNode done = parseDoneEvent(sse);
+			assertEquals("Bare answer [1].", done.get("answer").asText());
+			assertEquals("Observation", done.get("references").get(0).get("resourceType").asText());
+			assertEquals("med-agent-team-parity", done.get("model").asText());
+
+			JsonNode hubRequest = MAPPER.readTree(hubRequestBody.get());
+			assertEquals("med-agent-team-parity", hubRequest.get("model").asText());
+			assertEquals("patient-uuid", hubRequest.get("patient").asText());
+			assertFalse(hubRequest.get("stream").asBoolean(), "non-staged relay must not request the SSE contract");
 			verify(f.chatService, never()).chatStreaming(any(), any(), any());
 			verify(f.chatService, times(1)).persistHubStagedAnswer(eq(f.session), any(), any());
 		}

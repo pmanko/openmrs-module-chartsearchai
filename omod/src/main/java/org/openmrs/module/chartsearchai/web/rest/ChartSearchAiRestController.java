@@ -1087,6 +1087,14 @@ public class ChartSearchAiRestController {
 					streamHubStagedChat(out, session, patientUuid, sanitizedQuestion, overrideRes);
 					return;
 				}
+				if (overrideRes.endpointUrl != null) {
+					// Any remote engine (hub or otherwise) relays through the hub's single-completion
+					// contract instead of locally orchestrating chart-build + inference + citations.
+					// Only the fully-local bundled engine (no remote endpoint configured at all)
+					// still uses chatService.chatStreaming below.
+					streamHubNonStagedChat(out, session, patientUuid, sanitizedQuestion, overrideRes);
+					return;
+				}
 				ChatTurnResult result = chatService.chatStreaming(
 						session, sanitizedQuestion, new java.util.function.Consumer<String>() {
 						@Override
@@ -1724,7 +1732,7 @@ public class ChartSearchAiRestController {
 	private void streamHubStagedChat(OutputStream out, ChatSession session, String patientUuid,
 			String question, OverrideResolution overrideRes) throws IOException {
 		List<ChatMessage> priorTurns = chatService.priorTurnsForRelay(session);
-		String requestJson = hubStagedRequestJson(overrideRes.answeredModel, patientUuid, priorTurns, question);
+		String requestJson = hubRelayRequestJson(overrideRes.answeredModel, patientUuid, priorTurns, question, true);
 		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
 				.uri(URI.create(overrideRes.endpointUrl))
 				.version(HttpClient.Version.HTTP_1_1)
@@ -1789,6 +1797,62 @@ public class ChartSearchAiRestController {
 		if (!doneSeen[0]) {
 			writeSseEvent(out, "error", "Hub staged stream ended before final response.");
 		}
+	}
+
+	/**
+	 * Relay for a NON-staged remote model (e.g. bare parity — no answer/validation/in-depth
+	 * decomposition): one blocking hub call, then a single {@code done} event. The hub still owns
+	 * chart retrieval (patient ref) and reference resolution — this is NOT the old locally-
+	 * orchestrated chatService.chatStreaming path; it is the low-level engine's single-completion
+	 * contract, relayed rather than reimplemented.
+	 */
+	@SuppressWarnings("unchecked")
+	private void streamHubNonStagedChat(OutputStream out, ChatSession session, String patientUuid,
+			String question, OverrideResolution overrideRes) throws IOException {
+		List<ChatMessage> priorTurns = chatService.priorTurnsForRelay(session);
+		String requestJson = hubRelayRequestJson(overrideRes.answeredModel, patientUuid, priorTurns, question, false);
+		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+				.uri(URI.create(overrideRes.endpointUrl))
+				.version(HttpClient.Version.HTTP_1_1)
+				.timeout(Duration.ofSeconds(300))
+				.header("Content-Type", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofByteArray(
+						requestJson.getBytes(StandardCharsets.UTF_8)));
+		String apiKey = runtimeApiKey();
+		if (apiKey != null && !apiKey.trim().isEmpty()) {
+			requestBuilder.header("Authorization", "Bearer " + apiKey.trim());
+		}
+		HttpResponse<String> hubResponse;
+		try {
+			hubResponse = HttpClient.newHttpClient().send(requestBuilder.build(),
+					HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new IOException("Hub relay interrupted", e);
+		}
+		if (hubResponse.statusCode() < 200 || hubResponse.statusCode() >= 300) {
+			log.warn("Hub relay returned HTTP {}: {}", hubResponse.statusCode(), hubResponse.body());
+			writeSseEvent(out, "error", "Hub relay failed: HTTP " + hubResponse.statusCode());
+			return;
+		}
+		Map<String, Object> completion = MAPPER.readValue(hubResponse.body(),
+				new TypeReference<Map<String, Object>>() {});
+		List<Object> choices = (List<Object>) completion.get("choices");
+		if (choices == null || choices.isEmpty()) {
+			writeSseEvent(out, "error", "Hub relay returned no choices.");
+			return;
+		}
+		Map<String, Object> message = (Map<String, Object>) ((Map<String, Object>) choices.get(0)).get("message");
+		String content = message == null ? null : (String) message.get("content");
+		if (content == null || content.isEmpty()) {
+			writeSseEvent(out, "error", "Hub relay returned an empty answer.");
+			return;
+		}
+		Map<String, Object> wire = MAPPER.readValue(content, new TypeReference<Map<String, Object>>() {});
+		ChatTurnResult result = chatService.persistHubStagedAnswer(session, question, wire);
+		writeHubPayload(out, "done", wire, result.getSessionUuid(), result.getAssistantMessageUuid(),
+				overrideRes.answeredModel);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -1858,11 +1922,11 @@ public class ChartSearchAiRestController {
 		writeSseEvent(out, event, MAPPER.writeValueAsString(payload));
 	}
 
-	private String hubStagedRequestJson(String model, String patientUuid, List<ChatMessage> priorTurns,
-			String question) throws IOException {
+	private String hubRelayRequestJson(String model, String patientUuid, List<ChatMessage> priorTurns,
+			String question, boolean stream) throws IOException {
 		Map<String, Object> root = new LinkedHashMap<String, Object>();
 		root.put("model", model);
-		root.put("stream", true);
+		root.put("stream", stream);
 		root.put("patient", patientUuid);
 		List<Map<String, Object>> messages = new ArrayList<Map<String, Object>>();
 		// Prior turns: prose-only (priorTurnsForRelay's contract — never the raw stored JSON
