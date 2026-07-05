@@ -96,14 +96,14 @@ public class ChatServiceImpl implements ChatService {
 
 	@Override
 	public ChatTurnResult persistHubStagedAnswer(ChatSession session, String question,
-			Map<String, Object> answerWire) {
+			Map<String, Object> answerWire, long responseTimeMs) {
 		int nextOrdinal = chatDAO.getLastOrdinal(session) + 1;
 		persistUserMessage(session, question, nextOrdinal);
 
 		Map<String, Object> wire = normalizedHubWire(answerWire);
 		ChartAnswer answer = chartAnswerFromWire(wire);
 		ChatMessage assistant = persistAssistantWireTurn(session, wire, answer, nextOrdinal + 1,
-				ChatMessage.FINISH_STOP, question, 0);
+				ChatMessage.FINISH_STOP, question, responseTimeMs);
 		touchSession(session);
 		return new ChatTurnResult(answer, session.getUuid(), assistant.getUuid());
 	}

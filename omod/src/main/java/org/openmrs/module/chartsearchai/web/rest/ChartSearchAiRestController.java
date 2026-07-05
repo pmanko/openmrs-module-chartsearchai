@@ -746,8 +746,10 @@ public class ChartSearchAiRestController {
 			// against, on any hub level id (including the low-level answer:/answer-review:/
 			// indepth-only: legs used for arm comparisons). resolveOverride already rejected a
 			// non-remote engine, so there is no local orchestration to fall back to.
+			long hubCallStart = System.nanoTime();
 			Map<String, Object> wire = hubRelayCompletionWire(session, patientUuid, question, overrideRes);
-			result = chatService.persistHubStagedAnswer(session, question, wire);
+			long responseTimeMs = (System.nanoTime() - hubCallStart) / 1_000_000;
+			result = chatService.persistHubStagedAnswer(session, question, wire, responseTimeMs);
 		}
 		catch (ChartTooLargeException e) {
 			log.warn("Chart too large for chat for patient [id={}]: {}",
@@ -1129,6 +1131,7 @@ public class ChartSearchAiRestController {
 		if (apiKey != null && !apiKey.trim().isEmpty()) {
 			requestBuilder.header("Authorization", "Bearer " + apiKey.trim());
 		}
+		long hubCallStart = System.nanoTime();
 		HttpResponse<InputStream> hubResponse;
 		try {
 			hubResponse = HttpClient.newHttpClient().send(requestBuilder.build(),
@@ -1155,7 +1158,7 @@ public class ChartSearchAiRestController {
 			while ((line = reader.readLine()) != null) {
 				if (line.isEmpty()) {
 					handleHubStagedEvent(out, session, question, overrideRes.answeredModel,
-							assistantMessageUuid, doneSeen, event, data.toString());
+							assistantMessageUuid, doneSeen, event, data.toString(), hubCallStart);
 					event = "";
 					data.setLength(0);
 				} else if (line.startsWith("event:")) {
@@ -1175,7 +1178,7 @@ public class ChartSearchAiRestController {
 			}
 			if (data.length() > 0) {
 				handleHubStagedEvent(out, session, question, overrideRes.answeredModel,
-						assistantMessageUuid, doneSeen, event, data.toString());
+						assistantMessageUuid, doneSeen, event, data.toString(), hubCallStart);
 			}
 		}
 		if (!doneSeen[0]) {
@@ -1193,6 +1196,7 @@ public class ChartSearchAiRestController {
 	private void streamHubNonStagedChat(OutputStream out, ChatSession session, String patientUuid,
 			String question, OverrideResolution overrideRes) throws IOException {
 		Map<String, Object> wire;
+		long hubCallStart = System.nanoTime();
 		try {
 			wire = hubRelayCompletionWire(session, patientUuid, question, overrideRes);
 		}
@@ -1202,7 +1206,8 @@ public class ChartSearchAiRestController {
 			writeSseEvent(out, "error", e.getMessage());
 			return;
 		}
-		ChatTurnResult result = chatService.persistHubStagedAnswer(session, question, wire);
+		long responseTimeMs = (System.nanoTime() - hubCallStart) / 1_000_000;
+		ChatTurnResult result = chatService.persistHubStagedAnswer(session, question, wire, responseTimeMs);
 		writeHubPayload(out, "done", wire, result.getSessionUuid(), result.getAssistantMessageUuid(),
 				overrideRes.answeredModel);
 	}
@@ -1261,7 +1266,7 @@ public class ChartSearchAiRestController {
 	@SuppressWarnings("unchecked")
 	private void handleHubStagedEvent(OutputStream out, ChatSession session, String question,
 			String model, String[] assistantMessageUuid, boolean[] doneSeen, String event,
-			String data) throws IOException {
+			String data, long hubCallStart) throws IOException {
 		if (event == null || event.isEmpty() || data == null || data.isEmpty()) {
 			return;
 		}
@@ -1275,7 +1280,8 @@ public class ChartSearchAiRestController {
 		Map<String, Object> payload = MAPPER.readValue(data,
 				new TypeReference<Map<String, Object>>() {});
 		if ("answer_done".equals(event)) {
-			ChatTurnResult result = chatService.persistHubStagedAnswer(session, question, payload);
+			long responseTimeMs = (System.nanoTime() - hubCallStart) / 1_000_000;
+			ChatTurnResult result = chatService.persistHubStagedAnswer(session, question, payload, responseTimeMs);
 			assistantMessageUuid[0] = result.getAssistantMessageUuid();
 			writeHubPayload(out, event, payload, result.getSessionUuid(), assistantMessageUuid[0], model);
 			return;
@@ -1305,7 +1311,8 @@ public class ChartSearchAiRestController {
 			doneSeen[0] = true;
 			ChatTurnResult result;
 			if (assistantMessageUuid[0] == null) {
-				result = chatService.persistHubStagedAnswer(session, question, payload);
+				long responseTimeMs = (System.nanoTime() - hubCallStart) / 1_000_000;
+				result = chatService.persistHubStagedAnswer(session, question, payload, responseTimeMs);
 				assistantMessageUuid[0] = result.getAssistantMessageUuid();
 			} else {
 				result = chatService.updateHubStagedMessage(session, assistantMessageUuid[0], payload);

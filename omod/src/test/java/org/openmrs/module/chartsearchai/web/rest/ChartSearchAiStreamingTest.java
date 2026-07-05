@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -272,7 +273,7 @@ public class ChartSearchAiStreamingTest {
 					.thenReturn(new String[] { hubUrl, "med-agent-team-high-validated" });
 			when(f.modelSwitchService.isStagedModel(hubUrl, "med-agent-team-high-validated"))
 					.thenReturn(true);
-			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any()))
+			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any(), anyLong()))
 					.thenReturn(new ChatTurnResult(new ChartAnswer("Direct answer [1].", Collections.emptyList()),
 							"session-uuid", "assistant-msg-uuid"));
 			when(f.chatService.updateHubStagedMessage(eq(f.session), eq("assistant-msg-uuid"), any()))
@@ -300,7 +301,7 @@ public class ChartSearchAiStreamingTest {
 
 			JsonNode hubRequest = MAPPER.readTree(hubRequestBody.get());
 			assertEquals("med-agent-team-high-validated", hubRequest.get("model").asText());
-			verify(f.chatService, times(1)).persistHubStagedAnswer(eq(f.session), any(), any());
+			verify(f.chatService, times(1)).persistHubStagedAnswer(eq(f.session), any(), any(), anyLong());
 		}
 		finally {
 			hub.stop(0);
@@ -342,7 +343,7 @@ public class ChartSearchAiStreamingTest {
 					.thenReturn(ChartSearchAiConstants.LLM_ENGINE_REMOTE);
 			when(f.modelSwitchService.validateEndpointAndModel(hubUrl, "med-agent-team-parity"))
 					.thenReturn(new String[] { hubUrl, "med-agent-team-parity" });
-			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any()))
+			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any(), anyLong()))
 					.thenReturn(new ChatTurnResult(new ChartAnswer("Bare answer [1].", Collections.emptyList()),
 							"session-uuid", "assistant-msg-uuid"));
 
@@ -369,7 +370,7 @@ public class ChartSearchAiStreamingTest {
 			assertEquals("med-agent-team-parity", hubRequest.get("model").asText());
 			assertEquals("patient-uuid", hubRequest.get("patient").asText());
 			assertFalse(hubRequest.get("stream").asBoolean(), "non-staged relay must not request the SSE contract");
-			verify(f.chatService, times(1)).persistHubStagedAnswer(eq(f.session), any(), any());
+			verify(f.chatService, times(1)).persistHubStagedAnswer(eq(f.session), any(), any(), anyLong());
 		}
 		finally {
 			hub.stop(0);
@@ -412,6 +413,14 @@ public class ChartSearchAiStreamingTest {
 		HttpServer hub = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		hub.createContext("/v1/chat/completions", exchange -> {
 			hubRequestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			// Deliberate delay so the recorded responseTimeMs is deterministically non-zero
+			// (Gate 14/J5: real elapsed time, not the old hardcoded 0).
+			try {
+				Thread.sleep(20);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
 			String completion = "{\"choices\":[{\"message\":{\"content\":"
 					+ "\"{\\\"answer\\\":\\\"Sync answer [1].\\\",\\\"references\\\":"
 					+ "[{\\\"index\\\":1,\\\"resourceType\\\":\\\"Observation\\\",\\\"resourceUuid\\\":\\\"obs-1\\\"}],"
@@ -434,7 +443,7 @@ public class ChartSearchAiStreamingTest {
 			when(f.modelSwitchService.validateEndpointAndModel(
 					hubUrl, "answer:gemma-4-12b@synthesis-answer~enforce~temp0"))
 					.thenReturn(new String[] { hubUrl, "answer:gemma-4-12b@synthesis-answer~enforce~temp0" });
-			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any()))
+			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any(), anyLong()))
 					.thenReturn(new ChatTurnResult(new ChartAnswer("Sync answer [1].", Collections.emptyList()),
 							"session-uuid", "assistant-msg-uuid"));
 
@@ -463,10 +472,16 @@ public class ChartSearchAiStreamingTest {
 			// body was actually parsed correctly — the response body above only reflects the stub.
 			@SuppressWarnings("unchecked")
 			ArgumentCaptor<Map<String, Object>> wireCaptor = ArgumentCaptor.forClass(Map.class);
-			verify(f.chatService, times(1)).persistHubStagedAnswer(eq(f.session), any(), wireCaptor.capture());
+			ArgumentCaptor<Long> responseTimeCaptor = ArgumentCaptor.forClass(Long.class);
+			verify(f.chatService, times(1)).persistHubStagedAnswer(
+					eq(f.session), any(), wireCaptor.capture(), responseTimeCaptor.capture());
 			JsonNode persistedWire = MAPPER.valueToTree(wireCaptor.getValue());
 			assertEquals("Sync answer [1].", persistedWire.get("answer").asText());
 			assertEquals("Observation", persistedWire.get("references").get(0).get("resourceType").asText());
+			// Gate 14/J5: real wall-clock elapsed time for the hub round-trip, not the old
+			// hardcoded 0 — the hub handler above sleeps 20ms before responding.
+			assertTrue(responseTimeCaptor.getValue() >= 20,
+					"responseTimeMs must reflect the real hub round-trip, got " + responseTimeCaptor.getValue());
 		}
 		finally {
 			hub.stop(0);
@@ -530,7 +545,7 @@ public class ChartSearchAiStreamingTest {
 					.thenReturn(new String[] { hubUrl, "single-12b-checked" });
 			when(f.modelSwitchService.isStagedModel(hubUrl, "single-12b-checked")).thenReturn(true);
 			when(f.chatService.persistHubStagedAnswer(
-					eq(f.session), eq("What medications is this patient taking?"), any()))
+					eq(f.session), eq("What medications is this patient taking?"), any(), anyLong()))
 					.thenReturn(new ChatTurnResult(new ChartAnswer("Initial answer [1].",
 							Collections.emptyList()), "session-uuid", "assistant-msg-uuid"));
 			when(f.chatService.updateHubStagedMessage(eq(f.session), eq("assistant-msg-uuid"), any()))
@@ -584,7 +599,7 @@ public class ChartSearchAiStreamingTest {
 			verify(f.modelSwitchService, never()).validateEndpointAndModel(
 					eq(hubUrl), eq("indepth-only:single-12b-checked"));
 			verify(f.chatService, times(1)).persistHubStagedAnswer(
-					eq(f.session), eq("What medications is this patient taking?"), any());
+					eq(f.session), eq("What medications is this patient taking?"), any(), anyLong());
 			verify(f.chatService, times(3)).updateHubStagedMessage(
 					eq(f.session), eq("assistant-msg-uuid"), any());
 		}
@@ -645,7 +660,7 @@ public class ChartSearchAiStreamingTest {
 			when(f.modelSwitchService.validateEndpointAndModel(hubUrl, "single-12b-checked"))
 					.thenReturn(new String[] { hubUrl, "single-12b-checked" });
 			when(f.modelSwitchService.isStagedModel(hubUrl, "single-12b-checked")).thenReturn(true);
-			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any()))
+			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any(), anyLong()))
 					.thenReturn(new ChatTurnResult(new ChartAnswer("2026-01-26.", Collections.emptyList()),
 							"session-uuid", "assistant-msg-uuid"));
 			when(f.chatService.updateHubStagedMessage(eq(f.session), eq("assistant-msg-uuid"), any()))
@@ -739,7 +754,7 @@ public class ChartSearchAiStreamingTest {
 			when(f.modelSwitchService.validateEndpointAndModel(hubUrl, "single-12b-checked"))
 					.thenReturn(new String[] { hubUrl, "single-12b-checked" });
 			when(f.modelSwitchService.isStagedModel(hubUrl, "single-12b-checked")).thenReturn(true);
-			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any()))
+			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any(), anyLong()))
 					.thenReturn(new ChatTurnResult(new ChartAnswer("Ans.", Collections.emptyList()),
 							"session-uuid", "assistant-msg-uuid"));
 

@@ -53,9 +53,12 @@ public interface ChatService {
 	/**
 	 * Hub-relay staged Answer leg: persist the user message and the hub-provided assistant wire
 	 * payload without re-running local chart serialization or Java-side grounding.
+	 *
+	 * @param responseTimeMs wall-clock milliseconds the caller spent on the hub round-trip that
+	 *            produced this answer (request sent to answer received) — recorded on the audit row.
 	 */
 	ChatTurnResult persistHubStagedAnswer(ChatSession session, String question,
-			Map<String, Object> answerWire);
+			Map<String, Object> answerWire, long responseTimeMs);
 
 	/**
 	 * Hub-relay staged update: merge a later hub phase payload into the same assistant row.
