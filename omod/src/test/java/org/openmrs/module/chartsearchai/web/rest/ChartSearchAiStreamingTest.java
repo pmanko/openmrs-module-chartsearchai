@@ -413,8 +413,8 @@ public class ChartSearchAiStreamingTest {
 		HttpServer hub = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		hub.createContext("/v1/chat/completions", exchange -> {
 			hubRequestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
-			// Deliberate delay so the recorded responseTimeMs is deterministically non-zero
-			// (Gate 14/J5: real elapsed time, not the old hardcoded 0).
+			// Deliberate delay so the recorded responseTimeMs is deterministically non-zero,
+			// proving it reflects real elapsed time rather than the old hardcoded 0.
 			try {
 				Thread.sleep(20);
 			}
@@ -478,8 +478,8 @@ public class ChartSearchAiStreamingTest {
 			JsonNode persistedWire = MAPPER.valueToTree(wireCaptor.getValue());
 			assertEquals("Sync answer [1].", persistedWire.get("answer").asText());
 			assertEquals("Observation", persistedWire.get("references").get(0).get("resourceType").asText());
-			// Gate 14/J5: real wall-clock elapsed time for the hub round-trip, not the old
-			// hardcoded 0 — the hub handler above sleeps 20ms before responding.
+			// Real wall-clock elapsed time for the hub round-trip, not the old hardcoded 0 —
+			// the hub handler above sleeps 20ms before responding.
 			assertTrue(responseTimeCaptor.getValue() >= 20,
 					"responseTimeMs must reflect the real hub round-trip, got " + responseTimeCaptor.getValue());
 		}
