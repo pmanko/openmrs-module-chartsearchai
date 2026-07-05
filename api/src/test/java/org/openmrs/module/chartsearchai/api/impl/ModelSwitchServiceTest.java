@@ -252,6 +252,63 @@ public class ModelSwitchServiceTest {
 	}
 
 	@Test
+	public void fetchAvailable_readsStagedCapabilityFromOpenAiCompatModels() {
+		// Gate 10: the hub's /v1/models advertises a "staged" field per entry (server/openai_compat.py
+		// _staged_capability). The controller must read THIS, not guess from the model-id string.
+		ModelSwitchService svc = new ModelSwitchService() {
+			@Override
+			protected String httpGet(String url, String apiKey) {
+				if (url.endsWith("/api/v1/models")) {
+					throw new RuntimeException("simulated 404 -> fall back to openai-compat");
+				}
+				return "{\"data\":["
+						+ "{\"id\":\"single-12b-checked\",\"staged\":true},"
+						+ "{\"id\":\"med-agent-team-parity\",\"staged\":false},"
+						+ "{\"id\":\"raw-model-with-no-staged-field\"}"
+						+ "],\"object\":\"list\"}";
+			}
+		};
+		AvailableModels result = svc.fetchAvailable("http://hub:8080/v1/chat/completions");
+		List<ModelEntry> entries = result.getEntries();
+		assertTrue(byId(entries, "single-12b-checked").isStaged());
+		assertFalse(byId(entries, "med-agent-team-parity").isStaged());
+		assertFalse(byId(entries, "raw-model-with-no-staged-field").isStaged(),
+				"a missing staged field must fail-safe to false, not throw");
+	}
+
+	@Test
+	public void isStagedModel_looksUpCapabilityByIdNotNamePrefix() {
+		ModelSwitchService svc = new ModelSwitchService() {
+			@Override
+			protected String httpGet(String url, String apiKey) {
+				return "{\"data\":["
+						+ "{\"id\":\"med-agent-team-med-validated\",\"staged\":true},"
+						+ "{\"id\":\"med-agent-team-parity\",\"staged\":false}"
+						+ "],\"object\":\"list\"}";
+			}
+		};
+		// Deliberately picks ids that DON'T start with "single-" to prove this isn't prefix matching.
+		assertTrue(svc.isStagedModel("http://hub:8080/v1/chat/completions", "med-agent-team-med-validated"));
+		assertFalse(svc.isStagedModel("http://hub:8080/v1/chat/completions", "med-agent-team-parity"));
+	}
+
+	@Test
+	public void isStagedModel_failsSafeToFalseWhenProbeUnreachable() {
+		ModelSwitchService svc = new ModelSwitchService() {
+			@Override
+			protected String httpGet(String url, String apiKey) {
+				throw new RuntimeException("connection refused");
+			}
+		};
+		assertFalse(svc.isStagedModel("http://unreachable:1/v1/chat/completions", "anything"));
+	}
+
+	private static ModelEntry byId(List<ModelEntry> entries, String id) {
+		return entries.stream().filter(e -> e.getId().equals(id)).findFirst()
+				.orElseThrow(() -> new AssertionError("no entry with id " + id));
+	}
+
+	@Test
 	public void fetchAvailable_fallsBackOnV1NotJson() {
 		// Some servers return HTML/plain-text for unknown paths. The probe
 		// must not crash on non-JSON bodies.

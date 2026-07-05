@@ -74,13 +74,21 @@ public class ModelSwitchService {
 
 		private final Long maxContextLength;
 
+		private final boolean staged;
+
 		public ModelEntry(String id, String displayName, String type, boolean loaded,
 				Long maxContextLength) {
+			this(id, displayName, type, loaded, maxContextLength, false);
+		}
+
+		public ModelEntry(String id, String displayName, String type, boolean loaded,
+				Long maxContextLength, boolean staged) {
 			this.id = id;
 			this.displayName = displayName;
 			this.type = type;
 			this.loaded = loaded;
 			this.maxContextLength = maxContextLength;
+			this.staged = staged;
 		}
 
 		/**
@@ -89,6 +97,15 @@ public class ModelSwitchService {
 		 */
 		public static ModelEntry fromOpenAiId(String id) {
 			return new ModelEntry(id, id, "llm", false, null);
+		}
+
+		/**
+		 * Hydrate a {@link ModelEntry} from an OpenAI-compat /v1/models entry that may carry the
+		 * hub's {@code staged} capability field (server/openai_compat.py _staged_capability).
+		 * Missing/absent -> false (fail-safe, never guessed from the id string).
+		 */
+		public static ModelEntry fromOpenAiEntry(String id, boolean staged) {
+			return new ModelEntry(id, id, "llm", false, null, staged);
 		}
 
 		public String getId() {
@@ -109,6 +126,14 @@ public class ModelSwitchService {
 
 		public Long getMaxContextLength() {
 			return maxContextLength;
+		}
+
+		/**
+		 * Whether this model is served by the hub's phased-streaming engine — a capability read
+		 * from /v1/models, never inferred from the id string (e.g. a "single-" prefix).
+		 */
+		public boolean isStaged() {
+			return staged;
 		}
 	}
 
@@ -751,11 +776,7 @@ public class ModelSwitchService {
 			throw new APIException("Failed to fetch model list from " + openaiUrl + ": "
 					+ e.getMessage(), e);
 		}
-		List<String> ids = parseModelIds(openaiBody);
-		List<ModelEntry> entries = new ArrayList<>();
-		for (String id : ids) {
-			entries.add(ModelEntry.fromOpenAiId(id));
-		}
+		List<ModelEntry> entries = parseOpenAiModelEntries(openaiBody);
 		return new AvailableModels("generic-openai-compat", entries);
 	}
 
@@ -859,6 +880,62 @@ public class ModelSwitchService {
 			throw new APIException("Failed to parse /v1/models response: " + e.getMessage(), e);
 		}
 		return ids;
+	}
+
+	/**
+	 * Like {@link #parseModelIds}, but also reads the hub's optional {@code staged} capability
+	 * field per entry (server/openai_compat.py {@code _staged_capability}). A backend that doesn't
+	 * advertise the field (any raw/non-hub endpoint) fails safe to {@code staged=false}.
+	 */
+	static List<ModelEntry> parseOpenAiModelEntries(String body) {
+		List<ModelEntry> entries = new ArrayList<>();
+		try {
+			JsonNode root = MAPPER.readTree(body);
+			JsonNode data = root.get("data");
+			if (data != null && data.isArray()) {
+				for (JsonNode entry : data) {
+					JsonNode id = entry.get("id");
+					if (id != null && id.isTextual()) {
+						String value = id.asText().trim();
+						if (!value.isEmpty()) {
+							JsonNode staged = entry.get("staged");
+							entries.add(ModelEntry.fromOpenAiEntry(value,
+									staged != null && staged.asBoolean(false)));
+						}
+					}
+				}
+			}
+		}
+		catch (IOException e) {
+			throw new APIException("Failed to parse /v1/models response: " + e.getMessage(), e);
+		}
+		return entries;
+	}
+
+	/**
+	 * Whether {@code modelName} at {@code endpointUrl} advertises itself as staged (served by the
+	 * hub's phased-streaming engine) via /v1/models. A capability lookup, never a name-prefix
+	 * guess. Fails safe to {@code false} on any probe failure, unreachable endpoint, or unknown
+	 * model — the caller falls back to a non-staged relay in that case.
+	 */
+	public boolean isStagedModel(String endpointUrl, String modelName) {
+		if (endpointUrl == null || endpointUrl.trim().isEmpty()
+				|| modelName == null || modelName.trim().isEmpty()) {
+			return false;
+		}
+		try {
+			AvailableModels probed = fetchAvailable(endpointUrl.trim());
+			for (ModelEntry entry : probed.getEntries()) {
+				if (entry.getId().equals(modelName.trim())) {
+					return entry.isStaged();
+				}
+			}
+		}
+		catch (RuntimeException e) {
+			log.debug("Could not determine staged capability for model '{}' at '{}': {}",
+					modelName, endpointUrl, e.getMessage());
+		}
+		return false;
 	}
 
 	private synchronized HttpClient getHttpClient() {

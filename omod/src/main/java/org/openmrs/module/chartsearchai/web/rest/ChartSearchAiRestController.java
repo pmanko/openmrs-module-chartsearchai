@@ -1084,11 +1084,7 @@ public class ChartSearchAiRestController {
 
 			try {
 				if (staged) {
-					if (isHubNativeStagedModel(overrideRes.answeredModel)) {
-						streamHubStagedChat(out, session, patientUuid, sanitizedQuestion, overrideRes);
-						return;
-					}
-					streamStagedChat(out, session, sanitizedQuestion, overrideRes);
+					streamHubStagedChat(out, session, patientUuid, sanitizedQuestion, overrideRes);
 					return;
 				}
 				ChatTurnResult result = chatService.chatStreaming(
@@ -2075,42 +2071,22 @@ public class ChartSearchAiRestController {
 		return "true".equalsIgnoreCase(body.get("staged"));
 	}
 
+	/**
+	 * Whether this turn should relay through the hub's phased-streaming engine — a capability
+	 * lookup against the endpoint's /v1/models (ModelSwitchService#isStagedModel), never a
+	 * name-prefix guess. The hub owns which profiles are staged (levels.yaml); the controller
+	 * asks it, rather than re-deciding scaffolding from the model id string.
+	 */
 	private boolean canStage(OverrideResolution overrideRes) {
 		return overrideRes != null
 				&& overrideRes.endpointUrl != null
 				&& overrideRes.answeredModel != null
-				&& isStageableModel(overrideRes.answeredModel);
-	}
-
-	private boolean isStageableModel(String modelName) {
-		if (modelName == null || modelName.startsWith("answer-review:")) {
-			return false;
-		}
-		if (isHubNativeStagedModel(modelName)) {
-			return true;
-		}
-		if (modelName.startsWith("med-agent-team-parity")) {
-			return false;
-		}
-		return modelName.startsWith("med-agent-team-") || modelName.startsWith("answer:");
-	}
-
-	private boolean isHubNativeStagedModel(String modelName) {
-		return modelName != null && modelName.startsWith("single-");
+				&& modelSwitchService.isStagedModel(overrideRes.endpointUrl, overrideRes.answeredModel);
 	}
 
 	private void validateStagedModels(OverrideResolution overrideRes) {
-		if (isHubNativeStagedModel(overrideRes.answeredModel)) {
-			modelSwitchService.validateEndpointAndModel(
-					overrideRes.endpointUrl, overrideRes.answeredModel);
-			return;
-		}
 		modelSwitchService.validateEndpointAndModel(
-				overrideRes.endpointUrl, stagedAnswerModel(overrideRes.answeredModel));
-		modelSwitchService.validateEndpointAndModel(
-				overrideRes.endpointUrl, stagedValidationModel(overrideRes.answeredModel));
-		modelSwitchService.validateEndpointAndModel(
-				overrideRes.endpointUrl, stagedInDepthModel(overrideRes.answeredModel));
+				overrideRes.endpointUrl, overrideRes.answeredModel);
 	}
 
 	private String stagedAnswerModel(String modelName) {
