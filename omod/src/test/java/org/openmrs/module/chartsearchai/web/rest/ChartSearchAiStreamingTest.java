@@ -21,6 +21,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -553,6 +554,128 @@ public class ChartSearchAiStreamingTest {
 		}
 		finally {
 			hub.stop(0);
+		}
+	}
+
+	/**
+	 * Gate 6: a mid-leg browser disconnect must be detected via a heartbeat-triggered write, not
+	 * only discovered on the NEXT real event. The hub answers fast, then goes quiet (as it would
+	 * mid in-depth generation) sending only heartbeat comment lines for well over a second before
+	 * ever emitting {@code done}; the browser "disconnects" after the first successful write. If
+	 * the relay only writes on real events, it blocks reading heartbeats for the whole stall and
+	 * this test takes 1200ms+; if it writes (and so notices the disconnect) on each heartbeat, it
+	 * must return promptly.
+	 */
+	@Test
+	public void chatStream_hubNativeSingleProfile_abortsPromptlyOnDisconnectDuringHeartbeats()
+			throws Exception {
+		Fixture f = newFixture(true);
+		HttpServer hub = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		hub.createContext("/v1/chat/completions", exchange -> {
+			exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+			exchange.sendResponseHeaders(200, 0); // chunked — arbitrary length, flushed incrementally
+			try (OutputStream body = exchange.getResponseBody()) {
+				body.write((""
+						+ "event: answer_done\n"
+						+ "data: {\"answer\":\"Ans.\",\"references\":[],\"blocks\":[],"
+						+ "\"inDepth\":{\"status\":\"pending\",\"answer\":\"\"}}\n\n")
+						.getBytes(StandardCharsets.UTF_8));
+				body.flush();
+				for (int i = 0; i < 8; i++) {
+					body.write(": hb\n\n".getBytes(StandardCharsets.UTF_8));
+					body.flush();
+					try {
+						Thread.sleep(150);
+					}
+					catch (InterruptedException interrupted) {
+						Thread.currentThread().interrupt();
+						return;
+					}
+				}
+				body.write((""
+						+ "event: done\n"
+						+ "data: {\"answer\":\"Ans.\",\"references\":[],\"blocks\":[],"
+						+ "\"inDepth\":{\"status\":\"complete\",\"answer\":\"\"}}\n\n")
+						.getBytes(StandardCharsets.UTF_8));
+			}
+			catch (IOException expectedOnceRelayCloses) {
+				// the relay closed its connection to us mid-stream once it noticed the "browser"
+				// disconnect — exactly the behavior under test.
+			}
+		});
+		hub.start();
+		String hubUrl = "http://127.0.0.1:" + hub.getAddress().getPort() + "/v1/chat/completions";
+		try {
+			Map<String, String> body = chatBody();
+			body.put("endpointUrl", hubUrl);
+			body.put("modelName", "single-12b-checked");
+			body.put("staged", "true");
+			when(f.adminService.getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE))
+					.thenReturn(ChartSearchAiConstants.LLM_ENGINE_REMOTE);
+			when(f.modelSwitchService.validateEndpointAndModel(hubUrl, "single-12b-checked"))
+					.thenReturn(new String[] { hubUrl, "single-12b-checked" });
+			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any()))
+					.thenReturn(new ChatTurnResult(new ChartAnswer("Ans.", Collections.emptyList()),
+							"session-uuid", "assistant-msg-uuid"));
+
+			// "Browser" that accepts the FIRST write (answer_done) then disconnects.
+			DisconnectAfterNWritesResponse response = new DisconnectAfterNWritesResponse(1);
+
+			long startNanos = System.nanoTime();
+			try (MockedStatic<Context> ctx = mockStatic(Context.class)) {
+				ctx.when(() -> Context.requirePrivilege(
+						ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA)).then(inv -> null);
+				ctx.when(Context::getPatientService).thenReturn(f.patientService);
+				ctx.when(Context::getAdministrationService).thenReturn(f.adminService);
+				ctx.when(Context::getAuthenticatedUser).thenReturn(f.user);
+				ctx.when(Context::getRuntimeProperties).thenReturn(new Properties());
+
+				f.controller.chatStream(body, response);
+			}
+			long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000L;
+
+			assertTrue(elapsedMs < 700, "relay must abort promptly on a mid-leg disconnect — took "
+					+ elapsedMs + "ms; 8 heartbeats * 150ms = 1200ms of missed opportunities to notice "
+					+ "means it only writes (and so only notices disconnects) on real events");
+		}
+		finally {
+			hub.stop(0);
+		}
+	}
+
+	/**
+	 * A response whose output stream accepts the first {@code failAfterWrites} write calls, then
+	 * throws {@link IOException} on every subsequent write — simulating a browser that received
+	 * the fast answer, then closed the connection. NOT an {@link javax.servlet.http.HttpServletResponseWrapper}:
+	 * the controller unwraps those (to bypass buffering wrappers), which would strip this behavior.
+	 */
+	private static final class DisconnectAfterNWritesResponse extends MockHttpServletResponse {
+
+		private final int failAfterWrites;
+
+		private int writeCalls;
+
+		DisconnectAfterNWritesResponse(int failAfterWrites) {
+			this.failAfterWrites = failAfterWrites;
+		}
+
+		@Override
+		public javax.servlet.ServletOutputStream getOutputStream() {
+			return new javax.servlet.ServletOutputStream() {
+
+				@Override
+				public void write(int b) throws IOException {
+					write(new byte[] { (byte) b }, 0, 1);
+				}
+
+				@Override
+				public void write(byte[] b, int off, int len) throws IOException {
+					writeCalls++;
+					if (writeCalls > failAfterWrites) {
+						throw new IOException("simulated browser disconnect");
+					}
+				}
+			};
 		}
 	}
 

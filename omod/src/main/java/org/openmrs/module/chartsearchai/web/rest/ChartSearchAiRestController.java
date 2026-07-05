@@ -1778,6 +1778,11 @@ public class ChartSearchAiRestController {
 					}
 					String raw = line.substring("data:".length());
 					data.append(raw.startsWith(" ") ? raw.substring(1) : raw);
+				} else if (line.startsWith(":")) {
+					// Hub heartbeat during a stalled leg — forward it so a browser disconnect is
+					// detected here (Client disconnected -> propagates -> closes the hub connection
+					// -> frees its router slot) instead of only on the next real event.
+					writeSseCommentOrThrow(out);
 				}
 			}
 			if (data.length() > 0) {
@@ -2154,6 +2159,24 @@ public class ChartSearchAiRestController {
 		sb.append('\n');
 		out.write(sb.toString().getBytes("UTF-8"));
 		out.flush();
+	}
+
+	/**
+	 * Forwards a hub SSE heartbeat/comment line to the browser and converts a write failure into
+	 * the {@link RuntimeException} the streaming loop unwinds on. A stalled leg (long answer/
+	 * review/in-depth call) otherwise gives the relay NO opportunity to notice a browser disconnect
+	 * until the hub's next real event — this write on every heartbeat is what makes a mid-leg abort
+	 * actually free the router slot promptly instead of blocking for the rest of the leg.
+	 */
+	private void writeSseCommentOrThrow(OutputStream out) {
+		try {
+			out.write(": hb\n\n".getBytes(StandardCharsets.UTF_8));
+			out.flush();
+		}
+		catch (IOException e) {
+			log.debug("Client disconnected during a hub staged heartbeat");
+			throw new RuntimeException("Client disconnected", e);
+		}
 	}
 
 	/**
