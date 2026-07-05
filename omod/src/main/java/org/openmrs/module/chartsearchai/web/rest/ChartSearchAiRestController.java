@@ -1269,8 +1269,9 @@ public class ChartSearchAiRestController {
 		// before the response is built.
 		boolean overridden = false;
 		String answeredModel;
+		OverrideResolution overrideRes;
 		try {
-			OverrideResolution overrideRes = resolveOverride(body);
+			overrideRes = resolveOverride(body);
 			answeredModel = overrideRes.answeredModel;
 			overridden = overrideRes.overridden;
 		}
@@ -1280,7 +1281,17 @@ public class ChartSearchAiRestController {
 
 		ChatTurnResult result;
 		try {
-			result = chatService.chat(session, question);
+			if (overrideRes.endpointUrl != null) {
+				// Any remote engine (hub or otherwise) relays through the hub's single-completion
+				// contract — this is how the harness's synchronous research client drains the SAME
+				// engine the product streams against, on any hub level id (including the low-level
+				// answer:/answer-review:/indepth-only: legs used for arm comparisons).
+				Map<String, Object> wire = hubRelayCompletionWire(session, patientUuid, question, overrideRes);
+				result = chatService.persistHubStagedAnswer(session, question, wire);
+			}
+			else {
+				result = chatService.chat(session, question);
+			}
 		}
 		catch (ChartTooLargeException e) {
 			log.warn("Chart too large for chat for patient [id={}]: {}",
@@ -1806,9 +1817,34 @@ public class ChartSearchAiRestController {
 	 * orchestrated chatService.chatStreaming path; it is the low-level engine's single-completion
 	 * contract, relayed rather than reimplemented.
 	 */
-	@SuppressWarnings("unchecked")
 	private void streamHubNonStagedChat(OutputStream out, ChatSession session, String patientUuid,
 			String question, OverrideResolution overrideRes) throws IOException {
+		Map<String, Object> wire;
+		try {
+			wire = hubRelayCompletionWire(session, patientUuid, question, overrideRes);
+		}
+		catch (IOException e) {
+			log.warn("Hub relay (non-staged) failed for patient [id={}]: {}",
+					session.getPatient().getPatientId(), e.getMessage());
+			writeSseEvent(out, "error", e.getMessage());
+			return;
+		}
+		ChatTurnResult result = chatService.persistHubStagedAnswer(session, question, wire);
+		writeHubPayload(out, "done", wire, result.getSessionUuid(), result.getAssistantMessageUuid(),
+				overrideRes.answeredModel);
+	}
+
+	/**
+	 * One blocking (non-streaming) hub call for a non-staged turn — shared by the streaming
+	 * relay ({@link #streamHubNonStagedChat}) and the sync {@code POST /chat} endpoint, so the
+	 * harness's synchronous research client drains the SAME hub engine the product streams
+	 * against, on whatever model/profile id it names (including the low-level `answer:`/
+	 * `answer-review:`/`indepth-only:` legs). Returns the hub's answer wire; does NOT persist it
+	 * (callers persist via whichever ChatService method matches their surface).
+	 */
+	@SuppressWarnings("unchecked")
+	private Map<String, Object> hubRelayCompletionWire(ChatSession session, String patientUuid, String question,
+			OverrideResolution overrideRes) throws IOException {
 		List<ChatMessage> priorTurns = chatService.priorTurnsForRelay(session);
 		String requestJson = hubRelayRequestJson(overrideRes.answeredModel, patientUuid, priorTurns, question, false);
 		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
@@ -1832,27 +1868,21 @@ public class ChartSearchAiRestController {
 			throw new IOException("Hub relay interrupted", e);
 		}
 		if (hubResponse.statusCode() < 200 || hubResponse.statusCode() >= 300) {
-			log.warn("Hub relay returned HTTP {}: {}", hubResponse.statusCode(), hubResponse.body());
-			writeSseEvent(out, "error", "Hub relay failed: HTTP " + hubResponse.statusCode());
-			return;
+			throw new IOException("Hub relay failed: HTTP " + hubResponse.statusCode()
+					+ ": " + hubResponse.body());
 		}
 		Map<String, Object> completion = MAPPER.readValue(hubResponse.body(),
 				new TypeReference<Map<String, Object>>() {});
 		List<Object> choices = (List<Object>) completion.get("choices");
 		if (choices == null || choices.isEmpty()) {
-			writeSseEvent(out, "error", "Hub relay returned no choices.");
-			return;
+			throw new IOException("Hub relay returned no choices.");
 		}
 		Map<String, Object> message = (Map<String, Object>) ((Map<String, Object>) choices.get(0)).get("message");
 		String content = message == null ? null : (String) message.get("content");
 		if (content == null || content.isEmpty()) {
-			writeSseEvent(out, "error", "Hub relay returned an empty answer.");
-			return;
+			throw new IOException("Hub relay returned an empty answer.");
 		}
-		Map<String, Object> wire = MAPPER.readValue(content, new TypeReference<Map<String, Object>>() {});
-		ChatTurnResult result = chatService.persistHubStagedAnswer(session, question, wire);
-		writeHubPayload(out, "done", wire, result.getSessionUuid(), result.getAssistantMessageUuid(),
-				overrideRes.answeredModel);
+		return MAPPER.readValue(content, new TypeReference<Map<String, Object>>() {});
 	}
 
 	@SuppressWarnings("unchecked")

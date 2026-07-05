@@ -35,6 +35,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.openmrs.Patient;
 import org.openmrs.User;
@@ -52,6 +53,7 @@ import org.openmrs.module.chartsearchai.api.impl.ModelSwitchService;
 import org.openmrs.module.chartsearchai.api.impl.RequestLlmOverride;
 import org.openmrs.module.chartsearchai.model.ChatMessage;
 import org.openmrs.module.chartsearchai.model.ChatSession;
+import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -416,6 +418,82 @@ public class ChartSearchAiStreamingTest {
 			assertFalse(hubRequest.get("stream").asBoolean(), "non-staged relay must not request the SSE contract");
 			verify(f.chatService, never()).chatStreaming(any(), any(), any());
 			verify(f.chatService, times(1)).persistHubStagedAnswer(eq(f.session), any(), any());
+		}
+		finally {
+			hub.stop(0);
+		}
+	}
+
+	/**
+	 * Gate 11: the harness's own synchronous research client drives chartsearchai via
+	 * {@code POST /chat}. A model resolved to a remote endpoint (any hub level id, including the
+	 * low-level `answer:`/`answer-review:`/`indepth-only:` legs the harness uses for arm
+	 * comparisons) must relay to the SAME hub engine the product streams against — not run
+	 * chatService.chat's local chart-build + inference orchestration.
+	 */
+	@Test
+	public void chat_remoteModel_relaysToHubInsteadOfLocalChat() throws Exception {
+		Fixture f = newFixture(true);
+		AtomicReference<String> hubRequestBody = new AtomicReference<String>();
+		HttpServer hub = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		hub.createContext("/v1/chat/completions", exchange -> {
+			hubRequestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			String completion = "{\"choices\":[{\"message\":{\"content\":"
+					+ "\"{\\\"answer\\\":\\\"Sync answer [1].\\\",\\\"references\\\":"
+					+ "[{\\\"index\\\":1,\\\"resourceType\\\":\\\"Observation\\\",\\\"resourceUuid\\\":\\\"obs-1\\\"}],"
+					+ "\\\"blocks\\\":[]}\"}}]}";
+			byte[] bytes = completion.getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().add("Content-Type", "application/json");
+			exchange.sendResponseHeaders(200, bytes.length);
+			try (OutputStream body = exchange.getResponseBody()) {
+				body.write(bytes);
+			}
+		});
+		hub.start();
+		String hubUrl = "http://127.0.0.1:" + hub.getAddress().getPort() + "/v1/chat/completions";
+		try {
+			Map<String, String> body = chatBody();
+			body.put("endpointUrl", hubUrl);
+			body.put("modelName", "answer:gemma-4-12b@synthesis-answer~enforce~temp0");
+			when(f.adminService.getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE))
+					.thenReturn(ChartSearchAiConstants.LLM_ENGINE_REMOTE);
+			when(f.modelSwitchService.validateEndpointAndModel(
+					hubUrl, "answer:gemma-4-12b@synthesis-answer~enforce~temp0"))
+					.thenReturn(new String[] { hubUrl, "answer:gemma-4-12b@synthesis-answer~enforce~temp0" });
+			when(f.chatService.persistHubStagedAnswer(eq(f.session), any(), any()))
+					.thenReturn(new ChatTurnResult(new ChartAnswer("Sync answer [1].", Collections.emptyList()),
+							"session-uuid", "assistant-msg-uuid"));
+
+			ResponseEntity<Object> response;
+			try (MockedStatic<Context> ctx = mockStatic(Context.class)) {
+				ctx.when(() -> Context.requirePrivilege(
+						ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA)).then(inv -> null);
+				ctx.when(Context::getPatientService).thenReturn(f.patientService);
+				ctx.when(Context::getAdministrationService).thenReturn(f.adminService);
+				ctx.when(Context::getAuthenticatedUser).thenReturn(f.user);
+				ctx.when(Context::getRuntimeProperties).thenReturn(new Properties());
+
+				response = f.controller.chat(body);
+			}
+
+			JsonNode result = MAPPER.valueToTree(response.getBody());
+			assertEquals("Sync answer [1].", result.get("answer").asText());
+			assertEquals("answer:gemma-4-12b@synthesis-answer~enforce~temp0", result.get("model").asText());
+
+			JsonNode hubRequest = MAPPER.readTree(hubRequestBody.get());
+			assertEquals("answer:gemma-4-12b@synthesis-answer~enforce~temp0", hubRequest.get("model").asText());
+			assertEquals("patient-uuid", hubRequest.get("patient").asText());
+			assertFalse(hubRequest.get("stream").asBoolean());
+			verify(f.chatService, never()).chat(any(), any());
+
+			// The PERSISTED wire (not the mocked ChatTurnResult) is what proves the hub's completion
+			// body was actually parsed correctly — the response body above only reflects the stub.
+			@SuppressWarnings("unchecked")
+			ArgumentCaptor<Map<String, Object>> wireCaptor = ArgumentCaptor.forClass(Map.class);
+			verify(f.chatService, times(1)).persistHubStagedAnswer(eq(f.session), any(), wireCaptor.capture());
+			JsonNode persistedWire = MAPPER.valueToTree(wireCaptor.getValue());
+			assertEquals("Sync answer [1].", persistedWire.get("answer").asText());
+			assertEquals("Observation", persistedWire.get("references").get(0).get("resourceType").asText());
 		}
 		finally {
 			hub.stop(0);
