@@ -1081,55 +1081,10 @@ public class ChartSearchAiRestController {
 					streamHubStagedChat(out, session, patientUuid, sanitizedQuestion, overrideRes);
 					return;
 				}
-				if (overrideRes.endpointUrl != null) {
-					// Any remote engine (hub or otherwise) relays through the hub's single-completion
-					// contract instead of locally orchestrating chart-build + inference + citations.
-					// Only the fully-local bundled engine (no remote endpoint configured at all)
-					// still uses chatService.chatStreaming below.
-					streamHubNonStagedChat(out, session, patientUuid, sanitizedQuestion, overrideRes);
-					return;
-				}
-				ChatTurnResult result = chatService.chatStreaming(
-						session, sanitizedQuestion, new java.util.function.Consumer<String>() {
-						@Override
-						public void accept(String token) {
-							try {
-								writeSseEvent(out, "token", token);
-							}
-							catch (IOException e) {
-								log.debug("Client disconnected during chat streaming");
-								throw new RuntimeException("Client disconnected", e);
-							}
-						}
-					});
-
-			ChartAnswer answer = result.getAnswer();
-			Map<String, Object> doneData = new LinkedHashMap<String, Object>();
-			doneData.put("answer", answer.getAnswer());
-			doneData.put("disclaimer", DISCLAIMER);
-
-			List<Map<String, Object>> refs = new ArrayList<Map<String, Object>>();
-			for (RecordReference ref : answer.getReferences()) {
-				Map<String, Object> refMap = new LinkedHashMap<String, Object>();
-				refMap.put("index", ref.getIndex());
-				refMap.put("resourceType", ref.getResourceType());
-				refMap.put("resourceUuid", ref.getResourceUuid());
-				refMap.put("date", formatDate(ref.getDate()));
-				refs.add(refMap);
-			}
-			doneData.put("references", refs);
-			doneData.put("blocks", blocksToJson(answer.getBlocks()));
-			if (answer.getConfidence() != null) {
-				doneData.put("confidence", answer.getConfidence());
-			}
-			if (answer.getAnswerValidation() != null) {
-				doneData.put("answerValidation", answer.getAnswerValidation());
-			}
-			doneData.put("session", result.getSessionUuid());
-			doneData.put("messageId", result.getAssistantMessageUuid());
-			doneData.put("model", answeredModel);
-
-			writeSseEvent(out, "done", new ObjectMapper().writeValueAsString(doneData));
+				// Every chat turn relays through the hub's single-completion contract — chat requires
+				// the remote engine (resolveOverride rejects anything else), so there is no local
+				// chart-build + inference + citation orchestration left to fall back to.
+				streamHubNonStagedChat(out, session, patientUuid, sanitizedQuestion, overrideRes);
 		}
 		catch (ChartTooLargeException e) {
 			log.warn("Chart too large for chat streaming for patient [id={}]: {}",
@@ -1275,17 +1230,13 @@ public class ChartSearchAiRestController {
 
 		ChatTurnResult result;
 		try {
-			if (overrideRes.endpointUrl != null) {
-				// Any remote engine (hub or otherwise) relays through the hub's single-completion
-				// contract — this is how the harness's synchronous research client drains the SAME
-				// engine the product streams against, on any hub level id (including the low-level
-				// answer:/answer-review:/indepth-only: legs used for arm comparisons).
-				Map<String, Object> wire = hubRelayCompletionWire(session, patientUuid, question, overrideRes);
-				result = chatService.persistHubStagedAnswer(session, question, wire);
-			}
-			else {
-				result = chatService.chat(session, question);
-			}
+			// Every chat turn relays through the hub's single-completion contract -- this is how the
+			// harness's synchronous research client drains the SAME engine the product streams
+			// against, on any hub level id (including the low-level answer:/answer-review:/
+			// indepth-only: legs used for arm comparisons). resolveOverride already rejected a
+			// non-remote engine, so there is no local orchestration to fall back to.
+			Map<String, Object> wire = hubRelayCompletionWire(session, patientUuid, question, overrideRes);
+			result = chatService.persistHubStagedAnswer(session, question, wire);
 		}
 		catch (ChartTooLargeException e) {
 			log.warn("Chart too large for chat for patient [id={}]: {}",
@@ -2114,50 +2065,36 @@ public class ChartSearchAiRestController {
 	 * @throws IllegalArgumentException on an invalid override, or an override sent
 	 *         to a non-remote engine — callers map this to HTTP 400.
 	 */
+	/**
+	 * Chat always relays through a remote engine (a configured hub endpoint) — there is no local
+	 * bundled-engine chat fallback. A misconfigured engine GP fails cleanly here (400) rather than
+	 * silently falling back to local orchestration.
+	 */
 	private OverrideResolution resolveOverride(Map<String, String> body) {
 		String engine = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE);
 		boolean isRemote = ChartSearchAiConstants.LLM_ENGINE_REMOTE
 				.equalsIgnoreCase(engine != null ? engine.trim() : "");
+		if (!isRemote) {
+			throw new IllegalArgumentException(
+					"Chat requires the remote engine (a configured hub endpoint); active engine is '"
+							+ (engine != null ? engine.trim() : "") + "'.");
+		}
 
 		String overrideUrl = body.get("endpointUrl");
 		String overrideModel = body.get("modelName");
 		boolean hasOverride = overrideUrl != null && !overrideUrl.trim().isEmpty()
 				&& overrideModel != null && !overrideModel.trim().isEmpty();
 
-		if (!isRemote) {
-			if (hasOverride) {
-				throw new IllegalArgumentException(
-						"Per-request backend override requires the remote engine; active engine is '"
-								+ (engine != null ? engine.trim() : "") + "'.");
-			}
-				return new OverrideResolution(null, localModelName(), false);
-			}
-
-			String endpointUrl = Context.getAdministrationService()
-					.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
-			String answeredModel = Context.getAdministrationService()
-					.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
-			if (hasOverride) {
-				String[] valid = modelSwitchService.validateEndpointAndModel(overrideUrl, overrideModel);
-				RequestLlmOverride.set(valid[0], valid[1]);
-				return new OverrideResolution(valid[0], valid[1], true);
-			}
-			return new OverrideResolution(endpointUrl, answeredModel, false);
+		String endpointUrl = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_ENDPOINT_URL);
+		String answeredModel = Context.getAdministrationService()
+				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_REMOTE_MODEL_NAME);
+		if (hasOverride) {
+			String[] valid = modelSwitchService.validateEndpointAndModel(overrideUrl, overrideModel);
+			RequestLlmOverride.set(valid[0], valid[1]);
+			return new OverrideResolution(valid[0], valid[1], true);
 		}
-
-	/**
-	 * The local (bundled) engine's model name for the per-response tag — the
-	 * basename of {@code GP_LLM_MODEL_FILE_PATH}, or {@code "local"} if unset.
-	 */
-	private String localModelName() {
-		String path = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_LLM_MODEL_FILE_PATH);
-		if (path == null || path.trim().isEmpty()) {
-			return "local";
-		}
-		String p = path.trim();
-		int slash = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
-		return slash >= 0 ? p.substring(slash + 1) : p;
+		return new OverrideResolution(endpointUrl, answeredModel, false);
 	}
 }

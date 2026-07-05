@@ -53,6 +53,7 @@ import org.openmrs.module.chartsearchai.api.impl.ModelSwitchService;
 import org.openmrs.module.chartsearchai.api.impl.RequestLlmOverride;
 import org.openmrs.module.chartsearchai.model.ChatMessage;
 import org.openmrs.module.chartsearchai.model.ChatSession;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -127,27 +128,14 @@ public class ChartSearchAiStreamingTest {
 	}
 
 	/**
-	 * Happy path: a token streams, then a terminal {@code done} event carries the
-	 * answer, the session uuid, and the answering model. The session uuid is also
-	 * surfaced as a header before the stream opens.
+	 * Chat requires a configured remote engine (a hub endpoint) -- there is no local-bundled-engine
+	 * fallback. When the engine GP isn't "remote", the request fails cleanly BEFORE the SSE stream
+	 * opens (a 400 JSON error, same shape as the existing "override without remote engine" case),
+	 * never silently answering via chatService.chatStreaming's deleted local orchestration.
 	 */
 	@Test
-	public void chatStream_shouldStreamTokenThenDoneEnvelope() throws Exception {
+	public void chatStream_shouldReturnCleanBadRequest_whenEngineIsNotRemote() throws Exception {
 		Fixture f = newFixture(true);
-
-		ChartAnswer answer = new ChartAnswer(
-				"Lisinopril 10mg daily.",
-				Collections.singletonList(
-						new RecordReference(1, "MedicationRequest", "med-uuid", null)));
-		// The controller writes a `token` event for each consumed token, so the
-		// stub must actually invoke the consumer (thenReturn alone emits nothing).
-		when(f.chatService.chatStreaming(eq(f.session), eq("What medications is this patient taking?"), any()))
-				.thenAnswer(inv -> {
-					inv.<Consumer<String>>getArgument(2).accept("Lisinopril ");
-					inv.<Consumer<String>>getArgument(2).accept("10mg daily.");
-					return new ChatTurnResult(answer, "session-uuid", "assistant-msg-uuid");
-				});
-
 		MockHttpServletResponse response = new MockHttpServletResponse();
 
 		try (MockedStatic<Context> ctx = mockStatic(Context.class)) {
@@ -160,30 +148,9 @@ public class ChartSearchAiStreamingTest {
 			f.controller.chatStream(chatBody(), response);
 		}
 
-		String sse = response.getContentAsString();
-
-		int tokenIdx = sse.indexOf("event: token");
-		int doneIdx = sse.indexOf("event: done");
-		assertTrue(tokenIdx >= 0, "Expected a token event in the SSE stream, got:\n" + sse);
-		assertTrue(doneIdx >= 0, "Expected a done event in the SSE stream, got:\n" + sse);
-		assertTrue(tokenIdx < doneIdx, "token event must precede the done event");
-		assertTrue(sse.contains("data: Lisinopril "),
-				"Streamed token text missing from SSE, got:\n" + sse);
-
-		assertTrue(response.getContentType().startsWith("text/event-stream"),
-				"Content-Type must be an event-stream, got " + response.getContentType());
-		assertEquals("session-uuid", response.getHeader("X-ChartSearchAi-Session"),
-				"Session uuid must be surfaced as a header before the stream opens");
-
-		// Parse the JSON payload of the done event and assert the envelope fields.
-		JsonNode done = parseDoneEvent(sse);
-		assertEquals("Lisinopril 10mg daily.", done.get("answer").asText());
-		assertEquals("session-uuid", done.get("session").asText());
-		// No override + unstubbed engine GP (null => local) => local model name.
-		assertEquals("local", done.get("model").asText());
-		assertEquals(1, done.get("references").size());
-		assertEquals("MedicationRequest",
-				done.get("references").get(0).get("resourceType").asText());
+		assertEquals(HttpStatus.BAD_REQUEST.value(), response.getStatus());
+		assertFalse(response.getContentAsString().startsWith("event:"),
+				"must fail before the SSE stream opens, got:\n" + response.getContentAsString());
 	}
 
 	/**
@@ -233,6 +200,8 @@ public class ChartSearchAiStreamingTest {
 	@Test
 	public void chatStream_shouldReturnCleanError_whenSessionOrChartBuildFails() throws Exception {
 		Fixture f = newFixture(true);
+		when(f.adminService.getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE))
+				.thenReturn(ChartSearchAiConstants.LLM_ENGINE_REMOTE);
 		// resolveOrOpenSession(patient, null) opens a new session, which builds the
 		// chart snapshot. Simulate that build hitting a dangling encounter FK.
 		when(f.chatService.openOrLoadActiveSession(f.patient))
@@ -419,6 +388,28 @@ public class ChartSearchAiStreamingTest {
 		finally {
 			hub.stop(0);
 		}
+	}
+
+	/**
+	 * Same config-error contract as the streaming endpoint: sync {@code POST /chat} also requires
+	 * the remote engine, with no local-bundled fallback.
+	 */
+	@Test
+	public void chat_shouldReturnBadRequest_whenEngineIsNotRemote() throws Exception {
+		Fixture f = newFixture(true);
+
+		ResponseEntity<Object> response;
+		try (MockedStatic<Context> ctx = mockStatic(Context.class)) {
+			ctx.when(() -> Context.requirePrivilege(
+					ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA)).then(inv -> null);
+			ctx.when(Context::getPatientService).thenReturn(f.patientService);
+			ctx.when(Context::getAdministrationService).thenReturn(f.adminService);
+			ctx.when(Context::getAuthenticatedUser).thenReturn(f.user);
+
+			response = f.controller.chat(chatBody());
+		}
+
+		assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
 	}
 
 	/**
