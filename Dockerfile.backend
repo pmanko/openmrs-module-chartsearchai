@@ -43,8 +43,8 @@ RUN set -eu; \
 # Copy the OpenMRS distribution from the official image
 FROM openmrs/openmrs-reference-application-3-backend:nightly AS openmrs-dist
 
-# Rebase onto Ubuntu (glibc 2.39) so the bundled llama-server binaries load
-# correctly. The official image uses Amazon Linux 2 (glibc 2.26) which is too old.
+# Rebase onto Ubuntu (glibc 2.39) so querystore's onnxruntime embedder loads correctly.
+# The official image uses Amazon Linux 2 (glibc 2.26), which is too old (GLIBC_2.27 not found).
 FROM eclipse-temurin:21-jre
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
