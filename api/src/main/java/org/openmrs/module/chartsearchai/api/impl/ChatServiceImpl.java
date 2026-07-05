@@ -114,81 +114,6 @@ public class ChatServiceImpl implements ChatService {
 	}
 
 	@Override
-	public ChatTurnResult chat(ChatSession session, String question) {
-		ensureChartSnapshot(session);
-		String chartEnvelope = session.getChartSnapshot();
-		List<RecordMapping> mappings = deserializeMappings(session.getChartMappingsJson());
-
-		List<ChatMessage> priorTurns = priorsForLlm(chatDAO.getMessages(session));
-		int nextOrdinal = chatDAO.getLastOrdinal(session) + 1;
-		persistUserMessage(session, question, nextOrdinal);
-
-		long startedMs = System.currentTimeMillis();
-		ChartAnswer answer;
-		try {
-			answer = llmInferenceService.chat(chartEnvelope, mappings, priorTurns, question);
-		}
-		catch (RuntimeException e) {
-			touchSession(session);
-			throw e;
-		}
-		long elapsedMs = System.currentTimeMillis() - startedMs;
-
-		ChatMessage assistant = persistAssistantTurn(session, answer, nextOrdinal + 1,
-				ChatMessage.FINISH_STOP, question, elapsedMs);
-		touchSession(session);
-
-		return new ChatTurnResult(answer, session.getUuid(), assistant.getUuid());
-	}
-
-	@Override
-	public ChatTurnResult chatStreaming(ChatSession session, String question,
-			Consumer<String> tokenConsumer) {
-		ensureChartSnapshot(session);
-		String chartEnvelope = session.getChartSnapshot();
-		List<RecordMapping> mappings = deserializeMappings(session.getChartMappingsJson());
-
-		List<ChatMessage> priorTurns = priorsForLlm(chatDAO.getMessages(session));
-		int nextOrdinal = chatDAO.getLastOrdinal(session) + 1;
-		persistUserMessage(session, question, nextOrdinal);
-
-		// Accumulate the streamed text so a mid-stream abort can persist the
-		// partial answer the client already received (see catch below).
-		StringBuilder streamed = new StringBuilder();
-		Consumer<String> accumulating = token -> {
-			streamed.append(token);
-			tokenConsumer.accept(token);
-		};
-
-		long startedMs = System.currentTimeMillis();
-		ChartAnswer answer;
-		try {
-			answer = llmInferenceService.chatStreaming(
-					chartEnvelope, mappings, priorTurns, question, accumulating);
-		}
-		catch (RuntimeException e) {
-			// Client disconnected (or the upstream stream died) mid-flight.
-			// Persist the partial assistant turn with finish_reason='aborted'
-			// BEFORE re-throwing so the transcript stays well-formed: the next
-			// request resumes at the correct ordinal instead of appending a
-			// second consecutive user message. (ChatService docstring contract.)
-			long abortedMs = System.currentTimeMillis() - startedMs;
-			ChartAnswer partial = new ChartAnswer(streamed.toString(), Collections.emptyList());
-			persistAssistantTurn(session, partial, nextOrdinal + 1,
-					ChatMessage.FINISH_ABORTED, question, abortedMs);
-			touchSession(session);
-			throw e;
-		}
-		long elapsedMs = System.currentTimeMillis() - startedMs;
-
-		ChatMessage assistant = persistAssistantTurn(session, answer, nextOrdinal + 1,
-				ChatMessage.FINISH_STOP, question, elapsedMs);
-		touchSession(session);
-
-		return new ChatTurnResult(answer, session.getUuid(), assistant.getUuid());
-	}
-
-	@Override
 	public ChatTurnResult persistHubStagedAnswer(ChatSession session, String question,
 			Map<String, Object> answerWire) {
 		int nextOrdinal = chatDAO.getLastOrdinal(session) + 1;
@@ -319,38 +244,6 @@ public class ChatServiceImpl implements ChatService {
 		return chatDAO.saveMessage(msg);
 	}
 
-	protected ChatMessage persistAssistantTurn(ChatSession session, ChartAnswer answer, int ordinal,
-			String finishReason, String questionForAudit, long responseTimeMs) {
-		return persistAssistantTurn(session, answer, ordinal, finishReason, questionForAudit,
-				responseTimeMs, null);
-	}
-
-	protected ChatMessage persistAssistantTurn(ChatSession session, ChartAnswer answer, int ordinal,
-			String finishReason, String questionForAudit, long responseTimeMs,
-			Map<String, Object> inDepth) {
-		return persistAssistantTurn(session, answer, ordinal, finishReason, questionForAudit,
-				responseTimeMs, answer.getAnswerValidation(), inDepth);
-	}
-
-	protected ChatMessage persistAssistantTurn(ChatSession session, ChartAnswer answer, int ordinal,
-			String finishReason, String questionForAudit, long responseTimeMs,
-			Map<String, Object> answerValidation, Map<String, Object> inDepth) {
-		ChartSearchAuditLog audit = buildAuditRow(session, questionForAudit, answer, responseTimeMs);
-		auditDAO.saveAuditLog(audit);
-
-		ChatMessage msg = new ChatMessage();
-		msg.setSession(session);
-		msg.setOrdinal(ordinal);
-		msg.setRole(ChatMessage.ROLE_ASSISTANT);
-		msg.setContent(serializeAssistantContent(answer, answerValidation, inDepth));
-		msg.setCreatedAt(new Date());
-		msg.setAuditLog(audit);
-		msg.setInputTokens(answer.getInputTokens());
-		msg.setOutputTokens(answer.getOutputTokens());
-		msg.setFinishReason(finishReason);
-		return chatDAO.saveMessage(msg);
-	}
-
 	private ChatMessage persistAssistantWireTurn(ChatSession session, Map<String, Object> wire,
 			ChartAnswer answer, int ordinal, String finishReason, String questionForAudit,
 			long responseTimeMs) {
@@ -450,59 +343,6 @@ public class ChatServiceImpl implements ChatService {
 		}
 		catch (RuntimeException ignored) {
 			return null;
-		}
-	}
-
-	/**
-	 * Serialize the assistant response (prose + citations + blocks) to JSON
-	 * for storage on {@code chat_message.content}. The SPA hydration parses
-	 * this JSON back into {@code {answer, blocks}}; LLM replay extracts just
-	 * the prose answer via {@link #extractProseAnswer}.
-	 *
-	 * <p>When blocks is empty, we still store JSON (not plaintext) so the
-	 * hydration parser only has to handle one canonical shape on newly-
-	 * created rows. Legacy plaintext rows are detected and handled
-	 * separately in {@link #extractProseAnswer}.
-	 */
-	private static String serializeAssistantContent(ChartAnswer answer) {
-		return serializeAssistantContent(answer, answer.getAnswerValidation(), null);
-	}
-
-	private static String serializeAssistantContent(ChartAnswer answer, Map<String, Object> inDepth) {
-		return serializeAssistantContent(answer, answer.getAnswerValidation(), inDepth);
-	}
-
-	private static String serializeAssistantContent(ChartAnswer answer,
-			Map<String, Object> answerValidation, Map<String, Object> inDepth) {
-		Map<String, Object> wire = new LinkedHashMap<>();
-		wire.put("answer", answer.getAnswer());
-		wire.put("references", referencesToWire(answer.getReferences()));
-		// blocks rendered via the same helper used by the REST controller —
-		// keep wire format identical across persistence and live response so
-		// SPA hydration and SSE done events parse the same way.
-		wire.put("blocks", blocksToWire(answer.getBlocks()));
-		// Persist per-section confidence so a page reload rehydrates the same tag the live
-		// stream showed; omitted when absent (LM Studio / parity lane) so no phantom tag.
-		if (answer.getConfidence() != null) {
-			wire.put("confidence", answer.getConfidence());
-		}
-		if (answerValidation != null) {
-			wire.put("answerValidation", answerValidation);
-		}
-		if (inDepth != null) {
-			wire.put("inDepth", inDepth);
-		}
-		try {
-			return MAPPER.writeValueAsString(wire);
-		}
-		catch (IOException ioe) {
-			// Fail soft: if serialization breaks, fall back to plain prose so
-			// chat continues to function (just without blocks rendering on
-			// hydration). The thrown error would otherwise abort the entire
-			// assistant-message persistence and lose the answer.
-			log.warn("Failed to serialize assistant content to JSON; storing prose only: {}",
-					ioe.getMessage());
-			return answer.getAnswer();
 		}
 	}
 

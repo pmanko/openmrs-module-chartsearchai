@@ -11,7 +11,6 @@ package org.openmrs.module.chartsearchai.api;
 
 import java.util.List;
 import java.util.Map;
-import java.util.function.Consumer;
 
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.ChartAnswer;
@@ -64,24 +63,6 @@ public interface ChatService {
 	 * excluding summary rows.
 	 */
 	List<ChatMessage> getMessages(ChatSession session);
-
-	/**
-	 * Synchronous chat turn: persists the user message, calls the LLM,
-	 * persists the assistant message + audit row in one transaction, and
-	 * returns the ChatAnswer + the session + assistant-message uuids the
-	 * controller surfaces to the client.
-	 */
-	ChatTurnResult chat(ChatSession session, String question);
-
-	/**
-	 * Streaming chat turn — same semantics as {@link #chat} but tokens stream
-	 * to {@code tokenConsumer}. The assistant row is persisted only when the
-	 * upstream stream closes successfully; aborts persist a partial row with
-	 * {@code finish_reason='aborted'} so the next request resumes at the
-	 * correct ordinal.
-	 */
-	ChatTurnResult chatStreaming(ChatSession session, String question,
-			Consumer<String> tokenConsumer);
 
 	/**
 	 * Hub-relay staged Answer leg: persist the user message and the hub-provided assistant wire

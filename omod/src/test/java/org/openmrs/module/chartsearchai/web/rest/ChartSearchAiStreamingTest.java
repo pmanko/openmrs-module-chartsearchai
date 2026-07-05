@@ -177,7 +177,6 @@ public class ChartSearchAiStreamingTest {
 		assertEquals(403, response.getStatus(), "Access-denied must return 403");
 		// The genuine "auth before streaming" guarantee: the streaming service is
 		// never invoked once access is denied.
-		verify(f.chatService, never()).chatStreaming(any(), any(), any());
 
 		String body = response.getContentAsString();
 		assertTrue(body.contains("\"error\""),
@@ -223,7 +222,6 @@ public class ChartSearchAiStreamingTest {
 
 		assertEquals(500, response.getStatus(),
 				"a pre-stream build failure must be a handled 500, not a propagated exception");
-		verify(f.chatService, never()).chatStreaming(any(), any(), any());
 
 		String body = response.getContentAsString();
 		assertTrue(body.contains("\"error\""),
@@ -312,7 +310,6 @@ public class ChartSearchAiStreamingTest {
 
 			JsonNode hubRequest = MAPPER.readTree(hubRequestBody.get());
 			assertEquals("med-agent-team-high-validated", hubRequest.get("model").asText());
-			verify(f.chatService, never()).chatStreaming(any(), any(), any());
 			verify(f.chatService, times(1)).persistHubStagedAnswer(eq(f.session), any(), any());
 		}
 		finally {
@@ -382,7 +379,6 @@ public class ChartSearchAiStreamingTest {
 			assertEquals("med-agent-team-parity", hubRequest.get("model").asText());
 			assertEquals("patient-uuid", hubRequest.get("patient").asText());
 			assertFalse(hubRequest.get("stream").asBoolean(), "non-staged relay must not request the SSE contract");
-			verify(f.chatService, never()).chatStreaming(any(), any(), any());
 			verify(f.chatService, times(1)).persistHubStagedAnswer(eq(f.session), any(), any());
 		}
 		finally {
@@ -472,7 +468,6 @@ public class ChartSearchAiStreamingTest {
 			assertEquals("answer:gemma-4-12b@synthesis-answer~enforce~temp0", hubRequest.get("model").asText());
 			assertEquals("patient-uuid", hubRequest.get("patient").asText());
 			assertFalse(hubRequest.get("stream").asBoolean());
-			verify(f.chatService, never()).chat(any(), any());
 
 			// The PERSISTED wire (not the mocked ChatTurnResult) is what proves the hub's completion
 			// body was actually parsed correctly — the response body above only reflects the stub.
@@ -602,7 +597,6 @@ public class ChartSearchAiStreamingTest {
 					eq(f.session), eq("What medications is this patient taking?"), any());
 			verify(f.chatService, times(3)).updateHubStagedMessage(
 					eq(f.session), eq("assistant-msg-uuid"), any());
-			verify(f.chatService, never()).chatStreaming(any(), any(), any());
 		}
 		finally {
 			hub.stop(0);

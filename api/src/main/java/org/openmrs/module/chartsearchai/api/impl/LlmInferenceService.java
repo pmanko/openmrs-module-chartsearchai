@@ -332,44 +332,6 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
-	 * Multi-turn chat using a frozen session-scoped chart envelope. The
-	 * envelope and mappings are passed in (by the {@link ChatServiceImpl},
-	 * sourced from {@code chat_session.chart_snapshot} +
-	 * {@code chart_mappings_json}), so consecutive turns of one session
-	 * send the byte-identical chart prefix and the LLM's prompt cache
-	 * hits on follow-ups.
-	 *
-	 * <p>The {@code question} is the raw clinician text — assembleChat
-	 * places it as the trailing user message, separate from the chart
-	 * envelope.
-	 */
-	public ChartAnswer chat(String chartEnvelope, List<RecordMapping> mappings,
-			List<ChatMessage> priorTurns, String question) {
-		LlmResponse response = llmProvider.chat(chartEnvelope, priorTurns, question);
-
-			return new ChartAnswer(response.getAnswer(),
-					extractCitedReferences(response.getCitations(), mappings),
-					response.getBlocks(), response.getConfidence(), response.getAnswerValidation(),
-					response.getInputTokens(), response.getOutputTokens(),
-					response.getCachedTokens());
-	}
-
-	/**
-	 * Streaming variant of {@link #chat}.
-	 */
-	public ChartAnswer chatStreaming(String chartEnvelope, List<RecordMapping> mappings,
-			List<ChatMessage> priorTurns, String question, Consumer<String> tokenConsumer) {
-		LlmResponse response = llmProvider.chatStreaming(
-				chartEnvelope, priorTurns, question, tokenConsumer);
-
-			return new ChartAnswer(response.getAnswer(),
-					extractCitedReferences(response.getCitations(), mappings),
-					response.getBlocks(), response.getConfidence(), response.getAnswerValidation(),
-					response.getInputTokens(), response.getOutputTokens(),
-					response.getCachedTokens());
-	}
-
-	/**
 	 * Substitutes a placeholder when the chart has no records, so the LLM
 	 * produces a query-specific "no records" answer instead of one based
 	 * on demographics alone.
