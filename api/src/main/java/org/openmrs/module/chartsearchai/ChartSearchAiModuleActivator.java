@@ -15,22 +15,18 @@ import java.util.List;
 
 import org.openmrs.Privilege;
 import org.openmrs.Role;
-import org.openmrs.api.APIException;
 import org.openmrs.api.UserService;
 import org.openmrs.api.context.Context;
 import org.openmrs.module.BaseModuleActivator;
-import org.openmrs.module.DaemonToken;
-import org.openmrs.module.DaemonTokenAware;
 import org.openmrs.module.chartsearchai.api.AuditLogPurgeTask;
 import org.openmrs.module.chartsearchai.api.impl.LlmProvider;
-import org.openmrs.module.chartsearchai.api.impl.WarmupExecutor;
 import org.openmrs.scheduler.SchedulerService;
 import org.openmrs.scheduler.TaskDefinition;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class ChartSearchAiModuleActivator extends BaseModuleActivator implements DaemonTokenAware {
+public class ChartSearchAiModuleActivator extends BaseModuleActivator {
 
 	private static final Logger log = LoggerFactory.getLogger(ChartSearchAiModuleActivator.class);
 
@@ -43,17 +39,6 @@ public class ChartSearchAiModuleActivator extends BaseModuleActivator implements
 	static final String LEGACY_BACKFILL_TASK_NAME = "Chart Search AI - Embedding Backfill";
 
 	private static final long DAILY_INTERVAL_SECONDS = 86400L;
-
-	@Override
-	public void setDaemonToken(DaemonToken token) {
-		try {
-			Context.getRegisteredComponent("chartSearchAi.warmupExecutor", WarmupExecutor.class)
-					.setDaemonToken(token);
-		}
-		catch (APIException e) {
-			log.warn("Could not propagate DaemonToken to WarmupExecutor", e);
-		}
-	}
 
 	@Override
 	public void started() {

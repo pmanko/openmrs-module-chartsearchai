@@ -48,7 +48,6 @@ import org.slf4j.LoggerFactory;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.util.DateFormatUtil;
-import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.api.ChartTooLargeException;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.ChartAnswer;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
@@ -58,9 +57,7 @@ import org.openmrs.module.chartsearchai.api.ChatService.ChatTurnResult;
 import org.openmrs.module.chartsearchai.api.PatientAccessCheck;
 import org.openmrs.module.chartsearchai.api.impl.RequestLlmOverride;
 import org.openmrs.module.chartsearchai.api.impl.ResponseBlock;
-import org.openmrs.module.chartsearchai.api.impl.WarmupExecutor;
 import org.openmrs.module.chartsearchai.model.ChartSearchAuditLog;
-import org.openmrs.module.chartsearchai.reference.SafetyWarning;
 import org.openmrs.module.chartsearchai.model.ChatMessage;
 import org.openmrs.module.chartsearchai.model.ChatSession;
 import org.openmrs.module.webservices.rest.web.RestConstants;
@@ -166,10 +163,6 @@ public class ChartSearchAiRestController {
 			+ "the patient's medical records.";
 
 	@Autowired
-	@Qualifier("chartSearchAi.chartSearchServiceRouter")
-	private ChartSearchService chartSearchService;
-
-	@Autowired
 	@Qualifier("chartSearchAi.patientAccessCheck")
 	private PatientAccessCheck patientAccessCheck;
 
@@ -178,157 +171,12 @@ public class ChartSearchAiRestController {
 	private AuditLogService auditLogService;
 
 	@Autowired
-	@Qualifier("chartSearchAi.warmupExecutor")
-	private WarmupExecutor warmupExecutor;
-
-	@Autowired
 	@Qualifier("chartSearchAi.chatService")
 	private ChatService chatService;
 
 	@Autowired
 	@Qualifier("chartSearchAi.modelSwitchService")
 	private org.openmrs.module.chartsearchai.api.impl.ModelSwitchService modelSwitchService;
-
-	@RequestMapping(value = "/search", method = RequestMethod.POST)
-	@ResponseBody
-	public ResponseEntity<Object> search(@RequestBody Map<String, String> body) {
-		Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA);
-
-		String patientUuid = body.get("patient");
-		String question = body.get("question");
-
-		PatientResolution resolved = resolvePatient(patientUuid);
-		if (resolved.hasError()) {
-			return new ResponseEntity<Object>(
-					errorResponse(resolved.errorMessage), resolved.errorStatus);
-		}
-		Patient patient = resolved.patient;
-
-		if (question == null || question.trim().isEmpty()) {
-			return new ResponseEntity<Object>(
-					errorResponse("question is required"), HttpStatus.BAD_REQUEST);
-		}
-		if (question.length() > MAX_QUESTION_LENGTH) {
-			return new ResponseEntity<Object>(
-					errorResponse("question exceeds maximum length of "
-							+ MAX_QUESTION_LENGTH + " characters"),
-					HttpStatus.BAD_REQUEST);
-		}
-
-		question = CONTROL_CHARS.matcher(question).replaceAll("");
-		if (question.trim().isEmpty()) {
-			return new ResponseEntity<Object>(
-					errorResponse("question is required"), HttpStatus.BAD_REQUEST);
-		}
-
-		String sanitizationError = validateQuestion(question);
-		if (sanitizationError != null) {
-			return new ResponseEntity<Object>(
-					errorResponse(sanitizationError), HttpStatus.BAD_REQUEST);
-		}
-
-		User user = Context.getAuthenticatedUser();
-
-		ResponseEntity<Object> rateLimitError = checkRateLimit(user);
-		if (rateLimitError != null) {
-			return rateLimitError;
-		}
-
-		String preFilter = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
-		boolean preFilterEnabled = !"false".equalsIgnoreCase(preFilter.trim());
-
-		ChartAnswer chartAnswer;
-		long responseTimeMs;
-		try {
-			long startTime = System.currentTimeMillis();
-			chartAnswer = chartSearchService.search(patient, question);
-			responseTimeMs = System.currentTimeMillis() - startTime;
-		}
-		catch (ChartTooLargeException e) {
-			log.warn("Chart too large for LLM context for patient [id={}]: {}",
-					patient.getPatientId(), e.getMessage());
-			return new ResponseEntity<Object>(
-					errorResponse("This patient's chart is too large to process. "
-							+ "Contact your administrator to increase the LLM context size."),
-					HttpStatus.PAYLOAD_TOO_LARGE);
-		}
-		catch (IllegalStateException e) {
-			log.error("Chart search configuration error", e);
-			return new ResponseEntity<Object>(
-					errorResponse("Chart search is not properly configured. Contact your administrator."),
-					HttpStatus.SERVICE_UNAVAILABLE);
-		}
-		catch (Exception e) {
-			log.error("Chart search failed for patient [id={}]", patient.getPatientId(), e);
-			return new ResponseEntity<Object>(
-					errorResponse("Chart search failed. Please try again or contact your administrator."),
-					HttpStatus.INTERNAL_SERVER_ERROR);
-		}
-
-		ChartSearchAuditLog auditLog = new ChartSearchAuditLog();
-		auditLog.setUser(user);
-		auditLog.setPatient(patient);
-		auditLog.setQuestion(question);
-		auditLog.setAnswer(chartAnswer.getAnswer());
-		auditLog.setReferenceCount(chartAnswer.getReferences().size());
-		auditLog.setSearchMode(preFilterEnabled ? "pre-filter" : "full-chart");
-		auditLog.setResponseTimeMs(responseTimeMs);
-		auditLog.setInputTokens(chartAnswer.getInputTokens() > 0 ? chartAnswer.getInputTokens() : null);
-		auditLog.setOutputTokens(chartAnswer.getOutputTokens() > 0 ? chartAnswer.getOutputTokens() : null);
-		auditLog.setDateCreated(new Date());
-		try {
-			auditLogService.saveAuditLog(auditLog);
-		}
-		catch (Exception e) {
-			log.warn("Failed to save audit log for search query", e);
-		}
-
-		Map<String, Object> response = new HashMap<String, Object>();
-		response.put("answer", chartAnswer.getAnswer());
-		response.put("disclaimer", DISCLAIMER);
-
-		List<Map<String, Object>> refs = new ArrayList<Map<String, Object>>();
-		for (RecordReference ref : chartAnswer.getReferences()) {
-			Map<String, Object> refMap = new LinkedHashMap<String, Object>();
-			refMap.put("index", ref.getIndex());
-			refMap.put("resourceType", ref.getResourceType());
-			refMap.put("resourceUuid", ref.getResourceUuid());
-			refMap.put("date", formatDate(ref.getDate()));
-			// null when grounding is disabled or could not run — clients must
-			// render null as "unverified", never as "verified".
-			refMap.put("grounded", ref.getGrounded());
-			refs.add(refMap);
-		}
-		response.put("references", refs);
-		response.put("safetyWarnings", serializeSafetyWarnings(chartAnswer.getSafetyWarnings()));
-		if (auditLog.getAuditLogId() != null) {
-			response.put("questionId", String.valueOf(auditLog.getAuditLogId()));
-		}
-
-		return new ResponseEntity<Object>(response, HttpStatus.OK);
-	}
-
-	/**
-	 * Pre-warm the LLM prompt cache for a patient's chart. Called by the frontend
-	 * when a patient chart is opened, so the first AI query on that patient does
-	 * not pay full prefill cost. Returns 202 Accepted immediately; the warmup runs
-	 * on a background daemon thread.
-	 */
-	@RequestMapping(value = "/warmup", method = RequestMethod.POST)
-	@ResponseBody
-	public ResponseEntity<Object> warmup(@RequestBody Map<String, String> body) {
-		Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA);
-
-		PatientResolution resolved = resolvePatient(body.get("patient"));
-		if (resolved.hasError()) {
-			return new ResponseEntity<Object>(
-					errorResponse(resolved.errorMessage), resolved.errorStatus);
-		}
-
-		warmupExecutor.submit(resolved.patient);
-		return new ResponseEntity<Object>(HttpStatus.ACCEPTED);
-	}
 
 	/**
 	 * List the models the active remote endpoint reports via {@code /v1/models},
@@ -527,323 +375,6 @@ public class ChartSearchAiRestController {
 			return new ResponseEntity<Object>(errorResponse(e.getMessage()),
 					HttpStatus.SERVICE_UNAVAILABLE);
 		}
-	}
-
-	/**
-	 * Streaming search endpoint using Server-Sent Events. Streams tokens as they are
-	 * generated by the LLM, then sends references and disclaimer as a final "done" event.
-	 *
-	 * <p>Writes SSE events directly to the response output stream in the request
-	 * thread. This avoids the need for {@code SseEmitter}, background threads,
-	 * async servlet support, and proxy privileges — the authenticated user's
-	 * session is naturally available throughout the request.</p>
-	 *
-	 * <p>SSE event types:</p>
-	 * <ul>
-	 *   <li>{@code thinking} — a chunk of the model's reasoning (chain-of-thought), emitted
-	 *       before the answer; render distinctly (e.g. a collapsible panel), not as the answer</li>
-	 *   <li>{@code token} — a chunk of the answer text</li>
-	 *   <li>{@code references} — the answer's citations the moment the answer is complete,
-	 *       before grounding verdicts exist; render as unverified until verdicts arrive</li>
-	 *   <li>{@code done} — final JSON with answer, references, questionId, and disclaimer.
-	 *       With async grounding off (the default) the references carry their grounding
-	 *       verdicts; with {@code chartsearchai.grounding.async=true} they do not yet</li>
-	 *   <li>{@code grounded} — only with async grounding: the references re-sent with their
-	 *       grounding verdicts attached, after the Tier-2 verification tail completes; carries
-	 *       the same {@code questionId} as {@code done}. Clients must keep consuming the stream
-	 *       after {@code done} to receive it</li>
-	 *   <li>{@code error} — an error message if something goes wrong</li>
-	 * </ul>
-	 */
-	@RequestMapping(value = "/search/stream", method = RequestMethod.POST)
-	public void searchStream(@RequestBody Map<String, String> body,
-			HttpServletResponse response) throws IOException {
-		Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA);
-
-		String patientUuid = body.get("patient");
-		String question = body.get("question");
-
-		if (patientUuid == null || patientUuid.trim().isEmpty()) {
-			writeJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "patient is required");
-			return;
-		}
-		if (question == null || question.trim().isEmpty()) {
-			writeJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "question is required");
-			return;
-		}
-		if (question.length() > MAX_QUESTION_LENGTH) {
-			writeJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-					"question exceeds maximum length of " + MAX_QUESTION_LENGTH + " characters");
-			return;
-		}
-
-		String sanitizedQuestion = CONTROL_CHARS.matcher(question).replaceAll("");
-		if (sanitizedQuestion.trim().isEmpty()) {
-			writeJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "question is required");
-			return;
-		}
-
-		String sanitizationError = validateQuestion(sanitizedQuestion);
-		if (sanitizationError != null) {
-			writeJsonError(response, HttpServletResponse.SC_BAD_REQUEST, sanitizationError);
-			return;
-		}
-
-		Patient patient = Context.getPatientService().getPatientByUuid(patientUuid);
-		if (patient == null) {
-			writeJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Patient not found");
-			return;
-		}
-
-		User user = Context.getAuthenticatedUser();
-
-		if (!patientAccessCheck.canAccess(user, patient)) {
-			writeJsonError(response, HttpServletResponse.SC_FORBIDDEN,
-					"You do not have access to this patient's chart");
-			return;
-		}
-
-		ResponseEntity<Object> rateLimitError = checkRateLimit(user);
-		if (rateLimitError != null) {
-			writeJsonError(response, 429, "Rate limit exceeded");
-			return;
-		}
-
-		// All validation passed — start SSE streaming.
-		// Unwrap any response wrappers (e.g. Spring's ContentCachingResponseWrapper
-		// from ShallowEtagHeaderFilter) that buffer the entire body, which would
-		// prevent SSE tokens from streaming to the client in real time.
-		HttpServletResponse unwrapped = response;
-		while (unwrapped instanceof HttpServletResponseWrapper) {
-			javax.servlet.ServletResponse inner =
-					((HttpServletResponseWrapper) unwrapped).getResponse();
-			if (inner instanceof HttpServletResponse) {
-				unwrapped = (HttpServletResponse) inner;
-			} else {
-				break;
-			}
-		}
-
-		response.setContentType("text/event-stream");
-		response.setCharacterEncoding("UTF-8");
-		response.setHeader("Cache-Control", "no-cache");
-		response.setHeader("X-Accel-Buffering", "no");
-		response.setHeader("Connection", "keep-alive");
-		// Disable Tomcat's response buffer so tokens stream immediately
-		// instead of accumulating in the default 8KB buffer.
-		unwrapped.setBufferSize(0);
-
-		final OutputStream out = unwrapped.getOutputStream();
-		// Commit the response headers now so chunked transfer starts
-		unwrapped.flushBuffer();
-
-		String preFilterProp = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
-		String searchMode = !"false".equalsIgnoreCase(preFilterProp.trim())
-				? "pre-filter" : "full-chart";
-
-		streamAnswer(out, patient, sanitizedQuestion, user, searchMode, isAsyncGroundingActive());
-	}
-
-	/**
-	 * Whether the streaming endpoint should emit {@code done} before the grounding pass and
-	 * deliver verdicts in a trailing {@code grounded} event. Only meaningful when grounding
-	 * itself is on — with grounding disabled there is no tail to move off the response path.
-	 * Resolved here (not in {@link #streamAnswer}) so the orchestration stays free of
-	 * {@code Context} reads and unit-testable.
-	 */
-	private static boolean isAsyncGroundingActive() {
-		return ChartSearchAiUtils.isGroundingAsyncEnabled() && ChartSearchAiUtils.isGroundingEnabled();
-	}
-
-	/**
-	 * The SSE orchestration for one streaming search: runs the service call with the token /
-	 * thinking / references channels wired to the output stream, then emits the terminal events.
-	 *
-	 * <p>With {@code asyncGrounding} off, the classic shape: one {@code done} event after the
-	 * service returns, carrying the grounded references. With it on, {@code done} is emitted the
-	 * moment the answer is complete (references without verdicts, audit row already saved so
-	 * {@code questionId} is present) and a trailing {@code grounded} event delivers the
-	 * verdict-annotated references once verification finishes — the user's perceived completion
-	 * no longer waits out the grounding tail. If the service returns without ever surfacing an
-	 * ungrounded answer (a cache hit returns an already-final answer), the classic {@code done}
-	 * is emitted instead and no {@code grounded} event follows.</p>
-	 *
-	 * <p>Package-private and free of {@code Context} reads so event-order behavior is unit-tested
-	 * directly (see {@code ChartSearchAiStreamEventOrderTest}); {@code searchStream} resolves all
-	 * configuration before delegating here.</p>
-	 */
-	void streamAnswer(final OutputStream out, Patient patient, String sanitizedQuestion, User user,
-			String searchMode, boolean asyncGrounding) {
-		try {
-			long startTime = System.currentTimeMillis();
-
-			// Carries the early-done state from the consumer (fired mid-call) to the post-return
-			// code: [0] = the saved questionId (null if audit failed), and whether done was sent
-			// is tracked by earlyDoneSent. Single-element arrays because the consumer lambda needs
-			// effectively-final capture.
-			final String[] earlyQuestionId = new String[1];
-			final boolean[] earlyDoneSent = new boolean[1];
-
-			// Async grounding: the moment the (not yet grounding-verified) answer exists, persist
-			// the audit row and emit "done" — the user's perceived completion no longer waits out
-			// the grounding tail. The audit's responseTimeMs deliberately measures to THIS point
-			// (what the user experienced); the [timing] service log still carries groundMs.
-			// Serialization + write failures unwind like any mid-stream disconnect, via the same
-			// RuntimeException(IOException) shape writeSseEventOrThrow uses.
-			Consumer<ChartAnswer> ungroundedConsumer = !asyncGrounding ? ungrounded -> { }
-					: ungrounded -> {
-						if (earlyDoneSent[0]) {
-							// Interface contract is at-most-once; stay idempotent anyway — a
-							// duplicate done would corrupt every client's completion handling.
-							log.warn("Ungrounded-answer consumer fired more than once; ignoring");
-							return;
-						}
-						earlyQuestionId[0] = saveAuditLog(user, patient, sanitizedQuestion,
-								ungrounded, searchMode, System.currentTimeMillis() - startTime);
-						try {
-							writeSseEvent(out, "done",
-									doneEventJson(ungrounded, earlyQuestionId[0]));
-						}
-						catch (IOException e) {
-							log.debug("Client disconnected during streaming (done)");
-							throw new RuntimeException("Client disconnected", e);
-						}
-						earlyDoneSent[0] = true;
-					};
-
-			// Four channels: "token" carries the answer; "thinking" carries the model's reasoning
-			// (chain-of-thought), emitted first so the UI can show live progress and the rationale
-			// instead of a dead spinner; "references" carries the answer's citations the moment the
-			// answer is done — BEFORE the grounding pass — so the UI can render clickable citations
-			// immediately and not wait on Tier-2 verification. The terminal events re-send the
-			// references with grounding verdicts attached: in the classic shape on "done", or — when
-			// async grounding is active — on a trailing "grounded" event after an early "done". The
-			// frontend must render "thinking" distinctly (e.g. a collapsible panel), never as the
-			// answer; citations must show as unverified until verdicts arrive. All unwind on client
-			// disconnect via writeSseEventOrThrow.
-			ChartAnswer chartAnswer = chartSearchService.searchStreaming(
-					patient, sanitizedQuestion,
-					token -> writeSseEventOrThrow(out, "token", token),
-					reasoning -> writeSseEventOrThrow(out, "thinking", reasoning),
-					citations -> sendReferencesEvent(out, citations),
-					ungroundedConsumer);
-
-			if (!earlyDoneSent[0]) {
-				// Classic shape: async off, or the service returned an already-final answer (cache
-				// hit) without surfacing an ungrounded stage — audit and emit the single done.
-				String questionId = saveAuditLog(user, patient, sanitizedQuestion, chartAnswer,
-						searchMode, System.currentTimeMillis() - startTime);
-				writeSseEvent(out, "done", doneEventJson(chartAnswer, questionId));
-			} else {
-				// done already went out before grounding; deliver the verdicts in the trailing
-				// "grounded" event. Same reference serialization as done, so the client can
-				// replace its reference list wholesale; questionId correlates the two events.
-				Map<String, Object> groundedData = new HashMap<String, Object>();
-				groundedData.put("references", serializeReferences(chartAnswer.getReferences()));
-				groundedData.put("safetyWarnings", serializeSafetyWarnings(chartAnswer.getSafetyWarnings()));
-				if (earlyQuestionId[0] != null) {
-					groundedData.put("questionId", earlyQuestionId[0]);
-				}
-				writeSseEvent(out, "grounded", new ObjectMapper().writeValueAsString(groundedData));
-			}
-		}
-		catch (ChartTooLargeException e) {
-			log.warn("Chart too large for LLM context during streaming for patient [id={}]: {}",
-					patient.getPatientId(), e.getMessage());
-			try {
-				writeSseEvent(out, "error",
-						"This patient's chart is too large to process. "
-								+ "Contact your administrator to increase the LLM context size.");
-			}
-			catch (IOException ioe) {
-				log.debug("Could not send too-large error event, client likely disconnected");
-			}
-		}
-		catch (IllegalStateException e) {
-			log.error("Chart search configuration error during streaming", e);
-			try {
-				writeSseEvent(out, "error",
-						"Chart search is not properly configured. Contact your administrator.");
-			}
-			catch (IOException ioe) {
-				log.debug("Could not send config error event, client likely disconnected");
-			}
-		}
-		catch (Exception e) {
-			if (e.getCause() instanceof IOException) {
-				log.debug("Streaming ended due to client disconnect");
-			} else {
-				log.error("Chart search streaming failed for patient [id={}]",
-						patient.getPatientId(), e);
-				try {
-					writeSseEvent(out, "error",
-							"Chart search failed. Please try again or contact your administrator.");
-				}
-				catch (IOException ioe) {
-					log.debug("Could not send error event, client likely disconnected");
-				}
-			}
-		}
-
-		try {
-			out.flush();
-		}
-		catch (IOException e) {
-			log.debug("Could not flush SSE stream, client likely disconnected");
-		}
-	}
-
-	/**
-	 * Persists the audit row for a streaming answer and returns its id as the client-facing
-	 * {@code questionId}, or {@code null} when the save failed — audit failures are logged and
-	 * never break the response, exactly as before the async-grounding split. Shared by the
-	 * classic post-return path and the async early-{@code done} path so both emit identical
-	 * audit rows and {@code done} payloads.
-	 */
-	private String saveAuditLog(User user, Patient patient, String question, ChartAnswer answer,
-			String searchMode, long responseTimeMs) {
-		ChartSearchAuditLog auditLog = new ChartSearchAuditLog();
-		auditLog.setUser(user);
-		auditLog.setPatient(patient);
-		auditLog.setQuestion(question);
-		auditLog.setAnswer(answer.getAnswer());
-		auditLog.setReferenceCount(answer.getReferences().size());
-		auditLog.setSearchMode(searchMode);
-		auditLog.setResponseTimeMs(responseTimeMs);
-		auditLog.setInputTokens(answer.getInputTokens() > 0 ? answer.getInputTokens() : null);
-		auditLog.setOutputTokens(answer.getOutputTokens() > 0 ? answer.getOutputTokens() : null);
-		auditLog.setDateCreated(new Date());
-		try {
-			auditLogService.saveAuditLog(auditLog);
-		}
-		catch (Exception e) {
-			log.warn("Failed to save audit log for streaming query", e);
-		}
-		return auditLog.getAuditLogId() != null ? String.valueOf(auditLog.getAuditLogId()) : null;
-	}
-
-	/** Serializes the {@code done} event payload: answer, disclaimer, references, questionId. */
-	private String doneEventJson(ChartAnswer answer, String questionId) throws IOException {
-		Map<String, Object> doneData = new HashMap<String, Object>();
-		doneData.put("answer", answer.getAnswer());
-		doneData.put("disclaimer", DISCLAIMER);
-		doneData.put("references", serializeReferences(answer.getReferences()));
-		doneData.put("safetyWarnings", serializeSafetyWarnings(answer.getSafetyWarnings()));
-		if (questionId != null) {
-			doneData.put("questionId", questionId);
-		}
-		return new ObjectMapper().writeValueAsString(doneData);
-	}
-
-	/** Test seam: production wires {@link ChartSearchService} via {@code Autowired}. */
-	void setChartSearchService(ChartSearchService chartSearchService) {
-		this.chartSearchService = chartSearchService;
-	}
-
-	/** Test seam: production wires {@link AuditLogService} via {@code Autowired}. */
-	void setAuditLogService(AuditLogService auditLogService) {
-		this.auditLogService = auditLogService;
 	}
 
 	@RequestMapping(value = "/auditlog", method = RequestMethod.GET)
@@ -1280,6 +811,9 @@ public class ChartSearchAiRestController {
 		if (answer.getAnswerValidation() != null) {
 			response.put("answerValidation", answer.getAnswerValidation());
 		}
+		if (!answer.getSafetyWarnings().isEmpty()) {
+			response.put("safetyWarnings", answer.getSafetyWarnings());
+		}
 		response.put("session", result.getSessionUuid());
 		response.put("messageId", result.getAssistantMessageUuid());
 		response.put("model", answeredModel);
@@ -1346,6 +880,7 @@ public class ChartSearchAiRestController {
 					String prose = stored;
 					List<Object> blocks = new ArrayList<Object>();
 					List<Object> references = new ArrayList<Object>();
+					List<Object> safetyWarnings = new ArrayList<Object>();
 					Map<String, Object> confidence = null;
 					Map<String, Object> answerValidation = null;
 					Map<String, Object> inDepth = null;
@@ -1364,6 +899,10 @@ public class ChartSearchAiRestController {
 						com.fasterxml.jackson.databind.JsonNode refsNode = root.get("references");
 						if (refsNode != null && refsNode.isArray()) {
 							references = hydrateMapper.convertValue(refsNode, List.class);
+						}
+						com.fasterxml.jackson.databind.JsonNode safetyWarningsNode = root.get("safetyWarnings");
+						if (safetyWarningsNode != null && safetyWarningsNode.isArray()) {
+							safetyWarnings = hydrateMapper.convertValue(safetyWarningsNode, List.class);
 						}
 						com.fasterxml.jackson.databind.JsonNode confNode = root.get("confidence");
 							if (confNode != null && confNode.isObject()) {
@@ -1385,6 +924,9 @@ public class ChartSearchAiRestController {
 				entry.put("content", prose);
 				entry.put("blocks", blocks);
 				entry.put("references", references);
+					if (!safetyWarnings.isEmpty()) {
+						entry.put("safetyWarnings", safetyWarnings);
+					}
 					if (confidence != null) {
 						entry.put("confidence", confidence);
 					}
@@ -1594,67 +1136,6 @@ public class ChartSearchAiRestController {
 			return "Question contains disallowed content";
 		}
 		return null;
-	}
-
-	/**
-	 * Serializes references to the SSE wire shape shared by the early {@code references} event
-	 * (grounding verdicts not yet attached) and the final {@code done} event (grounded).
-	 * {@code grounded} is null when grounding is disabled or could not run — clients must render
-	 * null as "unverified", never as "verified".
-	 */
-	private List<Map<String, Object>> serializeReferences(List<RecordReference> references) {
-		List<Map<String, Object>> refs = new ArrayList<Map<String, Object>>();
-		for (RecordReference ref : references) {
-			Map<String, Object> refMap = new LinkedHashMap<String, Object>();
-			refMap.put("index", ref.getIndex());
-			refMap.put("resourceType", ref.getResourceType());
-			refMap.put("resourceUuid", ref.getResourceUuid());
-			refMap.put("date", formatDate(ref.getDate()));
-			refMap.put("grounded", ref.getGrounded());
-			refs.add(refMap);
-		}
-		return refs;
-	}
-
-	/**
-	 * Emits the {@code references} SSE event carrying the answer's citations before the grounding
-	 * pass completes, so the UI can render clickable citations without waiting on Tier-2
-	 * verification. A serialization failure is non-fatal — the final {@code done} event re-sends the
-	 * references with verdicts — but a client disconnect during the write unwinds the stream like the
-	 * other channels (via {@link #writeSseEventOrThrow}).
-	 */
-	/**
-	 * Serializes the post-answer drug-safety advisories to the wire shape rendered as chips below the
-	 * answer. Empty list when the drug-reference feature is off or nothing was flagged. The key is
-	 * always present (possibly empty) so the frontend can branch on length without a null check.
-	 */
-	private List<Map<String, Object>> serializeSafetyWarnings(List<SafetyWarning> warnings) {
-		List<Map<String, Object>> out = new ArrayList<Map<String, Object>>();
-		if (warnings == null) {
-			return out;
-		}
-		for (SafetyWarning warning : warnings) {
-			Map<String, Object> map = new LinkedHashMap<String, Object>();
-			map.put("type", warning.getType());
-			map.put("drug", warning.getDrug());
-			map.put("detail", warning.getDetail());
-			out.add(map);
-		}
-		return out;
-	}
-
-	private void sendReferencesEvent(OutputStream out, List<RecordReference> references) {
-		String json;
-		try {
-			Map<String, Object> data = new HashMap<String, Object>();
-			data.put("references", serializeReferences(references));
-			json = new ObjectMapper().writeValueAsString(data);
-		}
-		catch (IOException e) {
-			log.warn("Could not serialize early references event; the final done event still carries them", e);
-			return;
-		}
-		writeSseEventOrThrow(out, "references", json);
 	}
 
 	private void streamHubStagedChat(OutputStream out, ChatSession session, String patientUuid,

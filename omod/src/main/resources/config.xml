@@ -238,47 +238,6 @@
 		<description>When true, the validator cross-references each drug named in the answer against the patient's active allergies and conditions and flags contraindications: both hand-authored rules from the reference dataset and a recorded allergy to the same drug or one in the same ATC level-4 subgroup (cross-reactivity), the latter requiring only ATC codes so it works with the rule-less atc source. Requires chartsearchai.drugSafety.validateAnswers. Default: true.</description>
 	</globalProperty>
 
-	<!-- AOP -->
-	<advice>
-		<point>org.openmrs.api.EncounterService</point>
-		<class>org.openmrs.module.chartsearchai.api.EncounterIndexingAdvice</class>
-	</advice>
-
-	<advice>
-		<point>org.openmrs.api.ObsService</point>
-		<class>org.openmrs.module.chartsearchai.api.ObsIndexingAdvice</class>
-	</advice>
-
-	<advice>
-		<point>org.openmrs.api.ConditionService</point>
-		<class>org.openmrs.module.chartsearchai.api.PatientDataIndexingAdvice</class>
-	</advice>
-
-	<advice>
-		<point>org.openmrs.api.DiagnosisService</point>
-		<class>org.openmrs.module.chartsearchai.api.PatientDataIndexingAdvice</class>
-	</advice>
-
-	<advice>
-		<point>org.openmrs.api.PatientService</point>
-		<class>org.openmrs.module.chartsearchai.api.PatientDataIndexingAdvice</class>
-	</advice>
-
-	<advice>
-		<point>org.openmrs.api.OrderService</point>
-		<class>org.openmrs.module.chartsearchai.api.PatientDataIndexingAdvice</class>
-	</advice>
-
-	<advice>
-		<point>org.openmrs.api.ProgramWorkflowService</point>
-		<class>org.openmrs.module.chartsearchai.api.PatientDataIndexingAdvice</class>
-	</advice>
-
-	<advice>
-		<point>org.openmrs.api.MedicationDispenseService</point>
-		<class>org.openmrs.module.chartsearchai.api.PatientDataIndexingAdvice</class>
-	</advice>
-
 	<!-- Internationalization -->
 	<messages>
 		<lang>en</lang>

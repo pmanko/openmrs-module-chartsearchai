@@ -205,8 +205,23 @@ public class ChatServiceImpl implements ChatService {
 		Map<String, Object> answerValidation = wire.get("answerValidation") instanceof Map
 				? new LinkedHashMap<>((Map<String, Object>) wire.get("answerValidation"))
 				: null;
+		List<Map<String, Object>> safetyWarnings = safetyWarningsFromWire(wire.get("safetyWarnings"));
 		return new ChartAnswer(answer, references, Collections.emptyList(),
-				confidence, answerValidation, 0, 0, 0);
+				confidence, answerValidation, 0, 0, 0, safetyWarnings);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static List<Map<String, Object>> safetyWarningsFromWire(Object raw) {
+		if (!(raw instanceof List)) {
+			return Collections.emptyList();
+		}
+		List<Map<String, Object>> out = new ArrayList<>();
+		for (Object item : (List<Object>) raw) {
+			if (item instanceof Map) {
+				out.add(new LinkedHashMap<>((Map<String, Object>) item));
+			}
+		}
+		return out;
 	}
 
 	@SuppressWarnings("unchecked")
