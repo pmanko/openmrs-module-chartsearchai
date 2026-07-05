@@ -314,24 +314,6 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
-	 * Build the full, retrieval-free patient chart that the chat path uses
-	 * as its frozen session prefix. Bypasses {@code chartsearchai.embedding.preFilter}
-	 * deliberately — chat needs byte-stability across turns so the LLM's
-	 * prompt cache can hit, which pre-filter's query-dependent chart breaks.
-	 *
-	 * <p>Returned text is the LLM-ready envelope: "Patient records (most
-	 * recent first):\n<numbered records>". Stored on
-	 * {@code chat_session.chart_snapshot} by {@link ChatServiceImpl}.
-	 */
-	public PatientChart buildSessionChart(Patient patient) {
-		PatientChart chart = chartBuildingStrategy.buildChartUnfiltered(patient);
-		String envelope = "Patient records (most recent first):\n"
-				+ (chart.getText() == null || chart.getText().trim().isEmpty()
-						? "This patient has no records." : chart.getText().stripTrailing());
-		return new PatientChart(envelope, chart.getMappings());
-	}
-
-	/**
 	 * Substitutes a placeholder when the chart has no records, so the LLM
 	 * produces a query-specific "no records" answer instead of one based
 	 * on demographics alone.

@@ -35,18 +35,6 @@ class ChartBuildingStrategy {
 		return queryStoreChartBuilder.build(patient, question);
 	}
 
-	/**
-	 * Full patient chart with no query-driven focus hint — a byte-stable, question-independent
-	 * prefix the multi-turn chat path freezes onto the session (see
-	 * {@code LlmInferenceService#buildSessionChart}). This is the empty-question querystore build
-	 * (the focus hint is applied only for a non-empty question), so every turn of a session shares
-	 * one chart prefix and the LLM prompt cache hits. Routes through {@link #buildChart} so
-	 * querystore remains the single retrieval entry point.
-	 */
-	PatientChart buildChartUnfiltered(Patient patient) {
-		return buildChart(patient, "");
-	}
-
 	boolean usePreFilter() {
 		return PipelineSettings.usePreFilter();
 	}

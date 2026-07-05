@@ -36,8 +36,6 @@ import org.openmrs.module.chartsearchai.api.db.ChatDAO;
 import org.openmrs.module.chartsearchai.model.ChartSearchAuditLog;
 import org.openmrs.module.chartsearchai.model.ChatMessage;
 import org.openmrs.module.chartsearchai.model.ChatSession;
-import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
-import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,9 +55,6 @@ public class ChatServiceImpl implements ChatService {
 
 	@Autowired
 	private ChatDAO chatDAO;
-
-	@Autowired
-	private LlmInferenceService llmInferenceService;
 
 	@Autowired
 	private ChartSearchAiDAO auditDAO;
@@ -92,20 +87,6 @@ public class ChatServiceImpl implements ChatService {
 			chatDAO.saveSession(existing);
 		}
 		return createSession(patient, user);
-	}
-
-	@Override
-	public ChatSession refreshChartSnapshot(Patient patient) {
-		User user = Context.getAuthenticatedUser();
-		ChatSession existing = chatDAO.getLatestSession(patient, user);
-		if (existing == null) {
-			// Nothing to refresh — opening a session builds a fresh snapshot anyway.
-			return createSession(patient, user);
-		}
-		// Rebuild only the three chart fields; the transcript (messages) is never
-		// touched — this is the whole contrast with closeAndStartNew.
-		populateChartSnapshot(existing, patient);
-		return chatDAO.saveSession(existing);
 	}
 
 	@Override
@@ -156,82 +137,7 @@ public class ChatServiceImpl implements ChatService {
 		session.setStartedAt(now);
 		session.setLastActivityAt(now);
 		session.setStatus(ChatSession.STATUS_ACTIVE);
-		populateChartSnapshot(session, patient);
 		return chatDAO.saveSession(session);
-	}
-
-	/**
-	 * Backfill chart snapshot for sessions that lack one on first chat() call.
-	 * Idempotent.
-	 */
-	protected void ensureChartSnapshot(ChatSession session) {
-		if (session.getChartSnapshot() != null) {
-			return;
-		}
-		populateChartSnapshot(session, session.getPatient());
-		chatDAO.saveSession(session);
-	}
-
-	/**
-	 * Build the full chart for the session's patient (bypassing pre-filter)
-	 * and store envelope + mappings on the session row. The byte-stability
-	 * of envelope across all turns is the load-bearing invariant of the
-	 * chat design — the LLM's prompt cache hits on this prefix.
-	 */
-	protected void populateChartSnapshot(ChatSession session, Patient patient) {
-		PatientChart chart = llmInferenceService.buildSessionChart(patient);
-		session.setChartSnapshot(chart.getText());
-		session.setChartMappingsJson(serializeMappings(chart.getMappings()));
-		session.setChartBuiltAt(new Date());
-	}
-
-	/**
-	 * Serialize {@link RecordMapping} list as JSON with epoch-ms dates so
-	 * the round-trip is locale-free and deterministic. {@code RecordMapping}
-	 * lacks a no-arg ctor so we ser/des via plain Map.
-	 */
-	private static String serializeMappings(List<RecordMapping> mappings) {
-		if (mappings == null || mappings.isEmpty()) {
-			return "[]";
-		}
-		List<Map<String, Object>> wire = new ArrayList<>(mappings.size());
-		for (RecordMapping m : mappings) {
-			Map<String, Object> e = new LinkedHashMap<>();
-			e.put("index", m.getIndex());
-			e.put("resourceType", m.getResourceType());
-			e.put("resourceUuid", m.getResourceUuid());
-			e.put("date", m.getDate() == null ? null : m.getDate().getTime());
-			wire.add(e);
-		}
-		try {
-			return MAPPER.writeValueAsString(wire);
-		}
-		catch (IOException ioe) {
-			throw new APIException("Failed to serialize chart mappings: " + ioe.getMessage(), ioe);
-		}
-	}
-
-	static List<RecordMapping> deserializeMappings(String json) {
-		if (json == null || json.isEmpty() || "[]".equals(json)) {
-			return Collections.emptyList();
-		}
-		try {
-			List<Map<String, Object>> wire = MAPPER.readValue(
-					json, new TypeReference<List<Map<String, Object>>>() {});
-			List<RecordMapping> out = new ArrayList<>(wire.size());
-			for (Map<String, Object> e : wire) {
-				int index = ((Number) e.get("index")).intValue();
-				String type = (String) e.get("resourceType");
-				String uuid = (String) e.get("resourceUuid");
-				Number dateMs = (Number) e.get("date");
-				Date d = dateMs == null ? null : new Date(dateMs.longValue());
-				out.add(new RecordMapping(index, type, uuid, d));
-			}
-			return out;
-		}
-		catch (IOException ioe) {
-			throw new APIException("Failed to deserialize chart mappings: " + ioe.getMessage(), ioe);
-		}
 	}
 
 	protected ChatMessage persistUserMessage(ChatSession session, String content, int ordinal) {

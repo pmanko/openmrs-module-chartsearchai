@@ -28,14 +28,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Lifecycle contract for chat sessions, exercised through the real
- * {@link ChatService} + {@link ChatDAO} + chart serialization against a real
- * patient (no mocks — module rule).
- *
- * <p>The load-bearing contrast: {@code refreshChartSnapshot} rebuilds the chart
- * while KEEPING the transcript (same session, same messages, fresh chart);
- * {@code closeAndStartNew} clears it (new session, empty transcript). Asserting
- * both in one suite is the whole point — a refresh that accidentally behaved
- * like new-chat would silently lose the clinician's conversation.
+ * {@link ChatService} + {@link ChatDAO} against a real patient (no mocks —
+ * module rule).
  */
 public class ChatServiceRefreshTest extends BaseModuleContextSensitiveTest {
 
@@ -61,25 +55,6 @@ public class ChatServiceRefreshTest extends BaseModuleContextSensitiveTest {
 		m.setContent(content);
 		m.setCreatedAt(new Date());
 		chatDAO.saveMessage(m);
-	}
-
-	@Test
-	public void refreshChartSnapshot_rebuildsChartButKeepsTranscriptAndSession() {
-		ChatSession session = chatService.openOrLoadActiveSession(patient);
-		String originalUuid = session.getUuid();
-		assertNotNull(session.getChartSnapshot(), "a session opens with a chart snapshot");
-		addTurn(session, 0, ChatMessage.ROLE_USER, "What medications is this patient on?");
-		addTurn(session, 1, ChatMessage.ROLE_ASSISTANT, "Lisinopril 10mg [2]");
-		Context.flushSession();
-		assertEquals(2, chatService.getMessages(session).size(), "precondition: 2 turns persisted");
-
-		ChatSession refreshed = chatService.refreshChartSnapshot(patient);
-
-		assertEquals(originalUuid, refreshed.getUuid(), "refresh keeps the same session");
-		assertEquals(2, chatService.getMessages(refreshed).size(),
-				"refresh must NOT clear the transcript");
-		assertNotNull(refreshed.getChartSnapshot(), "refresh leaves a chart snapshot in place");
-		assertNotNull(refreshed.getChartBuiltAt(), "refresh stamps chartBuiltAt");
 	}
 
 	@Test
