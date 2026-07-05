@@ -95,9 +95,6 @@ public class ChartSearchAiStreamingTest {
 		when(f.patientService.getPatientByUuid("patient-uuid")).thenReturn(f.patient);
 		lenient().when(f.adminService.getGlobalProperty(ChartSearchAiConstants.GP_RATE_LIMIT_PER_MINUTE))
 				.thenReturn(null);
-		lenient().when(f.adminService.getGlobalProperty(
-				eq(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER), any()))
-				.thenReturn("false");
 		when(f.patientAccessCheck.canAccess(any(), eq(f.patient))).thenReturn(accessGranted);
 		lenient().when(f.auditLogService.getQueryCountByUserSince(any(), any())).thenReturn(0L);
 		lenient().when(f.chatService.openOrLoadActiveSession(f.patient)).thenReturn(f.session);

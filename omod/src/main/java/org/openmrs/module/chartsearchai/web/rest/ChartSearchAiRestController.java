@@ -229,6 +229,7 @@ public class ChartSearchAiRestController {
 				row.put("displayName", e.getDisplayName());
 				row.put("type", e.getType());
 				row.put("loaded", e.isLoaded());
+				row.put("staged", e.isStaged());
 				if (e.getMaxContextLength() != null) {
 					row.put("maxContextLength", e.getMaxContextLength());
 				}
@@ -326,6 +327,7 @@ public class ChartSearchAiRestController {
 					m.put("id", e.getId());
 					m.put("displayName", e.getDisplayName());
 					m.put("loaded", e.isLoaded());
+					m.put("staged", e.isStaged());
 					models.add(m);
 				}
 				row.put("models", models);
