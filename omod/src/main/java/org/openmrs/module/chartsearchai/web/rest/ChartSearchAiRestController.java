@@ -1404,8 +1404,6 @@ public class ChartSearchAiRestController {
 
 		Map<String, Object> response = new LinkedHashMap<String, Object>();
 		response.put("session", session.getUuid());
-		response.put("chartBuiltAt",
-				session.getChartBuiltAt() != null ? session.getChartBuiltAt().getTime() : null);
 		response.put("messages", out);
 		return new ResponseEntity<Object>(response, HttpStatus.OK);
 	}

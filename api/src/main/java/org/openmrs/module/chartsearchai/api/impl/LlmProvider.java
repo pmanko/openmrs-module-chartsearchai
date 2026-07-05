@@ -640,24 +640,6 @@ public class LlmProvider {
 		return verdicts;
 	}
 
-	protected int getMaxContextTokens() {
-		String value = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_CHAT_MAX_CONTEXT_TOKENS);
-		if (value != null && !value.trim().isEmpty()) {
-			try {
-				int parsed = Integer.parseInt(value.trim());
-				if (parsed > 0) {
-					return parsed;
-				}
-				log.warn("chartsearchai.chat.maxContextTokens must be positive, got '{}', using default", parsed);
-			}
-			catch (NumberFormatException e) {
-				log.warn("Invalid chartsearchai.chat.maxContextTokens '{}', using default", value);
-			}
-		}
-		return ChartSearchAiConstants.DEFAULT_CHAT_MAX_CONTEXT_TOKENS;
-	}
-
 	/**
 	 * Pre-warm the LLM's prompt cache by sending the same prefix a real query
 	 * would, with an empty trailing question. See {@link #buildUserMessage} for
