@@ -29,8 +29,8 @@ The standalone download above includes the backend module, frontend ESM, and the
   - [7. Indexing](#7-indexing)
 - [Query behavior](#query-behavior)
 - [API](#api)
-  - [Search](#search)
-  - [Streaming search (SSE)](#streaming-search-sse)
+  - [Chat](#chat)
+  - [Streaming chat (SSE)](#streaming-chat-sse)
   - [Feedback](#feedback)
   - [Audit log](#audit-log)
 - [Patient access control](#patient-access-control)
@@ -245,7 +245,7 @@ After the LLM answers, each citation can be verified against the record it point
 | `chartsearchai.grounding.enabled` | `false` | Master switch. When `true`, every cited record is checked for grounding after the answer is produced; citations that fail are flagged as unverified. The answer is never blocked or rewritten |
 | `chartsearchai.grounding.minCosine` | `0.40` | Tier-1 floor: minimum cosine similarity between a cited record's text and the answer sentence that cites it. Catches grossly off-topic citations, not subtle subject/negation flips. Model-dependent — the verifier embeds with querystore's model; the default `0.40` is far too low for `e5-base-v2`, so set ~`0.82` on an e5 deployment. Must be between 0 and 1 |
 | `chartsearchai.grounding.entailment.enabled` | `false` | Tier-2: confirm each citation with a yes/no LLM entailment judgement of whether the record actually supports the sentence citing it. Catches high-overlap-but-false citations (the record says a *relative* had X, or negates X) that cosine cannot separate. Verified in a batched LLM call. Tier-1 cosine is computed lazily in this mode, so Tier-2 works even when no embedding model is configured. Requires `chartsearchai.grounding.enabled` |
-| `chartsearchai.grounding.async` | `false` | *(Streaming only)* Emit the `done` event as soon as the answer is complete (references unverified) and deliver verdicts afterward in a trailing `grounded` event — moving the Tier-2 tail off the user's perceived completion time. Clients must keep consuming the SSE stream after `done`. The blocking `/search` endpoint is unaffected and always returns final verdicts. Requires `chartsearchai.grounding.enabled`. See [Streaming search (SSE)](#streaming-search-sse) |
+| `chartsearchai.grounding.async` | `false` | *(Streaming only)* Emit the `done` event as soon as the answer is complete (references unverified) and deliver verdicts afterward in a trailing `grounded` event — moving the Tier-2 tail off the user's perceived completion time. Clients must keep consuming the SSE stream after `done`. The blocking `POST /chat` endpoint is unaffected and always returns final verdicts. Requires `chartsearchai.grounding.enabled`. See [Streaming chat (SSE)](#streaming-chat-sse) |
 | `chartsearchai.grounding.clauseScoped` | `false` | When `true`, a citation in a sentence that cites multiple records is checked against the answer text up to and including its own `[N]` marker, rather than the whole compound sentence — flagging a citation that supports its own clause but not a later clause cited by a different record. Only affects which text a citation is verified against; never changes the answer or which records are cited |
 
 The Tier-2 (`entailment`) and `async` checks require `chartsearchai.grounding.enabled`.
@@ -313,7 +313,7 @@ When `chartsearchai.grounding.enabled` is `true` (off by default), every citatio
 - **Tier-1 (cosine)** — the cited record's text must be semantically close (cosine ≥ `chartsearchai.grounding.minCosine`) to the answer sentence that cites it. This catches grossly off-topic citations (a blood-pressure record cited for a diabetes claim) cheaply, with no extra LLM call.
 - **Tier-2 (entailment)** — with `chartsearchai.grounding.entailment.enabled=true`, a yes/no LLM judgement confirms the record actually entails the sentence. This catches high-overlap-but-false citations that cosine cannot separate — e.g. "the patient has X [5]" where record 5 says a *relative* had X, or negates X. Citations are verified in a single batched LLM call, and Tier-1 cosine is computed lazily in this mode (only where the LLM produced no verdict), so Tier-2 works even when no embedding model is configured.
 
-Each reference in the response carries a `grounded` verdict (`true` / `false` / `null` when not checked), which clients should surface by rendering any citation whose verdict is `false` or `null` as unverified. Grounding never rewrites or blocks the answer — it only annotates which citations could be confirmed. The verifier embeds with querystore's model, so the cosine floor is model-dependent (≈`0.82` for `e5-base-v2`; see `chartsearchai.grounding.minCosine`). On CPU-only servers the Tier-2 pass adds seconds after the answer is already readable, so `chartsearchai.grounding.async=true` moves it into a trailing `grounded` SSE event (see [Streaming search (SSE)](#streaming-search-sse)). See [ADR Decision 25](docs/adr.md#decision-25-citation-grounding-tier-1-cosine--tier-2-entailment) for the design rationale.
+Each reference in the response carries a `grounded` verdict (`true` / `false` / `null` when not checked), which clients should surface by rendering any citation whose verdict is `false` or `null` as unverified. Grounding never rewrites or blocks the answer — it only annotates which citations could be confirmed. The verifier embeds with querystore's model, so the cosine floor is model-dependent (≈`0.82` for `e5-base-v2`; see `chartsearchai.grounding.minCosine`). On CPU-only servers the Tier-2 pass adds seconds after the answer is already readable, so `chartsearchai.grounding.async=true` moves it into a trailing `grounded` SSE event (see [Streaming chat (SSE)](#streaming-chat-sse)). See [ADR Decision 25](docs/adr.md#decision-25-citation-grounding-tier-1-cosine--tier-2-entailment) for the design rationale.
 
 ### Drug-reference injection & safety validation
 
@@ -326,15 +326,22 @@ The clinical knowledge lives in a configurable data file (`drug-reference.json`)
 
 ## API
 
-### Search
+### Chat
+
+Multi-turn: pass a prior response's `session` uuid (or the one returned by `GET /chat`) to continue that
+conversation; omit it to use or open the caller's active session for the patient. Every chat turn relays
+through the configured remote LLM endpoint — chartsearchai has no local inference — see [Configure](#5-configure).
 
 ```
-POST /ws/rest/v1/chartsearchai/search
+POST /ws/rest/v1/chartsearchai/chat
 Content-Type: application/json
 
 {
   "patient": "patient-uuid-here",
-  "question": "What medications is this patient on?"
+  "question": "What medications is this patient on?",
+  "session": "existing-session-uuid (optional)",
+  "endpointUrl": "per-request backend override (optional)",
+  "modelName": "per-request backend override (optional)"
 }
 ```
 
@@ -344,46 +351,61 @@ Response:
 {
   "answer": "The patient is currently on Metformin [1] and Lisinopril [3]...",
   "disclaimer": "This response is AI-generated and may not be accurate...",
-  "questionId": "42",
   "references": [
-    { "index": 3, "resourceType": "order", "resourceUuid": "a8f5f167-4ee2-4d2a-94f9-3f3f86d2e9b6", "date": "2025-03-15", "grounded": null },
-    { "index": 1, "resourceType": "order", "resourceUuid": "5946f880-b197-400b-9caa-a3c661d71165", "date": "2025-01-10", "grounded": null }
+    { "index": 3, "resourceType": "order", "resourceUuid": "a8f5f167-4ee2-4d2a-94f9-3f3f86d2e9b6", "date": "2025-03-15" },
+    { "index": 1, "resourceType": "order", "resourceUuid": "5946f880-b197-400b-9caa-a3c661d71165", "date": "2025-01-10" }
   ],
-  "safetyWarnings": []
+  "blocks": [],
+  "confidence": { "answer": { "level": "green", "note": "" } },
+  "answerValidation": { "status": "checked", "label": "Checked" },
+  "safetyWarnings": [],
+  "session": "session-uuid",
+  "messageId": "assistant-message-uuid",
+  "model": "resolved-model-id"
 }
 ```
 
-`questionId` is a string identifier for this query, used to submit feedback (see below). It is omitted if audit logging fails.
+`confidence`, `answerValidation`, and `safetyWarnings` are only present when the resolved model/level
+produces them (validated or drug-safety-enabled levels). `safetyWarnings` entries are non-blocking
+drug-safety advisories (each `{ type, drug, detail }`, where `type` is `overdose` / `interaction` /
+`contraindication`) — see [Drug-reference injection & safety validation](#drug-reference-injection--safety-validation).
 
-Each reference carries a `grounded` field — `true` / `false` once [citation grounding](#citation-grounding) has verified it, or `null` when grounding is disabled (the default, shown above) or did not check that citation.
-
-`safetyWarnings` is an array of non-blocking drug-safety advisories (each `{ type, drug, detail }`, where `type` is `overdose` / `interaction` / `contraindication`). The key is always present and empty unless the optional drug-reference feature is enabled and something was flagged (see [Drug-reference injection & safety validation](#drug-reference-injection--safety-validation)).
-
-### Streaming search (SSE)
-
-For real-time token-by-token streaming:
+### Streaming chat (SSE)
 
 ```
-POST /ws/rest/v1/chartsearchai/search/stream
+POST /ws/rest/v1/chartsearchai/chat/stream
 Content-Type: application/json
 Accept: text/event-stream
 
 {
   "patient": "patient-uuid-here",
-  "question": "What medications is this patient on?"
+  "question": "What medications is this patient on?",
+  "session": "existing-session-uuid (optional)",
+  "staged": "true (optional — see below)"
 }
 ```
 
-SSE events:
+The `X-ChartSearchAi-Session` response header carries the session uuid before the stream opens.
+
+By default the stream emits `token` chunks followed by one final `done` event with the same JSON shape as
+the sync `POST /chat` response above.
+
+Setting `staged: "true"` opts into the staged answer/validation/in-depth event sequence — only meaningful
+for a model the configured remote endpoint advertises as staged-capable (the `staged` field on each entry
+returned by `GET /endpoints`):
 
 | Event | Description |
 |-------|-------------|
-| `thinking` | A chunk of the model's reasoning, emitted before the answer; render distinctly (e.g. a collapsible panel), never as the answer |
-| `token` | A chunk of the answer text as it is generated |
-| `references` | The answer's citations the moment the answer is complete — before grounding verdicts exist; render as unverified until verdicts arrive |
-| `done` | Final JSON with the complete answer, references (sorted most recent first, with `index`, `resourceType`, `resourceUuid`, `date`, `grounded`), `safetyWarnings`, `questionId`, and disclaimer. With `chartsearchai.grounding.async=true`, `done` is emitted as soon as the answer is complete — its references carry no verdicts yet and `safetyWarnings` is empty (validation runs with grounding) |
-| `grounded` | Only with `chartsearchai.grounding.async=true`: the references re-sent with their grounding verdicts (`grounded` true/false/null) once Tier-2 verification completes, plus the final `safetyWarnings`, with the same `questionId`. Keep consuming the stream after `done` to receive it |
+| `token` | A chunk of the direct answer as it is generated |
+| `answer_done` | The direct answer is complete; the envelope's `answerValidation.status` is `validating` and `inDepth.status` is `pending` |
+| `answer_validation` | *(only when the level has a validator)* the same message updated after its self-check |
+| `indepth_pending` | The in-depth analysis is about to start |
+| `indepth_token` | A chunk of the in-depth analysis as it streams |
+| `indepth_done` / `indepth_error` | The in-depth analysis completed or failed |
+| `done` | Final envelope with the settled answer and the completed in-depth |
 | `error` | Error message if something goes wrong |
+
+Every JSON event payload also carries `session`, `messageId`, `model`, and `disclaimer`.
 
 ### Warmup
 
