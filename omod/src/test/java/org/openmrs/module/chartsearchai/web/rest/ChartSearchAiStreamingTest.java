@@ -172,7 +172,7 @@ public class ChartSearchAiStreamingTest {
 		String body = response.getContentAsString();
 		assertTrue(body.contains("\"error\""),
 				"403 response must carry a JSON error body, got:\n" + body);
-		assertTrue(!body.contains("event: token") && !body.contains("event: done"),
+		assertTrue(!body.contains("event: answer_done") && !body.contains("event: done"),
 				"No SSE events may be written after a 403, got:\n" + body);
 		assertTrue(response.getContentType() != null
 						&& response.getContentType().startsWith("application/json"),
@@ -220,7 +220,7 @@ public class ChartSearchAiStreamingTest {
 		assertTrue(response.getContentType() != null
 						&& response.getContentType().startsWith("application/json"),
 				"pre-stream failure must be JSON, not an event-stream; got " + response.getContentType());
-		assertTrue(!body.contains("FetchNotFoundException") && !body.contains("event: token"),
+		assertTrue(!body.contains("FetchNotFoundException") && !body.contains("event: answer_done"),
 				"must not leak the raw exception or open the SSE stream, got:\n" + body);
 	}
 

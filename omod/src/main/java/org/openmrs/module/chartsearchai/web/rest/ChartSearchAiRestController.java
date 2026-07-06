@@ -1270,10 +1270,8 @@ public class ChartSearchAiRestController {
 		if (event == null || event.isEmpty() || data == null || data.isEmpty()) {
 			return;
 		}
-		if ("token".equals(event) || "indepth_token".equals(event) || "error".equals(event)) {
-			if ("error".equals(event)) {
-				doneSeen[0] = true;
-			}
+		if ("error".equals(event)) {
+			doneSeen[0] = true;
 			writeSseEvent(out, event, data);
 			return;
 		}
