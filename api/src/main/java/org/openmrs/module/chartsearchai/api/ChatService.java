@@ -75,7 +75,7 @@ public interface ChatService {
 
 	/**
 	 * Container for the controller's response: the ChartAnswer (text +
-	 * references + tokens), plus the session uuid and the newly-created
+	 * references + usage metadata), plus the session uuid and the newly-created
 	 * assistant message uuid for client-side threading.
 	 */
 	class ChatTurnResult {

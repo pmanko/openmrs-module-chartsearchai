@@ -31,7 +31,7 @@ on:
       onnx_model_url:
         description: 'Download URL for the ONNX model file'
         required: false
-        default: ''   # MiniLM is only used by the non-default chartsearchai.embedding.preFilter pipeline; not bundled
+        default: ''   # MiniLM is optional; it is not bundled into the default standalone artifact.
         type: string
       vocab_url:
         description: 'Download URL for the vocab.txt file'

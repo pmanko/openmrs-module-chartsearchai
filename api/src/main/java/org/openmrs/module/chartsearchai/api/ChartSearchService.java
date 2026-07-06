@@ -237,12 +237,10 @@ public interface ChartSearchService {
 
 		/**
 		 * Whether the cited record was found to actually support the answer
-		 * sentence(s) that cite it. {@code TRUE}/{@code FALSE} when grounding
-		 * verification ran (see {@code chartsearchai.grounding.enabled});
-		 * {@code null} when verification was disabled or could not run for this
-		 * reference (e.g. the record carried no text to compare against). A
-		 * {@code null} verdict must be rendered as "unverified", never as
-		 * "verified".
+		 * sentence(s) that cite it. {@code TRUE}/{@code FALSE} when the configured
+		 * hub/model endpoint returned a grounding verdict; {@code null} when no
+		 * verdict was returned or the check could not run. A {@code null} verdict
+		 * must be rendered as "unverified", never as "verified".
 		 */
 		public Boolean getGrounded() {
 			return grounded;

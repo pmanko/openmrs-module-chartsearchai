@@ -65,8 +65,8 @@ import com.sun.net.httpserver.HttpServer;
  * Behavioral tests for the SSE chat-streaming endpoint
  * ({@link ChartSearchAiRestController#chatStream}). These drive the real
  * controller method against a {@link MockHttpServletResponse} and assert on the
- * actual Server-Sent-Events bytes written to the response — the {@code token}
- * stream, the terminal {@code done} envelope, and that authorization is enforced
+ * actual Server-Sent-Events bytes written to the response — staged phase events,
+ * the terminal {@code done} envelope, and that authorization is enforced
  * before any streaming begins.
  *
  * <p>Only the injected collaborators (ChatService, PatientAccessCheck, ...) and

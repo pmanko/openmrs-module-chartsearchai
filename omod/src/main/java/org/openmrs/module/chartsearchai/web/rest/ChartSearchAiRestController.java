@@ -275,7 +275,7 @@ public class ChartSearchAiRestController {
 	 * request can't route to a model the endpoint doesn't actually serve.
 	 *
 	 * <p>Body: {@code {"modelName": "<id>"}}. Returns {@code {current}} on
-	 * success, {@code 400} for invalid input, {@code 503} for local engine.
+		 * success, {@code 400} for invalid input, {@code 503} for endpoint misconfiguration.
 	 */
 	@RequestMapping(value = "/model", method = RequestMethod.POST)
 	@ResponseBody
@@ -293,7 +293,7 @@ public class ChartSearchAiRestController {
 					HttpStatus.BAD_REQUEST);
 		}
 		catch (org.openmrs.api.APIException e) {
-			// listAvailable throws APIException for local-engine or misconfig.
+				// listAvailable throws APIException for endpoint misconfiguration.
 			// Surface as 503 so the SPA picker can hide itself cleanly.
 			return new ResponseEntity<Object>(errorResponse(e.getMessage()),
 					HttpStatus.SERVICE_UNAVAILABLE);
@@ -353,7 +353,7 @@ public class ChartSearchAiRestController {
 	 * Switch the active endpoint AND model in one step. Body:
 	 * {@code {"endpointUrl": "<url>", "modelName": "<id>"}}. Validates the URL is
 	 * a registered endpoint and the model is served there before writing both
-	 * GPs. {@code 400} on invalid input, {@code 503} for the local engine.
+		 * GPs. {@code 400} on invalid input, {@code 503} for endpoint misconfiguration.
 	 */
 	@RequestMapping(value = "/endpoint", method = RequestMethod.POST)
 	@ResponseBody
@@ -1430,21 +1430,6 @@ public class ChartSearchAiRestController {
 		}
 		catch (IOException e) {
 			log.debug("Client disconnected during a hub staged heartbeat");
-			throw new RuntimeException("Client disconnected", e);
-		}
-	}
-
-	/**
-	 * Writes an SSE event, converting a client-disconnect {@link IOException} into the
-	 * {@link RuntimeException} the streaming loop unwinds on. Shared by the answer ({@code token})
-	 * and reasoning ({@code thinking}) channels so both handle a mid-stream disconnect identically.
-	 */
-	private void writeSseEventOrThrow(OutputStream out, String event, String data) {
-		try {
-			writeSseEvent(out, event, data);
-		}
-		catch (IOException e) {
-			log.debug("Client disconnected during streaming ({})", event);
 			throw new RuntimeException("Client disconnected", e);
 		}
 	}

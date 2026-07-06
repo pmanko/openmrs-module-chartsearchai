@@ -531,7 +531,7 @@ public class ModelSwitchService {
 	 * {@link ChartSearchAiConstants#GP_LLM_REMOTE_ENDPOINT_URL} when the
 	 * registry GP is unset, so the picker works with no extra config.
 	 *
-	 * @throws APIException for the local engine (model-switching is remote-only)
+	 * @throws APIException when the active engine is not remote or endpoint discovery is misconfigured
 	 */
 	public List<EndpointSection> listEndpoints() {
 		String engine = getGlobalProperty(ChartSearchAiConstants.GP_LLM_ENGINE);
