@@ -423,6 +423,16 @@ public class CitationGroundingVerifierTest {
 	}
 
 	@Test
+	public void stripCitationMarkers_removesMultiIndexBracket() {
+		// A model may cite several records for one clause in a single comma-separated
+		// bracket instead of repeating the bracket per index; the whole bracket must
+		// still be stripped, not left dangling in the entailment statement.
+		assertEquals("Refilled three times  as needed",
+				CitationGroundingVerifier.stripCitationMarkers(
+						"Refilled three times [2, 20, 26] as needed"));
+	}
+
+	@Test
 	public void splitIntoCitedSentences_recordsInlineCitations() {
 		List<CitationGroundingVerifier.Sentence> sentences =
 				CitationGroundingVerifier.splitIntoCitedSentences(
@@ -432,6 +442,20 @@ public class CitationGroundingVerifierTest {
 		assertTrue(sentences.get(0).cites(1));
 		assertTrue(sentences.get(1).cites(2));
 		assertTrue(sentences.get(1).cites(3));
+	}
+
+	@Test
+	public void splitIntoCitedSentences_recordsAllIndicesFromAMultiIndexBracket() {
+		// One bracket citing several records for the same clause (e.g. repeated
+		// refills of the same drug) must record every index, not just the first.
+		List<CitationGroundingVerifier.Sentence> sentences =
+				CitationGroundingVerifier.splitIntoCitedSentences(
+						"Trimethoprim and sulfamethoxazole [2, 20, 26].");
+
+		assertEquals(1, sentences.size());
+		assertTrue(sentences.get(0).cites(2));
+		assertTrue(sentences.get(0).cites(20));
+		assertTrue(sentences.get(0).cites(26));
 	}
 
 	// ---- clause-scoped grounding ----
@@ -476,6 +500,27 @@ public class CitationGroundingVerifierTest {
 				CitationGroundingVerifier.splitIntoClauseScopedSentences("Patient has diabetes [1].");
 		assertEquals(1, clauses.size());
 		assertTrue(clauses.get(0).cites(1));
+	}
+
+	@Test
+	public void splitIntoClauseScopedSentences_multiIndexBracketProducesOneIsolatedClausePerIndex() {
+		// A single multi-index bracket has only ONE marker position, unlike the
+		// [1]...[2] case which splits at two separate positions. Every index in that
+		// one bracket shares the same clause text (up to and including the bracket)
+		// but must still be Tier-2 verified against its own record in isolation.
+		List<CitationGroundingVerifier.Sentence> clauses =
+				CitationGroundingVerifier.splitIntoClauseScopedSentences(
+						"Refilled three times [2, 20, 26].");
+
+		assertEquals(3, clauses.size());
+		for (CitationGroundingVerifier.Sentence clause : clauses) {
+			assertEquals("Refilled three times [2, 20, 26]", clause.text);
+			assertTrue(clause.isolate);
+		}
+		assertTrue(clauses.get(0).cites(2));
+		assertFalse(clauses.get(0).cites(20), "each clause is attributed to exactly one index");
+		assertTrue(clauses.get(1).cites(20));
+		assertTrue(clauses.get(2).cites(26));
 	}
 
 	@Test

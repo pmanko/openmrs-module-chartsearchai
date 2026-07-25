@@ -610,7 +610,7 @@ public class CitationGroundingVerifier {
 			Sentence sentence = new Sentence(raw);
 			Matcher marker = ChartSearchAiUtils.INLINE_CITATION.matcher(raw);
 			while (marker.find()) {
-				sentence.citedIndexes.add(Integer.valueOf(marker.group(1)));
+				sentence.citedIndexes.addAll(ChartSearchAiUtils.parseCitationIndices(marker.group()));
 			}
 			sentences.add(sentence);
 		}
@@ -643,9 +643,14 @@ public class CitationGroundingVerifier {
 			}
 			Matcher marker = ChartSearchAiUtils.INLINE_CITATION.matcher(sentence.text);
 			while (marker.find()) {
-				Integer idx = Integer.valueOf(marker.group(1));
-				clauses.add(new Sentence(sentence.text.substring(0, marker.end()),
-						Collections.singleton(idx), true));
+				// A single bracket may itself carry several indices ([2, 20, 26]); they
+				// share one marker position, so each gets its own isolated clause ending
+				// at that SAME position rather than being spread across positions that
+				// don't exist.
+				String clauseText = sentence.text.substring(0, marker.end());
+				for (Integer idx : ChartSearchAiUtils.parseCitationIndices(marker.group())) {
+					clauses.add(new Sentence(clauseText, Collections.singleton(idx), true));
+				}
 			}
 		}
 		return clauses;
