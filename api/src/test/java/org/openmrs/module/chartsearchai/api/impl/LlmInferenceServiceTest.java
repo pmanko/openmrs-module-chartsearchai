@@ -212,6 +212,31 @@ public class LlmInferenceServiceTest {
 	}
 
 	@Test
+	public void extractCitedReferences_shouldIncludeCitationsFromMultiIndexInlineBrackets() {
+		List<RecordMapping> mappings = Arrays.asList(
+				new RecordMapping(2, "order", uuid(2), null),
+				new RecordMapping(20, "order", uuid(20), null),
+				new RecordMapping(26, "order", uuid(26), null));
+
+		// A model may cite several records for the same clause in one bracket (e.g.
+		// repeated refills of the same drug) instead of repeating the bracket per
+		// index. This must resolve exactly like separate [2] [20] [26] markers
+		// would, not trip the abstention-dump drop (which fires when the prose has
+		// no inline marker at all).
+		String answer = "Trimethoprim and sulfamethoxazole [2, 20, 26]";
+
+		List<RecordReference> result = LlmInferenceService.extractCitedReferences(
+				answer, Arrays.asList(2, 20, 26), mappings);
+
+		List<Integer> indices = new ArrayList<Integer>();
+		for (RecordReference ref : result) {
+			indices.add(ref.getIndex());
+		}
+		Collections.sort(indices);
+		assertEquals(Arrays.asList(2, 20, 26), indices);
+	}
+
+	@Test
 	public void stripQueryStopwords_shouldNormalizeDifferentPhrasingsToSameResult() {
 		// Both queries have only 1 content word ("medications"), so both
 		// preserve the full sentence. The embedding model handles both

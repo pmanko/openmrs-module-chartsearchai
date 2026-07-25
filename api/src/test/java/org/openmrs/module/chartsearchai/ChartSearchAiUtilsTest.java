@@ -142,4 +142,28 @@ public class ChartSearchAiUtilsTest extends BaseModuleContextSensitiveTest {
 	public void extractCategoryHints_nullConcept_shouldReturnEmptyList() {
 		assertTrue(ChartSearchAiUtils.extractCategoryHints(null).isEmpty());
 	}
+
+	@Test
+	public void inlineCitation_shouldMatchASingleIndexBracket() {
+		assertTrue(ChartSearchAiUtils.INLINE_CITATION.matcher("[6]").matches());
+	}
+
+	@Test
+	public void inlineCitation_shouldMatchACommaSeparatedMultiIndexBracket() {
+		// A model may cite several records for one clause in a single bracket (e.g.
+		// repeated refills of the same drug) instead of repeating the bracket per
+		// index; the marker regex must match the whole bracket, not just a lone digit.
+		assertTrue(ChartSearchAiUtils.INLINE_CITATION.matcher("[2, 20, 26, 32, 37]").matches());
+	}
+
+	@Test
+	public void parseCitationIndices_shouldParseASingleIndex() {
+		assertEquals(Arrays.asList(6), ChartSearchAiUtils.parseCitationIndices("[6]"));
+	}
+
+	@Test
+	public void parseCitationIndices_shouldParseAllIndicesFromACommaSeparatedBracket() {
+		assertEquals(Arrays.asList(2, 20, 26, 32, 37),
+				ChartSearchAiUtils.parseCitationIndices("[2, 20, 26, 32, 37]"));
+	}
 }

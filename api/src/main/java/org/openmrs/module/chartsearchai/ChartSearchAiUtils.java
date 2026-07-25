@@ -34,12 +34,37 @@ public class ChartSearchAiUtils {
 	private static final Logger log = LoggerFactory.getLogger(ChartSearchAiUtils.class);
 
 	/**
-	 * Matches an inline {@code [N]} citation marker in LLM answer prose. The
-	 * single source of truth for citation-marker parsing, shared by citation
-	 * extraction ({@code LlmInferenceService}) and grounding
-	 * ({@code CitationGroundingVerifier}) so the two cannot drift apart.
+	 * Matches an inline {@code [N]} citation marker in LLM answer prose, including a
+	 * comma-separated multi-index form ({@code [N, N, ...]}) some models use to cite
+	 * several records for the same clause in one bracket instead of repeating the
+	 * bracket per index. The single source of truth for citation-marker parsing,
+	 * shared by citation extraction ({@code LlmInferenceService}) and grounding
+	 * ({@code CitationGroundingVerifier}) so the two cannot drift apart. Use
+	 * {@link #parseCitationIndices(String)} to pull the index(es) out of a match.
 	 */
-	public static final Pattern INLINE_CITATION = Pattern.compile("\\[(\\d{1,9})\\]");
+	public static final Pattern INLINE_CITATION =
+			Pattern.compile("\\[\\s*\\d{1,9}(?:\\s*,\\s*\\d{1,9})*\\s*\\]");
+
+	/**
+	 * Parses every citation index out of one {@link #INLINE_CITATION} match — a
+	 * single digit ({@code "[6]"}) or a comma-separated list ({@code "[2, 20, 26]"})
+	 * within one bracket.
+	 *
+	 * @param match the full matched text of one {@link #INLINE_CITATION} occurrence
+	 *        (i.e. {@code Matcher.group()}, brackets included)
+	 * @return the indices found, in the order they appear
+	 */
+	public static List<Integer> parseCitationIndices(String match) {
+		List<Integer> indices = new ArrayList<Integer>();
+		String inner = match.replace("[", "").replace("]", "");
+		for (String token : inner.split(",")) {
+			String trimmed = token.trim();
+			if (!trimmed.isEmpty()) {
+				indices.add(Integer.valueOf(trimmed));
+			}
+		}
+		return indices;
+	}
 
 	/**
 	 * Builds a composite key from a resource type and resource UUID.
