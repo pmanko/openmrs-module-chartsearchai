@@ -22,6 +22,14 @@ before starting a conversation; switching provider starts a new conversation. **
 occurs between providers. QueryStore remains the OpenMRS clinical-context surface; it is
 required for the bundled path and an optional source for a separately configured hub deployment.
 
+The provider-neutral chat endpoint captures the authenticated account's assigned and inherited
+roles, locale, and session location on the request thread. Both providers receive this immutable
+`TurnRequest.accountContext`; the hub transport sends it under `context.account_context`. Answer
+events and stored turn payloads carry `accountContext` from OpenMRS, not from browser or provider
+role claims. Missing location is null. Usernames, personal names, credentials, and user properties
+are not included. This metadata is not an authorization grant or proof of role-guided prompting:
+instruction selection and role-aware answer-cache isolation are not yet implemented.
+
 The standalone instructions below describe the supported bundled-provider installation. Hub
 integration configuration and the dual-provider acceptance record live in the validation harness's
 `openmrs-dual-provider-parity-roadmap.md`.

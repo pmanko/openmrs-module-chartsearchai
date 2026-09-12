@@ -130,6 +130,7 @@ public class HttpHubStreamTransport implements HubStreamTransport {
 		context.put("require_product_profile", Boolean.TRUE);
 		context.put("session", request.getConversationId());
 		context.put("request_id", request.getRequestId());
+		context.put("account_context", request.getAccountContext().toPayload());
 		root.put("context", context);
 		return MAPPER.writeValueAsString(root);
 	}
