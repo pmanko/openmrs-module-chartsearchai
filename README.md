@@ -1022,6 +1022,15 @@ starts in the same conversation. Tests read cases of the shared dual-provider
 conformance fixture; `api/src/test/resources/conformance/dual-provider-conformance.v1.json`
 carries only the cases this module's tests read, each copied unchanged.
 
+The conversation chat endpoint captures the signed-in account's assigned and
+inherited roles, session location and locale on the request thread as an immutable
+`AccountContext`. Both providers receive it on `TurnRequest`; the Hub transport sends
+it as `context.account_context`, and answer events and stored turns carry it as
+`accountContext`, taken from the OpenMRS session rather than the request body or the
+provider's response. Usernames, personal names, credentials and user properties are
+not included. It is context for the provider and the audit record, not an
+authorization decision.
+
 ## Local token counting
 
 `TokenCounter` and `LocalLlamaTokenCounter` provide the local engine's exact token
