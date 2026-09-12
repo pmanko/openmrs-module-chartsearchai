@@ -11,6 +11,7 @@ package org.openmrs.module.chartsearchai.api.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -22,7 +23,9 @@ import java.util.function.Consumer;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.Test;
+import org.openmrs.module.chartsearchai.LogCapture;
 import org.openmrs.module.chartsearchai.reference.DrugReferenceInjector;
 
 /**
@@ -270,16 +273,31 @@ public class LlmProviderTest {
 				+ "record it rests on. A demonstrated verdict with no citation behind it is exactly "
 				+ "the fabricated-verdict shape the eval gate cannot see (#126), taught by example");
 		// Both branches must stay reachable. #107's abstention is the direction that trades a
-		// missing verdict for a fabricated one, which is the worse defect, so the addressed-case
+		// missing verdict for a fabricated one, which is the worse defect, so EVERY addressed-case
 		// demonstration must sit AFTER the mango abstention and BEFORE the focus-hint banana
-		// abstention — it must not displace either.
+		// abstention — none of them may displace either. There are two since issue #283, which is
+		// why the chain below names both rather than only the first.
 		int mango = prompt.indexOf("Is it safe to deliver mangoes?");
 		int durian = prompt.indexOf("Is it safe to deliver durian?");
+		// The caution demonstration of issue #283 is a SECOND verdict demonstration, so the same
+		// constraint binds it and the chain includes it rather than skipping over it. Found by
+		// mutation: with the chain ending at durian, moving the lychee block after the banana
+		// abstention — leaving a VERDICT as the last thing the few-shot shows, which is the
+		// arrangement this ordering exists to prevent — left every test that reads the prompt green.
+		//
+		// This chain is the ONLY thing here that knows about that demonstration; its record shape,
+		// rating, lead and citations are asserted in SafetyVerdictSeverityGradationTest, beside the
+		// caution rule they belong to. So a THIRD demonstration needs assertions in whichever class
+		// owns its rule as well as an entry in this chain — the citation half of the durian block
+		// below did not travel to the lychee one for exactly that reason, and shipped unguarded until
+		// review mutated it away and found all 1300 tests still green.
+		int lychee = prompt.indexOf("Is it safe to deliver lychees?");
 		int focusHint = prompt.indexOf(LlmProvider.FOCUS_HINT_LABEL);
-		assertTrue(mango > 0 && durian > mango && focusHint > durian,
-				"Few-shot order must be mango abstention -> durian verdict -> focus-hint banana "
-				+ "abstention, so neither abstention demonstration is displaced by the new one. "
-				+ "mango=" + mango + " durian=" + durian + " focusHint=" + focusHint);
+		assertTrue(mango > 0 && durian > mango && lychee > durian && focusHint > lychee,
+				"Few-shot order must be mango abstention -> durian verdict -> lychee caution verdict "
+				+ "-> focus-hint banana abstention, so no abstention demonstration is displaced by a "
+				+ "verdict one. mango=" + mango + " durian=" + durian + " lychee=" + lychee
+				+ " focusHint=" + focusHint);
 		assertTrue(prompt.contains("never \"Yes\" or \"No\""),
 				"The unaddressed branch's #107 guard must survive verbatim");
 	}
@@ -537,6 +555,176 @@ public class LlmProviderTest {
 	}
 
 	@Test
+	public void extractResponse_shouldReadNumericStringCitationsAsIndices() {
+		// Issue #219. The module asks for a json_schema whose citation items are integers, but the
+		// SERVER enforces that, not this parser — so a model may still write its indices as strings.
+		// A strict isInt() check read this array as empty and said nothing: an answer whose
+		// references the model got right arrived with none whenever its prose did not anchor them
+		// inline as well.
+		String response = "{\"answer\": \"CD4 counts are 988.0 [9] and 1191.0 [10].\", "
+				+ "\"citations\": [\"9\", \"10\"]}";
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
+		assertEquals("CD4 counts are 988.0 [9] and 1191.0 [10].", result.getAnswer());
+		assertEquals(Arrays.asList(9, 10), result.getCitations());
+	}
+
+	@Test
+	public void extractResponse_shouldCoerceOnlyTheTypeNeverWhichValuesAreAdmitted() {
+		// The coercion reads the same VALUES the integer path reads — nothing more, nothing less.
+		// 0 and -1 are not record indices, but they are dropped downstream by
+		// extractCitedReferences (which surfaces only indices with a record behind them), exactly
+		// as the citation-zero-index and citation-negative-index cases pin for the integer path.
+		// Filtering them here instead would move that decision into the parser and hide it.
+		String strings = "{\"answer\": \"Allergy to Beef [5].\", \"citations\": [\"-1\", \"0\", \"5\"]}";
+		String integers = "{\"answer\": \"Allergy to Beef [5].\", \"citations\": [-1, 0, 5]}";
+		assertEquals(LlmProvider.extractResponse(integers).getCitations(),
+				LlmProvider.extractResponse(strings).getCitations(),
+				"a string-typed array must parse to exactly what its integer-typed twin parses to");
+		assertEquals(Arrays.asList(-1, 0, 5), LlmProvider.extractResponse(strings).getCitations());
+	}
+
+	@Test
+	public void extractResponse_shouldStillDropCitationEntriesThatNameNoIndex() {
+		// The bound on the coercion: a string is an index only when the whole string IS one. A
+		// label, a null or an object names no record, so widening the type must not turn the array
+		// into "anything goes" — 8 is the only citation this response carries.
+		String response = "{\"answer\": \"TB is active [8].\", "
+				+ "\"citations\": [8, \"eight\", \"9x\", \"\", null, {\"index\": 9}, 9.7]}";
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
+		assertEquals(Arrays.asList(8), result.getCitations());
+	}
+
+	@Test
+	public void extractResponse_shouldReportANonConformantCitationsArrayAtWarn() {
+		// Silence was the defect, so recovering the indices is only half the fix: an operator whose
+		// model is off-schema has to be able to find that out. Asserted on the LEVEL rather than the
+		// message, per LogCapture's javadoc — a re-wording must not be able to drop the guard.
+		String offSchema = "{\"answer\": \"CD4 is 988.0 [9].\", \"citations\": [\"9\"]}";
+		try (LogCapture capture = LogCapture.on(LlmAnswerExtractor.class.getName())) {
+			assertEquals(Arrays.asList(9), LlmProvider.extractResponse(offSchema).getCitations());
+			assertTrue(capture.hasEventAtOrAbove(Level.WARN),
+					"a citations array that does not honour the integer schema must be reported, not "
+							+ "silently repaired — the repair is a guess about a model that is "
+							+ "misbehaving in other ways too. Captured: " + capture.describeAll());
+		}
+		String conformant = "{\"answer\": \"CD4 is 988.0 [9].\", \"citations\": [9]}";
+		try (LogCapture capture = LogCapture.on(LlmAnswerExtractor.class.getName())) {
+			assertEquals(Arrays.asList(9), LlmProvider.extractResponse(conformant).getCitations());
+			assertFalse(capture.hasEventAtOrAbove(Level.WARN),
+					"a schema-conformant array must stay quiet, or the warning is noise every install "
+							+ "learns to ignore. Captured: " + capture.describeAll());
+		}
+	}
+
+	@Test
+	public void extractResponse_shouldReadAScalarCitationsValueAsTheOneIndexItNames() {
+		// Issue #221 — the CONTAINER case of what #219/#220 fixed for ENTRIES. The isArray() guard
+		// discarded a whole citations field that was not an array, in silence. A scalar has exactly
+		// one reading (an array of one), which is the same test #219 applied to "9": coerce what
+		// cannot be read two ways. Both JSON types citationIndex already accepts appear here, so the
+		// container's admitted types cannot drift from the entries'.
+		LlmProvider.LlmResponse number = LlmProvider.extractResponse(
+				"{\"answer\": \"TB is active [8].\", \"citations\": 8}");
+		assertEquals("TB is active [8].", number.getAnswer());
+		assertEquals(Arrays.asList(8), number.getCitations());
+
+		LlmProvider.LlmResponse text = LlmProvider.extractResponse(
+				"{\"answer\": \"TB is active [8].\", \"citations\": \"8\"}");
+		assertEquals(Arrays.asList(8), text.getCitations(),
+				"a scalar string index reads exactly as its integer twin, as it does inside an array");
+	}
+
+	@Test
+	public void extractResponse_shouldReadAScalarCitationsValueExactlyAsItsOneElementArray() {
+		// The bound, stated as an equality so it cannot rot: coercing the CONTAINER admits no value
+		// the one-element array does not already admit. 0 and -1 are not record indices and are not
+		// filtered here either — extractCitedReferences remains the only thing that decides which
+		// indices become references.
+		for (String value : new String[] { "8", "0", "-1", "\"8\"", "\"-1\"" }) {
+			String scalar = "{\"answer\": \"A [8].\", \"citations\": " + value + "}";
+			String array = "{\"answer\": \"A [8].\", \"citations\": [" + value + "]}";
+			assertEquals(LlmProvider.extractResponse(array).getCitations(),
+					LlmProvider.extractResponse(scalar).getCitations(),
+					"scalar citations " + value + " must parse to exactly what [" + value
+							+ "] parses to");
+		}
+	}
+
+	@Test
+	public void extractResponse_shouldReportAScalarCitationsValueAtWarn() {
+		// Silence was the defect, so recovering the index is only half the fix — same argument as
+		// #220's entry-typing WARN. Asserted on the LEVEL, per LogCapture's javadoc, so a re-wording
+		// cannot drop the guard.
+		try (LogCapture capture = LogCapture.on(LlmAnswerExtractor.class.getName())) {
+			assertEquals(Arrays.asList(8), LlmProvider.extractResponse(
+					"{\"answer\": \"TB is active [8].\", \"citations\": 8}").getCitations());
+			assertTrue(capture.hasEventAtOrAbove(Level.WARN),
+					"a citations field the server should have constrained to an array must be "
+							+ "reported when it is coerced, not silently repaired. Captured: "
+							+ capture.describeAll());
+		}
+	}
+
+	@Test
+	public void extractResponse_shouldStayQuietOnAnExplicitNullCitations() {
+		// The distinction this pins is the load-bearing one, and it is NOT "array versus not an
+		// array" — every other non-array container now warns (see the case above). It is what the
+		// container ASSERTS. null asserts ABSENCE: the same statement as an omitted field, made by a
+		// provider whose answer cites nothing, and this code already does exactly what it says.
+		// Nothing is lost and nothing is guessed, so there is nothing to report — and a channel that
+		// fires on a provider behaving correctly is worth less than no channel. Everything that
+		// reaches readNonArrayCitations asserts PRESENCE of something unusable, which is a loss.
+		//
+		// Captured at DEBUG so the assertion covers every level, not just WARN: this must log
+		// nothing at all, which is what stops the two branches being folded together later.
+		try (LogCapture capture = LogCapture.on(LlmAnswerExtractor.class.getName(), Level.DEBUG)) {
+			LlmProvider.LlmResponse result = LlmProvider.extractResponse(
+					"{\"answer\": \"No records.\", \"citations\": null}");
+			assertEquals("No records.", result.getAnswer());
+			assertTrue(result.getCitations().isEmpty());
+			assertTrue(capture.describeAll().isEmpty(),
+					"an explicit null citations names no defect and must log nothing at all. "
+							+ "Captured: " + capture.describeAll());
+		}
+		// And the same for an omitted field, which is the statement null is equivalent to.
+		try (LogCapture capture = LogCapture.on(LlmAnswerExtractor.class.getName(), Level.DEBUG)) {
+			assertTrue(LlmProvider.extractResponse("{\"answer\": \"No records.\"}")
+					.getCitations().isEmpty());
+			assertTrue(capture.describeAll().isEmpty(),
+					"an omitted citations field must stay indistinguishable from an explicit null. "
+							+ "Captured: " + capture.describeAll());
+		}
+	}
+
+	@Test
+	public void extractResponse_shouldReportACitationsContainerWithNoSingleReadingAtWarn() {
+		// A container that is neither an array nor a scalar naming an index has no ONE reading, so
+		// there is nothing to coerce and inventing one would be widening a VALUE. The VALUE
+		// behaviour is therefore unchanged — no citations — but the loss is reported at WARN, at the
+		// same level and in the same shape as reportNonConformantCitations, which already warns for
+		// this exact information loss one level in (an array whose ENTRIES name no index). Reporting
+		// the container more quietly would be two channels for one failure.
+		//
+		// This is not a warning on hypothetical data: the branch cannot run unless a provider really
+		// did send a citations field this parser cannot use. An earlier draft logged it at DEBUG on
+		// an "unobserved shape" argument that does not apply, and which the default org.openmrs.*
+		// level of WARN would have made worse — DEBUG is evidence for someone already looking.
+		for (String value : new String[] { "{\"index\": 9}", "\"eight\"", "9.7", "true" }) {
+			String response = "{\"answer\": \"A [9].\", \"citations\": " + value + "}";
+			try (LogCapture capture = LogCapture.on(LlmAnswerExtractor.class.getName())) {
+				LlmProvider.LlmResponse result = LlmProvider.extractResponse(response);
+				assertEquals("A [9].", result.getAnswer(),
+						"the answer is the half that is not in doubt and must survive " + value);
+				assertTrue(result.getCitations().isEmpty(),
+						"citations " + value + " names no index; inventing one would widen a value");
+				assertTrue(capture.hasEventAtOrAbove(Level.WARN),
+						"a citations container this parser cannot use must be reported, not skipped "
+								+ "quietly: " + value + ". Captured: " + capture.describeAll());
+			}
+		}
+	}
+
+	@Test
 	public void normalizeSlashCitations_shouldConvertSlashesToSeparateBrackets() {
 		assertEquals("Tuberculosis [1], [2] and Malaria [3], [4]",
 				LlmProvider.normalizeSlashCitations("Tuberculosis [1/2] and Malaria [3/4]"));
@@ -592,6 +780,19 @@ public class LlmProviderTest {
 		assertEquals("Condition [1].", result.getAnswer());
 		assertTrue(result.getCitations().contains(1),
 				"salvageable in-range citation must survive: " + result.getCitations());
+	}
+
+	@Test
+	public void extractResponse_shouldSalvageNumericStringCitationsFromTruncatedJson() {
+		// The salvage path exists BECAUSE the response is degraded, so it must not be stricter than
+		// the clean path about how the citations are typed: a model that writes "9" for 9 is also a
+		// model that can hit the output-token cap, and dropping both halves of that response leaves
+		// an answer with no references at all.
+		String truncated = "{\"answer\": \"CD4 counts are 988.0 [9] and 1191.0 [10].\", "
+				+ "\"citations\": [\"9\", \"10\"";
+		LlmProvider.LlmResponse result = LlmProvider.extractResponse(truncated);
+		assertEquals("CD4 counts are 988.0 [9] and 1191.0 [10].", result.getAnswer());
+		assertEquals(Arrays.asList(9, 10), result.getCitations());
 	}
 
 	@Test
@@ -854,7 +1055,45 @@ public class LlmProviderTest {
 		}
 	}
 
-	private static LlmProvider providerWith(final CapturingEngine engine) {
+	/**
+	 * Captures the user message of one blocking {@code infer} call, which is the arity
+	 * {@link LlmProvider#search} reaches.
+	 *
+	 * <p>A second double rather than a widening of {@link CapturingEngine}: that one fails the
+	 * build if {@code infer} is reached at all, which is a streaming pin ("streaming test must not
+	 * call infer"), and teaching it to capture instead would spend that pin to serve this case.
+	 * This one is its mirror — the streaming arities throw, and the 6-arg form need not be
+	 * overridden because {@link LlmEngine}'s default delegates to the 4-arg one that does.
+	 */
+	private static final class CapturingBlockingEngine implements LlmEngine {
+
+		String capturedUserMessage;
+
+		@Override
+		public InferenceResult infer(String systemPrompt, String userMessage, int timeoutSeconds) {
+			this.capturedUserMessage = userMessage;
+			return new InferenceResult("{\"reasoning\": \"r\", \"answer\": \"a\", \"citations\": []}", 1, 1, 0);
+		}
+
+		@Override
+		public InferenceResult inferStreaming(String s, String u, int t, Consumer<String> c) {
+			throw new AssertionError("the blocking search path must not stream");
+		}
+
+		@Override
+		public void warmup(String s, String u, int t) {
+		}
+
+		@Override
+		public void close() {
+		}
+
+		@Override
+		public void shutdown() {
+		}
+	}
+
+	private static LlmProvider providerWith(final LlmEngine engine) {
 		return new LlmProvider() {
 
 			@Override
@@ -882,7 +1121,7 @@ public class LlmProviderTest {
 		List<Integer> focus = Arrays.asList(1, 2);
 
 		provider.searchStreaming(records, focus, "Is the patient diabetic?",
-				tok -> { }, reason -> { }, "patient-uuid-42");
+				tok -> { }, reason -> { }, "patient-uuid-42", false);
 
 		assertEquals("patient-uuid-42", engine.capturedScope,
 				"the patient UUID must reach the engine as the KV cache scope so the query path can "
@@ -906,12 +1145,129 @@ public class LlmProviderTest {
 		LlmProvider provider = providerWith(engine);
 
 		provider.searchStreaming("1. x", Arrays.<Integer>asList(), "q",
-				tok -> { }, reason -> { }, null);
+				tok -> { }, reason -> { }, null, false);
 
 		assertNull(engine.capturedScope, "a null scope must pass through unchanged");
 		assertNull(engine.capturedSeed,
 				"with no scope there is no patient to key on, so the seed must be null and the engine "
 				+ "must skip all disk KV restore/save");
+	}
+
+	// ---------- the #397 flag's LAST hop: the provider's own bodies to the builder ----------
+
+	/**
+	 * THE FLAG THIS METHOD IS HANDED REACHES THE MESSAGE IT SENDS THE ENGINE — issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/397">#397</a>'s last
+	 * unguarded hop, and the only one of its chain that no case observed.
+	 *
+	 * <p>Every other link was pinned before this one: the gate's read position and both call sites
+	 * by {@code FindingEnumerationClauseContextTest}, and the append condition inside
+	 * {@code buildUserMessage} by {@code AbsentDataEvalTest} and
+	 * {@code LlmProviderUserMessageTest}. This one — {@code search}'s own parameter reaching the
+	 * builder — was covered by nothing in either direction. Measured, review round 3: replacing
+	 * {@code buildUserMessage(numberedRecords, focusIndices, question, enumerateFindings)} with the
+	 * retained flag-less 3-arg arity in BOTH {@code search} and {@code searchStreaming} left the
+	 * whole root build green, totals identical to the baseline's. That is a one-token edit — a
+	 * refactor deduplicating the two identical calls, or a cleanup of what reads as a redundant
+	 * 4-arg overload — and it reverts this issue's entire production payload while the gate still
+	 * computes the flag and both call sites still hand it over.
+	 *
+	 * <p>{@code FindingEnumerationClauseContextTest} cannot see it: its {@code RecordingProvider}
+	 * OVERRIDES {@code search} and {@code searchStreaming}, so these bodies never execute there.
+	 * This class is where they do.
+	 *
+	 * <p>Asserted as equality with the flag-true build and INEQUALITY with the flag-false one. The
+	 * second half is what stops the case going vacuous if the clause is ever ungated or deleted:
+	 * without it both sides move together and the equality passes over two clause-free messages.
+	 * Measured — deleting the append block from {@code buildUserMessage} reddens this case and its
+	 * streaming sibling, on that assertion.
+	 *
+	 * <p>Every direction of both hops was mutated and the failures read.
+	 * At {@code search}: the flag-less arity or a literal {@code false} reddens THIS case, and a
+	 * literal {@code true} reddens {@code search_withTheFlagFalseSendsTheMessageItSentBeforeThisFeatureExisted}.
+	 * At {@code searchStreaming}: the flag-less arity or {@code false} reddens
+	 * {@code searchStreaming_forwardsTheFindingEnumerationFlagToTheMessageAndNeverToTheKvSeed}, and
+	 * {@code true} reddens {@code searchStreaming_scopeAware_forwardsScopeAndQuestionIndependentSeedToEngine},
+	 * which was already the only case in the suite running a real provider body through a capturing
+	 * engine — and it passes {@code false}, which is why it could see only that one direction.
+	 */
+	@Test
+	public void search_forwardsTheFindingEnumerationFlagToTheMessageItSendsTheEngine() {
+		CapturingBlockingEngine engine = new CapturingBlockingEngine();
+		LlmProvider provider = providerWith(engine);
+		String records = "1. [2024-01-01] Safety finding: Warfarin + Ibuprofen (Major)";
+		List<Integer> focus = Arrays.asList(1);
+		String question = "should i give Warfarin?";
+
+		provider.search(records, focus, question, true);
+
+		assertEquals(LlmProvider.buildUserMessage(records, focus, question, provider.findingProse(true)),
+				engine.capturedUserMessage,
+				"the prompt this method sends must be the one built for the flag it was handed. "
+				+ "Calling the flag-less arity here, or hardcoding false, sends the pre-#397 prompt "
+				+ "with the gate and both call sites still intact and every other test green");
+		assertNotEquals(LlmProvider.buildUserMessage(records, focus, question, provider.findingProse(false)),
+				engine.capturedUserMessage,
+				"and the two flag values must actually differ in what the engine receives — without "
+				+ "this the assertion above passes over two clause-free messages if the clause is "
+				+ "ever ungated or removed, which is the state issue #397 exists to leave behind");
+	}
+
+	@Test
+	public void search_withTheFlagFalseSendsTheMessageItSentBeforeThisFeatureExisted() {
+		// The opposite direction of the case above, and the one with the safety consequence: a
+		// literal `true` here sends the 126-character clause to every prompt this method builds,
+		// including the empty-chart message AbsentDataEvalTest pins to exact bytes. That case
+		// cannot see it — it builds through an arity that hardcodes the flag false — and the
+		// streaming sibling below covers only searchStreaming.
+		CapturingBlockingEngine engine = new CapturingBlockingEngine();
+		LlmProvider provider = providerWith(engine);
+		String records = "1. [2024-01-01] BP 120/80";
+		List<Integer> focus = Arrays.<Integer>asList();
+
+		provider.search(records, focus, "Is she hypertensive?", false);
+
+		assertEquals(LlmProvider.buildUserMessage(records, focus, "Is she hypertensive?", false),
+				engine.capturedUserMessage,
+				"a caller that says this chart carries no enumerable finding set must get the prompt "
+				+ "this method built before #397 existed, byte for byte");
+	}
+
+	/**
+	 * THE SAME HOP IN {@code searchStreaming}, WHICH IS THE PATH THE FRONTEND USES BY DEFAULT, plus
+	 * the property that keeps the KV cache working: the flag reaches the user message and NEVER the
+	 * seed. See {@code search_forwardsTheFindingEnumerationFlagToTheMessageItSendsTheEngine} for
+	 * what the mutation measured, which was of both bodies at once.
+	 *
+	 * <p>The seed half is asserted with the flag TRUE, which is the arrangement where it could
+	 * leak: the two cases above this section pass {@code false}, so a seed built from the
+	 * clause-carrying arity would be indistinguishable from a correct one there. A seed carrying
+	 * the clause stops being a byte-prefix of the warmup message and every warmed patient
+	 * re-prefills its whole chart.
+	 */
+	@Test
+	public void searchStreaming_forwardsTheFindingEnumerationFlagToTheMessageAndNeverToTheKvSeed() {
+		CapturingEngine engine = new CapturingEngine();
+		LlmProvider provider = providerWith(engine);
+		String records = "1. [2024-01-01] Safety finding: Warfarin + Ibuprofen (Major)";
+		List<Integer> focus = Arrays.asList(1, 2);
+		String question = "should i give Warfarin?";
+
+		provider.searchStreaming(records, focus, question, tok -> { }, reason -> { },
+				"patient-uuid-42", true);
+
+		assertEquals(LlmProvider.buildUserMessage(records, focus, question, provider.findingProse(true)),
+				engine.capturedUserMessage,
+				"the streaming path must send the prompt built for the flag it was handed — see the "
+				+ "blocking sibling for the mutation that showed this hop uncovered");
+		assertNotEquals(LlmProvider.buildUserMessage(records, focus, question, provider.findingProse(false)),
+				engine.capturedUserMessage,
+				"and the two flag values must differ in what the engine receives, or the assertion "
+				+ "above is satisfied by two clause-free messages");
+		assertEquals(LlmProvider.buildUserMessage(records, ""), engine.capturedSeed,
+				"and the KV seed must stay the question-INDEPENDENT prefix whatever the flag says: "
+				+ "it is what warmup sends, so a seed built through the clause-carrying arity would "
+				+ "hash to a filename no warmup ever wrote");
 	}
 
 }

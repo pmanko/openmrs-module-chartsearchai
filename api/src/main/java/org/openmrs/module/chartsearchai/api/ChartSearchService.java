@@ -14,13 +14,23 @@ import java.util.List;
 import java.util.function.Consumer;
 
 import org.openmrs.Patient;
+import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
+import org.openmrs.module.chartsearchai.reference.DrugReferenceLoad;
+import org.openmrs.module.chartsearchai.reference.PairChipExtent;
 import org.openmrs.module.chartsearchai.reference.SafetyWarning;
 
 /**
- * Answers natural language questions about a patient's chart using a local LLM.
- * When {@code chartsearchai.embedding.preFilter} is {@code true} (default), uses
- * embedding similarity to narrow records to the most relevant ones before sending
- * them to the LLM. Set to {@code false} to send the full patient chart instead.
+ * Answers natural language questions about a patient's chart using an LLM.
+ *
+ * <p>How the prompt's chart context is assembled is decided by {@code chartsearchai.chartMode}
+ * (default {@code queryScoped} — a query-scoped slice, not the whole chart) and, within
+ * {@code fullChart}, by {@code chartsearchai.embedding.preFilter} (default {@code false}), which
+ * appends a similarity focus hint rather than narrowing anything. {@link ChartAnswer#getSearchMode()}
+ * reports which of the three produced a given answer. This paragraph replaced one that described a
+ * default-on pre-filter narrowing the chart — machinery removed with the querystore migration
+ * (issue #51) and a default that has been {@code false} since before it; the correction belongs with
+ * issue #178, which is what a reader trusting the old sentence would have got wrong.
  */
 public interface ChartSearchService {
 
@@ -195,6 +205,280 @@ public interface ChartSearchService {
 	}
 
 	/**
+	 * How many claims about the patient's ACTIVE ORDERS an answer stated, and how many of them
+	 * offered no chart record as evidence — the base a share needs, and issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/379">#379</a>'s half of
+	 * the question {@code ChartAnswer.getMisattributedOrderCitations()} answers the other half of.
+	 * This type is CANONICAL for what its two numbers do and do not assert. The accessor points at it
+	 * rather than restating it; README states the same contract for a client author, which is the
+	 * arrangement {@code conditionRuleCoverage} already uses.
+	 *
+	 * <p><b>Why a client could not read it off the other key.</b> {@code misattributedOrderCitations}
+	 * names the chart citations offered for such a claim that cannot be the order. Its {@code []} is
+	 * therefore two different responses: one whose active-order claims cited chart records that were
+	 * all accepted, and one that cited no chart record for any of them. Both are recorded, on one
+	 * patient and one question with {@code chartsearchai.drugSafety.citeOrderRecords} turned on, and
+	 * {@code misattributedOrderCitations} read {@code []} in each. ADR Decision 81 carries both runs,
+	 * and carries the fact that they disagree with each other.
+	 *
+	 * <p><b>What {@code stated} counts.</b> Occurrences of
+	 * {@code DrugSafetyValidator.ACTIVE_ORDER_INTERACTION_PHRASE} — CLAIMS, and not orders named. One
+	 * sentence reading <em>"… active order Dexamethasone and active order Hydrocortisone …"</em>
+	 * states one claim about two orders, because the second name carries no <em>interacts with</em>
+	 * before it. That is a residue rather than a rounding: the module's own recogniser is the phrase,
+	 * and a second rule for the conjunction would be a second recogniser.
+	 *
+	 * <p><b>What {@code uncited} counts.</b> Those claims whose own marker RUN — the same unit
+	 * {@code ActiveOrderCitationFidelityCheck} uses for the other half, never the sentence — held no
+	 * chart-group citation the answer's own resolution admitted. A claim citing a chart record that
+	 * is MISATTRIBUTED is not uncited: it offered evidence, and which record it offered is the other
+	 * key's answer. The two answer about different things — a CLAIM here, a CITATION there, and one
+	 * claim can contribute several of the latter — so a client must not add them. Neither is a
+	 * certificate: {@code uncited: 0} says every claim offered something, not that the something was
+	 * right.
+	 *
+	 * <p><b>Zero is a measurement and absence is not.</b> {@code stated: 0} says the answer stated no
+	 * such claim; a null {@code ActiveOrderClaims} says the producer stated no measurement, which the
+	 * async-grounding early {@code done} does because it is handed off before any check runs, and a
+	 * failed check does because a diagnostic that broke must not read as one that found nothing.
+	 *
+	 * <p><b>What it cannot see</b> is what the run unit cannot see, and the residues run OPPOSITE to
+	 * the other half's: there, a run the module cannot read fails toward silence; here, toward
+	 * counting the claim uncited. A model that hard-wraps between a claim and its markers, or that
+	 * puts them after a comma, states a claim this counts as offering nothing. ADR Decision 81
+	 * records them; {@code ActiveOrderCitationFidelityCheck} is canonical for the run itself.
+	 */
+	final class ActiveOrderClaims {
+
+		private final int stated;
+
+		private final int uncited;
+
+		public ActiveOrderClaims(int stated, int uncited) {
+			this.stated = stated;
+			this.uncited = uncited;
+		}
+
+		/** @return how many active-order claims the answer stated */
+		public int getStated() {
+			return stated;
+		}
+
+		/** @return how many of them offered no chart record in their own marker run */
+		public int getUncited() {
+			return uncited;
+		}
+
+		@Override
+		public String toString() {
+			return "ActiveOrderClaims{stated=" + stated + ", uncited=" + uncited + "}";
+		}
+	}
+
+	/**
+	 * How many injected safety findings the prompt CARRIED, and how many of them the answer CITED —
+	 * issue <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/395">#395</a>.
+	 * This type is CANONICAL for what its two numbers do and do not assert. The accessor points at
+	 * it rather than restating it; README states the same contract for a client author, the
+	 * arrangement {@code conditionRuleCoverage} and {@code activeOrderClaims} already use.
+	 *
+	 * <p><b>Why a client could not read it off anything already published.</b> The response's
+	 * {@code references} carry only what was cited, so they are the {@code cited} half with no base
+	 * to read it against; {@code reference_slice_records} is the base of a different population
+	 * (every reference-group record, monographs and class notes included) and reaches the audit row
+	 * rather than the response. {@code interactionPairs} counts what the SCREEN found and reported
+	 * and is true of a response whose prose dropped one, which is the reported defect exactly. On the
+	 * measured run nothing published said a finding had gone missing — the three keys that judge a
+	 * cited finding read {@code []}, and the two extents were each true of what they count. Stated
+	 * that way rather than as "every key read as a faithful answer's", which is false of that
+	 * response: {@code activeOrderClaims} read {@code {stated: 6, uncited: 6}} and was flagging
+	 * something real, just not this.
+	 *
+	 * <p><b>What {@code carried} counts.</b> Records of type {@code safety_finding} in the chart the
+	 * prompt was built from — the population {@code DrugReferenceInjector}'s findings loop wrote,
+	 * one record per finding, each independently citable. Never the {@code safetyWarnings} chips:
+	 * those are a different and usually larger population (on the reported run, seventeen chips
+	 * against seven records), and CLAUDE.md's own rule forbids inferring an extent from the chip
+	 * count.
+	 *
+	 * <p><b>What {@code cited} counts.</b> How many of those records the answer's own citation
+	 * resolution admitted — {@code LlmInferenceService.extractCitedReferences}, never a
+	 * re-derivation from the markers, so "which records did this answer cite" keeps one answer. A
+	 * finding cited twice counts once. A citation the MODULE attached (issue #305) is one the answer
+	 * did not make, and is not counted.
+	 *
+	 * <p><b>A COUNT and deliberately not an accusation.</b> Over the unit of one finding the
+	 * residues run in BOTH directions: an answer that states a finding in prose and omits its marker
+	 * would be falsely accused, and one that cites a marker while saying nothing about it would be
+	 * missed. That is the condition ADR Decision 81 gives for publishing the base rather than a
+	 * per-item accusation, and it holds here for the same reason. A maintainer who needs to know
+	 * WHICH finding went uncited reads the check's WARN.
+	 *
+	 * <p><b>Zero is a measurement and absence is not.</b> {@code carried: 0} says the prompt carried
+	 * no finding — the shipped default, where {@code chartsearchai.drugReference.enabled} is false
+	 * and the injector never runs, and equally a question that raised none. A null
+	 * {@code FindingCitationExtent} says the producer stated no measurement, which the
+	 * async-grounding early {@code done} does because it is handed off before any check runs, and a
+	 * failed check does because a diagnostic that broke must not read as one that found nothing.
+	 *
+	 * <p><b>{@code cited == carried} is not a certificate.</b> It says every finding was cited, not
+	 * that any of them was stated correctly: whether a cited finding's rating reached the prose is
+	 * {@code unstatedFindingSeverities}, whether its words were reproduced faithfully is
+	 * {@code unfaithfullyRenderedCitations}, and whether the chart record it offered can be the order
+	 * it names is {@code misattributedOrderCitations}. Nor is {@code cited < carried} proof of a
+	 * dropped hazard — the residues above are why.
+	 */
+	final class FindingCitationExtent {
+
+		private final int carried;
+
+		private final int cited;
+
+		public FindingCitationExtent(int carried, int cited) {
+			this.carried = carried;
+			this.cited = cited;
+		}
+
+		/** @return how many injected safety findings the prompt carried */
+		public int getCarried() {
+			return carried;
+		}
+
+		/** @return how many of them the answer's own citation resolution admitted */
+		public int getCited() {
+			return cited;
+		}
+
+		@Override
+		public String toString() {
+			return "FindingCitationExtent{carried=" + carried + ", cited=" + cited + "}";
+		}
+	}
+
+	/**
+	 * One cited safety finding whose RATING the answer states nowhere, and what that rating is —
+	 * issue <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/387">#387</a>.
+	 * This type is CANONICAL for what its two values do and do not assert;
+	 * {@code ChartAnswer.getUnstatedFindingSeverities()} points at it rather than restating it, and
+	 * README states the same contract for a client author.
+	 *
+	 * <p><b>Why the rating travels with the citation rather than beside it.</b> Until #387 the key
+	 * published the citation alone, and the rating — which
+	 * {@code SafetyFindingSeverityFidelityCheck} holds in the same map it decides from — was
+	 * dropped on the way out. A client could not recover it: the {@code safetyWarnings} chips carry
+	 * every rating but no citation index, and {@code (type, drug)} does not identify one, five
+	 * findings of one screen being {@code (interaction, Clarithromycin)} alike on the issue's own
+	 * reproduction. So the pairing is made once, where both halves are already in scope, and never
+	 * by a consumer.
+	 *
+	 * <p><b>This is not the chips reconciled against the answer, and must not be read as that.</b>
+	 * The value is {@code PatientChartSerializer.RecordMapping.getFindingSeverity()} — the rating
+	 * that travels structurally beside the record the model was given, written at the write site by
+	 * {@code DrugReferenceInjector.ratingThisRecordStates} and canonical there. Nothing here reads a
+	 * chip, no chip gains a citation index, and the chips remain the independent list nothing
+	 * reconciles against the answer.
+	 *
+	 * <p><b>{@link #getRating()} is NOT the value a {@code safetyWarnings} chip publishes as its
+	 * {@code severity}, and the two must not be joined — which is why this field is not called
+	 * {@code severity}.</b> Three mechanisms separate them, stated as mechanisms because every
+	 * attempt to summarise how far apart they come out was refuted by measurement. This value is
+	 * {@code DrugSafetyValidator.statableRating}'s output: the spelling {@code severityRank}
+	 * RECOGNISED, handed on TRIMMED, where a chip publishes {@code SafetyWarning.getSeverity()} raw
+	 * (ADR Decision 78). {@code statableRating} declines {@code unknown} and
+	 * {@code ratingThisRecordStates} requires the record to state the word, so findings a chip rates
+	 * have no entry here at all. And the two are written by different passes — a rating into the
+	 * record pre-answer by {@code DrugReferenceInjector.injectRecords}, a chip post-answer by
+	 * {@code DrugSafetyValidator.validate}. Nothing on the response pairs a chip with a citation in
+	 * any case, so there is no join to make.
+	 *
+	 * <p><b>What it asserts.</b> That the answer cited this record and that this rating's word
+	 * appears nowhere in the answer. Never WHERE the rating should have been, never that the
+	 * sentence citing it is wrong in any other way, and never that the finding was mis-stated — the
+	 * check asks of the whole answer, so an answer stating the rating in some other sentence is
+	 * silent here by design. {@code SafetyFindingSeverityFidelityCheck} is canonical for the unit
+	 * and for the residues.
+	 *
+	 * <p><b>It is shaped on {@code SafetyWarning.ChartOrderBridge}</b>, this module's other two-field
+	 * value type PUBLISHED as a list, rather than on the scalar-pair statements beside it: the
+	 * {@code rating} is required rather than null-tolerated, as the constructor below states, and
+	 * {@link #toString()} is the one spelling of the pair, which the producing check's {@code WARN}
+	 * takes rather than re-building. Value equality is what a list of these needs and what those
+	 * scalar pairs have no use for. It does not fall under the rule keeping {@code SafetyWarning}
+	 * itself without an {@code equals} — chips are kept apart so nothing downstream can collapse two
+	 * the module meant to keep, and here the producing check already makes the citation unique across
+	 * the list, so equality can collapse nothing.
+	 */
+	final class UnstatedFindingSeverity {
+
+		private final int citation;
+
+		private final String rating;
+
+		/**
+		 * {@code rating} is required: {@link #equals} and {@link #hashCode} dereference it, as
+		 * {@code SafetyWarning.ChartOrderBridge} says of its own two, and a caller building one by
+		 * hand owes the same. {@link #toString} does NOT — it concatenates, so a null would print as
+		 * {@code [350] null} rather than throwing, and since the producing check logs these that is
+		 * the one place a hand-built null would surface quietly. The production path cannot pass one:
+		 * {@code SafetyFindingSeverityFidelityCheck} skips a citation whose record carries no rating
+		 * before it reaches here.
+		 */
+		public UnstatedFindingSeverity(int citation, String rating) {
+			this.citation = citation;
+			this.rating = rating;
+		}
+
+		/**
+		 * @return the citation index of the safety finding — the number the answer printed in
+		 *         brackets, and the {@code index} of the matching entry in the response's
+		 *         {@code references} array, which is how a client joins the two
+		 */
+		public int getCitation() {
+			return citation;
+		}
+
+		/**
+		 * @return the rating that finding's own record states and the answer does not, in the form
+		 *         the module recognised it in. Never null on an entry this key publishes, and never
+		 *         a chip's raw {@code severity} — the class javadoc above is canonical for both.
+		 */
+		public String getRating() {
+			return rating;
+		}
+
+		@Override
+		public boolean equals(Object other) {
+			if (this == other) {
+				return true;
+			}
+			if (!(other instanceof UnstatedFindingSeverity)) {
+				return false;
+			}
+			UnstatedFindingSeverity that = (UnstatedFindingSeverity) other;
+			return citation == that.citation && rating.equals(that.rating);
+		}
+
+		@Override
+		public int hashCode() {
+			return 31 * citation + rating.hashCode();
+		}
+
+		/**
+		 * The one spelling of the pair, taken by {@code SafetyFindingSeverityFidelityCheck}'s
+		 * {@code WARN} rather than re-built there — the arrangement
+		 * {@code DrugReferenceInjector.chartOrderClause} already uses for
+		 * {@code SafetyWarning.ChartOrderBridge}, so the pair a debug dump prints and the pair a
+		 * maintainer reads in the log cannot differ. Pinned by
+		 * {@code SafetyFindingSeverityFidelityTest.theStatementCarriesEachFindingsOwnRatingBesideItsCitation},
+		 * which asserts this text in the captured log; mutate it and read the failures.
+		 */
+		@Override
+		public String toString() {
+			return "[" + citation + "] " + rating;
+		}
+	}
+
+	/**
 	 * An answer to a chart search question with source citations.
 	 */
 	class ChartAnswer {
@@ -210,6 +494,28 @@ public interface ChartSearchService {
 		private final int cachedTokens;
 
 		private final List<SafetyWarning> safetyWarnings;
+
+		private final String searchMode;
+
+		private final ChartSearchAiUtils.ReferenceSlice referenceSlice;
+
+		private final PairChipExtent pairChipExtent;
+
+		private final String unresolvedDrugClass;
+
+		private final List<Integer> unfaithfullyRenderedCitations;
+
+		private final List<Integer> misattributedOrderCitations;
+
+		private final List<UnstatedFindingSeverity> unstatedFindingSeverities;
+
+		private final ActiveOrderClaims activeOrderClaims;
+
+		private final FindingCitationExtent findingCitationExtent;
+
+		private final Boolean chartReadForSafety;
+
+		private final DrugReferenceLoad.Coverage conditionRuleCoverage;
 
 		public ChartAnswer(String answer, List<RecordReference> references) {
 			this(answer, references, 0, 0, 0);
@@ -229,6 +535,82 @@ public interface ChartSearchService {
 		public ChartAnswer(String answer, List<RecordReference> references,
 				int inputTokens, int outputTokens, int cachedTokens,
 				List<SafetyWarning> safetyWarnings) {
+			this(answer, references, inputTokens, outputTokens, cachedTokens, safetyWarnings, null);
+		}
+
+		public ChartAnswer(String answer, List<RecordReference> references,
+				int inputTokens, int outputTokens, int cachedTokens,
+				List<SafetyWarning> safetyWarnings, String searchMode) {
+			this(answer, references, inputTokens, outputTokens, cachedTokens, safetyWarnings, searchMode,
+					null);
+		}
+
+		public ChartAnswer(String answer, List<RecordReference> references,
+				int inputTokens, int outputTokens, int cachedTokens,
+				List<SafetyWarning> safetyWarnings, String searchMode,
+				ChartSearchAiUtils.ReferenceSlice referenceSlice) {
+			this(answer, references, inputTokens, outputTokens, cachedTokens, safetyWarnings, searchMode,
+					referenceSlice, null);
+		}
+
+		public ChartAnswer(String answer, List<RecordReference> references,
+				int inputTokens, int outputTokens, int cachedTokens,
+				List<SafetyWarning> safetyWarnings, String searchMode,
+				ChartSearchAiUtils.ReferenceSlice referenceSlice, PairChipExtent pairChipExtent) {
+			this(answer, references, inputTokens, outputTokens, cachedTokens, safetyWarnings, searchMode,
+					referenceSlice, pairChipExtent, null);
+		}
+
+		public ChartAnswer(String answer, List<RecordReference> references,
+				int inputTokens, int outputTokens, int cachedTokens,
+				List<SafetyWarning> safetyWarnings, String searchMode,
+				ChartSearchAiUtils.ReferenceSlice referenceSlice, PairChipExtent pairChipExtent,
+				String unresolvedDrugClass) {
+			this(answer, references, inputTokens, outputTokens, cachedTokens, safetyWarnings, searchMode,
+					referenceSlice, pairChipExtent, unresolvedDrugClass, null);
+		}
+
+		public ChartAnswer(String answer, List<RecordReference> references,
+				int inputTokens, int outputTokens, int cachedTokens,
+				List<SafetyWarning> safetyWarnings, String searchMode,
+				ChartSearchAiUtils.ReferenceSlice referenceSlice, PairChipExtent pairChipExtent,
+				String unresolvedDrugClass, List<Integer> unfaithfullyRenderedCitations) {
+			this(answer, references, inputTokens, outputTokens, cachedTokens, safetyWarnings, searchMode,
+					referenceSlice, pairChipExtent, unresolvedDrugClass, unfaithfullyRenderedCitations,
+					null, null, null, null, null, null);
+		}
+
+		/**
+		 * The widest form, and the ONLY one that takes the condition-rule coverage —
+		 * {@code ArchitectureGuardTest.everyAnswerThisModuleBuildsCarriesTheConditionRuleCoverage}
+		 * requires exactly one, so that no production site can build an answer stating null on a key
+		 * README documents as always present.
+		 *
+		 * <p><b>It is also the only form that grows.</b> A statement added to the answer takes a new
+		 * parameter HERE rather than a new overload, because a second constructor carrying the
+		 * coverage would fail that guard outright — which is what fixes the position of
+		 * {@code conditionRuleCoverage} last and puts each new statement before it, whether it is a
+		 * list or a value type of its own.
+		 *
+		 * <p>There is deliberately no twelve-argument overload beside it in either direction. Issues
+		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/377">#377</a> and
+		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/378">#378</a> each
+		 * added a twelfth argument independently and this is where they met: two twelve-argument
+		 * forms distinguishable only by their last parameter's type would make a caller passing a
+		 * bare {@code null} there ambiguous, and a second one taking the coverage would fail that
+		 * guard outright.
+		 */
+		public ChartAnswer(String answer, List<RecordReference> references,
+				int inputTokens, int outputTokens, int cachedTokens,
+				List<SafetyWarning> safetyWarnings, String searchMode,
+				ChartSearchAiUtils.ReferenceSlice referenceSlice, PairChipExtent pairChipExtent,
+				String unresolvedDrugClass, List<Integer> unfaithfullyRenderedCitations,
+				List<Integer> misattributedOrderCitations,
+				List<UnstatedFindingSeverity> unstatedFindingSeverities,
+				ActiveOrderClaims activeOrderClaims,
+				FindingCitationExtent findingCitationExtent,
+				Boolean chartReadForSafety,
+				DrugReferenceLoad.Coverage conditionRuleCoverage) {
 			this.answer = answer;
 			this.references = java.util.Collections.unmodifiableList(
 					new java.util.ArrayList<>(references));
@@ -238,6 +620,41 @@ public interface ChartSearchService {
 			this.safetyWarnings = java.util.Collections.unmodifiableList(
 					new java.util.ArrayList<>(safetyWarnings == null
 							? java.util.Collections.<SafetyWarning> emptyList() : safetyWarnings));
+			this.searchMode = searchMode;
+			this.referenceSlice = referenceSlice;
+			this.pairChipExtent = pairChipExtent;
+			this.unresolvedDrugClass = unresolvedDrugClass;
+			// Null SURVIVES as null and is not normalised to an empty list: the two say different
+			// things here, and the accessor's javadoc is where the difference lives.
+			this.unfaithfullyRenderedCitations = unfaithfullyRenderedCitations == null ? null
+					: java.util.Collections.unmodifiableList(
+							new java.util.ArrayList<Integer>(unfaithfullyRenderedCitations));
+			// Same rule, same reason (issue #377): null is the absence of a measurement and empty is
+			// a measurement of none, so neither is normalised into the other.
+			this.misattributedOrderCitations = misattributedOrderCitations == null ? null
+					: java.util.Collections.unmodifiableList(
+							new java.util.ArrayList<Integer>(misattributedOrderCitations));
+			// And once more (issue #337 round three), under the same rule as the two above rather
+			// than a rule of its own: null is the absence of a measurement, empty a measurement of
+			// none, and normalising either into the other loses the difference the accessors state.
+			this.unstatedFindingSeverities = unstatedFindingSeverities == null ? null
+					: java.util.Collections.unmodifiableList(
+							new java.util.ArrayList<UnstatedFindingSeverity>(unstatedFindingSeverities));
+			// A value type rather than a normalised pair of ints, under the same rule as the three
+			// lists above (issue #379): null is the absence of a measurement and a zeroed statement
+			// is a measurement of none, so neither is normalised into the other. It is immutable, so
+			// it is carried rather than copied.
+			this.activeOrderClaims = activeOrderClaims;
+			// And once more (issue #395), under the rule the four above share rather than one of its
+			// own: null is the absence of a measurement and a zeroed statement is a measurement of
+			// none. Immutable, so it is carried rather than copied.
+			this.findingCitationExtent = findingCitationExtent;
+			// Three-valued for the reason the value types above are (issue #247): null is the absence
+			// of a measurement, and FALSE is a measurement — of a chart the module could not read.
+			// Boxed and never unboxed into a primitive here; collapsing it loses the only thing that
+			// separates "nobody looked" from "the reads completed".
+			this.chartReadForSafety = chartReadForSafety;
+			this.conditionRuleCoverage = conditionRuleCoverage;
 		}
 
 		/**
@@ -249,7 +666,11 @@ public interface ChartSearchService {
 		}
 
 		/**
-		 * The ordered list of record references cited in the answer.
+		 * The ordered list of record references this answer PUBLISHES. Mostly the ones it cites, and
+		 * since issue #305 not only those: a chart record an injected {@code safety_finding} was
+		 * derived from joins the list whenever the model cites that finding, and says so through
+		 * {@link RecordReference#isAttachedByTheModule()}. Read it as what a client renders, not as
+		 * the model's citation set.
 		 */
 		public List<RecordReference> getReferences() {
 			return references;
@@ -286,10 +707,513 @@ public interface ChartSearchService {
 		public List<SafetyWarning> getSafetyWarnings() {
 			return safetyWarnings;
 		}
+
+		/**
+		 * How the prompt's chart context was assembled for this answer — one of the
+		 * {@link ChartSearchAiConstants}{@code .SEARCH_MODE_*} values, and what the audit log's
+		 * {@code search_mode} column records.
+		 *
+		 * <p>The producer states it, so the consumer derives nothing: issue #178 was the REST layer
+		 * branching on the preFilter global property at both of its audit-write sites, which left
+		 * {@code queryScoped} — the shipped default — unable to appear in the column at all. It
+		 * belongs on the answer because the answer is what a chart mode produced; anything that
+		 * re-reads a global property afterwards can disagree with the read that built the chart.
+		 *
+		 * @return the mode, never null — {@link ChartSearchAiConstants#SEARCH_MODE_UNKNOWN} when the
+		 *         producer stated none, so a caller writing a NOT NULL column has a value and no
+		 *         caller has to invent one
+		 */
+		public String getSearchMode() {
+			return searchMode == null ? ChartSearchAiConstants.SEARCH_MODE_UNKNOWN : searchMode;
+		}
+
+		/**
+		 * How much module-supplied reference material the prompt behind this answer carried — the
+		 * record count and character total the audit row's {@code reference_slice_records} and
+		 * {@code reference_slice_chars} columns record (issue #229).
+		 *
+		 * <p>The producer states it and the consumer derives nothing, the same discipline
+		 * {@link #getSearchMode()} follows and for the same reason: the number is a property of the
+		 * chart that was actually assembled, and anything re-deriving it afterwards is measuring a
+		 * different chart. {@code LlmInferenceService} resolves it once per method, off the chart
+		 * {@code DrugReferenceInjector.inject} returned, and sets it on every answer that method
+		 * produces — including the ungrounded one the streaming path hands its consumer, because the
+		 * two audit shapes read different objects.
+		 *
+		 * <p><b>Null is not zero.</b> Zero is a real measurement — the prompt carried no reference
+		 * material — while null says the producer stated nothing at all, which is what the five
+		 * constructors above do. Collapsing null into zero would make an unmeasured row
+		 * indistinguishable from a measured empty one, which is the failure issue #178 fixed for the
+		 * mode column; the audit columns are nullable for exactly this reason. There is no
+		 * {@code UNKNOWN} sentinel to return instead because those columns, unlike
+		 * {@code search_mode}, are not NOT NULL.
+		 *
+		 * <p><b>Zero says what the prompt carried, never why.</b> It is a true reading in every case —
+		 * the prompt really did carry no reference material — which is why no third value is owed here
+		 * the way {@code PatientClinicalContext.contraindicationRecordsRead()} is owed one: that
+		 * exists because a chart the module could not read is not a chart that records nothing,
+		 * whereas a prompt that carried nothing did carry nothing. What it will not tell you is which
+		 * of several quite different situations produced it — the question matched no reference entry;
+		 * {@code chartsearchai.drugReference.enabled} is off, which is the SHIPPED DEFAULT
+		 * ({@link ChartSearchAiConstants#DEFAULT_DRUG_REFERENCE_ENABLED}), so a stock install reads
+		 * 0/0 on every row; some combination of {@code drugReference.injectFromQuery},
+		 * {@code drugReference.injectFromOrders} and {@code drugSafety.validateAnswers} is off — note
+		 * the third is a {@code drugSafety} property rather than a {@code drugReference} one, and that
+		 * none of the three silences this number on its own, each leaving another arm injecting;
+		 * {@code DrugReferenceInjector.inject} threw and returned the chart unmodified, which it does
+		 * deliberately so an enrichment can never break the answer path; or the injector rebuilt the
+		 * chart with active-order records alone, which are the patient's own and outside this number.
+		 * Do not read that list as complete — it is the paths visible from {@code inject} and
+		 * {@code injectRecords} today, and an earlier version of this javadoc claimed there were three
+		 * when a count was never checked. The operational point does not depend on the count: a column
+		 * of zeros is not evidence a corpus raises no reference material, and the injector's own log
+		 * is the only thing that separates a swallowed failure from an honest miss.
+		 *
+		 * <p><b>On a cache hit this states the ORIGINAL request's slice.</b>
+		 * {@code ChartSearchServiceRouter} returns the cached {@code ChartAnswer} unchanged, so the
+		 * row files the prompt the answer was actually built from — which is the truthful reading for
+		 * one row, and means an operator SUMMING the column across rows over-reports prompt spend by
+		 * every cache hit. That is inherited from how caching works here rather than chosen, and it
+		 * matches what {@code search_mode} already does.
+		 *
+		 * <p>It counts reference-group records only, so the {@code active_drug_order} records the
+		 * injector also writes are outside it — they are the patient's own prescriptions and group as
+		 * chart evidence. Their count remains on the injector's DEBUG line.
+		 *
+		 * @return the slice, or null when the producer stated none
+		 */
+		public ChartSearchAiUtils.ReferenceSlice getReferenceSlice() {
+			return referenceSlice;
+		}
+
+		/**
+		 * How many drug pairs this answer's interaction check found and how many of them it
+		 * reported — what the {@code interactionPairs} key on the {@code /search} response and on the
+		 * {@code done} and {@code grounded} SSE events publishes (issue
+		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/336">#336</a>).
+		 *
+		 * <p>The producer states it, so no consumer derives it. A capped list was otherwise
+		 * indistinguishable from a complete one everywhere but a server-side WARN, and the chip count
+		 * cannot stand in for it: the drug-in-play arm raises interaction chips for drugs only the
+		 * ANSWER named and class chips this counts nowhere, so counting them answers a different
+		 * question. That arm states this too since issue
+		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/356">#356</a>, for
+		 * the prescribing question, where neither pairwise arm stated one AND the question resolved a
+		 * drug it could screen — so it does not speak for every question a pairwise arm declined
+		 * to describe: where the screening arm states nothing, nothing else states the field at all,
+		 * and {@link PairChipExtent} carries the exact condition (issue
+		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/370">#370</a>).
+		 *
+		 * @return the statement, or {@code null} where the interaction check made none —
+		 *         {@link PairChipExtent} is canonical for what that covers, and for why {@code null}
+		 *         is not zero
+		 */
+		public PairChipExtent getPairChipExtent() {
+			return pairChipExtent;
+		}
+
+		/**
+		 * The drug CLASS this answer's question named and that the module resolved to no substance —
+		 * what the {@code unresolvedDrugClass} key on the {@code /search} response and on the
+		 * {@code done} and {@code grounded} SSE events publishes (issue
+		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/354">#354</a>).
+		 *
+		 * <p><b>Why the module states it rather than leaving it to the answer.</b> #354's second
+		 * blessed outcome is that the module says the question named a class and asks for a specific
+		 * drug, and the deterministic half of that is a {@code drug_class_note} record in the prompt.
+		 * A prompt record reaches a client only if the model cites it, and on the issue's own
+		 * reproduction it did not: the injection was real, the answer relayed none of it, and the only
+		 * delta anywhere was an audit-log column no {@code /search} consumer can read.
+		 * A safety statement that is only as reliable as the wording of a generated answer is the
+		 * failure {@code getPairChipExtent()} exists for, one surface over; this is the same remedy.
+		 *
+		 * <p>The producer states it and no consumer derives it: {@code LlmInferenceService} reads it
+		 * once per method off the post-inject chart, through
+		 * {@link ChartSearchAiUtils#unresolvedDrugClass}, and sets it on every answer that method
+		 * produces — the ungrounded one included, because the early {@code done} event is emitted from
+		 * that answer and is what the user sees. Re-asking
+		 * {@code DrugReferenceService.namedDrugClass} at a consumer would be a second resolution that
+		 * can disagree with the prompt; that argument is at the accessor.
+		 *
+		 * <p><b>Null is the absence of a statement and not a denial.</b> It covers a question naming
+		 * no class, a question that named one AND resolved a substance (where there is nothing
+		 * unresolved to report), and the drug-reference feature being off. Unlike
+		 * {@link #getReferenceSlice()} there is no measured zero to distinguish from it, because the
+		 * statement here is purely positive.
+		 *
+		 * @return the class name the module could not resolve, or null where it states none
+		 */
+		public String getUnresolvedDrugClass() {
+			return unresolvedDrugClass;
+		}
+
+		/**
+		 * The citations whose rendering in this answer the module found UNFAITHFUL to the record they
+		 * point at — the second round of
+		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/337">issue #337</a>.
+		 * {@code ReferenceProseFidelityCheck} reports, at WARN, an answer that reproduces a stretch of
+		 * a cited reference-group record and then states different words inside the sentence it was
+		 * copying; until this key that report was a maintainer's signal and nothing a consumer of the
+		 * response could see, so a degraded safety sentence reached a clinician carrying a citation
+		 * marker with nothing anywhere saying the marker's own record says otherwise. That is the
+		 * failure {@link #getUnresolvedDrugClass()} and {@link #getPairChipExtent()} each answered the
+		 * same way, one surface over.
+		 *
+		 * <p><b>What it states is the CITATION and never a word of either text.</b> One record is one
+		 * entry however many times the answer diverged from it, and no prose travels — ADR Decision 74
+		 * carries why, and README's {@code unfaithfullyRenderedCitations} section carries what a client
+		 * can and cannot put beside it. The short of that: the response does NOT let a consumer recover
+		 * the cited record's own words. A {@code safety_finding}'s {@code resourceUuid} names the
+		 * subject drug only, so several records — several indexes — share one, and the
+		 * {@code safetyWarnings} chips carrying that {@code (type, drug)} are a candidate SET rather
+		 * than a match; and a chip's {@code detail} is in any case only the mechanism half of what this
+		 * check compares against. The prefix and the strength call carry no wire counterpart; TWO clauses
+		 * are exceptions and neither is the counterpart it looks like — the chart-order clause, since
+		 * what the chip publishes is its ITEMS, as structured {@code chartOrderBridges}, and the
+		 * provenance note, since what the chip publishes is the ANSWER it is appended off, the chip's own
+		 * {@code restsOnAnUncorroboratedChartMatch} (issue #374). Neither is the clause TEXT compared
+		 * here. A {@code drug_reference} record's text is published nowhere at all.
+		 *
+		 * <p><b>It is not a grounding verdict and must not be rendered as one.</b> The finding is
+		 * deterministic and correct; what diverged is the ANSWER's rendering of it. Reading it as
+		 * "unsupported" is issue #201's miscarriage — a red badge on this module's own Major
+		 * interaction finding.
+		 *
+		 * <p><b>Null is the absence of a measurement; empty is a measurement of none — and empty says
+		 * less than it looks.</b> An empty list also covers the answer citing no readable reference
+		 * record at all, which on a stock install is EVERY answer, {@code
+		 * chartsearchai.drugReference.enabled} being false: it says the check ran and named no
+		 * citation, never that the answer was compared against anything. And absence of an entry is
+		 * not a certificate of faithfulness — the check is recall-limited by construction, and ADR
+		 * Decision 61's "What this cannot see" enumerates how. Null says this producer stated nothing,
+		 * and the reachable cause is ONE: the early {@code done} of the async-grounding path, emitted
+		 * before the check runs. The check's own failure branch returns null too and no path is known
+		 * to deliver it — the one line it guards is a read of {@code patient.getPatientId()}, which
+		 * both answer methods re-read in their {@code finally} timing log, so a throw there leaves the
+		 * request as an error rather than as a response carrying null. On a cache hit this replays the
+		 * ORIGINAL request's list, the whole answer object being replayed.
+		 *
+		 * @return the distinct citation indexes, in report order, or null where none was stated
+		 */
+		public List<Integer> getUnfaithfullyRenderedCitations() {
+			return unfaithfullyRenderedCitations;
+		}
+
+		/**
+		 * The chart citations this answer offered as evidence of an ACTIVE DRUG ORDER that cannot be
+		 * one — <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/377">issue
+		 * #377</a>. {@code ActiveOrderCitationFidelityCheck} reports them, and this is the same
+		 * remedy {@link #getUnfaithfullyRenderedCitations()} is for the same failure one issue over:
+		 * the reported answer named five active orders, cited a condition, a visit and an encounter
+		 * for three of them, and nothing a consumer of the response could read separated those three
+		 * from the two that were right — every citation in it serialized {@code grounded: null},
+		 * which is what the #284 carve-out publishes for a chart citation whose sentence also rests
+		 * on a {@code safety_finding}.
+		 *
+		 * <p><b>The CITATION and never a word of either text</b>, for the reason its siblings state:
+		 * a client renders its own sentence beside the marker, and the record's prose is not the
+		 * module's to restate here. One index is one entry however many active-order claims cited
+		 * it.
+		 *
+		 * <p><b>It is not a grounding verdict.</b> It says the record cannot be evidence of an active
+		 * order, not that the claim is unsupported — the finding behind these sentences is
+		 * deterministic and, on the reported answer, correct. Rendering it as "unsupported" is issue
+		 * #201's miscarriage in a new place.
+		 *
+		 * <p><b>Null is the absence of a measurement; empty is a measurement of none — and empty is
+		 * not a certificate.</b> The check is recall-limited by construction: it sees only an answer
+		 * that reproduces {@code DrugSafetyValidator.ACTIVE_ORDER_INTERACTION_PHRASE}, only the run
+		 * of citation markers that follows it, and it cannot tell a citation of the WRONG drug order
+		 * from a citation of the right one. ADR Decision 76 enumerates that. <b>And empty says less
+		 * than it looks on a stock install</b>: {@code chartsearchai.drugReference.enabled} defaults
+		 * to false, and its own description says no safety warnings are produced then — so no finding
+		 * carries the phrase for an answer to reproduce, and this list is empty for a reason that is
+		 * not about the citations at all. That is the same qualification
+		 * {@link #getUnfaithfullyRenderedCitations()} carries, for the same GP. Null's reachable cause
+		 * is the async-grounding path's early {@code done}, built before the check runs; on a cache
+		 * hit the ORIGINAL request's list is replayed with the rest of the answer.
+		 *
+		 * <p><b>Read it beside {@link #getActiveOrderClaims()}</b>, which says on the same walk how
+		 * many active-order claims the answer made and how many offered no chart record at all. Empty
+		 * here means one thing where that number is zero and quite another where it equals the claims
+		 * stated, and issue #379 is a pair of live measurements in which it meant each.
+		 *
+		 * @return the distinct citation indexes, in the order the answer states them, or null where
+		 *         none was stated
+		 */
+		public List<Integer> getMisattributedOrderCitations() {
+			return misattributedOrderCitations;
+		}
+
+		/**
+		 * How many claims about this patient's ACTIVE ORDERS the answer stated, and how many of them
+		 * offered no chart record as evidence —
+		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/379">issue #379</a>.
+		 * {@code ActiveOrderCitationFidelityCheck} states it on the same walk that produces
+		 * {@link #getMisattributedOrderCitations()}, because they are two answers to one question and
+		 * a second walk is the two-resolutions-that-agree shape #151 forbids.
+		 *
+		 * <p><b>It is what makes {@link #getMisattributedOrderCitations()} readable</b>, whose empty
+		 * list could not be read alone. It is not a base that one is a share OF — that key counts
+		 * CITATIONS and this counts CLAIMS, and one claim can offer several citations.
+		 * {@link ActiveOrderClaims} is canonical for what {@code stated}, {@code uncited}, a zero and
+		 * this accessor's null each do and do not assert, for the two recorded runs behind that
+		 * reasoning, and for the residues of the run unit both halves share. ADR Decision 81 carries
+		 * the decision.
+		 *
+		 * @return the statement, or null where the producer made no measurement
+		 */
+		public ActiveOrderClaims getActiveOrderClaims() {
+			return activeOrderClaims;
+		}
+
+		/**
+		 * How many injected safety findings the prompt carried, and how many of them this answer
+		 * cited —
+		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/395">issue
+		 * #395</a>. {@code SafetyFindingCitationExtentCheck} states it.
+		 *
+		 * <p>It is the base the family had no member for. Its four neighbours each judge a finding
+		 * the answer DID cite — whether the rating reached the prose
+		 * ({@link #getUnstatedFindingSeverities()}), whether the words were reproduced faithfully
+		 * ({@link #getUnfaithfullyRenderedCitations()}), whether the chart record offered can be the
+		 * order named ({@link #getMisattributedOrderCitations()}), whether a claim offered any record
+		 * at all ({@link #getActiveOrderClaims()}) — so an answer that drops a finding ENTIRELY is
+		 * outside all four, and on the reported run not one of them reported it: the three list keys
+		 * read {@code []} and the fourth was flagging something else. Not "all four read as a
+		 * faithful answer's", which is false of that response.
+		 *
+		 * <p>{@link FindingCitationExtent} is canonical for what {@code carried}, {@code cited}, a
+		 * zero and this accessor's null each do and do not assert, for why it is a count rather than
+		 * an accusation, and for why neither {@code cited == carried} nor {@code cited < carried} is a
+		 * certificate of anything. ADR Decision 83 carries the decision.
+		 *
+		 * @return the statement, or null where the producer made no measurement
+		 */
+		public FindingCitationExtent getFindingCitationExtent() {
+			return findingCitationExtent;
+		}
+
+		/**
+		 * The citations of safety findings whose RATING this answer states nowhere, each carrying
+		 * the rating that went missing —
+		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/337">issue #337</a>,
+		 * round three, and
+		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/387">#387</a> for
+		 * the rating. {@code SafetyFindingSeverityFidelityCheck} reports them, and this is the same
+		 * remedy as its two siblings for the third face of one failure: a deterministic safety string
+		 * reaching the clinician weaker than the module wrote it.
+		 *
+		 * <p>The reported answer enumerated five interaction findings in one clause — <em>"…
+		 * Clarithromycin interacts with active order Methylprednisolone [177] [350], Clarithromycin
+		 * interacts with active order Budesonide [166] [351], …"</em> — and stated no rating for any
+		 * of them. Two were Major. A clinician reading the prose had no way to rank them, and
+		 * "interacts with" was doing the work that "Major" was supposed to do. Nothing on the
+		 * response said so: {@link #getUnfaithfullyRenderedCitations()} correctly read empty, because
+		 * that check reports a SUBSTITUTION inside a long reproduction and this answer reproduced
+		 * nothing.
+		 *
+		 * <p><b>The citation and the RATING, and never a word of either text</b>. The two siblings
+		 * publish a bare index because each has one datum to publish; this key carries two. One
+		 * citation is one entry, and {@link UnstatedFindingSeverity} is canonical for what an entry
+		 * asserts, why the two travel together, and how its {@code rating} differs from the
+		 * {@code severity} a chip publishes — a difference its spelling is chosen to keep visible.
+		 *
+		 * <p><b>It is not a grounding verdict and not a claim that the finding is wrong.</b> The
+		 * finding behind such a sentence is deterministic and was, on the reported answer, correct;
+		 * what this says is that the answer's rendering of it dropped the rating the record carries.
+		 *
+		 * <p><b>Null is the absence of a measurement; empty is a measurement of none — and empty is
+		 * not a certificate.</b> The check is recall-limited by construction and
+		 * {@code SafetyFindingSeverityFidelityCheck} enumerates how: it asks only whether the rating
+		 * appears ANYWHERE in the answer, so an answer that states one Major finding's rating and
+		 * drops another's is silent; it says nothing about a finding whose record carries no rating
+		 * for it to ask after, which is three different cases
+		 * ({@code DrugReferenceInjector.ratingThisRecordStates}); and it is satisfied by the word
+		 * appearing for any reason, including inside a mechanism the answer reproduced. <b>And
+		 * empty says less than it looks on a stock install</b>: {@code
+		 * chartsearchai.drugReference.enabled} defaults to false, so no finding exists to have a
+		 * rating dropped — the same qualification both siblings carry, for the same GP. Null's
+		 * reachable cause is the async-grounding path's early {@code done}, built before the check
+		 * runs; on a cache hit the ORIGINAL request's list is replayed with the rest of the answer.
+		 *
+		 * @return one entry per offending citation, the citations distinct and in CITATION order —
+		 *         the order {@code LlmInferenceService.extractCitedReferences} resolved them, which
+		 *         is the order the answer states them in wherever the model anchored them inline and
+		 *         did not also supply a structured array in some other order. Null where none was
+		 *         stated.
+		 */
+		public List<UnstatedFindingSeverity> getUnstatedFindingSeverities() {
+			return unstatedFindingSeverities;
+		}
+
+		/**
+		 * Whether the three chart reads the drug-safety screen rests on — this patient's allergies,
+		 * her conditions and her active drug orders — all completed behind this answer (issue
+		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/247">#247</a>).
+		 *
+		 * <p><b>Those three reads and no others, which is narrower than it sounds.</b> Two other
+		 * failures leave this verdict {@code TRUE}, both deliberately:
+		 * <ul>
+		 * <li>AGE and WEIGHT, each with a real and unstamped gap of its own. A failed AGE read makes
+		 * {@code DrugReference.bandForAge} answer null, which drops the dosing lines from the
+		 * injected record. A failed WEIGHT read silences the per-kg leg of
+		 * {@code DrugSafetyValidator.addOverdose}, so a band whose only ceiling is per-kg — the
+		 * shipped {@code sourceFormat=json} dataset has one — raises no overdose chip at all. Both
+		 * are outside this key because the key is built from the two stamps and neither of these
+		 * carries one. That scopes the KEY and never the log: both go through the same
+		 * {@code warnUnreadable} the three stamped reads do, so a failure of either is audible on a
+		 * stock install (the age line names no privilege, its read making no service call).</li>
+		 * <li>The per-concept sub-reads INSIDE those three loops — an order's concept uuid, its
+		 * concept names and its ATC codes, and the coded name of one recorded allergy or condition.
+		 * Each has its own catch and leaves its loop's stamp true, so a record read partly is not a
+		 * read that failed. They stay at DEBUG as well as outside the verdict, which is a separate
+		 * decision with its own home: {@code PatientClinicalContextBuilder.warnUnreadable}'s javadoc
+		 * says why, the short of it being that no {@code @Authorized} privilege gates a
+		 * lazy-association read, so such a line would have no privilege to name.</li>
+		 * </ul>
+		 * ADR Decision 91 records the scoping.
+		 *
+		 * <p><b>The problem it exists to remove.</b> {@code PatientClinicalContextBuilder} degrades a
+		 * failed allergy, condition or active-order read to an empty — or, where the read threw
+		 * part-way through, a PARTIAL — set, which is the right fail-safe
+		 * for an additive net and leaves the clinician-facing response identical to a healthy
+		 * patient's: no chips, no findings, and — before this key — nothing anywhere on the wire to
+		 * tell the two apart. The failure needs no bad data and no operator mistake: these reads go
+		 * through core's service layer, each behind an {@code @Authorized} privilege, so a role
+		 * granted this module's own privilege without {@code Get Allergies}, {@code Get Conditions}
+		 * or {@code Get Orders} reaches it, and so does a database error underneath them.
+		 *
+		 * <p><b>What each value asserts.</b> This javadoc is the one home for that list, and
+		 * {@code README.md}'s client-facing paragraph is the second — the second because it is the
+		 * only one a frontend author reads.
+		 * <ul>
+		 * <li>{@code TRUE} — the reads completed. It does NOT say a contraindication was screened,
+		 * that the dataset had a rule to ask ({@link #getConditionRuleCoverage()} is that question),
+		 * or that anything was found. An empty {@code safetyWarnings} beside {@code TRUE} is a
+		 * measurement of none <b>on a payload whose warnings are final</b> — not on the early
+		 * {@code done} of an async-grounding stream, which carries an empty list by construction
+		 * because {@code validate} has not run. This key is already FINAL on that event — like
+		 * {@code unresolvedDrugClass} and {@code conditionRuleCoverage}, and unlike the answer checks
+		 * beside it, which are deferred to the later {@code grounded} event — because the read it
+		 * reports happens before the model is called. <b>Final is not non-null</b>: the shipped
+		 * default has {@code chartsearchai.drugReference.enabled} off, so the pass returns before it
+		 * has a context and this key reads {@code null} on the early {@code done} and on the final
+		 * payload alike. A client must not treat {@code null} there as a protocol violation.</li>
+		 * <li>{@code FALSE} — at least one of the three did not complete. An empty
+		 * {@code safetyWarnings} beside it is NOT a measurement of none and must not be rendered as
+		 * a clear chart — and a NON-empty one beside it is not complete either, because a read that
+		 * threw part-way leaves what it had already collected in place. "Did not complete" rather
+		 * than "failed" because a null patient stamps both flags false having attempted
+		 * nothing.</li>
+		 * <li>{@code null} — no measurement. The drug-reference feature is off, or the pass threw
+		 * before it had a context. Never read {@code null} as either verdict.</li>
+		 * </ul>
+		 *
+		 * <p><b>It is the WHOLE pass and never one side of it.</b>
+		 * {@code PatientClinicalContext.chartReadForSafety()} is the one spelling of that
+		 * conjunction, shared with {@code DrugSafetyValidator.standingChartAlerts}, so the two
+		 * surfaces cannot come to disagree about whether one chart was read. A records-only verdict
+		 * was the first shape and it reads {@code TRUE} on a request whose active-order read failed,
+		 * which is the defect ADR Decision 79 records one surface over.
+		 *
+		 * <p><b>Which pass it is of.</b> The INJECTOR's, which is the drug-safety layer's first chart
+		 * read and happens before the model is called. (Chart assembly queries this patient's orders
+		 * earlier still; that read is not this layer's and is not stamped.) {@code DrugSafetyValidator.validate} builds a second
+		 * context of its own, so on a transient failure this verdict and the chips beside it can in
+		 * principle answer for different reads; in the case the key exists for — a role missing a
+		 * privilege — both builds fail alike. The injector's is used because it is the one that
+		 * happens whenever a screen could ({@code validate} gates on one switch more) and the only
+		 * one that has happened by the time the ungrounded answer is handed off.
+		 *
+		 * <p>It is not {@code StandingChartAlerts.isScreened()} on {@code /chartalerts}, which is a
+		 * strictly narrower verdict — that one also requires the drug-safety toggles and the pass
+		 * completing — and so keeps its own name. This paragraph is that comparison's one home in
+		 * production; the neighbours point here.
+		 *
+		 * @return the verdict, or {@code null} where the producer stated none
+		 */
+		public Boolean getChartReadForSafety() {
+			return chartReadForSafety;
+		}
+
+		/**
+		 * What the loaded drug-reference dataset publishes for the hand-authored <b>condition</b>-rule
+		 * arm of the contraindication screen — what the {@code conditionRuleCoverage} key on the
+		 * {@code /search} response and on the {@code done} and {@code grounded} SSE events publishes
+		 * (issue
+		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/378">#378</a>).
+		 *
+		 * <p><b>Why the module states it rather than leaving it to the answer.</b> Under the shipped
+		 * {@code sourceFormat=ddinter} default the dataset publishes no hand-authored allergy or
+		 * condition rule at all, so the condition leg has no rule to evaluate and this patient's
+		 * recorded conditions reach no rule at all — and nothing on the response said so, while
+		 * {@link #getPairChipExtent()} beside it made a completeness claim for the arm that had
+		 * nothing to hide. That is issue #336's argument with the count at zero, and this is the same
+		 * remedy: the module states what it could do, on a key, rather than depending on the wording
+		 * of a generated answer.
+		 *
+		 * <p><b>It is a statement about the loaded DATASET and never about this patient.</b>
+		 * {@code ABSENT} says a dataset was read and no entry publishes a condition rule the module
+		 * could put to a chart. {@code PUBLISHED} says the dataset publishes such rules and nothing
+		 * more — not that any fired, and not that every condition a chart records is screened.
+		 * {@code UNLOADED} says nothing was read, so nothing is known; on a stock install
+		 * {@code chartsearchai.drugReference.enabled} is {@code false} and that is the value. Keeping
+		 * "we looked and there is none" apart from "nobody looked" is the whole point, which is why
+		 * this is a three-valued verdict and not a boolean —
+		 * {@code SerializedRecord.getOrderActive()} keeps the same discipline one layer down.
+		 *
+		 * <p><b>What this value cannot speak to. This javadoc is the one home for that list</b>, and
+		 * {@code README.md}'s client-facing paragraph is the second — the second because it is the only
+		 * one a frontend author reads, which is the same two-homes arrangement {@code PairChipExtent}
+		 * keeps for the same reason. Everything else points here rather than restating it: a copy is a
+		 * second thing to forget to update, which is the rule
+		 * {@code SerializedRecord.getOrderActive()}'s own field javadoc states one layer down. ADR
+		 * Decision 75 is not a third copy — it records the two OPEN DEFECTS below with the evidence
+		 * for each, which is a decision's own business and not this list. Three things, none of them
+		 * closed by issue #378:
+		 *
+		 * <ul>
+		 * <li>Whether the contraindication arms are switched ON at all.
+		 * {@code chartsearchai.drugSafety.validateAnswers} and
+		 * {@code chartsearchai.drugSafety.warnOnContraindications} govern that and are deliberately not
+		 * folded in: a load-time capability is knowable whether or not a screen ran, so gating this on
+		 * them would withhold a knowable fact exactly where the arms are off.
+		 * {@code DrugSafetyValidator.conditionRuleCoverage()} carries that argument, and the refuted
+		 * one a first draft gave for the same rule.</li>
+		 * <li>Whether the patient's condition list was READ. A failed read degrades to an empty set;
+		 * that is {@link #getChartReadForSafety()}'s question since issue #247, and this key still
+		 * does not carry it. The two are read together or not at all — a dataset that publishes a
+		 * condition rule says nothing about a chart nobody could read, and vice versa.</li>
+		 * <li>ENCOUNTER DIAGNOSES. The contraindication screen builds its condition tokens from
+		 * OpenMRS's ACTIVE CONDITIONS alone ({@code PatientClinicalContextBuilder}), so a recorded
+		 * diagnosis reaches no contraindication rule whatever this says. It still reaches the chart the
+		 * model reads, like any other record, and the module reads a {@code Diagnosis} elsewhere to
+		 * invalidate a cached answer — the limit is on what the SCREEN sees, not on the module's
+		 * reach.</li>
+		 * </ul>
+		 *
+		 * <p>The producer states it and no consumer derives it, the discipline
+		 * {@link #getUnresolvedDrugClass()} follows: {@code LlmInferenceService} resolves it once per
+		 * method through {@code DrugSafetyValidator.conditionRuleCoverage()} and sets it on every
+		 * answer that method produces — the ungrounded one included, because the early {@code done}
+		 * event is emitted from that answer and is what the user sees. Like the class statement and
+		 * unlike {@link #getPairChipExtent()}, it is known before the model is called.
+		 *
+		 * @return the verdict, or null where the module stated none. The three constants above cover
+		 *         every case the producer can answer, so a null reaching a client means
+		 *         {@code DrugSafetyValidator.conditionRuleCoverage()} could not read the load status —
+		 *         that accessor's javadoc carries what it withholds and why
+		 */
+		public DrugReferenceLoad.Coverage getConditionRuleCoverage() {
+			return conditionRuleCoverage;
+		}
 	}
 
 	/**
-	 * Identifies a source record in OpenMRS cited by the LLM answer.
+	 * Identifies a source record in OpenMRS offered as evidence for the LLM answer — cited by the
+	 * model, or, since issue #305, attached by the MODULE because a record the model DID cite was
+	 * derived from it. {@link #isAttachedByTheModule()} is which.
 	 */
 	class RecordReference {
 
@@ -307,6 +1231,10 @@ public interface ChartSearchService {
 
 		private final int withheldInteractions;
 
+		/** Whether the MODULE put this citation on the answer rather than the model — see
+		 *  {@link #isAttachedByTheModule()} (issue #305). */
+		private final boolean attachedByTheModule;
+
 		public RecordReference(int index, String resourceType, String resourceUuid, Date date) {
 			this(index, resourceType, resourceUuid, date, null);
 		}
@@ -322,6 +1250,16 @@ public interface ChartSearchService {
 		 */
 		public RecordReference(int index, String resourceType, String resourceUuid, Date date, Boolean grounded,
 				String source, int withheldInteractions) {
+			this(index, resourceType, resourceUuid, date, grounded, source, withheldInteractions, false);
+		}
+
+		/**
+		 * Full constructor, additionally saying who put this citation on the answer — see
+		 * {@link #isAttachedByTheModule()}. Every shorter constructor answers {@code false}, which is
+		 * a model-emitted citation's real shape and the only shape that existed before issue #305.
+		 */
+		public RecordReference(int index, String resourceType, String resourceUuid, Date date, Boolean grounded,
+				String source, int withheldInteractions, boolean attachedByTheModule) {
 			this.index = index;
 			this.resourceType = resourceType;
 			this.resourceUuid = resourceUuid;
@@ -329,6 +1267,7 @@ public interface ChartSearchService {
 			this.grounded = grounded;
 			this.source = source;
 			this.withheldInteractions = withheldInteractions;
+			this.attachedByTheModule = attachedByTheModule;
 		}
 
 		public int getIndex() {
@@ -351,10 +1290,30 @@ public interface ChartSearchService {
 		 * Whether the cited record was found to actually support the answer
 		 * sentence(s) that cite it. {@code TRUE}/{@code FALSE} when grounding
 		 * verification ran (see {@code chartsearchai.grounding.enabled});
-		 * {@code null} when verification was disabled or could not run for this
-		 * reference (e.g. the record carried no text to compare against). A
+		 * {@code null} when verification was disabled, could not run for this
+		 * reference (e.g. the record carried no text to compare against), or ran
+		 * and could not certify it. That last set of reasons is enumerated once,
+		 * in ADR Decision 11's {@code grounded} paragraph, and is restated below
+		 * only to say which of them leave no verdict here; what this accessor
+		 * adds beyond the pointer is which of them leave a verdict standing
+		 * on IT. A {@code reference}-group citation is demote-only, so its Tier-1
+		 * cosine PASS renders {@code null} here while its FAIL is kept and returns
+		 * {@code FALSE} — only the wire withholds that unconditionally, which is
+		 * the distinction the next paragraph draws. A withholding the VERIFIER
+		 * itself applies leaves no verdict here to read at all: a compound claim
+		 * unit under entailment (issue #302); the judge's negative on a composite
+		 * claim (issue #284, whose count is logged once per answer instead); and a
+		 * citation the MODULE attached rather than the model emitting it (issue
+		 * #305), in either mode. A
 		 * {@code null} verdict must be rendered as "unverified", never as
 		 * "verified".
+		 *
+		 * <p>This is the verdict the pipeline holds, which is not always the one
+		 * a client sees: for a {@code reference}-group citation the REST layer
+		 * publishes {@code null} whatever this returns (issue #201, see
+		 * {@code ChartSearchAiRestController.groundedForWire}). Read this to
+		 * reason about grounding inside the module; read the wire to reason
+		 * about what a client renders.
 		 */
 		public Boolean getGrounded() {
 			return grounded;
@@ -382,11 +1341,47 @@ public interface ChartSearchService {
 		}
 
 		/**
+		 * @return whether the MODULE attached this citation rather than the model emitting it — a
+		 *         chart record an injected {@code safety_finding} the model DID cite was derived
+		 *         from, resolved by
+		 *         {@link org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping#getDerivedFrom()}
+		 *         (issue #305). {@code false} for every citation the model emitted, inline or in its
+		 *         structured array, and so for every citation that existed before that issue.
+		 *
+		 *         <p>Two things turn on it, and neither is cosmetic. It is why
+		 *         {@link #getGrounded()} is {@code null} here — such a citation is UNVERIFIABLE inside
+		 *         {@code CitationGroundingVerifier} rather than graded, and that enum constant is
+		 *         canonical for why. And it is published, because the answer prose carries no
+		 *         {@code [N]} marker for such a citation: a client that highlights the marker for a
+		 *         reference chip has nothing to highlight, and one reading the {@code null} verdict
+		 *         needs to know nothing is being withheld from it.
+		 *
+		 *         <p>It says who ATTACHED the citation, never how good the evidence is. A record the
+		 *         module attached is one it resolved deterministically from the finding's own match;
+		 *         a record the model cited is the model's claim. ADR Decision 80 carries why the
+		 *         module may publish one at all.
+		 */
+		public boolean isAttachedByTheModule() {
+			return attachedByTheModule;
+		}
+
+		/**
 		 * @return a copy of this reference carrying the given grounding verdict
+		 *
+		 *         <p>Every other field travels with it, {@link #isAttachedByTheModule()} included.
+		 *         This is a hand-written copy rather than a mutation, so a field added above and
+		 *         forgotten here is dropped SILENTLY and fail-open — the shape that has cost this
+		 *         module twice over the chart-assembly stamps. Every grounded answer passes through
+		 *         here, so dropping that one would relabel the module's own citation as the model's
+		 *         wherever grounding is on:
+		 *         {@code CitationGroundingVerifierTest.aCitationTheModuleAttachedPublishesNoVerdictAndSpendsNothing}
+		 *         asserts the flag on what {@code verify} returns, which is this copy, and is what
+		 *         reddens. The wire keys are pinned separately, in
+		 *         {@code ChartSearchAiFindingProvenanceTest}.
 		 */
 		public RecordReference withGrounded(Boolean verdict) {
 			return new RecordReference(index, resourceType, resourceUuid, date, verdict, source,
-					withheldInteractions);
+					withheldInteractions, attachedByTheModule);
 		}
 	}
 }

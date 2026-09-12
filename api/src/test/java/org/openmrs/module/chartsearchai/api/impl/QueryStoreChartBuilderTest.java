@@ -28,8 +28,9 @@ import org.openmrs.module.querystore.model.QueryDocument;
  * Pure unit tests for {@link QueryStoreChartBuilder}.
  *
  * <p>Focus-hint mode contract: the builder always calls
- * {@code QueryStoreService.getPatientChart} so the chart bytes are a function of the
- * patient only (the property llama-server's KV-cache reuse needs). When
+ * {@code QueryStoreService.getPatientChart} so the chart bytes do not vary with the
+ * question (the property llama-server's KV-cache reuse needs; since issue #317 they do vary with
+ * the patient's order status, which no question can change). When
  * {@code preFilter=true} with a non-blank question, it additionally calls
  * {@code QueryStoreService.searchByPatient} to get a relevance ranking; the matching
  * record UUIDs flow through {@code PatientChart.getFocusIndices()} for rendering as a
@@ -52,13 +53,13 @@ public class QueryStoreChartBuilderTest {
 	@BeforeEach
 	public void setUp() {
 		queryStore = new CountingQueryStoreStub();
-		builder = new TestableQueryStoreChartBuilder(queryStore);
+		builder = new TestableQueryStoreChartBuilder(queryStore.asService());
 		builder.setChartSerializer(new PatientChartSerializer());
 	}
 
 	@Test
 	public void build_shouldStillCallGetPatientChartAndSkipSearch_whenQuestionIsBlank() {
-		// Focus-hint contract: the chart bytes are a function of the patient only, so a blank
+		// Focus-hint contract: the chart bytes do not vary with the question, so a blank
 		// question still produces the full chart — that's exactly what warmup needs (warmup
 		// calls buildChart(patient, "") to prime the prefix llama-server will reuse on real
 		// queries). The blank-question short-circuit is now scoped to the focus-hint side
@@ -583,6 +584,46 @@ public class QueryStoreChartBuilderTest {
 	}
 
 	@Test
+	public void build_shouldStampTheChartWithThePreFilterDispatchItActuallyTook() {
+		// Issue #178: the audit row's search mode is read off the chart's own stamps rather than a
+		// later GP read, so this is where the two full-chart shapes become distinguishable at all.
+		// Taken from the same boolean the dispatch and the [timing] mode= label use, so the row and
+		// the log line cannot disagree about which one ran.
+		builder.usePreFilter = true;
+		assertTrue(builder.build(patient(1), "any allergies?").isPreFiltered(),
+				"a focus-hint build must say so on the chart it returns");
+
+		builder.usePreFilter = false;
+		assertFalse(builder.build(patient(1), "any allergies?").isPreFiltered(),
+				"a plain full chart must not claim a focus hint");
+	}
+
+	@Test
+	public void build_shouldStampDegradedChartsToo_soAFailedBuildStillNamesItsMode() {
+		// An empty chart from an unreachable querystore is still a chart assembled in preFilter
+		// mode, and its audit row has to say which mode was in force — a request that degraded is
+		// exactly the one a maintainer will come back to read.
+		builder.usePreFilter = true;
+		builder.queryStoreUnavailable = true;
+
+		PatientChart chart = builder.build(patient(1), "any allergies?");
+
+		assertEquals(0, chart.getMappings().size(), "the degraded path must have been taken");
+		assertTrue(chart.isPreFiltered(),
+				"a degraded build must not lose the mode it was dispatched in");
+	}
+
+	@Test
+	public void buildScoped_shouldNeverClaimAFocusHint() {
+		// The slice IS the scope and renders no focus hint, so the two stamps are mutually
+		// exclusive in practice — which is what lets searchModeLabel answer queryScoped first.
+		builder.usePreFilter = true;
+
+		assertFalse(builder.buildScoped(patient(1), "any allergies?").isPreFiltered(),
+				"a scoped slice carries no focus hint whatever the preFilter GP says");
+	}
+
+	@Test
 	public void buildFocused_shouldReturnEmptyChart_whenSearchByPatientThrows() {
 		// A focus-RPC failure must degrade to an empty focused chart (the caller treats that as
 		// "no preview") and NEVER propagate — the authoritative full-chart answer must not be
@@ -595,6 +636,31 @@ public class QueryStoreChartBuilderTest {
 				"a focus-RPC failure degrades to an empty focused chart, not a propagated throw");
 		assertEquals(1, queryStore.searchByPatientCalls,
 				"the failure happened inside searchByPatient — it was reached, then swallowed");
+	}
+
+	@Test
+	public void theTimingModeLabelsAreAnOpsContract_soTheirSpellingsArePinnedAsLiterals() {
+		// Issue #232. Every other use of these constants either interpolates one into a log line or
+		// compares a constant to a constant, and neither can notice a change to the VALUE — which is
+		// the whole of what the consumer sees, since a dashboard or saved log query greps
+		// `mode=fullChart` out of the [timing] querystoreBuild lines. Measured by mutation: renaming
+		// MODE_FULL_CHART's value to "TYPO_fullChart" makes THIS the only failing test in the api
+		// module; omod cannot see these package-private constants and no omod test asserts on the
+		// labels (the "fullChart" in omod's config.xml is the chartsearchai.chartMode GP token, a
+		// different contract). So before this assertion existed the re-spelling shipped green, as a
+		// metric going quietly to zero.
+		//
+		// Literals, deliberately — the same shape as ChartSearchAiAuditSearchModeTest's
+		// theColumnsVocabularyIsAWireContract_soItsSpellingsArePinnedAsLiterals, and allowed to be
+		// brittle for the same reason: it should fail the moment a spelling moves, and its failure
+		// is the notification that an ops contract is being changed rather than a constant renamed.
+		//
+		// These are deliberately NOT the audit column's spellings (full-chart / pre-filter, pinned
+		// in that other test). Two contracts, two audiences; unifying them was considered and
+		// declined during #178 — so a change that made these agree with those fails here.
+		assertEquals("preFilter", QueryStoreChartBuilder.MODE_PRE_FILTER);
+		assertEquals("fullChart", QueryStoreChartBuilder.MODE_FULL_CHART);
+		assertEquals("unknown", QueryStoreChartBuilder.MODE_UNKNOWN);
 	}
 
 	/**
@@ -613,6 +679,10 @@ public class QueryStoreChartBuilderTest {
 
 		boolean usePreFilter = true;
 
+		/** Makes {@code resolveQueryStoreService} answer null, which is how the builder's
+		 *  querystore-unavailable degradation is reached without a live module registry. */
+		boolean queryStoreUnavailable = false;
+
 		boolean dedupGroupLabels = false;
 
 		int progressiveTopK = 5;
@@ -623,7 +693,7 @@ public class QueryStoreChartBuilderTest {
 
 		@Override
 		protected QueryStoreService resolveQueryStoreService() {
-			return stub;
+			return queryStoreUnavailable ? null : stub;
 		}
 
 		@Override

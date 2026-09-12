@@ -57,17 +57,21 @@ public class LlmInferenceServiceAsyncGroundingTest {
 			@Override
 			public org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart inject(
 					org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart chart,
-					org.openmrs.Patient patient, String question) {
+					org.openmrs.Patient patient, String question,
+					org.openmrs.module.chartsearchai.reference.ChartReadStatus readStatus) {
 				return chart;
 			}
 		});
 		service.setDrugSafetyValidator(new org.openmrs.module.chartsearchai.reference.DrugSafetyValidator() {
 
-			// overrides the mappings-carrying overload production actually calls (issue #105)
+			// The overload production actually calls: mappings-carrying for echo scoping (issue #105)
+			// and sink-carrying since issue #336. Stubbing the four-argument one instead leaves this
+			// stub INERT — production would not reach it — which is why it names both parameters.
 			@Override
 			public java.util.List<org.openmrs.module.chartsearchai.reference.SafetyWarning> validate(
 					String answer, String question, org.openmrs.Patient patient,
-					java.util.List<RecordMapping> mappings) {
+					java.util.List<RecordMapping> mappings,
+					org.openmrs.module.chartsearchai.reference.PairChipExtent.Sink pairExtentSink) {
 				return java.util.Collections.emptyList();
 			}
 		});
@@ -200,7 +204,7 @@ public class LlmInferenceServiceAsyncGroundingTest {
 		@Override
 		public LlmResponse searchStreaming(String numberedRecords, List<Integer> focusIndices,
 				String question, Consumer<String> tokenConsumer, Consumer<String> reasoningConsumer,
-				String cacheScope) {
+				String cacheScope, boolean enumerateFindings) {
 			return new LlmResponse("Active Tuberculosis [8]. CD4 988.0 [9].", Arrays.asList(8, 9));
 		}
 	}

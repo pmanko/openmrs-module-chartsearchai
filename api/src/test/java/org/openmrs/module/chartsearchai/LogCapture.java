@@ -1,0 +1,297 @@
+/**
+ * This Source Code Form is subject to the terms of the Mozilla Public License,
+ * v. 2.0. If a copy of the MPL was not distributed with this file, You can
+ * obtain one at http://mozilla.org/MPL/2.0/. OpenMRS is also distributed under
+ * the terms of the Healthcare Disclaimer located at http://openmrs.org/license.
+ *
+ * Copyright (C) OpenMRS Inc. OpenMRS is a registered trademark and the OpenMRS
+ * graphic logo is a trademark of OpenMRS Inc.
+ */
+package org.openmrs.module.chartsearchai;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Appender;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.Logger;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Configurator;
+import org.apache.logging.log4j.core.config.Property;
+
+/**
+ * Captures what production code actually logs, so a test can assert the LEVEL an outcome is
+ * reported at rather than only its return value.
+ *
+ * <p>Why this exists: a configured drug-reference source that resolves to zero entries used to be
+ * reported exactly as a successful load — {@code log.info("Loaded {} ...", 0)} — which turned the
+ * whole drug-safety feature off with nothing at default log levels to say so (issue #149). The
+ * return value alone cannot pin that fix: an empty list is the correct fail-safe return in BOTH the
+ * healthy-but-empty and the misconfigured case, so the only observable difference is the level. A
+ * test that asserts on the WARN's message text instead would let a re-wording silently drop the
+ * guard.
+ *
+ * <p>Attaches a collecting appender to the named logger and, because log4j2 appenders are inherited
+ * by descendant loggers, sees everything logged under that name — pass a package name to capture a
+ * whole package. The level is raised to {@code INFO} for the duration (via {@link Configurator}, so
+ * the change lands on the shared logger CONFIG and therefore reaches descendant loggers —
+ * {@code Logger.setLevel} would only affect the one instance) and is restored on {@link #close()}.
+ * Capturing INFO as well as WARN matters for more than an INFO assertion: a capture that silently
+ * received nothing at all would make "no WARN was logged" pass vacuously.
+ *
+ * <p>Use with try-with-resources; it is not thread-safe against a concurrent
+ * {@link #close()} but the collected event list is.
+ */
+public final class LogCapture implements AutoCloseable {
+
+	private final List<LogEvent> events = Collections.synchronizedList(new ArrayList<LogEvent>());
+
+	private final String loggerName;
+
+	private final Logger logger;
+
+	private final Appender appender;
+
+	private final Level restoreLevel;
+
+	private LogCapture(String loggerName, Level level) {
+		this.loggerName = loggerName;
+		this.restoreLevel = ((Logger) LogManager.getLogger(loggerName)).getLevel();
+		Configurator.setLevel(loggerName, level);
+		this.logger = (Logger) LogManager.getLogger(loggerName);
+		this.appender = new CollectingAppender(events);
+		this.appender.start();
+		this.logger.addAppender(appender);
+	}
+
+	/**
+	 * @param loggerName a logger or package name; events from it and every logger beneath it are
+	 *            captured
+	 */
+	public static LogCapture on(String loggerName) {
+		return new LogCapture(loggerName, Level.INFO);
+	}
+
+	/**
+	 * {@link #on(String)} at a level of the caller's choosing, for the outputs whose only surface is a
+	 * line logged BELOW info — issue #163's drug-reference ENTRY character total, which exists precisely
+	 * because the REST response returns only CITED references and so cannot show what the injected
+	 * entries cost, leaving a test no other way to observe it. Say "entry total" and not "the reference
+	 * slice": since issue #229 that is a named type ({@code ChartSearchAiUtils.ReferenceSlice}) counting
+	 * a strictly larger population — every reference-group record, findings included — and its size IS
+	 * now readable from REST, on the audit row. The two are printed side by side on that DEBUG line for
+	 * exactly this reason.
+	 *
+	 * <p>{@code INFO} stays the default rather than becoming a parameter everywhere, because the reason
+	 * for it is specific to the assertions this class was built for: see the class javadoc — capturing
+	 * INFO alongside WARN is what stops "no WARN was logged" passing vacuously. A caller lowering the
+	 * level gets strictly more events, so that protection is not weakened, only widened.
+	 *
+	 * @param loggerName as {@link #on(String)}
+	 * @param level the level to raise the logger CONFIG to for the duration; restored on {@link #close()}
+	 */
+	public static LogCapture on(String loggerName, Level level) {
+		return new LogCapture(loggerName, level);
+	}
+
+	/** @return true when at least one captured event was logged at {@code level} or more severe. */
+	public boolean hasEventAtOrAbove(Level level) {
+		synchronized (events) {
+			for (LogEvent event : events) {
+				if (event.getLevel().isMoreSpecificThan(level)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * As {@link #hasEventAtOrAbove(Level)}, ignoring events logged by {@code excludedLogger} and the
+	 * loggers beneath it.
+	 *
+	 * <p>It exists for the collision a PACKAGE-scoped capture invites. A case whose claim is that its
+	 * own check said nothing captures the package rather than the class, so that the pipeline's own
+	 * INFO line proves the capture is live ({@link #on(String)} and this class's javadoc) — and the
+	 * cost of that is a negative which also fails when a DIFFERENT check in the package reports a
+	 * different property of the same canned answer. Issue #337's third round added a fourth such
+	 * check, which is where this first bit.
+	 *
+	 * <p>Naming the one logger to ignore is deliberately narrower than narrowing the capture to the
+	 * caller's own class, which was the other way out: that would give up the assertion's reach over
+	 * every OTHER logger in the package, and one of the things these negatives have caught is a WARN
+	 * from a neighbour nobody expected. Excluding by name keeps that reach and gives up only the
+	 * logger the caller says is another case's subject.
+	 *
+	 * @param level as {@link #hasEventAtOrAbove(Level)}
+	 * @param excludedLogger a logger or package name whose events do not count
+	 */
+	public boolean hasEventAtOrAbove(Level level, String excludedLogger) {
+		return hasEventAtOrAboveExcluding(level, new String[] { excludedLogger });
+	}
+
+	/**
+	 * The shared walk behind both exclusion arities. A logger matching ANY of {@code excluded} does
+	 * not count; a null element excludes nothing, which is what keeps
+	 * {@code LogCaptureExclusionTest.aNullExclusionExcludesNothing} the same assertion under the
+	 * varargs arity as it was under the single one.
+	 */
+	private boolean hasEventAtOrAboveExcluding(Level level, String[] excluded) {
+		synchronized (events) {
+			for (LogEvent event : events) {
+				if (!event.getLevel().isMoreSpecificThan(level)) {
+					continue;
+				}
+				boolean ignored = false;
+				for (String name : excluded) {
+					if (isFrom(event.getLoggerName(), name)) {
+						ignored = true;
+						break;
+					}
+				}
+				if (!ignored) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * {@link #hasEventAtOrAbove(Level, String)} for a logger named after a class, which is what a
+	 * check's logger is.
+	 *
+	 * <p><b>It exists to give the argument for excluding one logger a single home</b>, and that is
+	 * the whole of the reason: two sibling test files had carried a byte-identical constant, a
+	 * one-line wrapper and an eight-line justification of it, and ADR Decision 78 predicts a fifth
+	 * check meeting the same collision. It is NOT that those callers spelled a class name the
+	 * compiler could not check — they wrote {@code …Check.class.getName()} — and the one file that
+	 * does pass string literals here ({@code LogCaptureExclusionTest}) names fixture loggers with no
+	 * class behind them and could not take this arity. An earlier draft of this paragraph said the
+	 * opposite of both.
+	 *
+	 * <p><b>It became varargs when the predicted fifth check arrived</b> (issue #395). The paragraph
+	 * above forecast one more collision and got the arity wrong: two of the five checks now report
+	 * different properties of one canned answer, so a case whose subject is a third has two loggers
+	 * to name and not one. Widening the arity is what keeps each such negative the assertion it was
+	 * — reach over every OTHER logger in the package, given up only for the ones the caller says are
+	 * other cases' subjects — where the alternative was narrowing those captures to the caller's own
+	 * class and giving that reach up wholesale. A sixth check needs no further change here.
+	 *
+	 * @param level as {@link #hasEventAtOrAbove(Level)}
+	 * @param excludedLoggers the classes whose loggers' events do not count. Empty excludes nothing
+	 *            and is the same question {@link #hasEventAtOrAbove(Level)} asks; a null element
+	 *            excludes nothing, as the string arity's null does
+	 */
+	public boolean hasEventAtOrAbove(Level level, Class<?>... excludedLoggers) {
+		String[] names = new String[excludedLoggers == null ? 0 : excludedLoggers.length];
+		for (int i = 0; i < names.length; i++) {
+			names[i] = excludedLoggers[i] == null ? null : excludedLoggers[i].getName();
+		}
+		return hasEventAtOrAboveExcluding(level, names);
+	}
+
+	/** @return whether {@code loggerName} IS {@code ancestor} or sits beneath it — the same
+	 *          "and every logger beneath it" relation {@link #on(String)} captures by, so an
+	 *          exclusion cannot cover more or less than a capture of the same name would. The dot
+	 *          test is what stops {@code …FidelityChecker} being read as beneath
+	 *          {@code …FidelityCheck}. */
+	private static boolean isFrom(String loggerName, String ancestor) {
+		return loggerName != null && ancestor != null
+				&& (loggerName.equals(ancestor) || loggerName.startsWith(ancestor + "."));
+	}
+
+	/** @return the formatted messages captured at exactly {@code level}, in order. */
+	public List<String> messagesAt(Level level) {
+		List<String> out = new ArrayList<String>();
+		synchronized (events) {
+			for (LogEvent event : events) {
+				if (level.equals(event.getLevel())) {
+					out.add(event.getMessage().getFormattedMessage());
+				}
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * @return whether one captured message at {@code level} carries every one of {@code needles}.
+	 *
+	 *         <p>Here rather than copied per suite: every assertion the two fidelity checks make is a
+	 *         {@code contains} over a log line, so a change to how {@link #messagesAt} renders a
+	 *         message, or to the line a check emits, must be able to redden both files at once. Two
+	 *         private copies of this loop is how it would instead leave one of them silently matching
+	 *         nothing — a green test, not a red one.
+	 */
+	public boolean hasMessageAt(Level level, String... needles) {
+		for (String message : messagesAt(level)) {
+			boolean all = true;
+			for (String needle : needles) {
+				all = all && message.contains(needle);
+			}
+			if (all) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * @return whether any captured event at exactly {@code level} carries a throwable.
+	 *
+	 *         <p>For a rule about the stack TRACE rather than the message or the level — issue #247
+	 *         drops the trace from the one cause that repeats forever (a role missing an
+	 *         {@code @Authorized} privilege, whose message already names the privilege) and keeps it
+	 *         for every other, where the trace is the diagnosis. The level assertions beside this
+	 *         one cannot see that difference: both branches log at WARN.
+	 */
+	public boolean hasThrowableAt(Level level) {
+		synchronized (events) {
+			for (LogEvent event : events) {
+				if (level.equals(event.getLevel()) && event.getThrown() != null) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/** @return every captured event rendered as {@code LEVEL message [thrown]}, for assertion
+	 *          failure text. The throwable's TYPE is included because a rule about whether a trace
+	 *          is attached (issue #247) is otherwise invisible in a failure message. */
+	public List<String> describeAll() {
+		List<String> out = new ArrayList<String>();
+		synchronized (events) {
+			for (LogEvent event : events) {
+				out.add(event.getLevel() + " " + event.getMessage().getFormattedMessage()
+						+ (event.getThrown() == null ? "" : " [thrown " + event.getThrown().getClass().getName() + "]"));
+			}
+		}
+		return out;
+	}
+
+	@Override
+	public void close() {
+		logger.removeAppender(appender);
+		Configurator.setLevel(loggerName, restoreLevel);
+		appender.stop();
+	}
+
+	private static final class CollectingAppender extends AbstractAppender {
+
+		private final List<LogEvent> sink;
+
+		CollectingAppender(List<LogEvent> sink) {
+			super("chartsearchai-log-capture", null, null, true, Property.EMPTY_ARRAY);
+			this.sink = sink;
+		}
+
+		@Override
+		public void append(LogEvent event) {
+			sink.add(event.toImmutable());
+		}
+	}
+}

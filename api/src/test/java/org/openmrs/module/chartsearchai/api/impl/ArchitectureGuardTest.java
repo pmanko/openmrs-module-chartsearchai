@@ -9,20 +9,24 @@
  */
 package org.openmrs.module.chartsearchai.api.impl;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Test;
+import org.openmrs.module.chartsearchai.ModuleSourceRoot;
 
 /**
  * Build-time guard that fails if someone reintroduces pipeline logic
@@ -38,9 +42,158 @@ import org.junit.jupiter.api.Test;
  */
 public class ArchitectureGuardTest {
 
-	private static final Path SRC_ROOT = findSourceRoot();
+	private static final Path SRC_ROOT = ModuleSourceRoot.apiRoot();
+
+	/** The internal name of the type whose constructions issue #378's guard is about. */
+	private static final String CHART_ANSWER_TYPE =
+			"org/openmrs/module/chartsearchai/api/ChartSearchService$ChartAnswer";
+
+	/** The descriptor tail that tells RecordMapping's provenance-carrying constructor from every
+	 *  shorter one: it is the only one whose LAST parameter is a list (issue #305). */
+	private static final String DERIVED_FROM_TAIL = "Ljava/util/List;)V";
+
+	/** The descriptor fragment that tells the widest constructor from every shorter one. */
+	private static final String COVERAGE_TYPE =
+			"Lorg/openmrs/module/chartsearchai/reference/DrugReferenceLoad$Coverage;";
+
+	/** The safety-finding type as a token: the constant's simple name, or the literal value it holds.
+	 *  The constant arm is bounded at BOTH ends, so a longer identifier that merely CONTAINS that
+	 *  name is not read as it, wherever in the identifier the name sits; the literal arm is bounded by
+	 *  its own quotes. ONE spelling, and both readings below are BUILT from it — a second copy is the
+	 *  re-inlined-literal hazard this file exists to forbid, and it would let a third spelling added
+	 *  here leave the receiver arm looking for the old two with every canary still passing. */
+	private static final Pattern FINDING_TYPE_TOKEN = Pattern.compile(
+			"\"safety_finding\"|\\bRESOURCE_TYPE_SAFETY_FINDING\\b");
+
+	/** The type test with the token as the RECEIVER, which is the shape both production spellings
+	 *  use. Whitespace-tolerant because one of the two wraps across a line, and a line-scoped
+	 *  pattern would be blind to exactly the arrangement a re-inline is most likely to copy. */
+	private static final Pattern FINDING_TYPE_TEST_RECEIVER = Pattern.compile(
+			"(?:" + FINDING_TYPE_TOKEN.pattern() + ")"
+			+ "\\s*\\.\\s*equals(?:IgnoreCase)?\\s*\\(");
+
+	/** The opening of an {@code equals}/{@code equalsIgnoreCase} CALL, whose argument list is then
+	 *  read whole rather than matched positionally: {@code Objects.equals(type, CONST)} and
+	 *  {@code Objects.equals(CONST, type)} are the null-safe respellings a third selection site is
+	 *  likeliest to reach for — this module already writes {@code Objects.equals} in
+	 *  {@code api/src/main} — and a positional pattern catches at most one of the two argument
+	 *  orders. What the leading {@code \b} buys is indifference to WHAT qualifies the call — one
+	 *  rule covers {@code Objects.}, {@code StringUtils.} and a fully qualified
+	 *  {@code java.util.Objects.} — while still refusing a longer lowercase name ending in
+	 *  {@code equals}. A statically imported bare {@code equals(…)} would match too and is not a
+	 *  shape to worry about: every class inherits {@code Object.equals}, which shadows the import, so
+	 *  the two-argument call does not compile (measured while probing this rule). */
+	private static final Pattern EQUALS_CALL = Pattern.compile("\\bequals(?:IgnoreCase)?\\s*\\(");
+
+	/** The only two method bodies in {@code api/src/main} that may spell it, each named by its own
+	 *  signature text so the allow-list cannot drift onto a neighbour. */
+	private static final List<String> FINDING_TYPE_TEST_HOMES = java.util.Arrays.asList(
+			"public static List<RecordMapping> safetyFindingMappings(List<RecordMapping> mappings) {",
+			"public static String referenceGroup(String resourceType) {");
+
+	/** Where the two homes live, relative to {@code api/src/main/java} — the KEY the walk files
+	 *  that file under, so a class of the same simple name in another package cannot be mistaken
+	 *  for it and cannot silently displace it in the map either. */
+	private static final String FINDING_TYPE_TEST_HOME_FILE =
+			"org/openmrs/module/chartsearchai/ChartSearchAiUtils.java";
 
 	// --- Rules ---
+
+	/**
+	 * The constructor that can carry a provenance list is invoked from exactly one class in THIS
+	 * module, which is all this walk can see (issue #305).
+	 *
+	 * <p><b>The api module is the scope, and it is not the whole of production.</b> The walk reads
+	 * {@code api/target/classes}; {@code ModuleSourceRoot} exposes {@code apiRoot()} and no omod root,
+	 * and api's test phase runs before omod is built in any case. So a construction in omod — where
+	 * {@code RecordMapping}'s widest constructor is public and reachable — would leave {@code callers}
+	 * equal to the expected singleton and this case green. The omod builds no mappings today.
+	 *
+	 * <p>Judgements elsewhere rest on this and none of them could see it — how many is not a count
+	 * kept here, since each states its own dependence where it is written. The residue
+	 * disclosure on {@code CitationGroundingVerifier.AnswerCitations.unanchored} and
+	 * {@code ReferenceProseFidelityCheck}'s "needs no filter" note both argue from "an attached index
+	 * is always chart-group", which holds only because the sole writer of {@code derivedFrom} is
+	 * {@code DrugReferenceInjector}'s findings loop — allergy and condition uuids resolve to chart
+	 * records, and the {@code safety_finding} mappings are appended after the uuid index is built, so
+	 * a finding cannot attach a finding. Let another class construct a mapping with a derivation and
+	 * both break silently and in opposite directions: the prose check would examine, and could
+	 * publish an {@code unfaithfullyRenderedCitations} index for, a reference record the answer never
+	 * cited, and {@code restsOnReferenceMaterial} would find a demote-only member in EVERY claim's
+	 * rests-on set, withholding issue #284's negative for every chart citation in the answer.
+	 * {@code SafetyFindingSeverityFidelityCheck}'s note of its own exemption argues from the last
+	 * clause of that property rather than from the group — an attached index is never a
+	 * {@code safety_finding} record, so it carries no rating for that check to require — and a rated
+	 * mapping built with a derivation would have it publish an {@code unstatedFindingSeverities}
+	 * entry against a citation the model never made.
+	 *
+	 * <p><b>Asked of the BYTECODE, and the earlier source-text form is gone rather than patched.</b>
+	 * That form matched the literal {@code "new RecordMapping("} and counted commas, and review
+	 * defeated it twice, measured: a fully-qualified {@code new
+	 * …PatientChartSerializer.RecordMapping(} was invisible to the literal, and the
+	 * comment-stripping added to fix an inline-comment miscount ate the tail of
+	 * any line holding a {@code //} inside a STRING — an argument such as a URL — which dropped the
+	 * counted arity and skipped the construction with no signal at all. That is the fail-open
+	 * direction, and it was claimed to fail closed. What ends that sequence is a different KIND of
+	 * question rather than another spelling on the list: the constant pool records the descriptor a
+	 * call site actually invokes, so qualification, whitespace, comments and string literals are all
+	 * out of the picture.
+	 *
+	 * <p><b>What it cannot answer, and what does — both halves measured.</b> The pool says which
+	 * CLASS invokes the wide constructor, not which of that class's four mapping constructions passes
+	 * a non-empty list. A second caller reddens THIS case; giving the injector's own
+	 * {@code drug_reference} construction a one-element derivation leaves it green and reddens
+	 * {@code FindingChartRecordProvenanceContextTest.aChartRecordNamesNoProvenanceOfItsOwn} instead,
+	 * over a real arrangement that injects such a record. The two halves are different kinds of
+	 * question on purpose; neither alone is the property those three judgements need.
+	 *
+	 * <p>Every canary here fails on an empty discovery, because a guard that finds nothing forbids
+	 * nothing: the classes directory, the mapping's own class file, more than one constructor arity,
+	 * exactly one that takes a list, and at least one caller.
+	 */
+	@Test
+	public void theProvenanceCarryingMappingConstructorHasOneCaller() throws IOException {
+		Path classes = ModuleSourceRoot.apiRoot().resolve("target/classes");
+		assertTrue(Files.isDirectory(classes),
+				"no " + classes + "; a guard that discovers nothing forbids nothing");
+		Path mapping = classes.resolve(
+				"org/openmrs/module/chartsearchai/serializer/PatientChartSerializer$RecordMapping.class");
+		assertTrue(Files.exists(mapping),
+				"no RecordMapping class file at " + mapping + ", so this guard would forbid nothing");
+
+		List<String> constructors = constructorDescriptors(mapping);
+		assertTrue(constructors.size() > 1,
+				"expected RecordMapping to publish several constructor arities and found "
+						+ constructors.size() + "; with one there is no narrower one for a caller with no "
+						+ "provenance to use and this guard is vacuous");
+		List<String> carrying = new ArrayList<>();
+		for (String descriptor : constructors) {
+			if (descriptor.endsWith(DERIVED_FROM_TAIL)) {
+				carrying.add(descriptor);
+			}
+		}
+		assertEquals(1, carrying.size(),
+				"exactly one RecordMapping constructor may take a provenance list — it is the widest, "
+						+ "and every shorter one defaults it to empty. Found " + carrying.size() + ": "
+						+ carrying);
+
+		List<String> callers = new ArrayList<>();
+		try (java.util.stream.Stream<Path> tree = Files.walk(classes)) {
+			for (Path file : tree.filter(f -> f.toString().endsWith(".class"))
+					.filter(f -> !f.equals(mapping)).collect(java.util.stream.Collectors.toList())) {
+				if (constantPoolStrings(file).contains(carrying.get(0))) {
+					callers.add(classes.relativize(file).toString());
+				}
+			}
+		}
+		assertEquals(java.util.Collections.singletonList(
+				"org/openmrs/module/chartsearchai/reference/DrugReferenceInjector.class"), callers,
+				"the constructor that carries a provenance list may be invoked from DrugReferenceInjector "
+						+ "and nowhere else in this module's classes, which is what this walk reads — see "
+						+ "this test's javadoc for the checks that break silently otherwise. Callers "
+						+ "found: " + callers);
+	}
+
 
 	/**
 	 * No file outside ChartSearchAiConstants should call getEmbeddingPrefix().
@@ -103,6 +256,239 @@ public class ArchitectureGuardTest {
 	}
 
 	/**
+	 * The injected-finding POPULATION is selected in one method. Issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/397">#397</a> folded
+	 * two character-for-character copies of that selection into
+	 * {@code ChartSearchAiUtils.safetyFindingMappings}, and until this rule existed the coupling was
+	 * held by a javadoc sentence alone: a third site re-inlining the type test breaks nothing the
+	 * day it is written — the spellings are equal — which is the hazard
+	 * {@code ActiveOrderInteractionPhraseTest} records for
+	 * {@code DrugSafetyValidator.ACTIVE_ORDER_INTERACTION_PHRASE}. The divergence arrives later, as
+	 * a prompt asking for an enumeration of one population while {@code findingCitations} counts
+	 * another.
+	 *
+	 * <p><b>Two homes, not one, and the second is a different question.</b>
+	 * {@code safetyFindingMappings} SELECTS the population; {@code referenceGroup} asks which
+	 * of three types is reference material, off a bare type string with no mapping in sight, and
+	 * {@code ChartSearchAiReferenceGroupTest} is what binds it. Naming both is what lets this rule
+	 * be spelled as "nowhere else" rather than as a file exclusion.
+	 *
+	 * <p><b>What it catches, measured by writing each shape into a third class in
+	 * {@code api/src/main} and reading this case's own failures (2026-09-09, twelve shapes, all
+	 * twelve reported):</b> the constant or its literal value {@code "safety_finding"} as the
+	 * receiver of {@code equals} or {@code equalsIgnoreCase} — including the arrangement the
+	 * production spellings themselves use, one of which wraps across a line — and the same token
+	 * ANYWHERE in such a call's argument list. The rule keys on the METHOD NAME, so whatever
+	 * qualifies it is out of the picture: the shapes measured were {@code java.util.Objects.equals}
+	 * in BOTH argument orders, a {@code StringUtils.equals}-shaped two-argument helper, a fully
+	 * qualified constant as the sole argument, and
+	 * {@code Objects.equals(mapping.getResourceType(), CONST)} — an argument carrying parentheses of
+	 * its own, which is what a positional pattern cannot read past. The
+	 * null-safe respellings are the ones worth reaching, because a maintainer writing a third
+	 * selection site reaches for them rather than for the constant-first receiver trick production
+	 * uses, and this module already writes {@code Objects.equals} in {@code api/src/main}. It does
+	 * not matter whether the comparison reads {@code getResourceType()} directly, so a re-inline
+	 * through a local holding the type is caught too.
+	 *
+	 * <p><b>What it does NOT catch. This list is not exhaustive and the shapes on it are UNCAUGHT
+	 * rather than covered elsewhere</b> — measured in the same run: {@code contains},
+	 * {@code startsWith}, a reference comparison ({@code type == CONST}) against the interned
+	 * constant, a {@code switch} whose {@code case} label is the constant, and a comparison moved
+	 * into a helper of another name ({@code sameType(type, CONST)}) all pass this rule silently. A
+	 * re-collection through {@code referenceGroup} against {@code REFERENCE_GROUP_REFERENCE} passes
+	 * too, and that one is out of reach by design — it selects THREE types and is a wider
+	 * population, not this one respelled.
+	 *
+	 * <p><b>And the scope is {@code api/src/main/java}.</b> The omod is unreached (it builds no
+	 * mappings today, the same disclosure
+	 * {@link #theProvenanceCarryingMappingConstructorHasOneCaller} carries). The test tree is out of
+	 * scope because a copy there cannot move the coupling this rule protects — a test file selects
+	 * findings for its own assertion and reaches neither the prompt nor {@code findingCitations}.
+	 * <b>That is not the same as saying the tree is funnelled through one matcher: it is not.</b>
+	 * {@code DrugReferenceTestSupport.injectedFindings} is the matcher the tree is MEANT to use, and
+	 * several test files besides it still spell the type test themselves; its own javadoc names that
+	 * residue and the different hazard it carries, in the shape
+	 * {@code DrugReferenceTestSupport.injectedActiveOrders} uses for its own.
+	 *
+	 * <p><b>It reads COMMENTS as well as code</b>, so a javadoc that quotes the predicate outside
+	 * those two bodies reddens this case. That direction is a false positive rather than a silent
+	 * pass, and it is the deliberate choice: comment-stripping is what defeated the earlier
+	 * source-text form of {@link #theProvenanceCarryingMappingConstructorHasOneCaller}, eating the
+	 * tail of any line holding {@code //} inside a string literal.
+	 *
+	 * <p>Both canaries fail on an empty discovery, because a rule that finds nothing forbids
+	 * nothing: the walk must have read {@code ChartSearchAiUtils.java}, both named signatures must
+	 * still be declared there, and <b>each of the two bodies must itself contain a match</b> — that
+	 * last is what stops a rewrite of a production spelling from disarming the rule instead of
+	 * reddening it. Measured: narrowing the receiver arm off the production spelling reddens on that
+	 * precondition, and dropping either name from the allow-list reddens with the named method's own
+	 * spelling reported as the violation.
+	 *
+	 * <p><b>What the two bodies keep honest is ONE alternative of ONE shape, and that is stated at
+	 * the granularity it was measured at rather than as "the receiver shape".</b> Both spell
+	 * {@code ChartSearchAiConstants.RESOURCE_TYPE_SAFETY_FINDING.equals(}, so the precondition above
+	 * holds the reading to the QUALIFIED-CONSTANT receiver and to nothing else, and <b>any narrowing
+	 * the two bodies still satisfy passes both preconditions</b>. Measured 2026-09-09, one mutation
+	 * per run, each leaving this case GREEN: deleting the {@code "safety_finding"} literal arm from
+	 * {@link #FINDING_TYPE_TOKEN}, the one home both readings are built from; replacing
+	 * {@code equals(?:IgnoreCase)?} with {@code equals} in the receiver pattern and in
+	 * {@link #EQUALS_CALL}, which are two copies of THAT fragment; and
+	 * narrowing the receiver pattern to require the {@code ChartSearchAiConstants.} qualifier, after
+	 * which the reading sees neither a static-imported
+	 * {@code RESOURCE_TYPE_SAFETY_FINDING.equals(t)} nor {@code "safety_finding".equals(t)}. The
+	 * literal arm is the live one of the three: the root {@code CLAUDE.md} carries a rule against
+	 * testing a {@code resourceType} against a named type at all (issue #122), which exists because
+	 * such tests do get written. Deleting the {@link #EQUALS_CALL} half of
+	 * {@link #findingTypeTests} leaves this green too — neither production spelling puts the constant
+	 * in an {@code equals} ARGUMENT list — and silently gives up every argument-side shape above, the
+	 * {@code Objects.equals} ones included. <b>Trim nothing here on the strength of the build staying
+	 * green after it.</b>
+	 */
+	@Test
+	public void theFindingPopulationIsSelectedInOneMethod() throws IOException {
+		Path main = SRC_ROOT.resolve("src/main/java");
+		assertTrue(Files.exists(main),
+				"precondition: no production sources at " + main + " — this rule would forbid nothing");
+		final Path root = main;
+		final java.util.Map<String, String> sources = new java.util.LinkedHashMap<>();
+		Files.walkFileTree(main, new SimpleFileVisitor<Path>() {
+			@Override
+			public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+				if (file.toString().endsWith(".java")) {
+					sources.put(root.relativize(file).toString().replace('\\', '/'),
+							new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
+				}
+				return FileVisitResult.CONTINUE;
+			}
+		});
+		String utils = sources.get(FINDING_TYPE_TEST_HOME_FILE);
+		assertTrue(utils != null,
+				"precondition: the walk of " + main + " did not find " + FINDING_TYPE_TEST_HOME_FILE
+						+ ", so it is reading the wrong tree, or the class moved package and this "
+						+ "rule's allow-list no longer resolves — either way every violation below "
+						+ "would be invisible");
+		List<int[]> allowed = new ArrayList<>();
+		for (String signature : FINDING_TYPE_TEST_HOMES) {
+			int start = utils.indexOf(signature);
+			assertTrue(start >= 0,
+					"precondition: ChartSearchAiUtils no longer declares \"" + signature + "\" — this "
+							+ "rule's allow-list is keyed on that signature, so it would report the "
+							+ "method's own spelling as the violation");
+			int[] region = new int[] { start, endOfBody(utils, start + signature.length() - 1) };
+			assertTrue(!findingTypeTests(utils.substring(region[0], region[1])).isEmpty(),
+					"precondition: \"" + signature + "\" no longer spells the type test in a shape this "
+							+ "rule can see, so the rule has been disarmed rather than satisfied");
+			allowed.add(region);
+		}
+		List<String> violations = new ArrayList<>();
+		for (java.util.Map.Entry<String, String> entry : sources.entrySet()) {
+			String source = entry.getValue();
+			for (int[] test : findingTypeTests(source)) {
+				boolean home = FINDING_TYPE_TEST_HOME_FILE.equals(entry.getKey())
+						&& insideAnyOf(test[0], allowed);
+				if (!home) {
+					String quoted = source.substring(test[0], test[1]).replace("\n", " ");
+					violations.add(entry.getKey() + ":"
+							+ lineOf(source, test[0])
+							+ " — the injected-finding population is selected by "
+							+ "ChartSearchAiUtils.safetyFindingMappings and nowhere else (issue #397); "
+							+ "call it instead of respelling the type test\n    "
+							+ (quoted.length() > 160 ? quoted.substring(0, 160) + "…" : quoted));
+				}
+			}
+		}
+		assertNoViolations(violations);
+	}
+
+	/**
+	 * Every place {@code source} tests a resource type against the safety-finding type, as
+	 * {@code {start, end}} offsets — the ONE reading of that question in this class, so a canary
+	 * cannot be satisfied by a shape the rule itself does not look for.
+	 *
+	 * <p>Two shapes, and the second is read rather than matched. The token as the RECEIVER of
+	 * {@code equals}/{@code equalsIgnoreCase} is a token sequence and stays a pattern. The token as
+	 * an ARGUMENT is not: it can sit at any position of the list, behind any depth of qualifier, and
+	 * beside arguments carrying parentheses of their own ({@code mapping.getResourceType()}), so the
+	 * list is read to its matching close paren and searched whole. That is what reaches both
+	 * argument orders of {@code Objects.equals} with one rule instead of one alternation per order.
+	 *
+	 * <p><b>The paren count is naive in the same way {@link #endOfBody}'s brace count is</b> — it
+	 * knows nothing of strings, chars or comments — and it has THREE outcomes, of which TWO are
+	 * silent. A {@code )} inside a literal ahead of the token ends the list early and truncates the
+	 * span, hiding a token that sits after it. A {@code (} inside a literal runs the list past its
+	 * real end, and in the ordinary case that means past the end of the FILE: {@link #endOfArguments}
+	 * returns -1 and {@link #findingTypeTests} discards the call outright, which is the strongest
+	 * fail-open path here — a real type test carrying one such literal leaves the rule altogether.
+	 * It becomes loud only where a later net-extra {@code )} in the same file brings the depth back
+	 * to zero, reporting a token that is not in the argument list at all.
+	 *
+	 * <p><b>Measured 2026-09-09 by putting each shape to this reading on its own: all four are
+	 * MISSED</b> — {@code Objects.equals(t + ")", CONST)}, {@code Objects.equals(t + "(", CONST)},
+	 * {@code Objects.equals(t.replace(')', ' '), CONST)} and
+	 * {@code Objects.equals(t.substring(t.indexOf('(') + 1), CONST)} — with the loud outcome
+	 * reproduced only by putting a net-extra {@code )} later in the same source, which then reported
+	 * a token sitting outside the real argument list. The last two are ordinary Java and not a stray:
+	 * a genuine type test whose argument carries a paren-bearing sub-expression escapes a rule whose
+	 * whole purpose is to forbid it. <b>What makes that tolerable
+	 * is the tree and not the parser</b> — the same run read 107 {@code equals}-shaped calls across
+	 * the 68 java files of {@code api/src/main}, none of them returning -1, the longest span 93
+	 * characters and none crossing more than two lines.
+	 */
+	private static List<int[]> findingTypeTests(String source) {
+		List<int[]> found = new ArrayList<>();
+		Matcher receiver = FINDING_TYPE_TEST_RECEIVER.matcher(source);
+		while (receiver.find()) {
+			found.add(new int[] { receiver.start(), receiver.end() });
+		}
+		Matcher call = EQUALS_CALL.matcher(source);
+		while (call.find()) {
+			int close = endOfArguments(source, call.end() - 1);
+			if (close < 0) {
+				continue;
+			}
+			if (FINDING_TYPE_TOKEN.matcher(source.substring(call.end(), close)).find()) {
+				found.add(new int[] { call.start(), close + 1 });
+			}
+		}
+		java.util.Collections.sort(found, new java.util.Comparator<int[]>() {
+			@Override
+			public int compare(int[] left, int[] right) {
+				return Integer.compare(left[0], right[0]);
+			}
+		});
+		return found;
+	}
+
+	/** The index of the paren closing the argument list that opens at {@code openParen}, or -1 where
+	 *  the source runs out first — the caveats are {@link #findingTypeTests}'. */
+	private static int endOfArguments(String source, int openParen) {
+		int depth = 0;
+		for (int i = openParen; i < source.length(); i++) {
+			char c = source.charAt(i);
+			if (c == '(') {
+				depth++;
+			} else if (c == ')') {
+				depth--;
+				if (depth == 0) {
+					return i;
+				}
+			}
+		}
+		return -1;
+	}
+
+	/** Whether {@code offset} falls inside any of {@code regions}, each a {@code {start, end}} pair
+	 *  with the end EXCLUSIVE, as {@link #endOfBody} returns it. */
+	private static boolean insideAnyOf(int offset, List<int[]> regions) {
+		for (int[] region : regions) {
+			if (offset >= region[0] && offset < region[1]) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * The dataset helpers (inferResourceType, stripDatasetPrefixAndDate,
 	 * DATASET_PREFIXES) should only exist in TestDatasetHelper. Any other
 	 * test file defining these is duplicating shared logic.
@@ -139,12 +525,22 @@ public class ArchitectureGuardTest {
 		// (lines starting with /* [ and containing "Clinical observation:"
 		// or similar). A file defining 10+ such lines is duplicating the
 		// dataset.
+		// This rule walks its own directory instead of getSourceCache(), so the preconditions there do
+		// not cover it — and a silent `return` on a missing directory is the same fail-open one rule
+		// along: a wrong or moved source root leaves it reporting no violations forever. Measured
+		// under a forced-wrong apiRoot(), this was the ONE rule of the five that stayed green.
 		Path testDir = SRC_ROOT.resolve(
 				"src/test/java/org/openmrs/module/chartsearchai");
-		if (!Files.exists(testDir)) {
-			return;
-		}
+		org.junit.jupiter.api.Assertions.assertTrue(Files.exists(testDir),
+				"precondition: the test source directory was not found under " + SRC_ROOT + ", so this "
+						+ "rule would scan nothing and report no violations — it fails instead");
 		List<String> violations = new ArrayList<>();
+		// The right-tree canary, matching the second precondition in getSourceCache(). Existence alone
+		// is NOT equivalent to it: the sibling omod module carries the same package path, so a root
+		// pointed there passes the existence check and this rule scans the wrong tree and reports no
+		// violations — measured, that mutation reddens the four cache-reading rules and left this one
+		// green.
+		final List<String> scanned = new ArrayList<>();
 		Files.walkFileTree(testDir, new SimpleFileVisitor<Path>() {
 			@Override
 			public FileVisitResult visitFile(Path file, BasicFileAttributes attrs)
@@ -153,6 +549,7 @@ public class ArchitectureGuardTest {
 					return FileVisitResult.CONTINUE;
 				}
 				String name = file.getFileName().toString();
+				scanned.add(name);
 				if ("TestDatasetHelper.java".equals(name)
 						|| "ArchitectureGuardTest.java".equals(name)) {
 					return FileVisitResult.CONTINUE;
@@ -177,7 +574,351 @@ public class ArchitectureGuardTest {
 				return FileVisitResult.CONTINUE;
 			}
 		});
+		org.junit.jupiter.api.Assertions.assertTrue(scanned.contains("TestDatasetHelper.java"),
+				"precondition: the scan under " + testDir + " did not see TestDatasetHelper.java, so it "
+						+ "is reading the wrong tree — a wrong root that happens to carry this package "
+						+ "path scans SOMETHING and this rule then reports no violations");
 		assertNoViolations(violations);
+	}
+
+	/**
+	 * {@code ClassCodeFidelityCheck} must reach citation markers through
+	 * {@code ChartSearchAiUtils.citedIndexes} and carry no marker dialect of its own. Since issue
+	 * #338 it asks whether a marker sits inside a class-code parenthetical, and CLAUDE.md's rule for
+	 * that question is that {@code ChartSearchAiUtils.INLINE_CITATION} is the single parsing pattern,
+	 * reached through that shared decode step; the one production site that keeps its own matcher
+	 * does so because it needs each marker's text OFFSET, which this check does not.
+	 *
+	 * <p>Nothing behavioural can pin it: a private bracket pattern, a hand-rolled {@code charAt}
+	 * walk, or {@code INLINE_CITATION.matcher(...)} used directly all answer identically on every
+	 * case in {@code ClassCodeFidelityTest}, so the whole suite stays green on exactly the regression
+	 * the rule exists to prevent — the same reason {@link #noDirectGetEmbeddingPrefixCalls} exists
+	 * for a visibility the compiler already enforces.
+	 *
+	 * <p><b>Stated POSITIVELY, because forbidding spellings was measured not to work.</b> The first
+	 * version asked only for one compiled {@code Pattern} and no {@code \\[} literal, and three of
+	 * four ordinary relocations walked through it with the build green — a nested class assembling
+	 * the brackets by concatenation, a {@code charAt}/{@code isDigit} scan with no regex at all, and
+	 * {@code INLINE_CITATION.matcher} used directly (only a plain single-line
+	 * {@code Pattern.compile} was caught). What closes the other three is the first assertion below:
+	 * the decode step must be CALLED. The two negatives stay as defence in depth.
+	 *
+	 * <p>It reads SOURCE TEXT, so it asks that the call be present and not that its result be used:
+	 * a dialect written BESIDE a retained {@code citedIndexes} call is out of its reach, and no
+	 * behavioural case sees that either. Named rather than papered over — the residue is what a
+	 * later rule would have to close.
+	 *
+	 * <p>It reads the file itself rather than going through {@link #scanForPattern}, which reports
+	 * per-line matches across the whole tree: this rule needs a COUNT, one file, and a positive
+	 * assertion, none of which that helper expresses. It borrows the helper's comment skip, so a
+	 * maintainer may record the rejected alternative in this class's own javadoc — which ADR
+	 * Decision 59 spells character for character — without breaking the build.
+	 */
+	@Test
+	public void classCodeFidelityCheckReachesMarkersOnlyThroughTheSharedDecodeStep() throws IOException {
+		List<String> lines = getSourceCache().get("ClassCodeFidelityCheck.java");
+		org.junit.jupiter.api.Assertions.assertNotNull(lines,
+				"precondition: ClassCodeFidelityCheck.java was not found by the source scan, so this "
+						+ "rule would pass vacuously");
+		int compiles = 0;
+		boolean callsDecodeStep = false;
+		List<String> ownDialect = new ArrayList<>();
+		for (int i = 0; i < lines.size(); i++) {
+			String line = lines.get(i);
+			String trimmed = line.trim();
+			if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) {
+				continue;
+			}
+			if (line.contains("ChartSearchAiUtils.citedIndexes(")) {
+				callsDecodeStep = true;
+			}
+			if (line.contains("Pattern.compile(")) {
+				compiles++;
+			}
+			// A bracketed-digit regex of its own, and the shared pattern read directly instead of
+			// through its decode step. Both are marker dialects; neither is caught by the count.
+			if (line.contains("\\[") || line.contains("INLINE_CITATION")) {
+				ownDialect.add("line " + (i + 1) + ": " + trimmed);
+			}
+		}
+		org.junit.jupiter.api.Assertions.assertTrue(callsDecodeStep,
+				"ClassCodeFidelityCheck must read citation markers through "
+						+ "ChartSearchAiUtils.citedIndexes. If that call is gone, the marker rule has "
+						+ "grown a dialect of its own — a regex, a hand-rolled scan, or the shared "
+						+ "pattern matched directly — and no behavioural case can see it.");
+		org.junit.jupiter.api.Assertions.assertEquals(1, compiles,
+				"ClassCodeFidelityCheck must compile exactly one pattern — ATC_CLASS_CODE. A second "
+						+ "one is either a citation-marker dialect (use ChartSearchAiUtils.citedIndexes) "
+						+ "or a second compiled reading of the code shape (reuse ATC_CLASS_CODE).");
+		org.junit.jupiter.api.Assertions.assertTrue(ownDialect.isEmpty(),
+				"ClassCodeFidelityCheck must not spell a bracketed regex of its own nor name "
+						+ "INLINE_CITATION; markers are decoded by ChartSearchAiUtils.citedIndexes. "
+						+ "Found: " + ownDialect);
+	}
+
+	/**
+	 * Every answer this module builds carries the condition-rule coverage (issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/378">#378</a>) — asked
+	 * of the CLASS FILES rather than of the source.
+	 *
+	 * <p><b>The source form of this guard kept being walked past, and what ended it was changing the
+	 * question rather than widening the needle again.</b> Fresh reviewers got a coverage-less answer
+	 * past successive versions of it with a qualified {@code new ChartSearchService.ChartAnswer(},
+	 * with a COMMENT naming the construction (whose unbalanced bracket made a raw-text depth walk
+	 * swallow every real construction after it), with a line wrap inside the qualifier, with a
+	 * unicode escape ({@code new \u0043hartAnswer(}), and with a generic witness
+	 * ({@code new <String> ChartAnswer(}). Do not read that as the list. Every one of them is a fact
+	 * about TYPING, and none survives compilation: javac writes the same constructor descriptor into
+	 * the calling class's constant pool for all of them, which is why the question moved here rather
+	 * than the pattern getting another alternative.
+	 *
+	 * <p>So this reads {@code ChartAnswer}'s own constructor descriptors out of its class file, and
+	 * then asserts that no other production class references any of them except the widest — the one
+	 * ending in {@code DrugReferenceLoad$Coverage}. The descriptors come from the type's own METHOD
+	 * TABLE, so every constructor it declares is in the forbidden set whatever its signature: a
+	 * review agent added an arity opening on different parameter types and got a coverage-less answer
+	 * past an earlier version of this that picked constructors out of the pool by a hardcoded
+	 * descriptor PREFIX. It also closes what the source form conceded, that it could only see answers
+	 * built in one FILE; this sees every class under {@code api/target/classes}.
+	 *
+	 * <p><b>What it actually proves is that every answer is built through the WIDEST constructor</b>,
+	 * which is not the same as carrying a value: passing a literal {@code null} for that last argument
+	 * satisfies this completely. A review round measured it — a fourth answer site calling the widest
+	 * constructor with a {@code null} coverage leaves this green — and named it the likeliest escape
+	 * of all, since {@code ChartAnswer}'s own telescoping constructors do exactly that. Closing it
+	 * means reading the CALLER's bytecode for an {@code aconst_null} in that argument slot, which is a
+	 * real instruction walk rather than a constant-pool read; this stops at the descriptor
+	 * deliberately. So do not read a green run here as "every answer states a verdict" — it says no
+	 * answer was built through a constructor that CANNOT state one.
+	 *
+	 * <p><b>The rest of the residue, named rather than claimed away.</b> It reads api's output only, because omod
+	 * is not compiled when api's tests run — no {@code omod/src/main} class constructs an answer
+	 * today, and one that did would be invisible here. It excludes {@code ChartAnswer} itself, whose
+	 * telescoping constructors legitimately name every arity. And a class that builds an answer
+	 * through a factory rather than a constructor is outside it, and so is one built REFLECTIVELY —
+	 * {@code ChartAnswer.class.getConstructor(...).newInstance(...)} names no descriptor in the
+	 * caller's pool, and a review agent confirmed it passes. No such factory or reflective
+	 * construction exists.
+	 *
+	 * <p>And it reads BUILD OUTPUT, so it describes what was last compiled — which is why the module's
+	 * own rule to measure with {@code mvn -o clean install} from the root binds this guard as much as
+	 * any test. Reading compiled output is this repo's own idiom for a rule no behavioural case can
+	 * see, rather than a departure from it: {@code ChartSearchAiReferenceGroundingWithholdingTest}
+	 * reads every class file the controller compiles to and fails the build on a hardcoded
+	 * resource-type name, and ADR Decision 40 cites it as the precedent for pinning a behaviour-neutral
+	 * rule structurally. What that one needs from the pool is a NAME; what this one needs is a
+	 * DESCRIPTOR. Neither needs a bytecode parser.
+	 */
+	@Test
+	public void everyAnswerThisModuleBuildsCarriesTheConditionRuleCoverage() throws IOException {
+		Path classes = ModuleSourceRoot.apiRoot().resolve("target/classes");
+		org.junit.jupiter.api.Assertions.assertTrue(java.nio.file.Files.isDirectory(classes),
+				"no " + classes + "; a guard that discovers nothing forbids nothing");
+		Path holder = classes.resolve(
+				"org/openmrs/module/chartsearchai/api/ChartSearchService$ChartAnswer.class");
+		org.junit.jupiter.api.Assertions.assertTrue(java.nio.file.Files.exists(holder),
+				"no ChartAnswer class file at " + holder + ", so this guard would forbid nothing");
+
+		List<String> constructors = constructorDescriptors(holder);
+		org.junit.jupiter.api.Assertions.assertTrue(constructors.size() > 1,
+				"expected ChartAnswer to publish several constructor arities and found "
+						+ constructors.size() + "; with one there is nothing for a coverage-less answer "
+						+ "to be built through and this guard is vacuous");
+		List<String> widest = new ArrayList<>();
+		for (String descriptor : constructors) {
+			if (descriptor.contains(COVERAGE_TYPE)) {
+				widest.add(descriptor);
+			}
+		}
+		org.junit.jupiter.api.Assertions.assertEquals(1, widest.size(),
+				"exactly one ChartAnswer constructor may take the condition-rule coverage — it is the "
+						+ "widest, and every shorter one states null. Found " + widest.size() + ".");
+
+		List<String> violations = new ArrayList<>();
+		int callers = 0;
+		try (java.util.stream.Stream<Path> tree = java.nio.file.Files.walk(classes)) {
+			for (Path file : tree.filter(f -> f.toString().endsWith(".class"))
+					.filter(f -> !f.equals(holder)).collect(java.util.stream.Collectors.toList())) {
+				List<String> pool = constantPoolStrings(file);
+				if (!pool.contains(CHART_ANSWER_TYPE)) {
+					continue;
+				}
+				callers++;
+				for (String entry : pool) {
+					if (constructors.contains(entry) && !entry.contains(COVERAGE_TYPE)) {
+						violations.add(classes.relativize(file) + " builds " + entry);
+					}
+				}
+			}
+		}
+		org.junit.jupiter.api.Assertions.assertTrue(callers > 0,
+				"no production class outside ChartAnswer even NAMES it, so this guard just passed by "
+						+ "finding nothing to check — read " + classes + " before trusting it");
+		org.junit.jupiter.api.Assertions.assertTrue(violations.isEmpty(),
+				"every answer this module builds must carry the condition-rule coverage (issue #378); "
+						+ "one that does not states null on a key the README documents as always "
+						+ "present, and the ungrounded answer is the one a streaming user sees. "
+						+ "Found: " + violations);
+	}
+
+	/**
+	 * {@code DrugReferenceInjector.inject} has exactly ONE arity, and that is what keeps the
+	 * chart-read verdict reaching the answer (issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/247">#247</a>).
+	 *
+	 * <p>The sink carrying that verdict was added by WIDENING the signature rather than by adding an
+	 * overload beside it, so every stale test double became a compile error instead of a green test
+	 * that stubs nothing. Add a narrower arity back — for a caller that "does not need the sink",
+	 * which is the natural next edit — and the two coexist quietly: production keeps calling the wide
+	 * one, doubles keep overriding whichever they were written against, and the ones that picked the
+	 * narrow one go inert without failing. That is not hypothetical on this codebase;
+	 * {@code DrugSafetyValidator.validate}'s javadoc records it happening, and records that a review
+	 * of the commit that added the overload did not find it.
+	 *
+	 * <p>Structural rather than behavioural because nothing observable separates the two worlds on
+	 * the day the overload is added: the spellings are equal and the suite stays green. What changes
+	 * is only what a LATER edit can do silently.
+	 *
+	 * <p>Reflection rather than the class-file walk beside it, which is the idiom this tree already
+	 * uses for "what does this class declare" and needs no descriptors. It counts DECLARED methods
+	 * of that name, so a private helper called {@code inject} trips it too. Deliberate: the rule is
+	 * that this name is one entry point.
+	 */
+	@Test
+	public void theInjectorExposesExactlyOneInjectArity() {
+		List<String> arities = new ArrayList<>();
+		for (java.lang.reflect.Method method : org.openmrs.module.chartsearchai.reference
+				.DrugReferenceInjector.class.getDeclaredMethods()) {
+			if ("inject".equals(method.getName())) {
+				arities.add(java.util.Arrays.toString(method.getParameterTypes()));
+			}
+		}
+		org.junit.jupiter.api.Assertions.assertFalse(arities.isEmpty(),
+				"no method named inject was found on DrugReferenceInjector at all, so this guard "
+						+ "just passed by discovering nothing");
+		org.junit.jupiter.api.Assertions.assertEquals(1, arities.size(),
+				"DrugReferenceInjector.inject must have exactly one arity, so a test double written "
+						+ "against a stale signature fails to compile rather than going silently inert on "
+						+ "the production path (issue #247). Found: " + arities);
+	}
+
+	/**
+	 * @return the descriptor of every constructor {@code classFile} DECLARES, read from its method
+	 *         table rather than picked out of the constant pool by shape.
+	 *
+	 *         <p>The distinction is the guard's whole correctness. Selecting pool strings by a
+	 *         descriptor prefix hardcodes the leading parameter types, so a constructor added with a
+	 *         different signature never joins the forbidden set and its callers are never checked —
+	 *         measured by a review agent, which added such an arity plus a caller and left the guard
+	 *         green. The method table has no such blind spot, and it costs one more walk: past the
+	 *         pool, the access flags, this/super, the interfaces and the fields, skipping each
+	 *         attribute by its own declared length.
+	 */
+	private static List<String> constructorDescriptors(Path classFile) throws IOException {
+		java.nio.ByteBuffer in = java.nio.ByteBuffer.wrap(java.nio.file.Files.readAllBytes(classFile));
+		List<String> pool = readConstantPool(in);
+		in.position(in.position() + 6);
+		// Read the count into a local FIRST: getShort() advances the buffer, and the argument to
+		// position(...) evaluates in.position() before it does — so the inline form silently loses the
+		// two bytes the count itself occupies. That is what this walk got wrong on its first run, and
+		// it surfaced as an attribute length read out of the middle of a method body.
+		int interfaces = in.getShort() & 0xFFFF;
+		in.position(in.position() + 2 * interfaces);
+		skipFields(in);
+		List<String> descriptors = new ArrayList<>();
+		int methods = in.getShort() & 0xFFFF;
+		for (int i = 0; i < methods; i++) {
+			in.getShort();
+			String name = pool.get(in.getShort() & 0xFFFF);
+			String descriptor = pool.get(in.getShort() & 0xFFFF);
+			skipAttributes(in);
+			if ("<init>".equals(name)) {
+				descriptors.add(descriptor);
+			}
+		}
+		return descriptors;
+	}
+
+	/** Skips the field table, whose entries have a method's shape: access, name, descriptor, attributes. */
+	private static void skipFields(java.nio.ByteBuffer in) {
+		int fields = in.getShort() & 0xFFFF;
+		for (int i = 0; i < fields; i++) {
+			in.position(in.position() + 6);
+			skipAttributes(in);
+		}
+	}
+
+	/** Skips an attribute table by each attribute's own declared length. */
+	private static void skipAttributes(java.nio.ByteBuffer in) {
+		int attributes = in.getShort() & 0xFFFF;
+		for (int i = 0; i < attributes; i++) {
+			in.getShort();
+			int length = in.getInt();
+			in.position(in.position() + length);
+		}
+	}
+
+	/**
+	 * @return every {@code CONSTANT_Utf8} entry in {@code classFile}'s constant pool, walked by the
+	 *         class-file format's own lengths rather than scanned for. A regex over the raw bytes runs
+	 *         past the end of a descriptor into whatever follows it in the pool — measured while
+	 *         writing this, where it turned three unrelated method descriptors into one 629-character
+	 *         string. Long-and-double entries take two pool slots, which is the one thing a walk like
+	 *         this gets wrong if it does not know it.
+	 */
+	private static List<String> constantPoolStrings(Path classFile) throws IOException {
+		List<String> slots = readConstantPool(
+				java.nio.ByteBuffer.wrap(java.nio.file.Files.readAllBytes(classFile)));
+		List<String> present = new ArrayList<>();
+		for (String slot : slots) {
+			if (slot != null) {
+				present.add(slot);
+			}
+		}
+		return present;
+	}
+
+	/**
+	 * Reads the constant pool and leaves {@code in} positioned immediately after it, so a caller that
+	 * needs the method table can carry on from there.
+	 *
+	 * @return the pool BY SLOT, with a null wherever the entry is not a {@code CONSTANT_Utf8}. Slot
+	 *         indexes are 1-based in the class file and 0-based here, so slot {@code n} is element
+	 *         {@code n - 1}. Returning only the strings, in encounter order, would be the obvious
+	 *         shape and is wrong for the method table, whose name and descriptor indexes are SLOT
+	 *         numbers — every non-Utf8 entry between them would shift the answer.
+	 */
+	private static List<String> readConstantPool(java.nio.ByteBuffer in) {
+		in.position(8);
+		int count = in.getShort() & 0xFFFF;
+		List<String> slots = new ArrayList<>();
+		for (int i = 0; i < count; i++) {
+			slots.add(null);
+		}
+		for (int slot = 1; slot < count; slot++) {
+			int tag = in.get() & 0xFF;
+			switch (tag) {
+				case 1:
+					byte[] utf = new byte[in.getShort() & 0xFFFF];
+					in.get(utf);
+					slots.set(slot, new String(utf, java.nio.charset.StandardCharsets.UTF_8));
+					break;
+				case 7: case 8: case 16: case 19: case 20:
+					in.position(in.position() + 2);
+					break;
+				case 15:
+					in.position(in.position() + 3);
+					break;
+				case 5: case 6:
+					in.position(in.position() + 8);
+					slot++;
+					break;
+				default:
+					in.position(in.position() + 4);
+					break;
+			}
+		}
+		return slots;
 	}
 
 	// --- Infrastructure ---
@@ -185,6 +926,21 @@ public class ArchitectureGuardTest {
 	/** Cache of file name → lines, populated once by {@link #loadAllSources}. */
 	private static java.util.Map<String, List<String>> sourceCache;
 
+	/**
+	 * Most rules in this class scan this map, so an EMPTY or WRONG map made all of those
+	 * pass vacuously — a structural guard that reads nothing reports no violations. That was not
+	 * hypothetical: forcing {@link ModuleSourceRoot#apiRoot()} to an unrelated directory USED TO
+	 * leave this class entirely green. It no longer does; the cache asserts its own sanity before
+	 * any rule reads it, and the same mutation now reddens the rules that read it.
+	 *
+	 * <p><b>A rule that reads its own tree rather than this cache owes itself both assertions
+	 * inline</b>, and needs both: existence alone is not enough, because the sibling {@code omod}
+	 * module has the same package path, so a root pointed there exists and reads the wrong tree. No
+	 * count of such rules is published here and none should be — look for the pair in any rule that
+	 * reads its own tree, rather than for a list of which ones do. The two that do today read
+	 * {@code target/classes}, and each carries the pair as a canary on what it FOUND rather than on
+	 * the root merely existing, which is the stronger form: a wrong root reads something.
+	 */
 	private static java.util.Map<String, List<String>> getSourceCache()
 			throws IOException {
 		if (sourceCache == null) {
@@ -201,7 +957,48 @@ public class ArchitectureGuardTest {
 				}
 			});
 		}
+		org.junit.jupiter.api.Assertions.assertFalse(sourceCache.isEmpty(),
+				"precondition: the source scan found no .java files under " + SRC_ROOT + " — every rule "
+						+ "in this class would pass vacuously, so this fails instead of reporting no "
+						+ "violations");
+		org.junit.jupiter.api.Assertions.assertTrue(sourceCache.containsKey("LlmProvider.java"),
+				"precondition: the source scan did not find LlmProvider.java under " + SRC_ROOT + ", so "
+						+ "it is reading the wrong tree — a wrong root scans SOMETHING and every rule "
+						+ "then passes on files these rules were never written about");
 		return sourceCache;
+	}
+
+	/**
+	 * The index one past the brace closing the block that opens at {@code openBrace}. Naive by
+	 * design: it counts braces and knows nothing of strings, chars or comments, which is why its
+	 * caller names the two signatures it may be asked about rather than scanning for methods.
+	 */
+	private static int endOfBody(String source, int openBrace) {
+		int depth = 0;
+		for (int i = openBrace; i < source.length(); i++) {
+			char c = source.charAt(i);
+			if (c == '{') {
+				depth++;
+			} else if (c == '}') {
+				depth--;
+				if (depth == 0) {
+					return i + 1;
+				}
+			}
+		}
+		return source.length();
+	}
+
+	/** The 1-based line number of {@code offset} in {@code source}, for a violation a reader has to
+	 *  be able to find. */
+	private static int lineOf(String source, int offset) {
+		int line = 1;
+		for (int i = 0; i < offset; i++) {
+			if (source.charAt(i) == '\n') {
+				line++;
+			}
+		}
+		return line;
 	}
 
 	private static List<String> scanForPattern(Path root, Pattern pattern,
@@ -241,28 +1038,11 @@ public class ArchitectureGuardTest {
 			for (String v : violations) {
 				sb.append("  - ").append(v).append("\n");
 			}
-			sb.append("\nSee CLAUDE.md 'API surface rules' for the correct methods to use.");
+			sb.append("\nSee the 'API surface rules' of CLAUDE.md, and of "
+					+ "api/src/main/java/org/openmrs/module/chartsearchai/reference/CLAUDE.md for the "
+					+ "drug-safety ones, for the correct methods to use.");
 			fail(sb.toString());
 		}
 	}
 
-	private static Path findSourceRoot() {
-		// Walk up from the compiled test class to find the api/ module root.
-		// Maven sets CWD to the module directory, so check CWD first.
-		Path current = Paths.get("").toAbsolutePath();
-		while (current != null) {
-			if (Files.exists(current.resolve("src/main/java"))
-					&& Files.exists(current.resolve("src/test/java"))) {
-				return current;
-			}
-			// Try api/ subdirectory (for when CWD is the project root)
-			Path api = current.resolve("api");
-			if (Files.exists(api.resolve("src/main/java"))) {
-				return api;
-			}
-			current = current.getParent();
-		}
-		// Last resort: assume CWD is the module directory
-		return Paths.get("").toAbsolutePath();
-	}
 }

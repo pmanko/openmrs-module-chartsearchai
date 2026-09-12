@@ -14,10 +14,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Arrays;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.api.impl.QueryScopeRouter;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 
@@ -41,15 +43,14 @@ import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.Record
 public class DrugSafetyInteractionScreeningTest {
 
 	/** The canonical screening question from the issue, verbatim. */
-	private static final String SCREENING_QUESTION =
-			"Are there any drug interactions with her current medications?";
+	private static final String SCREENING_QUESTION = DrugReferenceTestSupport.SCREENING_QUESTION;
 
 	private static DrugSafetyValidator ddinterValidator() {
 		return DrugReferenceTestSupport.validator(DrugReferenceTestSupport.ddinterService());
 	}
 
 	private static DrugSafetyValidator curatedValidator() {
-		return DrugReferenceTestSupport.validator(DrugReferenceTestSupport.bundledService());
+		return DrugReferenceTestSupport.validator(DrugReferenceTestSupport.curatedService());
 	}
 
 	/** Validator over the substring-shape fixture, parsed by the real {@link DdiDrugReferenceSource}. */
@@ -58,13 +59,10 @@ public class DrugSafetyInteractionScreeningTest {
 	}
 
 	/** Validator over a test-classpath DDInter-shaped fixture, parsed by the real
-	 *  {@link DdiDrugReferenceSource} — no hand-built entries anywhere. */
+	 *  {@link DdiDrugReferenceSource} through the shared loader — no hand-built entries anywhere. */
 	private static DrugSafetyValidator fixtureValidator(String fixture) throws Exception {
-		try (java.io.InputStream in = DrugSafetyInteractionScreeningTest.class.getClassLoader()
-				.getResourceAsStream("chartsearchai-test/" + fixture)) {
-			return DrugReferenceTestSupport.validator(
-					DrugReferenceTestSupport.serviceWith(DdiDrugReferenceSource.parse(in)));
-		}
+		return DrugReferenceTestSupport.validator(DrugReferenceTestSupport
+				.serviceWith(DrugReferenceTestSupport.ddiFixtureEntries("chartsearchai-test/" + fixture)));
 	}
 
 	/**
@@ -80,7 +78,7 @@ public class DrugSafetyInteractionScreeningTest {
 	}
 
 	/** Two mutually interacting active orders: Simvastatin x Clarithromycin is Major in the real
-	 *  bundled DDInter sample, and the two share no ATC subgroup, so the rule arm is the only thing
+	 *  DDInter excerpt, and the two share no ATC subgroup, so the rule arm is the only thing
 	 *  that can produce a warning here. */
 	private static PatientClinicalContext interactingPairContext() {
 		return DrugReferenceTestSupport.ctx(60, null,
@@ -94,6 +92,35 @@ public class DrugSafetyInteractionScreeningTest {
 	private static List<SafetyWarning> screen(DrugSafetyValidator validator, String question,
 			PatientClinicalContext context) {
 		return validator.validate("", question, context);
+	}
+
+	@Test
+	public void theSharedScreeningQuestionIsStillClassifiedAsScreening() {
+		// Issue #153, asserted where it can fail. The string above is shared by ten test files, and which
+		// arm it reaches is decided by isInteractionScreening — so a change to that classifier decides
+		// whether ten files are testing the screening arm or something else.
+		//
+		// What this adds over what those ten files already give, measured rather than assumed: rewording
+		// nine of the ten copies one file at a time (see DrugReferenceTestSupport.SCREENING_QUESTION for
+		// the exact mutation and why the tenth was not measured) turned eight of the nine red, so the
+		// condition was NOT unprotected. Two things it adds. It names the cause — eight files failing on
+		// chip counts do not say "the classifier changed" — and it covers the one file that stayed GREEN,
+		// DuplicateInteractionChipTest, whose assertion the drug-in-play arm satisfies too. Asked of the
+		// production predicate directly, so there is no chip count in between.
+		assertTrue(QueryScopeRouter.isInteractionScreening(DrugReferenceTestSupport.SCREENING_QUESTION),
+				"the shared screening question must still be classified as interaction screening, or the "
+						+ "ten files that use it are no longer testing the screening arm: "
+						+ DrugReferenceTestSupport.SCREENING_QUESTION);
+		// The other half of the same contract: it must name no reference drug. Both halves are what makes
+		// the arm reachable — a question that names a drug is handled by the drug-in-play arm instead
+		// (DrugSafetyValidator.validate stands the screen down as soon as inPlay is non-empty), so a
+		// screening question that started resolving an entry would silently move every one of those files
+		// onto the other arm without changing the classifier at all.
+		assertTrue(DrugReferenceTestSupport.ddinterService()
+				.findImpliedByQuery(DrugReferenceTestSupport.SCREENING_QUESTION).isEmpty(),
+				"and it must still name no reference drug, or the screening arm never runs for it: "
+						+ DrugReferenceTestSupport.names(DrugReferenceTestSupport.ddinterService()
+								.findImpliedByQuery(DrugReferenceTestSupport.SCREENING_QUESTION)));
 	}
 
 	@Test
@@ -217,7 +244,7 @@ public class DrugSafetyInteractionScreeningTest {
 		// The issue's own repro patient (Mary Smith, one active order: Simvastatin 20mg). Honesty
 		// pin: pairwise screening cannot help a patient with one medication — there is no pair — so
 		// 0 chips stays the right answer for her, and the capability this adds needs at least two
-		// interacting orders to show. Simvastatin carries 15 partners in the bundled sample, none of
+		// interacting orders to show. Simvastatin carries 15 partners in the DDInter excerpt, none of
 		// which this patient is on.
 		List<SafetyWarning> warnings = screen(ddinterValidator(), SCREENING_QUESTION,
 				DrugReferenceTestSupport.ctx(60, null, DrugReferenceTestSupport.set("Simvastatin"),
@@ -268,7 +295,7 @@ public class DrugSafetyInteractionScreeningTest {
 		// fixed-dose combination ("Aspirin and omeprazole", Yosprala) resolves to BOTH constituents'
 		// entries, because the order name whole-word-matches an alias of each; the order's own concept
 		// carries the single mapped code A02BC05. Aspirin's rule against omeprazole is a real Minor row
-		// in the bundled sample, and it names omeprazole by that very ATC code — so a subject set that
+		// in the DDInter excerpt, and it names omeprazole by that very ATC code — so a subject set that
 		// only drops the SUBJECT's own codes leaves the code its co-formulated other half contributed
 		// standing as if it were a second order, and the two halves of one tablet get reported as an
 		// interacting pair (naming "esomeprazole", which the patient is on in no form at all).
@@ -396,9 +423,11 @@ public class DrugSafetyInteractionScreeningTest {
 		// play beside it. When the answer names a subject the screen also reaches, both arms run the
 		// same rule join over the same active orders and produce a byte-identical chip: measured, this
 		// arrangement raised the "Simvastatin interacts with active order clarithromycin — Major" chip
-		// TWICE in one safetyWarnings array. The answer here cites nothing, which is the shape that
-		// reaches this — echo scoping (#105) exempts an answer-named drug only when a CITED record
-		// already names it, so an uncited answer keeps every drug it names in play.
+		// TWICE in one safetyWarnings array. What reaches this is the MAPPINGS-LESS overload below:
+		// echo scoping has no records to attribute a mention to, so every drug the answer names stays
+		// in play. Not "the answer cites nothing" — since issue #360 an uncited answer is still scoped
+		// against the recitable reference records the chart carries, and here there is no chart at all,
+		// so nothing can attribute the mention.
 		List<SafetyWarning> warnings = ddinterValidator().validate(
 				"Yes — simvastatin and clarithromycin interact at a major level.", SCREENING_QUESTION,
 				interactingPairContext());
@@ -418,6 +447,91 @@ public class DrugSafetyInteractionScreeningTest {
 		assertTrue(DrugReferenceTestSupport.detailContains(warnings, SafetyWarning.TYPE_INTERACTION,
 				"Simvastatin", "clarithromycin", "Major"),
 				"and the pair must still be reported, was: " + warnings);
+	}
+
+	/**
+	 * Verbatim KB slice in which the two arms name one substance DIFFERENTLY — see the fixture's own
+	 * {@code metadata.note} for the three properties the shape needs at once.
+	 */
+	private static final String CROSS_ARM_FIXTURE = "chartsearchai-test/ddi-crossarm-canonical-duplicate.json";
+
+	@Test
+	public void theScreenStandsDownFromAPairTheSubstanceArmReportedUnderItsCanonicalName() throws Exception {
+		// The same invariant as the test above, on the one shape a TEXT-keyed suppression cannot see. Since
+		// issue #162 the drug-in-play arm names its chip after the substance's CANONICAL row while this arm
+		// names its own after whichever row findForActiveOrders returned first, so for a family whose
+		// route-unspecified row is not its first row the two arms word one finding differently and the
+		// text key stops recognising the repeat. Chloroprocaine is such a family and lidocaine's rule sits
+		// on its OPHTHALMIC row alone, so:
+		//
+		//   drug-in-play arm:  "Chloroprocaine interacts with active order lidocaine — Moderate. …"
+		//   screening arm:     "Chloroprocaine (ophthalmic) interacts with active order lidocaine — …"
+		//
+		// One clinical fact, two chips, and — since issue #110 — two citable safety-finding records. The
+		// suppression is therefore keyed on the PAIR's identity rather than on the rendered strings.
+		DrugReferenceService service = DrugReferenceTestSupport.ddiFixtureService(CROSS_ARM_FIXTURE);
+		PatientClinicalContext context = DrugReferenceTestSupport.ctx(60, null,
+				DrugReferenceTestSupport.set("Chloroprocaine 20mg/mL", "Lidocaine 2%"), null, null, null);
+
+		// Preconditions through the production resolvers, without which every count below could pass while
+		// the arms never met.
+		assertTrue(service.findByQuery(SCREENING_QUESTION).isEmpty(),
+				"precondition: the screening question must name no drug, or the screen never runs");
+		List<DrugReference> orderEntries = service.findForActiveOrders(context);
+		assertEquals(Arrays.asList("Chloroprocaine (ophthalmic)", "Chloroprocaine", "Lidocaine"),
+				DrugReferenceTestSupport.names(orderEntries),
+				"precondition: both orders must resolve, and the ROUTE-QUALIFIED chloroprocaine row must "
+						+ "come first — that is what makes the two arms disagree");
+
+		// The answer names chloroprocaine, and the MAPPINGS-LESS overload below is what puts the
+		// substance in play beside the screen: with no records at all, echo scoping can attribute the
+		// mention to nothing. It must not name lidocaine: that would put the reverse direction in play
+		// too, which is a different subject and a legitimately separate chip.
+		List<SafetyWarning> warnings = DrugReferenceTestSupport.validator(service).validate(
+				"Yes — she is on chloroprocaine, and the reference data flags a methemoglobinemia risk.",
+				SCREENING_QUESTION, context);
+
+		assertEquals(1, warnings.size(),
+				"one (substance, active order) pair is one chip however many arms reach it, was: "
+						+ warnings);
+		assertEquals("Chloroprocaine", warnings.get(0).getDrug(),
+				"and the surviving chip names the SUBSTANCE, was: " + warnings);
+		for (SafetyWarning warning : warnings) {
+			assertFalse(warning.getDetail().contains("(ophthalmic)")
+					|| warning.getDrug().contains("(ophthalmic)"),
+					"no chip may assert an ophthalmic preparation the chart does not record, was: "
+							+ warning.getDetail());
+		}
+	}
+
+	@Test
+	public void theScreenStandsDownFromAPairTheSubstanceArmReportedInTheOtherDirection() throws Exception {
+		// The same suppression asked of the OTHER direction, which a text key could never answer: "B
+		// interacts with active order A" is not the string "A interacts with active order B". Nothing but
+		// the order the patient's own order names happen to be listed in decides which direction this arm
+		// reaches a pair from — findForActiveOrders walks the order names and resolves each — so with the
+		// two names transposed the screen reaches the pair as Lidocaine x chloroprocaine while the
+		// drug-in-play arm reported it as Chloroprocaine x lidocaine. The pair is one clinical fact either
+		// way, so the ledger's key is unordered; a directional key leaves the repeat in for exactly half
+		// the possible chart orderings.
+		DrugReferenceService service = DrugReferenceTestSupport.ddiFixtureService(CROSS_ARM_FIXTURE);
+		PatientClinicalContext context = DrugReferenceTestSupport.ctx(60, null,
+				DrugReferenceTestSupport.set("Lidocaine 2%", "Chloroprocaine 20mg/mL"), null, null, null);
+
+		assertEquals(Arrays.asList("Lidocaine", "Chloroprocaine (ophthalmic)", "Chloroprocaine"),
+				DrugReferenceTestSupport.names(service.findForActiveOrders(context)),
+				"precondition: the PARTNER's entry must come first, so the screen reaches the pair from the "
+						+ "opposite side to the arm that reported it");
+
+		List<SafetyWarning> warnings = DrugReferenceTestSupport.validator(service).validate(
+				"Yes — she is on chloroprocaine, and the reference data flags a methemoglobinemia risk.",
+				SCREENING_QUESTION, context);
+
+		assertEquals(1, warnings.size(),
+				"one pair is one chip whichever direction the screen reaches it from, was: " + warnings);
+		assertEquals("Chloroprocaine", warnings.get(0).getDrug(),
+				"and the chip that survives is the drug-in-play arm's, which named the substance, was: "
+						+ warnings);
 	}
 
 	@Test
@@ -463,6 +577,48 @@ public class DrugSafetyInteractionScreeningTest {
 	}
 
 	@Test
+	public void aQuestionAskingWhatToWORRYAboutTheCurrentMedicationsIsScreened() {
+		// Measured live on the :8081 3.7.1 rig on 2026-09-10 over the shipped DDInter KB. Patient
+		// Kenneth Hernandez, on Salicylic acid + Enalapril Co 10mg — a real Moderate NSAID/ACE pair:
+		// "Are any of his current medications interacting with each other?" reported it, and this
+		// question, on the same patient and the same chart through the same request path, reported
+		// NOTHING, because the trigger required an interact* word to be present.
+		//
+		// Why this is not the over-reach the two guards above forbid: a question asking what to worry
+		// about in the current medications IS a question about their safety, so a chip it raises stays
+		// tied to what was asked. That is exactly what separates it from "What medications is the
+		// patient taking?" and "Show me an interactive list of her medications.", which ask to be
+		// ENUMERATED and must still screen nothing.
+		List<SafetyWarning> warnings = screen(ddinterValidator(),
+				"Anything I should worry about in his current medications?", interactingPairContext());
+
+		assertTrue(DrugReferenceTestSupport.detailContains(warnings, SafetyWarning.TYPE_INTERACTION,
+				"Simvastatin", "clarithromycin", "Major"),
+				"a question asking what to worry about in the current medications must raise the real "
+						+ "pair among the patient's own active orders, was: " + warnings);
+	}
+
+	@Test
+	public void aQuestionAskingWhetherToSTOPAMedicationIsScreened() {
+		// The same measurement's second cell, and the more serious of the two. Patient Michael Turner,
+		// on Zolvimix + Klarizom — two brand names carrying a real MAJOR Simvastatin/Clarithromycin
+		// pair. "Are any of his current medications interacting with each other?" reported the Major;
+		// "Should I stop any of the medications he is on?" reported nothing at all. A Major
+		// interaction was invisible to the most natural way a clinician asks to have therapy reviewed.
+		//
+		// Asking whether to stop a medication is a question about CHANGING therapy, which is the
+		// decision an interaction screen exists to inform — so, like the worry phrasing above, the
+		// chips stay tied to the question.
+		List<SafetyWarning> warnings = screen(ddinterValidator(),
+				"Should I stop any of the medications he is on?", interactingPairContext());
+
+		assertTrue(DrugReferenceTestSupport.detailContains(warnings, SafetyWarning.TYPE_INTERACTION,
+				"Simvastatin", "clarithromycin", "Major"),
+				"a question asking whether to stop a medication must raise the real pair among the "
+						+ "patient's own active orders, was: " + warnings);
+	}
+
+	@Test
 	public void aScreeningQuestionThatNAMESADrugKeepsTheExistingSingleChip() {
 		// The boundary with the question-driven arm: once the question names a drug, that arm has an
 		// anchor and already answers the question, so the screening arm stands down. Asserting the
@@ -481,11 +637,12 @@ public class DrugSafetyInteractionScreeningTest {
 	@Test
 	public void aQuestionNamingTwoDrugsGoesToThePairArmAndNotToTheScreen() {
 		// The boundary with issue #114/#120's question-pair arm, pinned rather than reasoned. Both arms
-		// now group chips and both cap at ten, so "can one arm report a pair the other suppresses?"
+		// now group chips and both cap at the same configured limit (#131's maxPairChips, ten by
+		// default here since no GP is set), so "can one arm report a pair the other suppresses?"
 		// has to have an answer: no, because the gates are mutually exclusive and at most one of them
 		// runs per question. That arm needs the question to resolve >= 2 drugs; this one needs it to
 		// resolve none. This question does both jobs at once — it names warfarin and aspirin (a real
-		// Major row in the bundled sample, neither of them on this chart) AND carries the screening
+		// Major row in the DDInter excerpt, neither of them on this chart) AND carries the screening
 		// cues — so it is the single input where a shared pair could be double-reported or lost.
 		// Exclusivity means the pair arm answers it and the patient's OWN pair is not raised.
 		List<SafetyWarning> warnings = screen(ddinterValidator(),
@@ -514,19 +671,14 @@ public class DrugSafetyInteractionScreeningTest {
 		// Blast radius. Pairs grow quadratically with the medication list — 10 active orders is 45
 		// pairs — and each surviving chip is also injected into the prompt as a citable finding, so
 		// an uncapped arm would both bury the clinician and write tens of thousands of characters
-		// into the context window. These six real bundled-sample drugs interact pairwise 15 ways,
+		// into the context window. These six real drugs from the excerpt interact pairwise 15 ways,
 		// exactly 10 of them Major, so the cap and the severity ordering are both observable: the
 		// arm must report 10, and all 10 must be the Major ones. Dataset order would instead keep
 		// simvastatin x warfarin (Minor) and three Moderates.
 		List<SafetyWarning> warnings = screen(ddinterValidator(), SCREENING_QUESTION,
-				DrugReferenceTestSupport.ctx(60, null,
-						DrugReferenceTestSupport.set("Simvastatin", "Warfarin", "Ciprofloxacin",
-								"Clarithromycin", "Fluconazole", "Amiodarone"),
-						DrugReferenceTestSupport.set("C10AA01", "B01AA03", "J01MA02", "J01FA09",
-								"J02AC01", "C01BD01"),
-						null, null));
+				DrugReferenceTestSupport.screenedSixOrderChart());
 
-		assertEquals(DrugSafetyValidator.MAX_SCREENING_INTERACTION_WARNINGS, warnings.size(),
+		assertEquals(ChartSearchAiConstants.DEFAULT_DRUG_SAFETY_MAX_PAIR_CHIPS, warnings.size(),
 				"the screening arm must cap the chips it raises, was: " + warnings.size());
 		for (SafetyWarning warning : warnings) {
 			assertTrue(warning.getDetail().contains("— Major."),
@@ -564,9 +716,12 @@ public class DrugSafetyInteractionScreeningTest {
 	public void screeningInjectsNoDrugReferenceRecordsForTheActiveOrders() {
 		// A deliberate scope decision, pinned. Order-driven reference injection stays
 		// relevance-scoped: unscoping it for screening questions would append one full reference
-		// record per active order — each up to MAX_INTERACTION_RENDER_CHARS of partner prose the
-		// patient has nothing to do with, which #117 measures the model reciting verbatim into the
-		// answer — and that cost grows with the medication list. The deterministic finding already
+		// record per active order, and that cost grows with the medication list. The per-record half
+		// of that cost is usually smaller since issue #355 — a record with nothing patient-specific to
+		// show normally names a bounded handful of partners with their severities rather than spending
+		// MAX_INTERACTION_RENDER_CHARS on the mechanism prose #117 measures the model reciting
+		// verbatim, though a rule with no name to shorten to still renders its paragraph — so this
+		// decision now stands mostly on the record COUNT rather than on both. The deterministic finding already
 		// carries the pair, the severity and the mechanism in one bounded line, so the screening
 		// answer is grounded without it.
 		PatientChart result = screeningInjector().injectRecords(

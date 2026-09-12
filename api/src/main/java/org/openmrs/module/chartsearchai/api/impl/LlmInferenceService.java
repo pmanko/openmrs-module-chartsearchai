@@ -24,8 +24,11 @@ import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.api.impl.LlmProvider.LlmResponse;
+import org.openmrs.module.chartsearchai.reference.ChartReadStatus;
 import org.openmrs.module.chartsearchai.reference.DrugReferenceInjector;
+import org.openmrs.module.chartsearchai.reference.DrugReferenceLoad;
 import org.openmrs.module.chartsearchai.reference.DrugSafetyValidator;
+import org.openmrs.module.chartsearchai.reference.PairChipExtent;
 import org.openmrs.module.chartsearchai.reference.SafetyWarning;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
@@ -116,25 +119,126 @@ public class LlmInferenceService implements ChartSearchService {
 		String outcome = "error";
 		try {
 			PatientChart chart = chartBuildingStrategy.buildChart(patient, question);
-			chart = drugReferenceInjector.inject(chart, patient, question);
+			// Whether this layer's two stamped chart reads happened (issue #247). Declared here
+			// because the injector's pass is what states it; ChartAnswer.getChartReadForSafety() is
+			// canonical for the three answers and for why that pass rather than validate's.
+			ChartReadStatus chartRead = new ChartReadStatus();
+			chart = drugReferenceInjector.inject(chart, patient, question, chartRead);
+			// Resolved once, off the chart that was actually assembled, and carried on the answer —
+			// so the audit row the REST layer writes states the mode instead of re-deriving it
+			// (issue #178). After inject() deliberately: that is the chart the LLM sees.
+			String searchMode = chartBuildingStrategy.searchModeLabel(chart);
+			// And, off the same chart and for the same reason, how much of it is the module's own
+			// reference material (issue #229). After inject() is not incidental: that is the chart the
+			// LLM sees, and the injector is what appends the records being measured. Carried on the
+			// answer because by audit-write time this chart is gone.
+			ChartSearchAiUtils.ReferenceSlice referenceSlice =
+					ChartSearchAiUtils.referenceSlice(chart.getMappings());
+			// And, off the same chart, the drug class the module reports as named-but-unresolved
+			// (issue #354). Read off the injected chart rather than by asking the question again, so
+			// the wire statement and the prompt record cannot disagree — the reason is at
+			// ChartSearchAiUtils.unresolvedDrugClass. It is carried because a prompt record only
+			// reaches a client if the model cites it, which on the issue's own reproduction it did
+			// not.
+			String unresolvedDrugClass = ChartSearchAiUtils.unresolvedDrugClass(chart.getMappings());
+			// And what this install's contraindication screen had to ask the patient's recorded
+			// conditions WITH (issue #378). A load-time verdict rather than a reading of this chart,
+			// so it is resolved here only to keep every module statement in one place; it is carried
+			// for the reason the three above are — nothing a /search consumer reads could otherwise
+			// tell a screen that cannot fire from one that asked and found nothing.
+			DrugReferenceLoad.Coverage conditionRuleCoverage =
+					drugSafetyValidator.conditionRuleCoverage();
+			// And whether this chart's prompt asks the model for one line per safety finding (issue
+			// #397). After inject() deliberately, as searchMode, referenceSlice and
+			// unresolvedDrugClass above are — and this one means NOTHING anywhere else:
+			// DrugReferenceInjector is the sole producer of `safety_finding` mappings, so a read
+			// hoisted above that line is unconditionally false and #397's whole payload is reverted
+			// with the build green. A local for the same reason they are, and so that this comment
+			// has somewhere to live.
+			boolean enumerateFindings = severalFindingsAboutOneDrug(chart);
 			buildMs = System.currentTimeMillis() - buildStart;
 
 			long llmStart = System.currentTimeMillis();
 			LlmResponse response = llmProvider.search(chartTextOrPlaceholder(chart),
-					chart.getFocusIndices(), question);
+					chart.getFocusIndices(), question, enumerateFindings);
 			llmMs = System.currentTimeMillis() - llmStart;
 			inputTokens = response.getInputTokens();
 			cachedTokens = response.getCachedTokens();
 
-			List<RecordReference> references = groundReferences(response.getAnswer(),
-					extractCitedReferences(response.getAnswer(), response.getCitations(),
-							chart.getMappings()),
+			List<RecordReference> cited = extractCitedReferences(response.getAnswer(),
+					response.getCitations(), chart.getMappings());
+			// Issue #398, before every check below and before grounding: each of them judges the
+			// answer this method is about to publish, so a repair running after any of them would
+			// leave that key describing prose the caller never receives.
+			List<Integer> owedRepair = findingsOwedARepair(cited, chart.getMappings());
+			if (!owedRepair.isEmpty()) {
+				// Into llmMs and not beside it: the repair IS a second inference, and a timing line
+				// that left it out would under-report precisely the cost this feature adds, on the
+				// field an operator reads to decide whether to keep paying it.
+				long repairStart = System.currentTimeMillis();
+				response = withRepairedFindingEnumeration(response,
+						llmProvider.search(chartTextOrPlaceholder(chart), chart.getFocusIndices(),
+								findingEnumerationRepairQuestion(owedRepair), false),
+						owedRepair, chart.getMappings());
+				llmMs += System.currentTimeMillis() - repairStart;
+				cited = extractCitedReferences(response.getAnswer(), response.getCitations(),
+						chart.getMappings());
+				inputTokens = response.getInputTokens();
+				cachedTokens = response.getCachedTokens();
+			}
+			ClassCodeFidelityCheck.reportClassCodeDefects(patient, question, response.getAnswer(),
+					cited, chart.getMappings());
+			// The prose check's own answer, carried rather than re-derived (issue #337 round two): a
+			// consumer could not re-ask it if it wanted to, the chart being gone by REST time, and a
+			// second walk would be the two-resolutions-that-agree shape #151 forbids.
+			List<Integer> unfaithfullyRenderedCitations =
+					ReferenceProseFidelityCheck.reportUnfaithfulReferenceProse(patient,
+							response.getAnswer(), cited, chart.getMappings());
+			// And the third of them (issue #377): the chart citations the answer offered as evidence
+			// of an active drug order that cannot be one. Carried rather than re-derived for the
+			// reason its neighbour is — the chart is gone by REST time.
+			// Both of its answers come off ONE report: the citations that cannot be the order, and
+			// how many active-order claims the answer made against how many offered no chart record
+			// at all (issue #379). Destructured here rather than re-asked, because a second walk is
+			// the two-resolutions-that-agree shape #151 forbids — and because a failed check must
+			// state no measurement on BOTH keys, which one null report gives and two calls could not.
+			ActiveOrderCitationFidelityCheck.Report activeOrderReport =
+					ActiveOrderCitationFidelityCheck.examineActiveOrderClaims(patient,
+							response.getAnswer(), cited, chart.getMappings());
+			List<Integer> misattributedOrderCitations =
+					activeOrderReport == null ? null : activeOrderReport.getMisattributed();
+			ActiveOrderClaims activeOrderClaims =
+					activeOrderReport == null ? null : activeOrderReport.getClaims();
+			// And the fourth (issue #337 round three): the cited safety findings whose RATING the
+			// answer states nowhere. Carried rather than re-derived for the reason its neighbours
+			// are — the chart, which is where the rating travels, is gone by REST time.
+			List<ChartSearchService.UnstatedFindingSeverity> unstatedFindingSeverities =
+					SafetyFindingSeverityFidelityCheck.reportUnstatedFindingSeverities(patient,
+							response.getAnswer(), cited, chart.getMappings());
+			// And the fifth (issue #395): the base the four above had none for. Each of them judges a
+			// finding the answer DID cite, so an answer that drops one entirely is outside all four
+			// — this counts the findings the prompt carried against the ones the answer cited.
+			// Carried rather than re-derived for the reason its neighbours are: the chart, which is
+			// the carrier of the population, is gone by REST time.
+			FindingCitationExtent findingCitationExtent =
+					SafetyFindingCitationExtentCheck.measureFindingCitations(patient,
+							response.getAnswer(), cited, chart.getMappings());
+			List<RecordReference> references = groundReferences(response.getAnswer(), cited,
 					chart.getMappings());
+			// A per-call sink, never a field: the validator is a Spring singleton, so a field would be
+			// one slot shared by every concurrent request (issue #172). What it hears is how bounded
+			// the interaction list behind these chips is — the statement issue #336 exists for, and one
+			// no consumer can re-derive from the chips themselves. Which arm states it, and when none
+			// does, is PairChipExtent's and ChartAnswer.getPairChipExtent()'s to say, not a sink site's.
+			PairChipExtent.Sink pairExtent = new PairChipExtent.Sink();
 			List<SafetyWarning> safetyWarnings = drugSafetyValidator.validate(response.getAnswer(), question,
-					patient, chart.getMappings());
+					patient, chart.getMappings(), pairExtent);
 			ChartAnswer answer = new ChartAnswer(response.getAnswer(), references,
 					response.getInputTokens(), response.getOutputTokens(),
-					response.getCachedTokens(), safetyWarnings);
+					response.getCachedTokens(), safetyWarnings, searchMode, referenceSlice,
+					pairExtent.stated(), unresolvedDrugClass, unfaithfullyRenderedCitations,
+					misattributedOrderCitations, unstatedFindingSeverities, activeOrderClaims,
+					findingCitationExtent, chartRead.stated(), conditionRuleCoverage);
 			outcome = "ok";
 			return answer;
 		}
@@ -197,6 +301,42 @@ public class LlmInferenceService implements ChartSearchService {
 	}
 
 	/**
+	 * Whether an answer short of the findings its prompt carried is repaired by asking again —
+	 * issue #398, {@code chartsearchai.drugSafety.repairFindingEnumeration}, shipping OFF.
+	 * {@code protected} for the reason its siblings are: a test drives the two answer paths with no
+	 * OpenMRS runtime behind them, and a repair gated on an unreadable global property would be
+	 * silently untested on the arrangement it exists for.
+	 */
+	protected boolean resolveFindingEnumerationRepair() {
+		// AND-ed with issue #403's mode, and the direction is the point: where the prompt asked the
+		// model to SUMMARISE the findings rather than list them, an answer citing fewer than the
+		// prompt carried is the ASKED-FOR shape, so a repair would re-add exactly the enumeration
+		// that mode removes — one inference per answer to undo the change the operator turned on.
+		// Suppressed here rather than at the repair's own call site so the two toggles cannot be read
+		// in different orders on the two answer paths.
+		if (ChartSearchAiUtils.getBooleanGlobalProperty(
+				ChartSearchAiConstants.GP_DRUG_SAFETY_FINDINGS_RENDERED_BY_CLIENT,
+				ChartSearchAiConstants.DEFAULT_DRUG_SAFETY_FINDINGS_RENDERED_BY_CLIENT)) {
+			// SAID rather than done silently, because since the summarise mode became the DEFAULT this
+			// branch overrides a setting the operator had to go out of their way to turn on. An
+			// operator who wants the repair has to turn the summarise mode off, and a log line is how
+			// they find that out without reading this method.
+			if (ChartSearchAiUtils.getBooleanGlobalProperty(
+					ChartSearchAiConstants.GP_DRUG_SAFETY_REPAIR_FINDING_ENUMERATION,
+					ChartSearchAiConstants.DEFAULT_DRUG_SAFETY_REPAIR_FINDING_ENUMERATION)) {
+				log.warn("{} is on, so {} is not applied — prose asked to summarise is short of the "
+						+ "findings by design. Turn the first off to use the repair.",
+						ChartSearchAiConstants.GP_DRUG_SAFETY_FINDINGS_RENDERED_BY_CLIENT,
+						ChartSearchAiConstants.GP_DRUG_SAFETY_REPAIR_FINDING_ENUMERATION);
+			}
+			return false;
+		}
+		return ChartSearchAiUtils.getBooleanGlobalProperty(
+				ChartSearchAiConstants.GP_DRUG_SAFETY_REPAIR_FINDING_ENUMERATION,
+				ChartSearchAiConstants.DEFAULT_DRUG_SAFETY_REPAIR_FINDING_ENUMERATION);
+	}
+
+	/**
 	 * Pure-logic decision for whether the current retrieval mode produces a
 	 * question-independent chart prefix that warmup can usefully prime. Warmup
 	 * primes the cache with one specific prompt prefix; that only pays off if
@@ -209,7 +349,11 @@ public class LlmInferenceService implements ChartSearchService {
 	 * querystore migration (#51) produces a question-independent chart prefix, so warmup is viable:
 	 * <ul>
 	 *   <li>{@code preFilter=false} — {@link QueryStoreChartBuilder} returns the patient's full
-	 *       chart via {@code getPatientChart}; bytes are a function of the patient only.</li>
+	 *       chart via {@code getPatientChart}; bytes do not vary with the question, which is what
+	 *       makes warmup viable. They are not, however, permanent: since issue #317 a drug-order
+	 *       record also states whether its order is in force, so an order lapsing moves the bytes
+	 *       from that record onward and warmup's primed prefix is reusable only up to it. See
+	 *       {@code QueryStoreChartBuilder}'s class javadoc for what that costs.</li>
 	 *   <li>{@code preFilter=true} — full chart plus a small trailing "Records ranked by
 	 *       similarity to the query: ..." focus hint. The records section (the bulk of the prompt)
 	 *       is byte-identical across queries; the hint and the question vary only at the very end,
@@ -299,8 +443,22 @@ public class LlmInferenceService implements ChartSearchService {
 			}
 			PatientChart focused = chartBuildingStrategy.buildFocusedChart(patient, question);
 			if (focused != null && !focused.getMappings().isEmpty()) {
+				// `false` explicitly, and it is a decision rather than a default. THE LOAD-BEARING
+				// REASON IS THAT THIS PROMPT HAS NOTHING TO ENUMERATE: buildFocusedChart goes to
+				// QueryStoreChartBuilder.buildFocused and never through drugReferenceInjector
+				// .inject, the sole producer of `safety_finding` mappings, so a preview chart carries
+				// none — threading searchStreaming's own flag down here (the natural edit, that flag
+				// being a live local at the call above) would send the 126-character sentence to a
+				// prompt with no finding in it, and spend those bytes on the one pass that shares
+				// llama-server's single slot with the committed answer. That the preview also
+				// DISCARDS its answer (DISCARD_TOKENS) is the weaker reason, and was the only one
+				// this comment gave. FindingEnumerationClauseContextTest
+				// .theProgressiveReasoningPreviewIsHandedFalseWhereTheCommittedAnswerIsHandedTrue
+				// reddens on either edit — this literal flipped, or that flag threaded in — because
+				// there the two passes' flags differ. Passed at the call site because the flag-less
+				// arity was removed — the @param on `search` is canonical for why.
 				llmProvider.searchStreaming(focused.getText(), focused.getFocusIndices(), question,
-						DISCARD_TOKENS, previewReasoningConsumer, null);
+						DISCARD_TOKENS, previewReasoningConsumer, null, false);
 			}
 		}
 		catch (RuntimeException e) {
@@ -365,7 +523,38 @@ public class LlmInferenceService implements ChartSearchService {
 		String outcome = "error";
 		try {
 			PatientChart chart = chartBuildingStrategy.buildChart(patient, question);
-			chart = drugReferenceInjector.inject(chart, patient, question);
+			// Whether this layer's two stamped chart reads happened (issue #247). Declared here
+			// because the injector's pass is what states it; ChartAnswer.getChartReadForSafety() is
+			// canonical for the three answers and for why that pass rather than validate's.
+			ChartReadStatus chartRead = new ChartReadStatus();
+			chart = drugReferenceInjector.inject(chart, patient, question, chartRead);
+			// One resolution for BOTH answers this method produces (issue #178). The early-done path
+			// audits the ungrounded answer and the classic path audits the returned one, so a mode
+			// each of them derived separately is two audit-write sites that can disagree — which is
+			// half of what #178 was, one layer up.
+			String searchMode = chartBuildingStrategy.searchModeLabel(chart);
+			// The slice too, and for the reason just given about the mode: one resolution for both
+			// answers this method produces (issue #229). Off the post-inject chart, which is the whole
+			// point of the number — see the same pair in search() above.
+			ChartSearchAiUtils.ReferenceSlice referenceSlice =
+					ChartSearchAiUtils.referenceSlice(chart.getMappings());
+			// The class statement too, one resolution for both answers this method produces and for
+			// the same reason (issue #354). Both need it, and the ungrounded one especially: with
+			// async grounding the early "done" is emitted from THAT answer, so a statement set only
+			// on the returned one would be absent from the event the user actually sees.
+			String unresolvedDrugClass = ChartSearchAiUtils.unresolvedDrugClass(chart.getMappings());
+			// The condition-rule coverage too, one resolution for both answers this method produces
+			// and for the same reason (issue #378). The ungrounded one especially: with async
+			// grounding the early "done" is emitted from THAT answer, and this statement is known
+			// before the model is called, so there is no reason for that event to carry less.
+			DrugReferenceLoad.Coverage conditionRuleCoverage =
+					drugSafetyValidator.conditionRuleCoverage();
+			// The finding-enumeration flag too, off the same post-inject chart and for the reason
+			// search() gives at the same position (issue #397): DrugReferenceInjector is the sole
+			// producer of `safety_finding` mappings, so a read hoisted above the inject() line above
+			// is unconditionally false and this issue's whole payload is reverted with the build
+			// green.
+			boolean enumerateFindings = severalFindingsAboutOneDrug(chart);
 			buildMs = System.currentTimeMillis() - buildStart;
 
 			// Progressive reasoning: stream a fast preview reasoning from the focused top-K chart to
@@ -384,7 +573,7 @@ public class LlmInferenceService implements ChartSearchService {
 			String kvCacheScope = chart.isQueryScoped() ? null : kvCacheScopeFor(patient);
 			LlmResponse response = llmProvider.searchStreaming(
 					chartTextOrPlaceholder(chart), chart.getFocusIndices(), question, tokenConsumer,
-					reasoningConsumer, kvCacheScope);
+					reasoningConsumer, kvCacheScope, enumerateFindings);
 			llmMs = System.currentTimeMillis() - llmStart;
 			inputTokens = response.getInputTokens();
 			cachedTokens = response.getCachedTokens();
@@ -395,6 +584,27 @@ public class LlmInferenceService implements ChartSearchService {
 			// carries the grounded references once verification completes.
 			List<RecordReference> cited = extractCitedReferences(response.getAnswer(),
 					response.getCitations(), chart.getMappings());
+			// Issue #398, before the citations reach the caller and before the ungrounded handoff
+			// below: the repair's own prose streams through the SAME token consumer, so a user
+			// watching the answer being written sees the continuation arrive rather than finding it
+			// only in the final object. That ordering is the whole reason the repair appends
+			// instead of replacing — by here the short answer has already been streamed.
+			List<Integer> owedRepair = findingsOwedARepair(cited, chart.getMappings());
+			if (!owedRepair.isEmpty()) {
+				// Into llmMs, for the reason the sibling path states.
+				long repairStart = System.currentTimeMillis();
+				response = withRepairedFindingEnumeration(response,
+						llmProvider.searchStreaming(chartTextOrPlaceholder(chart),
+								chart.getFocusIndices(),
+								findingEnumerationRepairQuestion(owedRepair), tokenConsumer,
+								reasoningConsumer, kvCacheScope, false),
+						owedRepair, chart.getMappings());
+				llmMs += System.currentTimeMillis() - repairStart;
+				cited = extractCitedReferences(response.getAnswer(), response.getCitations(),
+						chart.getMappings());
+				inputTokens = response.getInputTokens();
+				cachedTokens = response.getCachedTokens();
+			}
 			citationsConsumer.accept(cited);
 
 			// The answer is complete: hand the whole (not yet grounding-verified) result to the
@@ -403,18 +613,81 @@ public class LlmInferenceService implements ChartSearchService {
 			// Fires regardless of whether grounding is enabled — see the interface contract.
 			ungroundedAnswerConsumer.accept(new ChartAnswer(response.getAnswer(), cited,
 					response.getInputTokens(), response.getOutputTokens(),
-					response.getCachedTokens()));
+					response.getCachedTokens(), Collections.<SafetyWarning> emptyList(), searchMode,
+					referenceSlice, null, unresolvedDrugClass, null, null, null, null, null,
+					chartRead.stated(), conditionRuleCoverage));
+
+			// After the user-visible handoff, before grounding: the exact comparisons over what the
+			// answer did with the records it cites — the class-code defects a set-membership
+			// comparison can and cannot see (issues #142 and #338), prose reproduced from a cited
+			// reference record and then rewritten inside the sentence it was copying (issue #337),
+			// and, since issue #377, the chart citations offered as evidence of an active drug order
+			// that cannot be one, and, since #337's third round, a cited finding whose RATING the
+			// answer states nowhere. None blocks: the class-code check reports only to the log and
+			// the rest carry their answers onto the ChartAnswer this method RETURNS, so no consumer
+			// above waits on any of them. Microseconds for the first and the third — measured by
+			// calling their own entry points from a throwaway same-package case, the active-order
+			// check costs 0.93 us on an answer stating no active-order claim, which is the ordinary
+			// one, and 171 us on a five-claim answer over a 400-record chart. The finding-severity
+			// check is in the same band, 6.2 us on a stock install and 87 us on the reported shape
+			// (ADR Decision 78). The prose check is the outlier and is why this comment stopped
+			// saying microseconds of all of them: it is a word-level dynamic program, ~0.7 ms on a
+			// realistic chart and ~1.2 ms at the largest injected record set anyone has swept (ADR
+			// Decision 61).
+			ClassCodeFidelityCheck.reportClassCodeDefects(patient, question, response.getAnswer(),
+					cited, chart.getMappings());
+			// Its answer is carried onto the ChartAnswer this method returns (issue #337 round two).
+			// The early one above cannot have it and states null: the check runs HERE, after the
+			// user-visible handoff, and moving it ahead would put a word-level dynamic program in
+			// front of the "done" event for a statement that is not needed to render the answer.
+			List<Integer> unfaithfullyRenderedCitations =
+					ReferenceProseFidelityCheck.reportUnfaithfulReferenceProse(patient,
+							response.getAnswer(), cited, chart.getMappings());
+			// Its answer is carried the same way and states null on the early `done` for the same
+			// reason (issue #377): the check runs here, after the user-visible handoff.
+			// One report, two answers, for the reason search() states.
+			ActiveOrderCitationFidelityCheck.Report activeOrderReport =
+					ActiveOrderCitationFidelityCheck.examineActiveOrderClaims(patient,
+							response.getAnswer(), cited, chart.getMappings());
+			List<Integer> misattributedOrderCitations =
+					activeOrderReport == null ? null : activeOrderReport.getMisattributed();
+			ActiveOrderClaims activeOrderClaims =
+					activeOrderReport == null ? null : activeOrderReport.getClaims();
+			// The fourth, carried the same way and stating null on the early `done` for the same
+			// reason (issue #337 round three): the check runs here, after the user-visible handoff.
+			List<ChartSearchService.UnstatedFindingSeverity> unstatedFindingSeverities =
+					SafetyFindingSeverityFidelityCheck.reportUnstatedFindingSeverities(patient,
+							response.getAnswer(), cited, chart.getMappings());
+			// The fifth, carried the same way and stating null on the early `done` for the same
+			// reason (issue #395): the check runs here, after the user-visible handoff. It is the
+			// cheapest of the five — two walks and a set intersection, and of the answer only whether
+			// there is any prose at all rather than a scan of it — and it
+			// still runs here rather than ahead of the handoff, because a client that got a zeroed
+			// extent on the early event and a real one on the final would read the first as a
+			// measurement.
+			FindingCitationExtent findingCitationExtent =
+					SafetyFindingCitationExtentCheck.measureFindingCitations(patient,
+							response.getAnswer(), cited, chart.getMappings());
 
 			long groundStart = System.currentTimeMillis();
 			List<RecordReference> references = groundReferences(response.getAnswer(), cited,
 					chart.getMappings());
 			groundMs = System.currentTimeMillis() - groundStart;
 
+			// A per-call sink, never a field: the validator is a Spring singleton, so a field would be
+			// one slot shared by every concurrent request (issue #172). What it hears is how bounded
+			// the interaction list behind these chips is — the statement issue #336 exists for, and one
+			// no consumer can re-derive from the chips themselves. Which arm states it, and when none
+			// does, is PairChipExtent's and ChartAnswer.getPairChipExtent()'s to say, not a sink site's.
+			PairChipExtent.Sink pairExtent = new PairChipExtent.Sink();
 			List<SafetyWarning> safetyWarnings = drugSafetyValidator.validate(response.getAnswer(), question,
-					patient, chart.getMappings());
+					patient, chart.getMappings(), pairExtent);
 			ChartAnswer answer = new ChartAnswer(response.getAnswer(), references,
 					response.getInputTokens(), response.getOutputTokens(),
-					response.getCachedTokens(), safetyWarnings);
+					response.getCachedTokens(), safetyWarnings, searchMode, referenceSlice,
+					pairExtent.stated(), unresolvedDrugClass, unfaithfullyRenderedCitations,
+					misattributedOrderCitations, unstatedFindingSeverities, activeOrderClaims,
+					findingCitationExtent, chartRead.stated(), conditionRuleCoverage);
 			outcome = "ok";
 			return answer;
 		}
@@ -433,6 +706,166 @@ public class LlmInferenceService implements ChartSearchService {
 	 */
 	private static String chartTextOrPlaceholder(PatientChart chart) {
 		return chart.getMappings().isEmpty() ? "(No relevant records found)" : chart.getText();
+	}
+
+	/**
+	 * The words the repair pass asks its second question in — issue #398. A CONSTANT because it is
+	 * a prompt, and this module's one measured lesson about prompts
+	 * (<a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/397">#397</a>, ADR
+	 * Decision 84) is that their bytes must be pinnable; {@code FindingEnumerationRepairTest} reads
+	 * the composed question off the provider it hands the service.
+	 *
+	 * <p><b>It names records and asks for nothing else.</b> It carries no verdict instruction: the
+	 * lead is the original answer's and the continuation is appended after it, so a repair that
+	 * asked for a call would put a second one in the same answer — the failure ADR Decision 84
+	 * measured the {@code ", and nothing else"} wording causing, one surface over.
+	 */
+	static final String FINDING_ENUMERATION_REPAIR_INSTRUCTION =
+			"For these records only, state each one on a line of its own, naming the active order "
+					+ "it is about and the severity that finding states, and citing its record "
+					+ "number: ";
+
+	/**
+	 * The findings this answer owes a repair for — issue #398. The gate and the population in one
+	 * place, so the two answer paths cannot come to disagree about either; an empty list is both
+	 * "the repair is off" and "the answer cited them all", which are the same instruction to a caller.
+	 */
+	private List<Integer> findingsOwedARepair(List<RecordReference> cited,
+			List<RecordMapping> mappings) {
+		if (!resolveFindingEnumerationRepair()) {
+			return Collections.emptyList();
+		}
+		return SafetyFindingCitationExtentCheck.uncitedFindingIndexes(cited, mappings);
+	}
+
+	/**
+	 * The second question, composed from the records the answer left uncited. Package-private so a
+	 * case can read what the model was asked without reaching into the provider.
+	 *
+	 * @param uncited the uncited carried findings, in the injector's order, as
+	 *            {@code SafetyFindingCitationExtentCheck.uncitedFindingIndexes} answers
+	 * @return the question, naming every uncited record and no cited one
+	 */
+	static String findingEnumerationRepairQuestion(List<Integer> uncited) {
+		StringBuilder question = new StringBuilder(FINDING_ENUMERATION_REPAIR_INSTRUCTION);
+		String separator = "";
+		for (Integer index : uncited) {
+			question.append(separator).append('[').append(index).append(']');
+			separator = ", ";
+		}
+		return question.append('.').toString();
+	}
+
+	/**
+	 * The repaired answer, or {@code original} where the repair bought nothing — issue #398.
+	 *
+	 * <p><b>It may only ADD.</b> The continuation is kept only where the answer's own citation
+	 * resolution admits at least one finding that was uncited before it, so a model answering the
+	 * follow-up with prose carrying no marker leaves the response byte for byte as it was. That is
+	 * the direction this pass is allowed to move the two published keys it touches: an appended
+	 * continuation can raise {@code findingCitations.cited} and cannot lower it.
+	 *
+	 * <p><b>The lead is not re-decided.</b> The continuation goes AFTER the original answer, whose
+	 * opening is what {@code score_directness.classify} reads — the property ADR Decision 84
+	 * measured an arm losing while it gained completeness, and the one this pass must not trade.
+	 */
+	private LlmResponse withRepairedFindingEnumeration(LlmResponse original,
+			LlmResponse continuation, List<Integer> uncited, List<RecordMapping> mappings) {
+		if (continuation == null || ChartSearchAiUtils.isBlank(continuation.getAnswer())) {
+			return original;
+		}
+		Set<Integer> nowCited = new LinkedHashSet<Integer>();
+		for (RecordReference reference : extractCitedReferences(continuation.getAnswer(),
+				continuation.getCitations(), mappings)) {
+			nowCited.add(Integer.valueOf(reference.getIndex()));
+		}
+		if (Collections.disjoint(nowCited, uncited)) {
+			log.debug("Finding-enumeration repair discarded: the continuation cites none of {}",
+					uncited);
+			return original;
+		}
+		List<Integer> citations = new ArrayList<Integer>();
+		if (original.getCitations() != null) {
+			citations.addAll(original.getCitations());
+		}
+		if (continuation.getCitations() != null) {
+			for (Integer index : continuation.getCitations()) {
+				if (!citations.contains(index)) {
+					citations.add(index);
+				}
+			}
+		}
+		// Built by LlmResponse and never here: that type's own javadoc carries why, and the reason
+		// is a guard this class would otherwise trip on a descriptor it shares with ChartAnswer.
+		return original.continuedWith(continuation, citations);
+	}
+
+	/**
+	 * Whether this chart's prompt carries more than one injected safety finding AND every one of
+	 * them names the same drug — the only fact about the chart the #397 clause in
+	 * {@code LlmProvider.buildUserMessage} needs. Issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/397">#397</a>.
+	 *
+	 * <p><b>Both conjuncts read the SAME selection of the carried population,
+	 * {@code ChartSearchAiUtils.safetyFindingMappings}</b> — the first its SIZE, the second through
+	 * {@code ChartSearchAiUtils.findingSubjects}, a projection of that one walk and not a second
+	 * walk. An earlier draft walked the mappings here instead and justified it by saying the
+	 * two questions are asked of charts that do not coexist — which is false: {@code chart} is the
+	 * same live local at this call and at {@code SafetyFindingCitationExtentCheck}'s, in both answer
+	 * methods. Two selections would
+	 * let a filter added to one drift from the other silently, so that the prompt asks for an
+	 * enumeration of a population {@code findingCitations} then counts differently. That check runs
+	 * after the answer and needs the index SET; this runs before there is one and needs only whether
+	 * there are two records, so it counts the records rather than crossing into the check to count
+	 * the indexes they were numbered with.
+	 *
+	 * <p>The threshold is TWO because one finding is not an enumeration. Nothing published records
+	 * the per-cell carried counts of the measured corpus, so no claim is made about them here.
+	 *
+	 * <p><b>ONE SUBJECT, and that conjunct is the clause's own precondition rather than a
+	 * refinement of it.</b> The sentence reads "Where more than one finding names <em>it</em>", and
+	 * its {@code it} is a drug; a chart whose findings name several drugs offers no single referent
+	 * for it, so the sentence describes an arrangement that chart does not have. Measured over the
+	 * bundled DDInter knowledge base through {@code DrugReferenceTestSupport.injectorWithSafety(
+	 * ddinterServiceWithGroups()).injectRecords}, with the subjects read back by the same
+	 * {@code findingSubjects} this method calls, on a two-order chart with six resolved active
+	 * drugs: {@code "do any of her meds interact?"} —
+	 * an issue #113 interaction SCREEN, which needs no drug in the question at all — injects ten
+	 * findings naming FIVE subjects, and this conjunct is what keeps the clause off it. Without it
+	 * the flag is true there, and no arm of #397's A/B contains such a cell. That population is also
+	 * the one with a recorded measurement of citing NONE of its findings — see
+	 * {@code eval/drift-metric/score_probe_safety.py}'s {@code findings_incompletely_stated}
+	 * docstring, where a wh-question carried ten screening-arm findings and cited none of them.
+	 *
+	 * <p><b>What it does NOT establish is that the QUESTION names that drug.</b> A screen whose
+	 * findings happen to name one of her own drugs still takes the clause (measured: the same
+	 * arrangement with four resolved drugs injects two findings naming one subject), and there the
+	 * antecedent for {@code it} is in the records rather than the question. That is unmeasured and
+	 * is not claimed closed; what the conjunct does guarantee is that whenever the clause is sent,
+	 * exactly one drug in the prompt satisfies its own description. Narrowing on the question's
+	 * phrasing instead — {@code QueryScopeRouter.isInteractionScreening} negated — was measured and
+	 * is worse in both directions. {@code "Does clarithromycin interact with any of her current
+	 * medications?"} carries the screening cue yet its findings name the one drug the question names,
+	 * the screening arm standing down because the question resolved a drug (four resolved active
+	 * drugs: four findings, one subject), so a phrasing gate withholds the clause there for no
+	 * reason. {@code "Do her clarithromycin and amiodarone interact?"} carries no screening cue and
+	 * names two (six resolved active drugs: nine findings, two subjects), so a phrasing gate sends
+	 * it. Both figures are from the arrangement above through the same helper.
+	 *
+	 * <p><b>Gating at all — rather than appending the clause unconditionally — is also about the
+	 * absent-data prompt.</b> The empty-chart message's exact bytes are pinned by
+	 * {@code AbsentDataEvalTest.theEmptyChartPromptAsksTheModelToNameWhatIsMissing} after 19
+	 * measured cases, and that test is how this method came to exist rather than by design. It
+	 * cannot see a widened CALL SITE, though — it builds its bytes through an arity that hardcodes
+	 * the flag false, so a literal {@code true} where this method is called left the whole build
+	 * green until
+	 * {@code FindingEnumerationClauseContextTest.theCallSitesHandTheProviderFalseForThePopulationsTheGateWithholdsFrom}
+	 * existed. Widen either call site and read that case's failure.
+	 */
+	static boolean severalFindingsAboutOneDrug(PatientChart chart) {
+		List<RecordMapping> mappings = chart.getMappings();
+		return ChartSearchAiUtils.safetyFindingMappings(mappings).size() > 1
+				&& ChartSearchAiUtils.findingSubjects(mappings).size() == 1;
 	}
 
 	static boolean isWarmupEnabled() {
@@ -463,9 +896,11 @@ public class LlmInferenceService implements ChartSearchService {
 
 	/**
 	 * Builds the clickable reference list for an answer, reconciling the two
-	 * sources of citation indices that can disagree: the LLM's structured
-	 * {@code citations} array and the {@code [N]} markers it writes inline in the
-	 * prose. We take the UNION of both (restricted to indices that map to a real
+	 * sources of citation indices the MODEL can disagree with itself about: its
+	 * structured {@code citations} array and the {@code [N]} markers it writes
+	 * inline in the prose. (A third source, which is not the model's at all, is
+	 * the last paragraph below.) We take the UNION of the
+	 * two (restricted to indices that map to a real
 	 * retrieved record), so a record the model cited inline but omitted from the
 	 * array — or one it listed in the array while citing at least one record
 	 * inline — still resolves to a reference. The one exception is the
@@ -487,6 +922,15 @@ public class LlmInferenceService implements ChartSearchService {
 	 * absence of an answer (a distinct degenerate output), not an answer that
 	 * failed to anchor its citations, so the array still resolves there — as does
 	 * the legacy {@code answer == null} entry point.
+	 *
+	 * <p><b>A third source, and the only one that is not the model's</b> (issue #305): a record the
+	 * model DID cite may declare, through {@link RecordMapping#getDerivedFrom()}, the chart records
+	 * it was derived from — an injected {@code safety_finding} names the recorded allergy or
+	 * condition its match fired on. Those records join the reference list and are marked
+	 * {@link RecordReference#isAttachedByTheModule()}. It is a ONE-LEVEL step by construction here:
+	 * the derivation is read off what the model cited and never off what this step added, so a
+	 * record that later carried a derivation of its own would not be followed. Resolved after both
+	 * of the reads above — see the comment at the walk for which one is load-bearing and why.
 	 */
 	static List<RecordReference> extractCitedReferences(String answer, List<Integer> citations,
 			List<RecordMapping> mappings) {
@@ -513,6 +957,64 @@ public class LlmInferenceService implements ChartSearchService {
 			seen.addAll(inline);
 		}
 
+		// The chart records the model's own citations were DERIVED from (issue #305) — a recorded
+		// allergy or condition an injected safety_finding fired on, resolved deterministically by
+		// DrugReferenceInjector and carried on the mapping. Attached here because this method is the
+		// only thing that decides which indices become references, and attaching a citation anywhere
+		// else is how the deterministic layer and the answer come apart.
+		//
+		// AFTER the two reads above, and the reason is the SECOND of them rather than the carve-out.
+		// Measured: moving this block ahead of the carve-out leaves the whole suite green, because
+		// that carve-out returns an unconditional empty list — whatever `seen` held cannot reach a
+		// client, so an abstaining answer acquires nothing either way.
+		//
+		// What the position does decide is narrower than "this block runs late", and the mutation
+		// that shows it is not a move: it is which set `!seen.contains(derived)` below reads. Have it
+		// read the citations array ALONE — the state before `seen.addAll(inline)` — and a record the
+		// model cited INLINE ONLY, its finding in the array, is admitted here and published as
+		// `attachedByTheModule`: the module claiming a citation the model wrote. Iterating a
+		// pre-inline snapshot while leaving that check on `seen` changes nothing, measured. So keep
+		// this after both reads, and read `seen`. →
+		// LlmInferenceServiceTest.extractCitedReferences_shouldNotClaimARecordTheModelCitedInlineOnly
+		//
+		// A SECOND pass over what the model cited, and ONE level: the derivations read here are the
+		// model's own citations', never those of a record this step added, so the walk cannot chain.
+		// That is the rule rather than a property of today's data — no chart record carries a
+		// derivation at all. What keeps the iteration safe is separate and simpler: additions go into
+		// `attached` and reach `seen` only after the loop.
+		//
+		// The loop's SUBJECT carries the gate, and it is a mutation of its own — distinct from the
+		// check inside, which cannot see it. Iterate `indexMap.keySet()` rather than `seen` and every
+		// mapping's derivations are collected whatever the model cited, which is ADR Decision 80's
+		// refused alternative: attach the record unconditionally. Reddens →
+		// LlmInferenceServiceTest.extractCitedReferences_shouldNotSurfaceADerivationOfAFindingTheModelDidNotCite
+		// and, over the real injector, →
+		// LlmInferenceServiceFindingProvenanceContextTest.aFindingTheModelDidNotCiteBringsNoChartRecordIntoTheReferences
+		Set<Integer> attached = new LinkedHashSet<Integer>();
+		for (Integer index : seen) {
+			RecordMapping mapping = indexMap.get(index);
+			if (mapping == null) {
+				continue;
+			}
+			for (Integer derived : mapping.getDerivedFrom()) {
+				// Already cited by the model is a no-op, and it must stay the MODEL's citation: it
+				// carries a claim of the model's, so grounding reads it as the model's like every
+				// other citation the model emitted (issue #305's own first measured form).
+				// The mapping check is for a CALLER mismatch and not for the injector: a derivation is
+				// resolved off the same mapping list that arrives here, so on the production path
+				// every derived index maps. It bites where a caller hands this method a different
+				// list than the one the numbers were resolved against — which the legacy
+				// answer-less entry point makes possible — and it fails closed there, dropping the
+				// attachment rather than publishing a reference to nothing. Unlike the array path
+				// above it does not WARN, because an unmapped derivation is the module's own
+				// bookkeeping and not something the model claimed.
+				if (!seen.contains(derived) && indexMap.containsKey(derived)) {
+					attached.add(derived);
+				}
+			}
+		}
+		seen.addAll(attached);
+
 		List<RecordReference> references = new ArrayList<RecordReference>();
 		for (Integer index : seen) {
 			RecordMapping mapping = indexMap.get(index);
@@ -522,7 +1024,7 @@ public class LlmInferenceService implements ChartSearchService {
 				// the citation chip, so the record has nothing about itself for the model to recite.
 				references.add(new RecordReference(index, mapping.getResourceType(),
 						mapping.getResourceUuid(), mapping.getDate(), null, mapping.getSource(),
-						mapping.getWithheldInteractions()));
+						mapping.getWithheldInteractions(), attached.contains(index)));
 			} else {
 				log.warn("LLM cited record [{}] which does not exist in the provided records", index);
 			}

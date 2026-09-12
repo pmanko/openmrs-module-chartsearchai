@@ -19,13 +19,16 @@ import static org.openmrs.module.chartsearchai.ChartSearchAiConstants.RESOURCE_T
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
 
 import org.openmrs.Concept;
 import org.openmrs.ConceptSet;
 import org.openmrs.api.context.Context;
+import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.RecordMapping;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,10 +37,21 @@ public class ChartSearchAiUtils {
 	private static final Logger log = LoggerFactory.getLogger(ChartSearchAiUtils.class);
 
 	/**
-	 * Matches an inline {@code [N]} citation marker in LLM answer prose. The
-	 * single source of truth for citation-marker parsing, shared by citation
-	 * extraction ({@code LlmInferenceService}) and grounding
-	 * ({@code CitationGroundingVerifier}) so the two cannot drift apart.
+	 * Matches an inline {@code [N]} citation marker. Answer prose is where they are READ, and since
+	 * issue #379 a record's own prose can carry one too: {@code DrugReferenceInjector.chartOrderClause}
+	 * WRITES the spelling into a chart-order attribution, and
+	 * {@code ReferenceProseFidelityCheck.wordsWithoutMarkers} strips it from a record as well as an
+	 * answer so the two operands of its comparison are produced alike. The writer holds no reference to
+	 * this constant — it builds the spelling as a literal — so a change to either side is caught by
+	 * {@code InteractionFindingChartOrderBridgeTest}, whose cases assert the rendered clause and whose
+	 * {@code .theNumbersTheClauseWritesAreReadableByTheSharedCitationPattern} is the one that asks the
+	 * decode step rather than the words. The
+	 * single source of truth for citation-marker parsing, shared by every consumer
+	 * {@link #citedIndexes} names — citation extraction ({@code LlmInferenceService}),
+	 * grounding ({@code CitationGroundingVerifier}), safety echo-scoping
+	 * ({@code DrugSafetyValidator}), the class-code parenthetical check
+	 * ({@code ClassCodeFidelityCheck}) and the active-order citation check
+	 * ({@code ActiveOrderCitationFidelityCheck}) — so they cannot drift apart.
 	 *
 	 * <p>Deliberately single-index. Small local models also emit compact shorthand —
 	 * {@code [6, 7]} (measured on the rc.2 standalone, 2026-07-21: the #76 guard read such
@@ -51,13 +65,101 @@ public class ChartSearchAiUtils {
 	public static final Pattern INLINE_CITATION = Pattern.compile("\\[(\\d{1,9})\\]");
 
 	/**
+	 * The characters this module reads as the end of a sentence. One home, because
+	 * {@link #SENTENCE_BOUNDARY}, {@link #mayEndASentence} and
+	 * {@code DrugSafetyValidator.endSentence} are three QUESTIONS over one set and a second spelling
+	 * of the set would let them disagree about what a sentence is — which is not hypothetical here:
+	 * {@code ReferenceProseFidelityCheck}'s record-sentence exit is only safe while the character
+	 * {@code endSentence} appends is one this set contains, and that check's own javadoc rests on it.
+	 *
+	 * <p>Public for that third consumer, in another package. A caller does not test a character
+	 * against a literal of its own.
+	 *
+	 * <p>It is interpolated into {@link #SENTENCE_BOUNDARY}'s character class through
+	 * {@link Pattern#quote}, so a member with meaning inside a class — {@code ]}, {@code ^},
+	 * {@code \} or a {@code -} in range position — is a literal rather than a syntax change. Unquoted
+	 * it changes the PATTERN rather than the set: appending {@code ]} makes the lookbehind read
+	 * "a terminator followed by {@code ]}", so the splitter stops splitting on punctuation while
+	 * {@link #mayEndASentence}, which reads this by {@code indexOf}, carries on. That is the
+	 * divergence one set exists to prevent, and it is LOUD rather than silent — that arrangement
+	 * reddens the grounding verifier's own suite wholesale. No count of it is published here: one was,
+	 * and it went stale in the very commit that wrote it, because the case added beside it in that
+	 * commit adds a failure of its own. Append a character and read the failures. The quoting is here
+	 * so the set can be edited as a set, not because the alternative hides.
+	 */
+	public static final String SENTENCE_TERMINATORS = ".!?";
+
+	/**
+	 * Where one sentence of an answer or a record ends and the next begins: a {@code .}, {@code !}
+	 * or {@code ?} followed by whitespace, or a line break. The SPLITTING question over
+	 * {@link #SENTENCE_TERMINATORS}: {@code CitationGroundingVerifier} cuts a text into the units it
+	 * grades on it, and it is strict because a splitter that cut at every dot would halve a sentence
+	 * at {@code Q12H.} or at an abbreviation. {@link #mayEndASentence} is the other question over the
+	 * same set — could a sentence have ended in this GAP — and is deliberately weaker; read its
+	 * javadoc before reaching for either, because they are not interchangeable in either direction.
+	 *
+	 * <p>Two spellings of one terminator set is the shape issue #260 records the cost of: the two
+	 * disagreed in both directions and both silently. So a consumer takes one of these two entry
+	 * points, and never a regex of its own.
+	 *
+	 * <p>The line-break arm is not decoration: the system prompt instructs the model to "use numbered
+	 * lines or simple newlines to structure lists", so a multi-item answer often carries no
+	 * sentence-ending punctuation at all.
+	 */
+	public static final Pattern SENTENCE_BOUNDARY = Pattern.compile(
+			"(?<=[" + Pattern.quote(SENTENCE_TERMINATORS) + "])\\s+|[\\r\\n]+");
+
+	/**
+	 * @return whether a sentence COULD have ended inside {@code between} — the text separating two
+	 *         adjacent words — which is a deliberately weaker question than
+	 *         {@link #SENTENCE_BOUNDARY} asks. Any terminator anywhere in the gap answers yes, and
+	 *         so does a line break; nothing has to follow the terminator.
+	 *
+	 *         <p><b>Weaker on purpose, and the weakness is the correctness.</b> Its caller
+	 *         ({@code ReferenceProseFidelityCheck}) uses the answer only to STAY SILENT, so a gap
+	 *         read as a sentence end can only suppress a report and never cause one — which is what
+	 *         makes that check's "loses recall, never precision" property true. Since issue #337's
+	 *         second round that suppression is client-visible as well as log-local, the check's
+	 *         answer being published: what it costs is an entry in
+	 *         {@code ChartAnswer.getUnfaithfullyRenderedCitations()}, which is why that key's client
+	 *         contract says an absent entry is not a certificate of faithfulness. The direction is
+	 *         unchanged — it still cannot manufacture one. Asking
+	 *         {@code SENTENCE_BOUNDARY} instead was measured wrong in exactly that direction: it
+	 *         requires the terminator to be followed IMMEDIATELY by whitespace, so a quotation the
+	 *         model closed — {@code ."} or {@code .)} , and this module's own reference prose is full
+	 *         of {@code (SSRIs)} and {@code (M1)} — is not a boundary, and a faithful quotation
+	 *         followed by the model's own next sentence was reported as a substitution.
+	 *
+	 *         <p>It must not be used to SPLIT a text into units: {@code Q12H. }-shaped prose and an
+	 *         abbreviation dot both answer yes here, and a splitter that believed them would cut a
+	 *         sentence in half. That is {@link #SENTENCE_BOUNDARY}'s question, and the two are kept
+	 *         apart for the reason issue #260 records — one rule, one terminator set, one named entry
+	 *         point per question, never a second regex at a call site.
+	 */
+	public static boolean mayEndASentence(String between) {
+		if (between == null) {
+			return false;
+		}
+		for (int at = 0; at < between.length(); at++) {
+			char c = between.charAt(at);
+			if (SENTENCE_TERMINATORS.indexOf(c) >= 0 || c == '\r' || c == '\n') {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Decodes every inline {@code [N]} citation marker in {@code text} to its record index,
 	 * in first-appearance order. The shared decode step over {@link #INLINE_CITATION} for
 	 * citation extraction ({@code LlmInferenceService}), grounding
-	 * ({@code CitationGroundingVerifier}) and safety echo-scoping ({@code DrugSafetyValidator})
-	 * so those consumers cannot drift. (The clause-scoped splitter keeps its own matcher — it
-	 * needs each marker's text offset, which a set of indexes cannot carry.) Returns an empty
-	 * set for null/blank text.
+	 * ({@code CitationGroundingVerifier}), safety echo-scoping ({@code DrugSafetyValidator}) and —
+	 * since issue #338 — the check that asks whether a marker sits INSIDE a class-code parenthetical
+	 * ({@code ClassCodeFidelityCheck}) and — since issue #377 — the active-order citation check
+	 * ({@code ActiveOrderCitationFidelityCheck}), so those consumers cannot drift. A caller matches
+	 * {@link #INLINE_CITATION} directly only for what a set of indexes cannot carry — a marker's text
+	 * offset, or the text with markers removed — which is the two-reason split CLAUDE.md's own
+	 * inline-citation rule states. Returns an empty set for null/blank text.
 	 */
 	public static Set<Integer> citedIndexes(String text) {
 		Set<Integer> indexes = new java.util.LinkedHashSet<Integer>();
@@ -75,19 +177,38 @@ public class ChartSearchAiUtils {
 	 * Classifies a cited record's resource type into the group a client renders it under:
 	 * {@link ChartSearchAiConstants#REFERENCE_GROUP_CHART} for evidence retrieved from this
 	 * patient's chart, {@link ChartSearchAiConstants#REFERENCE_GROUP_REFERENCE} for
-	 * module-supplied reference prose. This is the single entry point for the DISPLAY-GROUPING
-	 * decision: code that labels or orders references for a client must ask here rather than
+	 * module-supplied reference prose. This is the single entry point for the PROVENANCE decision:
+	 * code that labels or orders references for a client must ask here rather than
 	 * compare {@code resourceType} itself, so the split stays in one place as further kinds of
-	 * injected record are added — three exist already, and they do not all fall on the same side
-	 * (see below). (Unrelated per-type behaviour keyed off
-	 * {@link ChartSearchAiConstants#RESOURCE_TYPE_DRUG_REFERENCE} is untouched by this — the
-	 * demote-only grounding gate in {@code CitationGroundingVerifier} is its own concern and
-	 * legitimately tests the type directly.)
+	 * injected record are added — several exist already, and they do not all fall on the same side
+	 * (see below).
+	 *
+	 * <p>Four behaviours now hang off this one classification, not just the display grouping. The
+	 * demote-only grounding carve-out in {@code CitationGroundingVerifier} is derived from it via
+	 * {@link #isGroundingDemoteOnly}. That gate used to test the {@code drug_reference} type directly,
+	 * so when {@code safety_finding} arrived (#110) it was classified here and NOT registered there,
+	 * and the module's own deterministic findings were graded as retrieved chart evidence — publishing
+	 * unstable {@code grounded} verdicts with no error anywhere (issue #122). Deriving both from one
+	 * classification is what makes that class of omission unrepresentable, and it is why editing this
+	 * method now also changes whether a type's citations can be verified. Those two are swept off one
+	 * enumeration in {@code ChartSearchAiReferenceGroupTest}. The third is the wire: since #201 a
+	 * reference-group citation publishes no verdict at all, so editing this method also changes what a
+	 * CLIENT can see — swept off its own enumeration in
+	 * {@code ChartSearchAiReferenceGroundingWithholdingTest}, in the omod module, because that is
+	 * where the serializer lives.
+	 *
+	 * <p>The fourth is prompt COST: {@link #referenceSlice} measures how much of an assembled chart is
+	 * reference material, which is the durable observable issue #229 asks for. It reads this
+	 * classification rather than a list of type names for the same reason the other three do — so a
+	 * further injected kind is measured automatically instead of being silently omitted — and the
+	 * fail-safe below means it UNDER-reports an unrecognised type rather than over-reporting it,
+	 * which is the safe direction for a number an operator reads as a floor on prompt spend.
 	 *
 	 * <p>The two groups are exhaustive because exactly two code paths mint a
 	 * {@code RecordMapping}: {@code PatientChartSerializer}, which passes through whatever
 	 * type querystore retrieved, and {@code DrugReferenceInjector}, which writes
-	 * {@code drug_reference}, {@code safety_finding} and {@code active_drug_order}. Not everything
+	 * {@code drug_reference}, {@code safety_finding}, {@code drug_class_note} and
+	 * {@code active_drug_order}. Not everything
 	 * injected is reference material: an {@code active_drug_order} record is the patient's own
 	 * active order, read from {@code OrderService} when the retrieved chart cannot substantiate it,
 	 * so it groups as chart evidence — which is also what the fallback below yields, deliberately
@@ -104,8 +225,289 @@ public class ChartSearchAiUtils {
 	public static String referenceGroup(String resourceType) {
 		return ChartSearchAiConstants.RESOURCE_TYPE_DRUG_REFERENCE.equals(resourceType)
 				|| ChartSearchAiConstants.RESOURCE_TYPE_SAFETY_FINDING.equals(resourceType)
+				|| ChartSearchAiConstants.RESOURCE_TYPE_DRUG_CLASS_NOTE.equals(resourceType)
+				|| ChartSearchAiConstants.RESOURCE_TYPE_INTERACTION_SCREEN_NOTE.equals(resourceType)
 						? ChartSearchAiConstants.REFERENCE_GROUP_REFERENCE
 						: ChartSearchAiConstants.REFERENCE_GROUP_CHART;
+	}
+
+	/**
+	 * Whether a cited record of {@code resourceType} is DEMOTE-ONLY for citation grounding: its
+	 * verdict may render {@code false} (an off-topic citation) or {@code null} (unverified), never
+	 * {@code true}, and it never enters — nor consumes the per-answer cap of — the Tier-2 entailment
+	 * pass. (The {@code false} survives except where such a citation also sits inside a compound claim
+	 * unit under entailment, where the stronger #302 rule withholds even that; nothing downstream sees
+	 * the difference, since #201 withholds every reference-group verdict at the wire.) True exactly for {@link ChartSearchAiConstants#REFERENCE_GROUP_REFERENCE} material: this
+	 * is a named view of {@link #referenceGroup}, not a second classification, so there is no list of
+	 * type names here to fall out of step with that one.
+	 *
+	 * <p><strong>This is the grading rule, not the wire — and since issue #284 it also decides one
+	 * CHART citation's published verdict.</strong> A chart citation whose claim rests on a record
+	 * this predicate calls reference material has its entailment NEGATIVE withheld, so what is
+	 * classified here is no longer the only citation affected by the classification. The rest of
+	 * this paragraph is about the classified citation's own verdict. Since issue #201 the REST layer
+	 * publishes no verdict at all for reference material — {@code grounded} serializes as
+	 * {@code null} for a {@code reference}-group citation whatever this pass concluded, at every
+	 * emission site (see {@code ChartSearchAiRestController.groundedForWire}). The surviving
+	 * {@code false} below is therefore module-internal: still computed, still returned on
+	 * {@code RecordReference.getGrounded()}, and no longer published — because its meaning is
+	 * "off-topic citation" and reading it as anything else renders the module's own deterministic
+	 * finding as unsupported. Note that the Tier-2 exclusion, the {@code TRUE}-to-{@code null}
+	 * demotion and the composite-claim withholding above are driven by THIS predicate rather than by
+	 * that verdict — but it is not the only thing that holds a verdict back:
+	 * {@code CitationGroundingVerifier} treats a COMPOUND claim unit (issue #302) — a fact about the
+	 * shape of the claim rather than the provenance of the record — more strictly still. That one
+	 * publishes nothing in either direction and skips Tier-1 as well as Tier-2, under entailment only,
+	 * where this predicate demotes in either mode and — except where the two overlap, and the stronger
+	 * rule wins — keeps its cosine FAIL. So the two are not the same treatment, and a citation can be
+	 * held back without this predicate being true of it: by that rule, by a citation the MODULE
+	 * attached rather than the model emitting it (issue #305), and by whatever else
+	 * {@code CitationGroundingVerifier.Disposition} names — that enum is canonical for the set and
+	 * for how much of a verdict each leaves.
+	 *
+	 * <p><strong>Why module-supplied material cannot be verified.</strong> An answer sentence citing
+	 * module-rendered reference prose is typically a recitation of it, and a recitation embeds
+	 * near-identically to its source whether or not it swaps subject roles ("erythromycin decreases X"
+	 * against the record's "ivosidenib decreases X … including erythromycin"). The same lexical
+	 * containment defeats the Tier-2 judge: measured on the live pipeline, 4/4 role-swapped
+	 * recitations were judged entailed while the one faithful recitation was judged not (issue #106).
+	 * A passing verdict is therefore false assurance. A FAILING verdict still carries information — it
+	 * says the citation is not about the record at all — so the flag is kept and only the pass is
+	 * withheld. Faithfulness of reference content is checked deterministically instead, by exact
+	 * comparisons that run after every answer — and {@code CitationGroundingVerifier}'s class javadoc
+	 * is where they are enumerated, along with the post-answer check that is NOT one of them because
+	 * it reads no reference content at all. Pointed at rather than copied here, so that this site
+	 * cannot fall behind the family again. NOT
+	 * by the {@code DrugSafetyValidator} chips, which this javadoc said until #337: they carry the
+	 * deterministic text but are an independent list nothing reconciles against the answer.
+	 *
+	 * <p><strong>It follows from provenance, not from being injected.</strong> An
+	 * {@link ChartSearchAiConstants#RESOURCE_TYPE_ACTIVE_DRUG_ORDER} record is injected yet groups as
+	 * chart evidence — one drug name asserted of this patient, carrying the real {@code Order} uuid,
+	 * with no subject roles to swap — so it is graded normally; demoting it would strip the
+	 * faithfulness check from the very record injected to stop the answer contradicting the safety
+	 * chips (#118). <b>"One drug name" is the ordinary shape and not every shape</b>: an order the
+	 * module can read no name for renders as its ATC codes alone, so that record asserts no drug and
+	 * the clause above does not hold of it. It stays graded regardless — issue #294 asked what that
+	 * costs before anything is changed, and ADR Decision 38's owed-measurement section is the answer,
+	 * including what a type-keyed carve-out here was measured to cost — which is NOT the
+	 * display-keyed, wire-sited remedy that issue proposes.
+	 *
+	 * <p>Conversely a {@link ChartSearchAiConstants#RESOURCE_TYPE_SAFETY_FINDING} is
+	 * patient-specific but module-derived, and its rendering ("&lt;Drug&gt; interacts with active order
+	 * &lt;Partner&gt; — Major. &lt;mechanism&gt;") is precisely the role-swappable prose above, which is why
+	 * grading it produced verdicts that tracked embedding noise rather than the finding (issue #122).
+	 *
+	 * <p><strong>The unrecognised-type fallback grades normally</strong>, following
+	 * {@link #referenceGroup}'s fail-safe, and that is deliberate in this direction too: querystore
+	 * passes through chart types this module declares no constant for ({@code visit},
+	 * {@code encounter} …), so demoting unknown types would silently stop verifying
+	 * most real chart citations. The cost is that a module-supplied type introduced as a bare string
+	 * literal — rather than as a {@code RESOURCE_TYPE_*} constant, which
+	 * {@code ChartSearchAiReferenceGroupTest}'s sweep would catch — would be graded as chart evidence;
+	 * {@code DrugReferenceInjector}'s class javadoc warns against exactly that.
+	 *
+	 * @param resourceType the cited record's resource type, may be null
+	 * @return true when a grounding pass may at most demote this record's citation
+	 */
+	public static boolean isGroundingDemoteOnly(String resourceType) {
+		return isReferenceMaterial(resourceType);
+	}
+
+	/**
+	 * The one spelling of "this type is module-supplied reference material", which both
+	 * {@link #isGroundingDemoteOnly} and {@link #referenceSlice} delegate to. Private because it is
+	 * not a third classification: {@link #referenceGroup} decides, and this is the boolean reading of
+	 * its answer. It exists so the comparison is written once — the same argument
+	 * {@code isGroundingDemoteOnly}'s javadoc makes for having no type list of its own, applied one
+	 * level down now that a second view needs the same question.
+	 *
+	 * <p>The size metric deliberately does NOT go through {@code isGroundingDemoteOnly}. That method
+	 * names a GRADING rule, and a caller measuring prompt cost has no business depending on what
+	 * grounding does; were the two ever to diverge, the one that must move is the grading rule.
+	 */
+	private static boolean isReferenceMaterial(String resourceType) {
+		return ChartSearchAiConstants.REFERENCE_GROUP_REFERENCE.equals(referenceGroup(resourceType));
+	}
+
+	/**
+	 * Whether a cited chart record's resource type can describe a medication the patient was
+	 * PRESCRIBED or GIVEN at all — the admissibility half of
+	 * {@code ActiveOrderCitationFidelityCheck} (issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/377">#377</a>), which
+	 * asks it of the chart citation an answer offers as evidence of an active drug order. A
+	 * condition, a visit and an encounter answer false, and those were the three the reported answer
+	 * cited.
+	 *
+	 * <p><b>An ALLOW-LIST, so a type nobody here declared answers false.</b> That direction is
+	 * forced: the two types the ticket's own measurement caught — querystore's {@code visit} and
+	 * {@code encounter} — are contract strings this module never declares, so a deny-list could not
+	 * have named them. What it costs is stated rather than implied: a deployment whose retrieval
+	 * types prescriptions as something outside this list would have every active-order sentence
+	 * reported. The WARN carries the type for exactly that reason, so one log line diagnoses it.
+	 *
+	 * <p><b>Three members, and the third is not an order.</b>
+	 * {@link ChartSearchAiConstants#RESOURCE_TYPE_DRUG_ORDER} is querystore's prescription contract —
+	 * the ticket's own table measured the patient's real orders arriving under it.
+	 * {@link ChartSearchAiConstants#RESOURCE_TYPE_ACTIVE_DRUG_ORDER} is this module's own record for
+	 * an active order the retrieved chart is missing (issue #118); it groups as chart evidence and
+	 * carries the real {@code Order} uuid, so it is the authoritative read of one.
+	 * {@link ChartSearchAiConstants#RESOURCE_TYPE_MEDICATION_DISPENSE} is admitted deliberately
+	 * although a dispensing event is not an order: it is a record of this patient being given the
+	 * drug, and reporting a clinician-legible citation of one would be the check crying wolf. What
+	 * that gives up is naming a dispense cited for an ORDER claim.
+	 *
+	 * <p><b>{@link ChartSearchAiConstants#RESOURCE_TYPE_ORDER} is deliberately OUT</b>, because the
+	 * same type covers {@code "Test order:"} and {@code "Referral order:"} — admitting it would admit
+	 * a lab order as evidence of a medication one. And this is not
+	 * {@code QueryScopeRouter.typedSlice}'s MEDICATIONS slice: that is a RETRIEVAL scope and cannot
+	 * carry {@code active_drug_order}, a type retrieval never returns. &rarr; ADR Decision 76,
+	 * canonical for both arguments and for what admitting the dispense type gives up.
+	 *
+	 * @param resourceType the cited record's resource type, may be null
+	 * @return true when a record of this type could be a medication order or dispensing of one
+	 */
+	public static boolean mayDescribeAMedicationOrder(String resourceType) {
+		return ChartSearchAiConstants.RESOURCE_TYPE_DRUG_ORDER.equals(resourceType)
+				|| ChartSearchAiConstants.RESOURCE_TYPE_ACTIVE_DRUG_ORDER.equals(resourceType)
+				|| ChartSearchAiConstants.RESOURCE_TYPE_MEDICATION_DISPENSE.equals(resourceType);
+	}
+
+	/**
+	 * How much of an assembled chart is module-supplied reference material — the record count and the
+	 * character total, together, because they answer different halves of one question and either
+	 * alone is misleading (issue #229).
+	 *
+	 * <p><b>Why this exists.</b> Nothing bounds how many {@code drug_reference} and
+	 * {@code safety_finding} records {@code DrugReferenceInjector} appends;
+	 * {@code MAX_INTERACTION_RENDER_CHARS} is a per-RECORD budget, so N records cost N times it, and
+	 * the only signal that any of it happened was one DEBUG line. On OpenMRS the {@code log.level}
+	 * global property is not applied at startup, so that line is not reachable by configuration
+	 * alone — the prompt slice a clinician's answer was built from could not be measured after the
+	 * fact at all. This is the derivation the durable channel reads:
+	 * {@code ChartAnswer.getReferenceSlice()} carries it to the audit row.
+	 *
+	 * <p><b>What it counts, stated so the number is not read as more than it is.</b> It counts every
+	 * mapping the chart carries whose type {@link #referenceGroup} calls reference material — not
+	 * "everything the injector added", which is a different and wrong set: an
+	 * {@link ChartSearchAiConstants#RESOURCE_TYPE_ACTIVE_DRUG_ORDER} record is injected and is the
+	 * patient's own prescription, so it groups as chart evidence and is outside this number. Nor is
+	 * it a claim about who MINTED the record: {@code PatientChartSerializer} passes through whatever
+	 * type querystore retrieved, so a reference-group type arriving that way would be counted here —
+	 * which is the honest reading for a prompt-cost figure, since the cost is the same whoever wrote
+	 * the line.
+	 *
+	 * <p>Characters are the rendered record text, which is what the model reads and what crowds out
+	 * chart records, and it excludes the {@code "[N] "} citation prefix and the newline the chart's own
+	 * assembly adds. Scope the reading of that to the injector's records, which is where every
+	 * reference-group record comes from today: there the mapping text and the chart line are
+	 * byte-identical by construction, so the total is a floor on the bytes spent. It is not a general
+	 * property of a {@code RecordMapping} — {@code PatientChartSerializer} carries an inline date and
+	 * group label on the mapping that the chart line run-length-dedups away — so were a reference-group
+	 * type ever to arrive through querystore, its characters could exceed what the prompt spent on it.
+	 *
+	 * @param mappings the assembled chart's mappings, may be null
+	 * @return the slice, never null; zero/zero when nothing reference-group is present, which is a
+	 *         real measurement and not the same as "nothing was measured"
+	 */
+	public static ReferenceSlice referenceSlice(List<RecordMapping> mappings) {
+		int records = 0;
+		int characters = 0;
+		if (mappings != null) {
+			for (RecordMapping mapping : mappings) {
+				if (mapping != null && isReferenceMaterial(mapping.getResourceType())) {
+					records++;
+					if (mapping.getText() != null) {
+						characters += mapping.getText().length();
+					}
+				}
+			}
+		}
+		return new ReferenceSlice(records, characters);
+	}
+
+	/**
+	 * How much reference material one assembled chart carried: a record count and a character total,
+	 * held together because a count alone does not say what the slice cost and a character total
+	 * alone does not say how many citations the model was offered.
+	 *
+	 * <p>One type rather than two ints so the pair cannot come apart in transit — it travels from the
+	 * chart, through {@code ChartAnswer}, to two audit columns, and a caller cannot supply one half
+	 * of it.
+	 */
+	public static final class ReferenceSlice {
+
+		private final int records;
+
+		private final int characters;
+
+		public ReferenceSlice(int records, int characters) {
+			this.records = records;
+			this.characters = characters;
+		}
+
+		/** How many reference-group records the chart carried. */
+		public int getRecords() {
+			return records;
+		}
+
+		/** How many characters of rendered reference-record text the chart carried. */
+		public int getCharacters() {
+			return characters;
+		}
+
+		@Override
+		public String toString() {
+			return records + " record(s), " + characters + " chars";
+		}
+	}
+
+	/**
+	 * The drug CLASS one assembled chart reports as named-but-unresolved, or {@code null} where it
+	 * reports none — the wire-facing half of issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/354">#354</a>, carried
+	 * to the response as {@code ChartAnswer.getUnresolvedDrugClass()}.
+	 *
+	 * <p><b>Why the chart is asked rather than the question.</b> The statement and the injected
+	 * {@link ChartSearchAiConstants#RESOURCE_TYPE_DRUG_CLASS_NOTE} record must never disagree, and a
+	 * consumer that re-asked {@code DrugReferenceService.namedDrugClass} would be a second resolution
+	 * of one question — the shape issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/151">#151</a> records as
+	 * having let two layers disagree about the patient's own orders, silently and in one direction.
+	 * That accessor is also not enough on its own: the note is raised only where the question resolved
+	 * NO substance, and only where question-driven injection is enabled at all, neither of which it
+	 * asks. Reading the injector's own output makes the wire statement true exactly when the prompt
+	 * carries the note, by construction rather than by agreement.
+	 *
+	 * <p><b>It names the ONE type deliberately, and that is not the hardcode
+	 * {@link #referenceGroup} forbids.</b> That rule is about GROUPING questions — asking whether a
+	 * citation is reference material by naming a type is how {@code safety_finding} was graded as
+	 * chart evidence (issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/122">#122</a>). This
+	 * asks which record states a class, and exactly one type does; a fourth reference-group type
+	 * added later states nothing about a class and must not be picked up here.
+	 *
+	 * <p>The value is the note's {@code resourceUuid}, which for this type is the class name and not
+	 * a row — see {@code DrugReferenceInjector.injectRecords}, which is the sole writer of it, and the
+	 * {@code README} section that tells a client the same thing. The FIRST such record wins; the
+	 * injector appends at most one, so nothing here picks between two.
+	 *
+	 * @param mappings the assembled chart's mappings, may be null
+	 * @return the class name, or null where the chart carries no class note — which covers a question
+	 *         naming no class, a question that resolved a substance, and the drug-reference feature
+	 *         being off, and deliberately does not distinguish them: what a client renders is the
+	 *         positive statement, and there is no negative one to make
+	 */
+	public static String unresolvedDrugClass(List<RecordMapping> mappings) {
+		if (mappings != null) {
+			for (RecordMapping mapping : mappings) {
+				if (mapping != null && ChartSearchAiConstants.RESOURCE_TYPE_DRUG_CLASS_NOTE
+						.equals(mapping.getResourceType())) {
+					return mapping.getResourceUuid();
+				}
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -119,6 +521,119 @@ public class ChartSearchAiUtils {
 	 */
 	public static String resourceKey(String resourceType, String resourceUuid) {
 		return resourceType + ":" + resourceUuid;
+	}
+
+	/**
+	 * The distinct reference drugs one assembled chart's injected {@code safety_finding} records
+	 * name — the subjects of its findings, as {@code SafetyWarning.getDrug()} spelled them. Issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/397">#397</a>.
+	 *
+	 * <p><b>Production asks it for the SIZE</b>, because a prompt clause about "the drug" needs the
+	 * chart's findings to name exactly one — see
+	 * {@code LlmInferenceService.severalFindingsAboutOneDrug}.
+	 *
+	 * <p><b>It sits beside {@link #resourceKey} because it is that method's inverse over one half of
+	 * the composite, and the two must not drift.</b> A finding's {@code resourceUuid} is
+	 * {@code resourceKey(type, drug)} — written in exactly one place,
+	 * {@code DrugReferenceInjector.injectRecords}, which is also {@code resourceKey}'s only
+	 * production caller — so the drug is everything after the first {@code :}. Split it here and
+	 * never at a call site: the finding's TYPE varies over one subject (an interaction and an
+	 * allergy contraindication about one drug are two keys), so a caller comparing whole keys would
+	 * read one drug as two, and one comparing type prefixes would read two drugs as one. That
+	 * arrangement ships — a recorded allergy beside an interacting active order, both about the drug
+	 * the question names — and constructing it needs a context carrying recorded allergies AND
+	 * active drugs, so every arrangement without both leaves this split a no-op:
+	 * {@code FindingEnumerationClauseContextTest.aChartWhoseFindingsMixTypesAboutOneDrugAsksForOneLinePerFinding}
+	 * is the one that reddens on {@code subjects.add(key)}.
+	 *
+	 * <p><b>What the answer is NOT.</b> {@code SafetyWarning.getDrug()}'s own javadoc says it is
+	 * neither a per-finding identity nor a stable substance name to group on, and this does not
+	 * pretend otherwise: two spellings of one substance count as two subjects here. The direction
+	 * that costs is therefore the safe one — a chart whose findings really are about one drug under
+	 * two labels reads as several, and the caller withholds a prompt sentence rather than sending an
+	 * unfounded one.
+	 *
+	 * <p><b>It selects the population through {@link #safetyFindingMappings} and never by walking
+	 * the list itself</b>, which is where the null tolerance and the injection-order contract live:
+	 * the other questions asked of that population — its own SIZE, at this method's own call site,
+	 * and {@code SafetyFindingCitationExtentCheck}'s citation indexes — read the same walk, and none
+	 * of them may disagree about which records are findings.
+	 *
+	 * @param mappings the assembled chart's mappings; null answers empty, per the shared walk
+	 * @return the distinct subject labels, in the shared walk's injection order — which that walk's
+	 *         own pin holds; empty where the chart carries no finding. No consumer reads this order,
+	 *         only {@code size()}, so the {@code LinkedHashSet} here contributes nothing any case
+	 *         can observe and is said so rather than left to look defended
+	 */
+	public static Set<String> findingSubjects(List<RecordMapping> mappings) {
+		Set<String> subjects = new LinkedHashSet<String>();
+		for (RecordMapping mapping : safetyFindingMappings(mappings)) {
+			String key = mapping.getResourceUuid();
+			// Both fallbacks are unreachable given resourceKey's contract — it never returns null
+			// and always writes the separator — and are here so that a key some future writer
+			// builds differently reads as its own subject rather than as somebody else's.
+			// Defensive only: do not build a rule on either.
+			int separator = key == null ? -1 : key.indexOf(':');
+			subjects.add(separator < 0 ? key : key.substring(separator + 1));
+		}
+		return subjects;
+	}
+
+	/**
+	 * The injected {@code safety_finding} records one assembled chart carries, in injection order —
+	 * the ONE selection of that population, and the walk both questions asked of it project off.
+	 * Issue <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/397">#397</a>.
+	 *
+	 * <p><b>Both halves of that sentence are observed, and neither was when it was first written.</b>
+	 * The ORDER is pinned by
+	 * {@code FindingEnumerationClauseContextTest.theSharedWalkHandsTheFindingsBackInTheOrderTheInjectorWroteThem},
+	 * over a chart the real injector gave several findings: re-collecting this list in reverse used
+	 * to leave the whole build green while
+	 * {@code SafetyFindingCitationExtentCheck.measureFindingCitations}' WARN promised prompt order.
+	 * The ONE-selection half is pinned by
+	 * {@code ArchitectureGuardTest.theFindingPopulationIsSelectedInOneMethod}, a source scan
+	 * over {@code api/src/main} whose javadoc is canonical for the shapes it catches and the ones it
+	 * does not — do not read it as catching every respelling.
+	 *
+	 * <p><b>Why it is one method.</b> Three questions are asked of this population in one request, at
+	 * two different moments. Before the answer: its SIZE, because the #397 clause needs more than one
+	 * finding, and {@link #findingSubjects}, because that clause is about "the drug" and needs the
+	 * findings to name exactly one — {@code LlmInferenceService.severalFindingsAboutOneDrug} is both.
+	 * After it: the citation INDEXES, to count what the prompt carried against what the answer cited,
+	 * which is {@code SafetyFindingCitationExtentCheck}'s projection and is also published there as
+	 * {@code carriedFindingIndexes}.
+	 * Only the projection differs. Spelled twice, a filter added to one would drift from the other
+	 * silently, so that the prompt asks for an enumeration of a population {@code findingCitations}
+	 * then counts differently — which is the state this method was extracted out of, the two
+	 * spellings having been character-for-character identical in two classes.
+	 *
+	 * <p>A {@code List} rather than a Set, so the projection decides its own collapse: the index set
+	 * is unique by construction (the injector's own sequential numbering) while two findings about
+	 * one drug are two records and one subject, and a Set here would have to pick one of those.
+	 *
+	 * <p>Null-tolerant in two DIMENSIONS: a null list answers empty, and a null mapping inside a
+	 * non-null list is skipped. {@link #referenceSlice} and {@link #unresolvedDrugClass} are of the
+	 * same list and tolerate it the same way — this runs on the prompt-assembly path as well, which
+	 * has no catch of its own. Deliberately UNPINNED, and said so rather than left to look defended:
+	 * no production path produces either shape, {@code PatientChartSerializer} never emitting a null
+	 * mapping, so a case forcing one would be a hand-crafted input rather than an arrangement of the
+	 * pipeline.
+	 *
+	 * @param mappings the assembled chart's mappings, may be null
+	 * @return the finding records, in the order the chart carries them; empty where it carries none
+	 */
+	public static List<RecordMapping> safetyFindingMappings(List<RecordMapping> mappings) {
+		List<RecordMapping> findings = new ArrayList<RecordMapping>();
+		if (mappings == null) {
+			return findings;
+		}
+		for (RecordMapping mapping : mappings) {
+			if (mapping != null && ChartSearchAiConstants.RESOURCE_TYPE_SAFETY_FINDING
+					.equals(mapping.getResourceType())) {
+				findings.add(mapping);
+			}
+		}
+		return findings;
 	}
 
 	/**
@@ -567,6 +1082,64 @@ public class ChartSearchAiUtils {
 	 *          predicate shared by the drug-reference parse boundaries and renderers. */
 	public static boolean isBlank(String value) {
 		return value == null || value.trim().isEmpty();
+	}
+
+	/**
+	 * @return whether {@code text} states {@code word} as a WORD rather than merely containing its
+	 *         letters — case-insensitively, with no letter or digit against either end of it.
+	 *
+	 *         <p>Issue <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/337">
+	 *         #337</a>'s third round, and it is shared rather than local because its callers must
+	 *         agree or the check between them is unsound: {@code DrugReferenceInjector} asks it
+	 *         whether an injected finding's RECORD states the finding's rating, and
+	 *         {@code SafetyFindingSeverityFidelityCheck} asks it whether the ANSWER does. Were those
+	 *         two rules to differ, a rating the record states one way and the answer states the other
+	 *         would be reported as dropped, or a rating neither states would be asked for.
+	 *
+	 *         <p><b>Deliberately not {@code DrugReference}'s bounded-token family, and not a member
+	 *         of it — but not because the rules differ.</b> At {@code PROSE_TRAILING_LETTERS}
+	 *         (zero) that family's {@code containsWord} reduces to this same condition, and a review
+	 *         pass drove both over 175 pairs to confirm it: they agree on every one but an accented
+	 *         needle. So the reason is NOT that this question "has no allowance to choose", which an
+	 *         earlier draft of this javadoc said in four places and which is false of
+	 *         {@code containsWord} too. Two reasons hold. That family FOLDS DIACRITICS and this
+	 *         deliberately does not — a rating is the module's own closed vocabulary, so an accented
+	 *         spelling of it is not a thing to accommodate, while folding one silently would widen
+	 *         what an answer may say. And {@code containsWord} is package-private in the drug-safety
+	 *         package, so reaching it from {@code api.impl} means widening the drug-name matcher out
+	 *         of the package whose instructions bind it (#260). It is a boundary rule beside that
+	 *         family rather than inside it — {@code DrugReference.boundedTokenIndex}'s javadoc
+	 *         enumerates the routes that share ITS scan, and this is not one of them.
+	 *
+	 *         <p>The boundary admits every way a rating has been observed to be written — a colon
+	 *         after it, parentheses or markdown emphasis around it, a hyphen before {@code -rated} —
+	 *         and refuses only a longer word it sits inside, {@code majority} being the one that
+	 *         matters, since it is ordinary in clinical prose.
+	 *
+	 *         <p>A null or blank {@code word} answers false rather than matching everything: an empty
+	 *         needle would otherwise match at the first position with non-alphanumeric neighbours —
+	 *         any {@code ". "} — and a check silenced by a blank is a check that fails open. <b>The
+	 *         blank half of that guard is UNPINNED</b>: weakening it to a null test leaves the suite
+	 *         green, because no production caller can reach here with a blank
+	 *         ({@code statableRating} answers a trimmed non-blank or null). It is contract for a
+	 *         public method rather than a reachable path, and said so rather than left looking
+	 *         better defended than it is.
+	 */
+	public static boolean statesWord(String text, String word) {
+		if (text == null || isBlank(word)) {
+			return false;
+		}
+		String haystack = text.toLowerCase(Locale.ROOT);
+		String needle = word.toLowerCase(Locale.ROOT);
+		for (int at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1)) {
+			int after = at + needle.length();
+			if ((at == 0 || !Character.isLetterOrDigit(haystack.charAt(at - 1)))
+					&& (after >= haystack.length()
+							|| !Character.isLetterOrDigit(haystack.charAt(after)))) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** @return the first non-blank of {@code values} (as given, untrimmed), or null when none —

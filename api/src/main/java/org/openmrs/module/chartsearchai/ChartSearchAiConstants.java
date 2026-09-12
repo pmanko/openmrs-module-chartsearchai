@@ -67,7 +67,7 @@ public class ChartSearchAiConstants {
 	 *       meanF1 (0.748 vs 0.668), abstention (0.86 vs 0.74), and off-topic drift (181 vs 477) — the
 	 *       focused slice keeps the small model from drowning in a whole chart's worth of noise.</li>
 	 *   <li>{@link #CHART_MODE_FULL_CHART} — the patient's whole chart is serialized into every prompt.
-	 *       The chart bytes are a function of the patient only, so llama-server's KV prefix cache (plus
+	 *       The chart bytes do not vary with the question, so llama-server's KV prefix cache (plus
 	 *       warmup/prewarm/disk persistence) amortizes the multi-thousand-token prefill across queries;
 	 *       this makes repeat/varied questions on an already-warmed patient fast, at the cost of a heavy
 	 *       first-ever query (tens of seconds to minutes on a GPU-less host). Prefer this only where a
@@ -89,6 +89,46 @@ public class ChartSearchAiConstants {
 	 * absent or unreadable GP takes this default.
 	 */
 	public static final String CHART_MODE_DEFAULT = CHART_MODE_QUERY_SCOPED;
+
+	/**
+	 * A full chart carrying the similarity focus hint {@code chartsearchai.embedding.preFilter}
+	 * turns on — and the anchor for the whole {@code SEARCH_MODE_*} family, documented here because
+	 * the family has no {@code GP_} declaration of its own to hang from the way {@code CHART_MODE_*}
+	 * hangs from {@link #GP_CHART_MODE}.
+	 *
+	 * <p>The vocabulary of the audit log's {@code search_mode} column — how the prompt's chart context
+	 * was assembled for the query that row records. Resolved once per request by
+	 * {@code ChartBuildingStrategy.searchModeLabel} and carried on the answer; the REST layer writes
+	 * it and derives nothing, because deriving it there is what issue #178 was: both audit-write
+	 * sites branched on the preFilter GP alone, so {@link #CHART_MODE_QUERY_SCOPED} — the shipped
+	 * {@link #CHART_MODE_DEFAULT default} — could not appear in the column at all, and every row on a
+	 * default install claimed {@link #SEARCH_MODE_FULL_CHART} while the prompt carried a slice.
+	 *
+	 * <p>{@link #SEARCH_MODE_PRE_FILTER} and {@link #SEARCH_MODE_FULL_CHART} keep the exact spellings
+	 * they have written since the column existed: these rows are read outside this module, so #178
+	 * ADDS a third value rather than re-spelling two. {@link #SEARCH_MODE_QUERY_SCOPED} is defined AS
+	 * the GP value, so the row names the mode with the same token an operator sets. Note the
+	 * {@code [timing] querystoreBuild} log lines spell the same two dispatch shapes
+	 * {@code preFilter}/{@code fullChart} — a separate ops contract, deliberately not unified here.
+	 */
+	public static final String SEARCH_MODE_PRE_FILTER = "pre-filter";
+
+	/** A full chart with no focus hint. See {@link #SEARCH_MODE_PRE_FILTER} for the family. */
+	public static final String SEARCH_MODE_FULL_CHART = "full-chart";
+
+	/** A query-scoped slice — the same token {@link #GP_CHART_MODE} takes, by construction.
+	 *  See {@link #SEARCH_MODE_PRE_FILTER} for the family. */
+	public static final String SEARCH_MODE_QUERY_SCOPED = CHART_MODE_QUERY_SCOPED;
+
+	/**
+	 * Written when an answer states no mode. The column is {@code not-null}, so something must be
+	 * written; it is deliberately none of the three real modes, because a row that silently claims a
+	 * mode nobody resolved is the defect #178 fixed rather than a tidier version of it. Unreachable
+	 * from the in-tree pipeline, which labels every answer it builds — it exists for an alternative
+	 * {@code ChartSearchService}, and mirrors {@code QueryStoreChartBuilder.MODE_UNKNOWN}, which
+	 * buckets the dispatch it cannot honestly label the same way.
+	 */
+	public static final String SEARCH_MODE_UNKNOWN = "unknown";
 
 	public static final String GP_AUDIT_LOG_RETENTION_DAYS = "chartsearchai.auditLogRetentionDays";
 
@@ -253,13 +293,18 @@ public class ChartSearchAiConstants {
 	public static final int DEFAULT_PROGRESSIVE_REASONING_TOP_K = 15;
 
 	/**
-	 * When {@code true}, every cited record is checked for grounding after the
-	 * LLM answers: the record's text must be semantically close enough to the
-	 * answer sentence(s) that cite it, otherwise the citation is flagged as
-	 * unverified. Index validation alone (does {@code [N]} map to a real
+	 * When {@code true}, cited records are checked for grounding after the LLM
+	 * answers: the record's text must be semantically close enough to the
+	 * answer sentence(s) that cite it, otherwise that citation is published as
+	 * unsupported. Index validation alone (does {@code [N]} map to a real
 	 * retrieved record?) cannot catch the dangerous case of a real record cited
-	 * for a claim it does not actually support. Default {@code false} so the
-	 * feature is opt-in. See {@code CitationGroundingVerifier}.
+	 * for a claim it does not actually support. Which citations carry a verdict
+	 * is narrower than which are cited, and a {@code null} is not a failed
+	 * check: the reasons are enumerated once, in ADR Decision 11's
+	 * {@code grounded} paragraph, and {@code CitationGroundingVerifier.Disposition}
+	 * is canonical for how much of a verdict each citation may be given.
+	 * Default {@code false} so the feature is opt-in. See
+	 * {@code CitationGroundingVerifier}.
 	 */
 	public static final String GP_GROUNDING_ENABLED = "chartsearchai.grounding.enabled";
 
@@ -299,10 +344,16 @@ public class ChartSearchAiConstants {
 	 * sentence citing it. This is what catches high-overlap-but-false citations
 	 * ("patient has X [5]" where record 5 says a relative had X, or the record
 	 * negates X) that cosine similarity cannot separate. An answer's citations
-	 * are verified in one batched LLM call (capped per answer; clause-scoped
-	 * compound-sentence citations get single-pair calls), and the Tier-1 cosine
+	 * are verified in one batched LLM call (capped per answer; the citations of one
+	 * sentence whose claim statements overlap get single-pair calls — a clause-scoped
+	 * compound, or an enumerating sentence in either mode), and the Tier-1 cosine
 	 * verdict is computed lazily only where Tier-2 yields none, so the marginal
-	 * cost is one LLM round-trip per answer. Still a separate opt-in from the
+	 * cost is one LLM round-trip per answer. Some citations are never put to
+	 * the judge at all: module-supplied reference material (issue #106/#122); a
+	 * COMPOUND claim unit, a statement attaching its citations to different pieces of
+	 * itself (issue #302); and a citation the MODULE attached rather than the model
+	 * emitting it (issue #305). {@code CitationGroundingVerifier.Disposition} is
+	 * canonical for that set and for how much each is held back. Still a separate opt-in from the
 	 * cheap Tier-1 pass. Default {@code false}. See {@code CitationGroundingVerifier}.
 	 */
 	public static final String GP_GROUNDING_ENTAILMENT_ENABLED = "chartsearchai.grounding.entailment.enabled";
@@ -321,11 +372,19 @@ public class ChartSearchAiConstants {
 	public static final boolean DEFAULT_GROUNDING_CLAUSE_SCOPED = false;
 
 	/**
-	 * Upper bound on the number of citations Tier-2 entailment verifies per answer (i.e. the batch
-	 * size), so a heavily-cited answer cannot make the single batched entailment prompt grow without
-	 * bound. References beyond this many keep their Tier-1 verdict; the verifier logs once when the
-	 * cap is hit (no silent truncation). Tier-2 issues one batched LLM call per answer regardless of
-	 * how many citations it carries.
+	 * Upper bound on the number of citations Tier-2 entailment verifies per answer, so a heavily-cited
+	 * answer cannot make the entailment prompt grow without bound. References beyond this many keep
+	 * their Tier-1 verdict; the verifier logs once when the cap is hit (no silent truncation).
+	 *
+	 * <p>It bounds PAIRS, not calls, and is deliberately no longer described as "the batch size".
+	 * Citations whose claim statements overlap are verified one pair per call rather than co-batched,
+	 * because batched entailment is not per-pair independent — the fragments of a clause-scoped
+	 * compound sentence, and of an ENUMERATING sentence in either mode (#278). An answer can therefore
+	 * cost up to this many LLM round-trips rather than one, which is why the number is also a latency
+	 * ceiling and not only a prompt-size one; {@code CitationGroundingVerifier.splitEnumeration}
+	 * records the measured per-call cost. The previous wording ("Tier-2 issues one batched LLM call per
+	 * answer regardless of how many citations it carries") was already inaccurate for clause-scoped
+	 * grounding before #278 made it inaccurate by default.
 	 */
 	public static final int GROUNDING_ENTAILMENT_MAX_CHECKS = 16;
 
@@ -358,11 +417,42 @@ public class ChartSearchAiConstants {
 	 *  When absent, the dataset bundled on the module classpath is used. */
 	public static final String GP_DRUG_REFERENCE_DATA_FILE_PATH = "chartsearchai.drugReference.dataFilePath";
 
-	/** Selects the drug-reference data adapter: {@code json} (the curated default) or {@code atc}
-	 *  (consume a WHO ATC classification export by pointing dataFilePath at it). See ADR Decision 24. */
+	/**
+	 * The value {@code config.xml} declares as this global property's default — a path inside the
+	 * application data directory that the module never creates, so an install that has configured
+	 * nothing falls back to the bundled dataset. Held as a constant because that is the difference
+	 * between an untouched default (fine, and silent) and an operator naming a file that was then not
+	 * read (issue #156, which is loud): see {@code DrugReferenceValidity}. Pinned against
+	 * {@code config.xml} by {@code GlobalPropertyDefaultsTest} — a drift here would silently make every
+	 * install loud or every misconfiguration silent.
+	 *
+	 * <p>It is the upstream release's OWN filename, and that is what makes a knowledge-base refresh a
+	 * file copy rather than a configuration change: dropping a newer {@code ddi_knowledge_base.json}
+	 * from the openmrs-ddi-knowledge-base project into {@code <appdata>/chartsearchai/} is enough for it
+	 * to be read in place of the bundled one, with no global property to edit and so no chance of the
+	 * path and the format disagreeing. Do not rename it to match the bundled resource
+	 * ({@code ddi-knowledge-base.json}): the two names are deliberately different, one naming what an
+	 * operator downloads and the other what the module ships.
+	 */
+	public static final String DEFAULT_DRUG_REFERENCE_DATA_FILE_PATH = "chartsearchai/ddi_knowledge_base.json";
+
+	/** Selects the drug-reference data adapter: {@code ddinter} (the default — the bundled DDInter
+	 *  knowledge base), {@code json} (the curated seed) or {@code atc} (consume a WHO ATC
+	 *  classification export by pointing dataFilePath at it). See ADR Decision 24. */
 	public static final String GP_DRUG_REFERENCE_SOURCE_FORMAT = "chartsearchai.drugReference.sourceFormat";
 
-	public static final String DEFAULT_DRUG_REFERENCE_SOURCE_FORMAT = "json";
+	/**
+	 * Value of {@link #GP_DRUG_REFERENCE_SOURCE_FORMAT} that selects the curated source — the NAME of a
+	 * format, which is a different fact from {@link #DEFAULT_DRUG_REFERENCE_SOURCE_FORMAT}'s "and it is
+	 * the one in force when nobody chose". They were one constant, and the two uses only looked alike
+	 * while the default happened to be {@code json}: anything naming the curated format through the
+	 * default would start naming whatever the default became. <b>That has now happened</b> — the default
+	 * is {@link #DRUG_REFERENCE_SOURCE_DDINTER} — so this is no longer a precaution: every remaining use
+	 * of the default constant means "whatever is in force when nobody chose", and every site meaning the
+	 * curated parser names it here. Its sibling formats each have their own name constant; this is the
+	 * one that was missing.
+	 */
+	public static final String DRUG_REFERENCE_SOURCE_JSON = "json";
 
 	/** Value of {@link #GP_DRUG_REFERENCE_SOURCE_FORMAT} that selects the ATC classification source. */
 	public static final String DRUG_REFERENCE_SOURCE_ATC = "atc";
@@ -372,13 +462,41 @@ public class ChartSearchAiConstants {
 	 *  cross-walked to CIEL). See ADR Decision 24 and the openmrs-ddi-knowledge-base data project. */
 	public static final String DRUG_REFERENCE_SOURCE_DDINTER = "ddinter";
 
+	/**
+	 * The format in force when nobody chose, which since ADR Decision 36 is the DDInter knowledge base
+	 * the module bundles: an install that switches {@link #GP_DRUG_REFERENCE_ENABLED} on and configures
+	 * nothing else gets 2283 substances and ~295k severity-rated interaction pairs rather than the
+	 * four-drug curated seed. What it does NOT get is dosing or hand-authored allergy/condition rules —
+	 * DDInter publishes neither, so {@link #GP_DRUG_SAFETY_WARN_ON_DOSE_EXCESS} has nothing it can fire
+	 * on under this default and an install needing dose ceilings selects
+	 * {@link #DRUG_REFERENCE_SOURCE_JSON} (or points {@link #GP_DRUG_REFERENCE_DATA_FILE_PATH} at a
+	 * dataset that carries them). Pinned, with the bound, by {@code ShippedDrugReferenceDefaultTest}.
+	 *
+	 * <p><b>An unrecognised value is not this.</b> A typo falls back to {@link #DRUG_REFERENCE_SOURCE_JSON}
+	 * — see {@code DrugReferenceService.effectiveFormat}, whose fall-through has to name the parser
+	 * {@code sourceFor} falls through to — so it is NOT the same thing as leaving the property unset, and
+	 * an install that mistypes {@code ddinter} gets the curated parser applied to whatever
+	 * {@code dataFilePath} names. That divergence is reported in both channels
+	 * ({@code DrugReferenceValidity.configuredSourceFormatNotUsed}), which is the only reason it is safe
+	 * to differ from the default at all.
+	 */
+	public static final String DEFAULT_DRUG_REFERENCE_SOURCE_FORMAT = DRUG_REFERENCE_SOURCE_DDINTER;
+
 	/** Path (relative to the OpenMRS application data directory) to the curated cross-reactivity
-	 *  groups dataset, loaded alongside EITHER source format. When absent, the groups bundled on
+	 *  groups dataset, loaded alongside ANY source format. When absent, the groups bundled on
 	 *  the module classpath are used. Closes the ADR Decision 24 cross-branch boundary as data. */
 	public static final String GP_DRUG_REFERENCE_CROSS_REACTIVITY_FILE_PATH =
 			"chartsearchai.drugReference.crossReactivityGroupsFilePath";
 
-	/** Patient-driven injection: inject reference entries that match an active order's ATC code. */
+	/** As {@link #DEFAULT_DRUG_REFERENCE_DATA_FILE_PATH}, for the groups dataset: the module never
+	 *  creates this file either, so every untouched install serves the bundled groups. */
+	public static final String DEFAULT_DRUG_REFERENCE_CROSS_REACTIVITY_FILE_PATH =
+			"chartsearchai/cross-reactivity-groups.json";
+
+	/** Patient-driven injection: inject the reference entries the patient's active orders resolve to —
+	 *  an ATC-code hit OR any name the order carries (its coded drug's, the free text a clinician typed, or its concept's), whichever the reference data answers
+	 *  ({@code DrugReferenceService.findForActiveOrders}, issue #151) — scoped to the orders in a
+	 *  family with the drug the question names. */
 	public static final String GP_DRUG_REFERENCE_INJECT_FROM_ORDERS = "chartsearchai.drugReference.injectFromOrders";
 
 	public static final boolean DEFAULT_DRUG_REFERENCE_INJECT_FROM_ORDERS = true;
@@ -403,11 +521,67 @@ public class ChartSearchAiConstants {
 
 	public static final boolean DEFAULT_DRUG_SAFETY_WARN_ON_INTERACTIONS = true;
 
-	/** Cross-check drugs named in the answer against the patient's allergies/conditions for contraindications. */
+	/** Cross-check the drugs in play — those the question asks about and those the answer names on its own
+	 *  authority — against the patient's allergies/conditions for contraindications, and the patient's own
+	 *  active orders against those same records (issue #143), scoped to what the response is about:
+	 *  either the drug or the recorded finding must be named by the question, the answer or a cited
+	 *  record, with a medication-, allergy- or condition-domain question keeping the corresponding
+	 *  list in scope. */
 	public static final String GP_DRUG_SAFETY_WARN_ON_CONTRAINDICATIONS =
 			"chartsearchai.drugSafety.warnOnContraindications";
 
 	public static final boolean DEFAULT_DRUG_SAFETY_WARN_ON_CONTRAINDICATIONS = true;
+
+	/** Whether an injected {@code safety_finding}'s chart-order attribution names the NUMBER of the
+	 *  chart record each order IS — {@code "<Substance> from <order display> [14]"} rather than
+	 *  {@code "<Substance> from <order display>"} (issue #379). Off by default: the resolution is
+	 *  deterministic and pinned, but a single-cell A/B with it ON reports the answer citing no drug
+	 *  order at all, one prescription named two ways between the prose and the chips, and a
+	 *  {@code CYP450} identifier no cited record states — so the default now rests on evidence rather
+	 *  than on the absence of it (ADR Decision 81), and Decision 77 records the costs a rendered
+	 *  marker carries besides. The drift-metric probe the ticket names as a precondition is still
+	 *  owed, and turning this on is how it gets run. It gates the
+	 *  rendered marker alone; the resolution's other reader (the issue #118 reconciliation) and
+	 *  {@code ReferenceProseFidelityCheck}'s marker stripping are unconditional, so the flag is safe to
+	 *  flip in either direction. */
+	public static final String GP_DRUG_SAFETY_CITE_ORDER_RECORDS =
+			"chartsearchai.drugSafety.citeOrderRecords";
+
+	public static final boolean DEFAULT_DRUG_SAFETY_CITE_ORDER_RECORDS = false;
+
+	/**
+	 * Whether an answer that cited fewer safety findings than the prompt carried is repaired by
+	 * asking the model again for the ones it left out — issue #398. Ships OFF: ADR Decision 84
+	 * measured this area regressing under added instruction, and a second inference is a cost no
+	 * install should pay unmeasured. {@code ChartAnswer.getFindingCitationExtent()} is the gate to
+	 * measure it against.
+	 */
+	public static final String GP_DRUG_SAFETY_REPAIR_FINDING_ENUMERATION =
+			"chartsearchai.drugSafety.repairFindingEnumeration";
+
+	public static final boolean DEFAULT_DRUG_SAFETY_REPAIR_FINDING_ENUMERATION = false;
+
+	/**
+	 * Whether the answer's prose is asked to SUMMARISE the safety findings rather than enumerate
+	 * them, on the grounds that the client already renders every finding in full — issue #403.
+	 *
+	 * <p>Ships ON since the fourteen-cell measurement: over ADR Decision 84's own corpus this arm
+	 * stated every carried finding on 8 of 12 cells against the previous default's 5, dropped a
+	 * cited finding's rating on none, and left verdict-led, the abstention controls and licensing
+	 * untouched — a strict improvement at one inference instead of two. It does NOT reach the
+	 * scorer's exit 0, which wants no cell short at all; the arm that does is
+	 * {@link #GP_DRUG_SAFETY_REPAIR_FINDING_ENUMERATION}, and turning that on now requires turning
+	 * THIS off.
+	 * {@code ChartAnswer.getFindingCitationExtent()} stops being the gate when it is on: prose that
+	 * is not asked to enumerate is short of the findings BY DESIGN, so
+	 * {@link #GP_DRUG_SAFETY_REPAIR_FINDING_ENUMERATION} is suppressed rather than left to fight it.
+	 * What to measure instead is whether the verdict still leads and whether the chips still carry
+	 * every finding — the second being deterministic and therefore not at risk.
+	 */
+	public static final String GP_DRUG_SAFETY_FINDINGS_RENDERED_BY_CLIENT =
+			"chartsearchai.drugSafety.findingsRenderedByClient";
+
+	public static final boolean DEFAULT_DRUG_SAFETY_FINDINGS_RENDERED_BY_CLIENT = true;
 
 	/** Minimum source-assigned severity ({@code unknown} &lt; {@code minor} &lt; {@code moderate} &lt;
 	 *  {@code major}) a rule-based interaction must carry to raise a warning chip. Rules without a
@@ -443,6 +617,17 @@ public class ChartSearchAiConstants {
 	public static final String GP_DRUG_SAFETY_WEIGHT_MAX_AGE_DAYS = "chartsearchai.drugSafety.weightMaxAgeDays";
 
 	public static final int DEFAULT_DRUG_SAFETY_WEIGHT_MAX_AGE_DAYS = 90;
+
+	/** Most interaction chips one question may raise from a PAIRWISE arm — the question's own drugs
+	 *  checked against each other, or the patient's active orders checked against each other. Both are
+	 *  quadratic in a list this module does not control, and both feed the prompt as citable findings,
+	 *  so the number is a clinical judgement a deployment makes (a polypharmacy review clinic may want
+	 *  30, a triage screen 5) rather than one this module fixes at build time — issue #131. An
+	 *  unparseable or non-positive value falls back to the default rather than disabling the cap; see
+	 *  {@code DrugSafetyValidator.maxPairChips} for why a cap cannot simply be removed. */
+	public static final String GP_DRUG_SAFETY_MAX_PAIR_CHIPS = "chartsearchai.drugSafety.maxPairChips";
+
+	public static final int DEFAULT_DRUG_SAFETY_MAX_PAIR_CHIPS = 10;
 
 	/**
 	 * When {@code > 0}, the {@code reasoning} scratchpad in the chart-answer schema is capped at
@@ -480,6 +665,32 @@ public class ChartSearchAiConstants {
 
 	public static final String RESOURCE_TYPE_MEDICATION_DISPENSE = "medication_dispense";
 
+	/**
+	 * querystore's resource type for a prescription (its {@code DrugOrderRecordSerializer}
+	 * contract). Chart evidence like any other querystore record — it is the patient's own order,
+	 * not module-injected reference material — and distinct from
+	 * {@link #RESOURCE_TYPE_ACTIVE_DRUG_ORDER}, which this module injects for an active order the
+	 * retrieved chart carries no record of (issue #118).
+	 *
+	 * <p>Declared for issue #317, which added a fourth production reader — the chart builder, which
+	 * scopes the order-currency mark to this type — to three that were already spelling the string as
+	 * a literal: {@code QueryScopeRouter.typedSlice}'s MEDICATIONS and ORDERS slices, and
+	 * {@code DrugReferenceInjector}, which filters the mappings it puts to the substantiation test.
+	 * All four now read this constant, and the injector and the builder are the pair that MUST
+	 * agree: the injector
+	 * admits a record to that corpus only where the prose and the builder's own order read both leave
+	 * it live, so a divergence would leave the #317 half of that AND looking at no records at all —
+	 * silently, since a condition that never sees a drug-order mapping simply stops narrowing
+	 * anything.
+	 *
+	 * <p>Being declared here puts it in
+	 * {@code ChartSearchAiReferenceGroupTest}'s sweep, which forces a reference-group decision to be
+	 * RECORDED for every declared type — that is a forcing function, not an obstacle, and the group
+	 * it records ({@code chart}) is the one {@code referenceGroup} already returned for the bare
+	 * string.
+	 */
+	public static final String RESOURCE_TYPE_DRUG_ORDER = "drug_order";
+
 	/** Reference data, not patient data — injected by {@link org.openmrs.module.chartsearchai.reference.DrugReferenceInjector}. */
 	public static final String RESOURCE_TYPE_DRUG_REFERENCE = "drug_reference";
 
@@ -511,24 +722,85 @@ public class ChartSearchAiConstants {
 	public static final String RESOURCE_TYPE_ACTIVE_DRUG_ORDER = "active_drug_order";
 
 	/**
+	 * The module's statement that the QUESTION named a drug CLASS no reference ENTRY is indexed by,
+	 * injected pre-answer so the prompt carries what was NOT screened rather than nothing at all
+	 * (issue #354).
+	 *
+	 * <p>Module-supplied reference prose like {@link #RESOURCE_TYPE_DRUG_REFERENCE}, and grouped with
+	 * it for the same reason — it points at no record of this patient, and a cosine pass comparing
+	 * module-rendered prose against itself can vouch for nothing. Its own type rather than
+	 * {@code drug_reference} because it stands for no reference ENTRY:
+	 * {@code DrugReferenceInjector.referenceCharacters} is issue #163's per-entry character total, and
+	 * a note counted into it would inflate the figure that defect is read from with nothing failing.
+	 *
+	 * <p>What it shares with {@code drug_reference} is the prompt-facing LEAD
+	 * ({@code DrugReferenceInjector.REFERENCE_PREFIX}) and not the type, so the system prompt's
+	 * record-type sentence covers it without a clause of its own.
+	 */
+	public static final String RESOURCE_TYPE_DRUG_CLASS_NOTE = "drug_class_note";
+
+	/**
+	 * A record stating that the interaction SCREEN ran over the patient's own active medications and
+	 * related none of them (issue #401).
+	 *
+	 * <p>Module-supplied prose, GROUPED like {@link #RESOURCE_TYPE_DRUG_CLASS_NOTE} — it names no drug
+	 * and points at no record of this patient — and standing for no reference ENTRY, so counting it into
+	 * {@code DrugReferenceInjector.referenceCharacters} would inflate issue #163's per-entry figure.
+	 *
+	 * <p><b>But it wears the SAFETY-FINDING lead rather than that note's, and the difference is
+	 * measured.</b> Its subject is this patient's own medications, while the prompt's record-type rule
+	 * tells the model that a record beginning {@code "Drug reference"} is reference data and NOT this
+	 * patient's. Under that lead the answer prefixed an inverted verdict; under
+	 * {@code DrugReferenceInjector.FINDING_PREFIX}, whose rule says such records ARE about this patient,
+	 * the same note produced the right one. ADR Decision 87 carries both arms. The lead is a
+	 * PROMPT-facing choice and this type is what every other consumer keys on, so nothing downstream
+	 * reads it as a finding: {@code ChartSearchAiUtils.safetyFindingMappings} selects the finding
+	 * population by TYPE.
+	 *
+	 * <p>Its own type rather than {@code drug_class_note} because that type is what
+	 * {@code ChartSearchAiUtils.unresolvedDrugClass} reads to publish the response's
+	 * {@code unresolvedDrugClass} key: a second meaning on it would make that key state a drug class
+	 * for a question that named none.
+	 */
+	public static final String RESOURCE_TYPE_INTERACTION_SCREEN_NOTE = "interaction_screen_note";
+
+	/**
 	 * Wire value of a serialized reference's {@code group}: a record retrieved from THIS
 	 * patient's chart. Evidence about the patient, citable as such.
 	 */
 	public static final String REFERENCE_GROUP_CHART = "chart";
 
 	/**
-	 * Wire value of a serialized reference's {@code group}: module-supplied reference prose
-	 * (a drug knowledge-base entry), not a record about this patient. Kept visible precisely
-	 * so a client can disclose that provenance rather than let it read as chart evidence —
-	 * A drug-reference citation is additionally never grounding-verified as {@code true}, being
-	 * demote-only (see {@code CitationGroundingVerifier}) — but note that gate keys on the
-	 * {@code drug_reference} resource type, not on this group, so the property does NOT extend for
-	 * free to the other injected types. It already does not hold for all of this group:
-	 * {@link #RESOURCE_TYPE_SAFETY_FINDING} is reference-group yet graded normally. And
-	 * {@link #RESOURCE_TYPE_ACTIVE_DRUG_ORDER} is injected but groups as
-	 * {@link #REFERENCE_GROUP_CHART}, so it is graded too (decided in #118: one drug asserted of
-	 * this patient has no subject roles to swap, so a passing verdict is real assurance). A client
-	 * must therefore read {@code grounded} per reference, not infer it from {@code group}.
+	 * Wire value of a serialized reference's {@code group}: module-supplied reference prose (a drug
+	 * knowledge-base entry, a finding derived from one, or this module's statement that the question
+	 * named a drug CLASS it holds no entry for), not a record about this patient. Kept
+	 * visible precisely so a client can disclose that provenance rather than let it read as chart
+	 * evidence. A citation in this group is additionally never grounding-verified as {@code true},
+	 * being demote-only (see {@code CitationGroundingVerifier}) — a property of the GROUP since issue
+	 * #122, which derived that gate from {@link ChartSearchAiUtils#referenceGroup} instead of from the
+	 * {@code drug_reference} resource type. Keying it on the type is how
+	 * {@link #RESOURCE_TYPE_SAFETY_FINDING} came to be reference-group yet graded as chart evidence.
+	 *
+	 * <p>{@link #RESOURCE_TYPE_ACTIVE_DRUG_ORDER} is injected but groups as
+	 * {@link #REFERENCE_GROUP_CHART}, so it is graded normally (decided in #118: one drug asserted of
+	 * this patient has no subject roles to swap, so a passing verdict is real assurance) — "the module
+	 * injected it" is a different question from this group. That parenthesis is the ordinary shape and
+	 * not every shape; {@code ChartSearchAiUtils.isGroundingDemoteOnly}'s javadoc carries what a
+	 * codes-only display does to it (issue #294).
+	 *
+	 * <p>Since issue #201 the group decides the wire value outright: a citation in this group
+	 * serializes {@code grounded: null} whatever the pass concluded. Demote-only had already ruled
+	 * {@code true} out; what remained was a Tier-1 {@code false} meaning "this citation is not about
+	 * that record", which is not what a chart citation's {@code false} means and which no client
+	 * distinguished — so it is withheld too, in
+	 * {@code ChartSearchAiRestController.groundedForWire}. The key stays present and null, which is
+	 * this field's existing "unverified" value. Adding a type to this group therefore stops its
+	 * citations being VERIFIED (they are still graded, demote-only), stops any verdict of theirs
+	 * reaching a client, and — since issue #229 — counts its records into the prompt-cost figure the
+	 * audit row carries ({@code ChartSearchAiUtils.referenceSlice}). Since issue #284 it does one more
+	 * thing, to OTHER citations: a chart citation whose claim rests on a record in this group has its
+	 * own entailment negative withheld, so the blast radius of a type added here is not confined to
+	 * that type's citations.
 	 */
 	public static final String REFERENCE_GROUP_REFERENCE = "reference";
 

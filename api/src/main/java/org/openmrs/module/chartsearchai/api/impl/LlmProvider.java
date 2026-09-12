@@ -22,7 +22,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.openmrs.api.context.Context;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.reference.DrugReferenceInjector;
+import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,7 +46,14 @@ public class LlmProvider {
 
 	/** Label that prefixes the focus-hint line in the user message. Shared with the
 	 *  DEFAULT_SYSTEM_PROMPT few-shot so the demonstration always mirrors the real prompt
-	 *  shape — if they drift, the few-shot stops teaching the format the model actually sees. */
+	 *  shape — if they drift, the few-shot stops teaching the format the model actually sees.
+	 *  Of the elements this label and {@code DrugReferenceInjector.FINDING_PREFIX} couple, the
+	 *  #397 clause is the one deliberately left unmirrored; the comment at its append in
+	 *  {@link #buildUserMessage(String, List, String, boolean)} is where that exception is
+	 *  decided. Read that as scoped to the coupled elements and no wider: the records header is
+	 *  not mirrored either — the real message opens "Patient records (most recent first):" and the
+	 *  demonstration "Records:" — and never was, which is a shape nothing here couples rather than
+	 *  a second deliberate exception. */
 	static final String FOCUS_HINT_LABEL = "Records ranked by similarity to the query: ";
 
 	static final String DEFAULT_SYSTEM_PROMPT = "You are a clinical assistant helping a clinician "
@@ -57,6 +66,125 @@ public class LlmProvider {
 			+ "Records beginning with \"Drug reference\" are clinical reference data, not this "
 			+ "patient's data; cite them the same way, but never present reference dosing as a value "
 			+ "already recorded for the patient. "
+			// ISSUE #315, and it is a REPORTING rule rather than a CLASSIFICATION one — which is the
+			// whole reason it can exist at all. ADR Decision 45 measured four CLAUSE wordings of an
+			// ENDED/CURRENT clause over querystore's TEXT markers and reverted every one: an order
+			// lapsed by auto_expire_date renders no end marker, so the model was being asked to sort
+			// records into two classes with no discriminator for one of them — it misfiled that record
+			// (four is its W1-W4; its own "five wordings" counts the clause-less control as a row. Nine
+			// further wordings are counted there and TWO of them are described, so seven are unrecorded
+			// — do not re-run the two it names)
+			// and then asserted the lapsed drug as current in a clinical answer. #317 (Decision 46)
+			// removed that gap: a drug_order record carries PatientChartSerializer's own mark wherever the
+			// module could establish the answer — not everywhere, and deliberately so; see
+			// SerializedRecord.getOrderActive() for the cases it stays silent on. The model demonstrably
+			// reads it — #315's re-measurement records an answer
+			// quoting "the order status is not in force" back unprompted. So this clause asks the model
+			// to decide nothing. It names the token the record STATES and says what an answer naming that
+			// record's drug owes the reader.
+			//
+			// The trigger is the serializer's CONSTANT and not a copy of its text, for the reason
+			// FINDING_PREFIX is used in the few-shot below — a copy would go on teaching a token no record
+			// carries the moment the mark's wording changed, which Decision 46's javadoc explicitly
+			// anticipates ("A change to either string is a change to what every chart says to the model").
+			// javac inlines the constant, so no behavioural assertion can tell a copy from a reference;
+			// EndedOrderAnswerRuleTest.thePromptsTriggerTokenIsTheSerializersConstantAndNotACopy reads
+			// this source instead.
+			//
+			// ONE SENTENCE. THE FIRST TWO BULLETS ARE ADDITIONS THAT WERE MEASURED AND REJECTED; THE
+			// THIRD RECORDS A MUTATION THAT PASSED, AND THE FOURTH IS AN ARGUMENT AND SAYS SO. Seven
+			// wordings as full
+			// arms against the unchanged base, plus two single-clause mutation probes against the two
+			// answer cases; the arms ran on one binary, GP-swapped through chartsearchai.llm.systemPrompt,
+			// interleaved with a decoy between every sample — on another patient for the standalone cells,
+			// on the same chart with another question for the fixture ones — over Decision 45's own two
+			// decisive charts, the two residue charts it records, the #319 yes/no medications gate cell and
+			// the two fixture charts EndedOrderAnswerRuleTest builds. ADR Decision 47 carries the ledger
+			// cell by cell; what is here is why the sentence has no second half.
+			//  - NO date instruction, though the ticket's title asks for the stop date. Restrictively
+			//    ("give the date it was stopped only when that record states one") it left the ticket's own
+			//    cell UNFIXED and dropped the activation date that cell used to carry. Positively
+			//    ("together with the date it was stopped where that record carries one") it DOES fix that
+			//    cell with the date in it — and on Decision 45's cell-B chart, asked what the patient is
+			//    taking, replaces BOTH live drug names with a lab measurement: "The patient is
+			//    currently taking: 1 Serum magnesium measurement (mg/dL) Every twelve hours [3] and ...".
+			//    That is a clinical falsehood on the chart this approach was previously reverted over. The
+			//    date is left to the record's own text, which already carries it wherever querystore
+			//    renders one — and where it does, the answer states it without being asked to.
+			//  - NO completeness half ("without dropping anything else you would have reported" / "Keep
+			//    every other detail ... about that record"). It stops the rule firing at all on a
+			//    single-record chart — both of EndedOrderAnswerRuleTest's ENDED-direction answer cases
+			//    go red; add the
+			//    half back and re-run them rather than trusting a tally here. The rider that rescues that
+			//    turns the model to enumerating dose, route and frequency on every medication list: on the
+			//    #319 gate cell every one of its citations went from a mix of supported and unsupported to
+			//    unsupported throughout. Trading a
+			//    correct answer's citations into red is the #201/#302 failure class.
+			//  - The completeness half breaks the rule with EITHER verb, which is worth stating because
+			//    the obvious reading is that the verb is what matters. It is not: swap "say in the same
+			//    sentence" for "add to the sentence naming it" and leave the half out, and both answer
+			//    cases still pass. Mutate one thing at a time here — a two-word change measured against a
+			//    two-clause change taught this file a false rule once already, and the mutation that
+			//    refutes it takes one targeted test run.
+			//  - ONE BRANCH — and this one is NOT in the ledger above; it is an argument, and the
+			//    positive half it declines has no arm of its own. What KEEPS it one branch is
+			//    EndedOrderAnswerRuleTest.theSystemPromptStatesTheRuleForAnOrderThatIsNotInForce,
+			//    which asks this rule's whole SPAN — between the "Drug reference" sentence and the
+			//    "Safety finding" one — to be exactly these two sentences, and asks the prompt to
+			//    name a "drug-order record" exactly once. Adding a half here reddens it; that method's
+			//    javadoc says which shapes it does and does not see. Nothing about a record carrying NO mark: the mark is silent wherever the
+			//    module could not establish the answer (SerializedRecord.getOrderActive() owns that
+			//    list), so a clause speaking for the silent case would assert exactly what the silence
+			//    exists to withhold. That is a property of the CLAUSE, not a guarantee about the answer:
+			//    measured on a chart carrying an unevaluable order beside marked ones, the model still
+			//    grouped the unmarked record in with "no longer in force". The clause does not say it;
+			//    nothing here stops the model saying it. And nothing about a record marked IN FORCE: Decision 45's residue is
+			//    that a positive currency sentence makes the model re-state a live order in prose instead
+			//    of copying a field list, and prose loses fields and can invent them.
+			//
+			// THE COSTS. NOT a closed list, and it must not be re-labelled into one: ADR Decision 47's
+			// ledger and trade-offs are canonical for what this wording pays, and what is here is the
+			// three a re-wording has to re-run FIRST, worst first. Earlier forms of this comment said
+			// "TWO costs, stated rather than hidden" and left the first bullet out — that bullet was
+			// measured a commit BEFORE the second was written, so re-labelling the list around the two
+			// that happened to be adjacent closed an enumeration that had never contained the worst of
+			// them. If you add a cost, do not restate the count.
+			//  - A FABRICATED STOP DATE — the worst thing the clause does, and the reason to re-run
+			//    cell H before any other cell. On a chart carrying SEVERAL records of ONE drug where
+			//    some carry ". Stopped: <date>" and one (lapsed by auto_expire_date) does not, asked
+			//    "has his Triomune-30 been stopped?", the answer states that record's ORDER date as a
+			//    stop date and CITES it — 3/3, where the base arm never names that record at all. It is
+			//    a false clinical fact carrying a citation, and it violates this prompt's own "Never
+			//    infer, assume, or add information not explicitly stated in the records". FIVE further
+			//    wordings failed to remove it (a prohibition on dating the ending; a prohibition on
+			//    re-using the record's other dates; a sentence stating what the field does and does not
+			//    say; dropping the word "ended"; a status-only clause naming no ending at all — all
+			//    five fabricate, 3/3 each), which is what makes it a property of the CLAUSE rather than
+			//    of its phrasing. It ships because its precondition is narrow — several ended records
+			//    of one drug disagreeing about whether their text carries an end date — and every
+			//    realistic chart measured stays clean; Decision 47 carries that trade and the cells.
+			//  - On the renewal chart (an ended order beside a live one for the same drug) the answer
+			//    loses the dose it used to carry — "He is taking Nevirapine 400 Milligram" becomes "He is
+			//    taking Nevirapine". Of the wordings measured, every one that keeps that dose pays one of
+			//    the two prices in the DECLINED list above — cell B2's lab-measurement falsehood, or the
+			//    fixture answer cases going red. (That phrase used to read "the two prices above", which
+			//    stopped being unambiguous the moment a third cost was added between the two lists.)
+			//    It is the lesser loss here because the base arm's own grounding
+			//    verifier already marked that dose claim UNSUPPORTED, and the answer that replaces it is
+			//    verified: that citation moves unsupported -> supported.
+			//  - On a chart of ONE ended order, asked "what medications is he taking?", the answer stops
+			//    naming the drug at all: "Nevirapine was ordered on 2026-07-26 [1]." becomes "No current
+			//    medications are recorded.", 3/3, with NO citation. True of that patient, and it satisfies
+			//    this clause vacuously — nothing is named, so nothing owes a status — but the drug, the
+			//    ended status and the stop date the ticket's title asks for all leave the answer. Four of
+			//    the eight measured wordings keep it naming the drug AND its status; each is excluded by
+			//    another cell (the ticket's own cell unfixed, cell B2's lab-measurement falsehood, or both
+			//    of EndedOrderAnswerRuleTest's ENDED-direction answer cases red). Decision 47's A3 note
+			//    carries which, and the
+			//    base on that cell is NOT settled — four runs, three different base answers.
+			+ "A drug-order record carrying \"" + PatientChartSerializer.INACTIVE_ORDER_LABEL
+			+ "\" is a record of an order that has ended. Whenever your answer names a drug from such "
+			+ "a record, say in the same sentence that its order is no longer in force. "
 			// SAFETY GUIDANCE LIVES IN TWO PLACES: this record-type sentence (#110, #112) and the
 			// safety/suitability paragraph below (#107, #112). They are one rule split across the
 			// prompt's two natural sections — what a record type means here, and how to answer a
@@ -81,7 +209,30 @@ public class LlmProvider {
 			+ "just shared words — before you write the answer.\n"
 			+ "Use plain text only in the answer — no markdown, no bullet markers like * or -, "
 			+ "no headers. Use numbered lines or simple newlines to structure lists.\n\n"
-			+ "If no records are relevant, name what is missing.\n"
+			// THE TWO SENTENCES AFTER THE FIRST ARE ISSUE #214's FIX, and each answers a different
+			// half of what was measured. "Name what is missing" alone is ambiguous when the chart is
+			// empty: normalizeRecords() has just told the model "This patient has no records matching
+			// this query", so on one reading the missing thing IS the records and paraphrasing the
+			// placeholder satisfies the instruction. The clinician cannot act on that answer — "no
+			// imaging is recorded", "the chart failed to load" and "the question was not understood"
+			// are three different situations and "No patient records were provided." does not
+			// distinguish them (issue #94 is the same confusion of the slice for the patient).
+			//
+			// Measured over the 19 absent-data cases against the bundled model, empty chart, at
+			// DEFAULT_LLM_MAX_OUTPUT_TOKENS, before this hunk: 17/19 named their topic, and the two
+			// that did not ("Does the patient smoke?" → "No records are provided.", "What vaccines has
+			// the patient received?" → "No patient records were provided.") did so in three identical
+			// runs. Reversing the order the cases are asked in kept those two and added a third ("any
+			// episodes?" at the head of the run), so the reading is not a property of a topic — it is
+			// the ambiguity resolving under whatever the KV cache holds. Every passing answer lifted a
+			// contiguous noun phrase out of the question ("No imaging studies are recorded.", "No
+			// social history is recorded."); the robust failures are the questions that offer none to
+			// lift, which is why the second sentence asks for a noun phrase rather than only forbidding
+			// the placeholder echo. After this hunk, all 19 name their topic in both orders.
+			+ "If no records are relevant, name what is missing. Name the TOPIC the query asked "
+			+ "about, as a noun phrase of your own when the query states it as a verb — asked "
+			+ "\"does the patient drink?\": \"No alcohol use is recorded.\" Reporting only that "
+			+ "records are missing names nothing.\n"
 			+ "When the query is a yes/no question (\"any allergies?\", \"is the patient "
 			+ "hypertensive\"), begin the answer with an explicit verdict, then the complete cited "
 			+ "evidence. Start with \"Yes\" ONLY when a record explicitly names what is asked — a "
@@ -96,6 +247,14 @@ public class LlmProvider {
 			+ "question names a category rather than a measurable quantity (\"any heart "
 			+ "problems\", \"any eye issues\"), cite nothing after a no-record verdict — do not "
 			+ "list vital signs or unrelated measurements.\n"
+			// The two question shapes named here are EXAMPLES of this paragraph's scope, not its
+			// bound, and nothing else carries scope: the #348 branches at the end of the paragraph
+			// are gated on the FINDING's clause and never on the question, and the screening shape
+			// they exist for ("Does she have any drug interactions I should know about?") is not one
+			// of the shapes listed. The scope reaches it in practice — the reproduction IS this
+			// paragraph's withholding branch applied to that question. Adding the screening shape
+			// here was RUN as an arm of ADR Decision 72's A/B and refuted: it produced the cleanest
+			// two-order leads of the three arms and dropped a finding from the eight-order cell. Do not re-propose it.
 			+ "The same rules apply to safety and suitability questions (\"is it safe to give "
 			+ "X\", \"can we start X\"): when no record addresses the drug or intervention asked "
 			+ "about, the whole answer is one sentence stating that the records do not address "
@@ -103,11 +262,57 @@ public class LlmProvider {
 			+ "different drug or condition is never evidence for or against it, and attaching "
 			+ "one only suggests a connection the records do not make. "
 			+ "When a safety finding DOES name the drug or intervention asked about, the opposite "
-			+ "branch applies: that finding is evidence against giving it, so begin the answer with "
-			+ "the call it supports — \"No\", and what to avoid — then the finding itself, carrying "
-			+ "its own severity, and every record it rests on, cited. The finding's mechanism is the "
-			+ "evidence for that call: it belongs after the call, not in place of it. Never open such "
-			+ "an answer with \"Yes\".\n"
+			+ "branch applies, and the finding states how far it goes: begin the answer with the call "
+			+ "the finding states, then the finding itself, carrying its own severity, and every "
+			+ "record it rests on, cited. A finding that says it is a reason to withhold it is "
+			+ "evidence against giving it: open with \"No\" and what to avoid. A finding that says it "
+			+ "is a caution to note, not a reason to withhold it, is not evidence against giving the "
+			+ "drug: open by stating that the drug can be given, and name the caution in the same "
+			+ "sentence so it is never dropped. Where more than one finding names the drug and they "
+			+ "state different strengths, the strongest governs: a finding that is a reason to "
+			+ "withhold it outranks one that is only a caution to note, so open with \"No\". "
+			// ISSUE #348. Two branches for the two clauses a finding about a medication the patient
+			// is ALREADY TAKING states, quoting each clause in the words the record uses — which is
+			// the property SafetyVerdictSeverityGradationTest already holds the older two to, and
+			// what ADR Decision 44 measured the absence of: a clause the prompt keys on nothing at
+			// all is inert, six runs byte-identical. INSIDE this paragraph and never a paragraph of
+			// its own: #112 proposed a lead rule beside it and that was ruled out, on the measured
+			// history that added instructions in this area regress (see the comment above the
+			// "Safety finding" record-type sentence). Positively gated and carrying no fallback
+			// clause, because LlmProviderTest fails this paragraph on the substring "otherwise" in
+			// any casing (#107 arm D).
+			//
+			// Placed BEFORE the never-"Yes" token that closes the paragraph, so that token's "such an
+			// answer" reaches these two branches as well. That is deliberate and it is what they ask
+			// for: neither branch wants a VERDICT at all — the lead is a statement about medications
+			// already prescribed, which is the sentence #348 says the chip carries and the answer does
+			// not — so being denied "Yes" costs them nothing, and being denied it explicitly is worth
+			// more than the alternative. One of the two alternatives has a measured cost: a lead
+			// instruction in a paragraph of its own is #112's refuted shape. The other — putting
+			// these two branches AFTER the never-"Yes" token — has not been measured, and the
+			// argument against it is legibility only: the token's own scope becomes the thing a
+			// reader has to infer. Worth weighing rather than settled: one READING of ADR Decision
+			// 72's first residue — §3a still opening with a bare "No —" — is that this token plus the
+			// yes/no verdict paragraph above leave no other lead available on a screening question.
+			// That reading is not measured either, and no arm has tried the placement.
+			// The residue that belongs to the measurement rather than to this comment: on the charts
+			// that already answered correctly the lead was "Yes, there are documented interactions
+			// …", and these branches ask for a statement instead. Measured — both several-finding
+			// cells KEEP that Yes lead with every finding, severity and citation, and ADR Decision
+			// 72's "The measurement" section records the run, its three residues and the arm above.
+			// Nothing in this repository can see what the model produces from these two sentences;
+			// SafetyVerdictSeverityGradationTest pins what they SAY.
+			+ "A finding that says it is a reason to change a medication this patient is already "
+			+ "taking is not about a drug anything proposed: open by naming that medication and what "
+			+ "the finding relates it to, carry the finding's severity, and never open by refusing to "
+			+ "give a drug. A finding that says it is a caution about a medication this patient is "
+			+ "already taking, not a reason to change it, is not evidence against that medication: "
+			+ "open by naming it and the caution in the same sentence, and never open by refusing to "
+			+ "give a drug. Where findings state calls of both kinds, the strongest still governs: a "
+			+ "finding that is a reason to withhold it leads, then one that is a reason to change a "
+			+ "medication this patient is already taking, then a caution. "
+			+ "The finding's mechanism is the evidence for the call it states: it belongs after the "
+			+ "call, not in place of it. Never open such an answer with \"Yes\".\n"
 			+ "Your answer must not vary based on the punctuation or phrasing of the query "
 			+ "— focus only on its semantic meaning.\n\n"
 			+ "The following is a FORMAT DEMONSTRATION ONLY using fake non-medical data. "
@@ -122,7 +327,16 @@ public class LlmProvider {
 			// actually sees — the same coupling FOCUS_HINT_LABEL gives the focus-hint demo.
 			+ "[4] " + DrugReferenceInjector.FINDING_PREFIX
 			+ "Durian: Durian spoils the oranges in store — Major. "
-			+ "Ethylene released by durian ripens and rots citrus within days.\n\n"
+			+ "Ethylene released by durian ripens and rots citrus within days."
+			+ DrugReferenceInjector.STRENGTH_WITHHOLD + "\n"
+			// The caution class, demonstrated on a rated MINOR finding (#283). Both clauses are the
+			// production constants for the reason FINDING_PREFIX is: the rule above tells the model to
+			// follow the call the finding STATES, so a demonstration carrying a copy of that sentence
+			// would keep teaching a wording the record no longer has.
+			+ "[5] " + DrugReferenceInjector.FINDING_PREFIX
+			+ "Lychee: Lychee dulls the oranges in store — Minor. "
+			+ "Lychee husks shed a dust that films citrus rind and wipes off in seconds."
+			+ DrugReferenceInjector.STRENGTH_CAUTION + "\n\n"
 			+ "Clinician's query: How many apples were delivered?\n"
 			+ "{\"reasoning\": \"The query is about apples. Records [1] and [3] are apple deliveries; "
 			+ "[2] is oranges, a different fruit.\", "
@@ -142,11 +356,20 @@ public class LlmProvider {
 			+ "\"answer\": \"The records do not address mango deliveries.\", \"citations\": []}\n\n"
 			+ "Clinician's query: Is it safe to deliver durian?\n"
 			+ "{\"reasoning\": \"A safety question about durian. The safety finding [4] names durian "
-			+ "and reports a Major problem with the oranges already in store [2], so the records DO "
-			+ "address durian and that finding is evidence against the delivery. The answer opens "
-			+ "with that call, then the finding and the record it rests on, both cited.\", "
+			+ "and reports a Major problem with the oranges already in store [2], and says it is a "
+			+ "reason to withhold it, so the records DO address durian and that finding is evidence "
+			+ "against the delivery. The answer opens with that call, then the finding and the record "
+			+ "it rests on, both cited.\", "
 			+ "\"answer\": \"No — durian should not be delivered: it spoils the oranges already in "
 			+ "store [2], a Major problem [4].\", \"citations\": [2, 4]}\n\n"
+			+ "Clinician's query: Is it safe to deliver lychees?\n"
+			+ "{\"reasoning\": \"A safety question about lychees. The safety finding [5] names lychee "
+			+ "and says it is a caution to note rather than a reason to withhold it, so the records DO "
+			+ "address lychees and the call it states is not a refusal. The answer says the delivery "
+			+ "can go ahead and carries the caution in the same sentence, with the finding and the "
+			+ "record it rests on both cited.\", "
+			+ "\"answer\": \"Lychee can be delivered, with one caution: it dulls the oranges already "
+			+ "in store [2], a Minor problem [5].\", \"citations\": [2, 5]}\n\n"
 			+ FOCUS_HINT_LABEL + "2.\n"
 			+ "Clinician's query: Were any bananas delivered?\n"
 			+ "{\"reasoning\": \"The query is about bananas. The ranked record [2] is oranges and no "
@@ -163,26 +386,38 @@ public class LlmProvider {
 	private RemoteLlmEngine remoteEngine;
 
 	/**
-	 * Send numbered patient records and a question to the LLM for synthesis.
+	 * The ONLY synchronous arity. Where {@code focusIndices} is non-empty it renders a short
+	 * "Records ranked by similarity to the query: ..." line between the records section and the
+	 * question. The numberedRecords are still the full patient chart in stable date-desc order, so
+	 * the prompt prefix is byte-identical across queries for the same patient and llama-server's KV
+	 * cache reuses the prefill. The variable bytes are the small focus-hint line plus the question.
+	 *
+	 * <p>The flag-less convenience overload that stood beside it was DELETED rather than kept, for
+	 * the reason {@link #searchStreaming}'s own paragraph on the same deletion gives and the
+	 * {@code enumerateFindings} @param below repeats of this arity: do not reintroduce one.
 	 *
 	 * @param numberedRecords the numbered patient records text
+	 * @param focusIndices the records ranked most similar to the query, or empty for no hint
 	 * @param question the clinician's natural language question
+	 * @param enumerateFindings whether this chart's prompt carries more than one injected safety
+	 *        finding, all of them naming one drug — see
+	 *        {@link #buildUserMessage(String, List, String, boolean)}. It is a parameter of the ONE
+	 *        entry point rather than of an overload beside a flag-less one, and that is not
+	 *        tidiness: this method is the seam the suite's test doubles override, so an overload
+	 *        production called instead would be silently bypassed by every one of them. No count
+	 *        of them is given here on purpose — the one that stood in this sentence was already
+	 *        wrong at the commit that published it, this change having added a double of its own,
+	 *        which is the root {@code CLAUDE.md} rule against a published count landing one file
+	 *        outside what {@code ProjectInstructionsGuardTest} can police. Issue
+	 *        <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/397">#397</a>
+	 *        shipped that mistake first and eleven test classes errored on it
 	 * @return the LLM's response with answer text and structured citation indices
 	 */
-	public LlmResponse search(String numberedRecords, String question) {
-		return search(numberedRecords, Collections.<Integer>emptyList(), question);
-	}
-
-	/**
-	 * Focus-hint variant of {@link #search}: renders a short "Records ranked by similarity to the
-	 * query: ..." line between the records section and the question. The numberedRecords
-	 * are still the full patient chart in stable date-desc order, so the prompt prefix is
-	 * byte-identical across queries for the same patient and llama-server's KV cache reuses
-	 * the prefill. The variable bytes are the small focus-hint line plus the question.
-	 */
-	public LlmResponse search(String numberedRecords, List<Integer> focusIndices, String question) {
+	public LlmResponse search(String numberedRecords, List<Integer> focusIndices, String question,
+			boolean enumerateFindings) {
 		String systemPrompt = getSystemPrompt();
-		String userMessage = buildUserMessage(numberedRecords, focusIndices, question);
+		String userMessage = buildUserMessage(numberedRecords, focusIndices, question,
+				findingProse(enumerateFindings));
 		int timeoutSeconds = getTimeoutSeconds();
 
 		LlmEngine.InferenceResult result = getActiveEngine().infer(
@@ -193,53 +428,45 @@ public class LlmProvider {
 	}
 
 	/**
-	 * Streaming variant of {@link #search}. Calls the tokenConsumer for each token as it is
-	 * generated, and returns the full response when complete.
+	 * Streaming variant of {@link #search}, KV-scope-aware and reasoning-aware. Calls
+	 * {@code tokenConsumer} for each token of the {@code "answer"} value as it is generated, and
+	 * forwards the model's leading {@code "reasoning"} value to {@code reasoningConsumer} (so a
+	 * caller can surface it as a live "thinking" indicator); two independent field-scanning
+	 * {@link AnswerExtractingConsumer}s split the single engine token stream, reasoning first
+	 * (schema order: reasoning precedes answer). The reasoning channel is purely additive — the
+	 * answer stream is byte-identical without a consumer for it.
 	 *
-	 * @param numberedRecords the numbered patient records text
-	 * @param question the clinician's natural language question
-	 * @param tokenConsumer called with each token fragment as it is generated
-	 * @return the complete LLM response with answer text and structured citation indices
-	 */
-	public LlmResponse searchStreaming(String numberedRecords, String question,
-			Consumer<String> tokenConsumer) {
-		return searchStreaming(numberedRecords, Collections.<Integer>emptyList(), question, tokenConsumer);
-	}
-
-	/** Focus-hint variant of {@link #searchStreaming}. See {@link #search(String, List, String)}. */
-	public LlmResponse searchStreaming(String numberedRecords, List<Integer> focusIndices, String question,
-			Consumer<String> tokenConsumer) {
-		return searchStreaming(numberedRecords, focusIndices, question, tokenConsumer, chunk -> { });
-	}
-
-	/**
-	 * Reasoning-aware streaming variant. Forwards the model's leading {@code "reasoning"} value to
-	 * {@code reasoningConsumer} (so a caller can surface it as a live "thinking" indicator) and the
-	 * {@code "answer"} value to {@code tokenConsumer}, as each is generated. Two independent
-	 * field-scanning {@link AnswerExtractingConsumer}s split the single engine token stream;
-	 * reasoning is emitted first (schema order: reasoning precedes answer). The reasoning channel is
-	 * purely additive — the answer stream is byte-identical to the non-reasoning overload.
-	 */
-	public LlmResponse searchStreaming(String numberedRecords, List<Integer> focusIndices, String question,
-			Consumer<String> tokenConsumer, Consumer<String> reasoningConsumer) {
-		return searchStreaming(numberedRecords, focusIndices, question, tokenConsumer, reasoningConsumer, null);
-	}
-
-	/**
-	 * KV-scope-aware variant of {@link #searchStreaming(String, List, String, Consumer, Consumer)}.
-	 * When {@code cacheScope} is non-null (the pipeline mode produces a question-independent chart
+	 * <p><b>The ONLY streaming arity, and the narrower ones were deleted rather than kept as
+	 * conveniences</b>, when the flag made them dangerous. Three flag-less delegates stood here — 3-,
+	 * 4- and 5-argument — reached by nothing in production or in the suite, the widest hardcoding
+	 * {@code enumerateFindings = false} in its delegate. Before #397 they were behaviourally
+	 * identical to this one, so they carried no risk; after it they differ in a safety-relevant flag,
+	 * which is the hazard {@code search}'s own @param names — a seam every test double overrides,
+	 * silently bypassed by an overload production called instead. Do not reintroduce one: a caller
+	 * wanting the old shapes passes {@code Collections.emptyList()}, {@code chunk -> { }},
+	 * {@code null} and {@code false} explicitly, which is what makes the flag visible at the call.
+	 *
+	 * <p>When {@code cacheScope} is non-null (the pipeline mode produces a question-independent chart
 	 * prefix — see {@code LlmInferenceService.shouldRunWarmup}), the engine may restore this
 	 * patient's prefilled chart KV from disk instead of re-prefilling, and persist a fresh cold
 	 * prefill, so a query arriving cold (server restart, prompt-cache overflow, or warmup never
 	 * fired) does not re-pay the full prefill. The KV filename is keyed on the question-INDEPENDENT
 	 * prefix {@code buildUserMessage(numberedRecords, "")} — the exact bytes {@link #warmup} sends —
 	 * so warmup-saved and query-saved entries share one file per patient+chart. A null scope sends a
-	 * null seed, which makes the engine skip all disk KV work (behavior identical to the 5-arg form).
+	 * null seed, which makes the engine skip all disk KV work.
+	 *
+	 * @param enumerateFindings see {@link #buildUserMessage(String, List, String, boolean)}. It
+	 *        reaches the user message and never the KV seed above, which is what keeps that seed a
+	 *        byte-prefix of this query; why it is a parameter of the one arity is the paragraph
+	 *        above and {@code search}'s own @param
 	 */
-	public LlmResponse searchStreaming(String numberedRecords, List<Integer> focusIndices, String question,
-			Consumer<String> tokenConsumer, Consumer<String> reasoningConsumer, String cacheScope) {
+	public LlmResponse searchStreaming(String numberedRecords, List<Integer> focusIndices,
+			String question, Consumer<String> tokenConsumer, Consumer<String> reasoningConsumer,
+			String cacheScope, boolean enumerateFindings) {
+
 		String systemPrompt = getSystemPrompt();
-		String userMessage = buildUserMessage(numberedRecords, focusIndices, question);
+		String userMessage = buildUserMessage(numberedRecords, focusIndices, question,
+				findingProse(enumerateFindings));
 		// The KV seed must be the question-independent prefix so it matches the warmup key exactly.
 		String cacheSeed = cacheScope == null ? null : buildUserMessage(numberedRecords, "");
 		int timeoutSeconds = getTimeoutSeconds();
@@ -481,9 +708,12 @@ public class LlmProvider {
 	 * Tier-2 grounding check for a SINGLE {@code (source, statement)} pair: asks the active LLM
 	 * whether {@code source} actually supports {@code statement}. It catches the subject/polarity
 	 * flips cosine alone cannot judge (high lexical overlap but e.g. "patient has X" vs "mother had
-	 * X"). The chart-grounding path now verifies all of an answer's citations in one round-trip via
-	 * {@link #entailsBatch}; this single-pair form is retained as the primitive and for one-off
-	 * checks.
+	 * X"). The chart-grounding path verifies an answer's citations via {@link #entailsBatch} — in ONE
+	 * round-trip for citations whose statements do not overlap, but in a single-pair call each for the
+	 * fragments of one sentence that do (a clause-scoped compound, or an enumeration in either mode:
+	 * see {@code CitationGroundingVerifier} and #278). So this single-pair form is not only the
+	 * primitive and the one-off path — {@code entailsBatch} is genuinely called with one pair on the
+	 * grounding path too.
 	 *
 	 * @param source the cited record's text
 	 * @param statement the answer sentence that cites it
@@ -728,6 +958,61 @@ public class LlmProvider {
 	 * the 5-10x LLM-time reduction on local Gemma for same-patient/distinct-query traffic.
 	 */
 	static String buildUserMessage(String numberedRecords, List<Integer> focusIndices, String question) {
+		return buildUserMessage(numberedRecords, focusIndices, question, false);
+	}
+
+	/**
+	 * As {@link #buildUserMessage(String, List, String)}, additionally asking for one line per
+	 * safety finding — issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/397">#397</a>.
+	 *
+	 * @param enumerateFindings whether this chart's prompt carries more than one injected
+	 *        safety finding AND every one of them names the same drug, which only the caller
+	 *        holding the chart can say — {@code LlmInferenceService.severalFindingsAboutOneDrug}
+	 *        is the predicate and is canonical for both conjuncts, for what the second one is
+	 *        measured to keep the clause off, and for what it does not establish. Do not read
+	 *        the flag as "there are findings": passing it unconditionally sends the sentence to
+	 *        charts whose findings name several drugs, which is an arrangement the sentence does
+	 *        not describe, and to the empty-chart message whose exact bytes
+	 *        {@code AbsentDataEvalTest.theEmptyChartPromptAsksTheModelToNameWhatIsMissing} pins.
+	 *        <b>Those are two different edits and no one test sees both.</b> That pin reddens when
+	 *        the append condition in the body below drops {@code enumerateFindings} — measured —
+	 *        and it CANNOT move for anything a caller does, because it builds through an arity
+	 *        that hardcodes this flag false. A caller handing the flag
+	 *        unconditionally is caught by
+	 *        {@code FindingEnumerationClauseContextTest.theCallSitesHandTheProviderFalseForThePopulationsTheGateWithholdsFrom}
+	 *        instead, and before that case existed it was caught by nothing at all
+	 */
+	static String buildUserMessage(String numberedRecords, List<Integer> focusIndices,
+			String question, boolean enumerateFindings) {
+		return buildUserMessage(numberedRecords, focusIndices, question,
+				enumerateFindings ? FindingProse.ENUMERATED : FindingProse.UNPROMPTED);
+	}
+
+	/**
+	 * Which prose, if any, the message asks for ABOUT the safety findings it carries. Three states
+	 * and not two booleans, so "enumerate them" and "do not enumerate them" cannot both be asked.
+	 *
+	 * <p>{@link #UNPROMPTED} is the shape every message had before issue #397 and the one every
+	 * message without several findings about one drug still has: the clause is absent and the model
+	 * writes whatever the system prompt's safety branches lead it to.
+	 */
+	enum FindingProse {
+		/** No clause. The pre-#397 shape, and the shape of every message the gate does not fire on. */
+		UNPROMPTED,
+		/** ADR Decision 84's measured clause: one line per finding, each with its own severity. */
+		ENUMERATED,
+		/**
+		 * Issue #403: the findings are NOT to be listed, because the client renders every one of
+		 * them in full beside the answer, and a small model asked to restate a list it can see
+		 * transcribes it — measured 2026-09-10, an answer reproducing the injected records' own
+		 * scaffolding down to "Record [353]:" and corrupting "patient" into "patent".
+		 */
+		SUMMARISED
+	}
+
+	static String buildUserMessage(String numberedRecords, List<Integer> focusIndices,
+			String question, FindingProse findingProse) {
 		StringBuilder sb = new StringBuilder();
 		sb.append("Patient records (most recent first):\n").append(normalizeRecords(numberedRecords));
 		if (focusIndices != null && !focusIndices.isEmpty()) {
@@ -784,6 +1069,54 @@ public class LlmProvider {
 					+ "the chart.");
 		}
 		sb.append("\n\nClinician's query: ").append(question);
+		// ISSUE #397. A LAYOUT rule, and BOTH the position and the separator are load-bearing: the
+		// clause goes AFTER the question and runs on from it with a SPACE. Ahead of the records, in
+		// DEFAULT_SYSTEM_PROMPT, the same sentence made completeness WORSE and cost more output; on
+		// a line of its own here it read as the dominant instruction and cost a verdict lead. ADR
+		// Decision 84 carries both measurements, the refuted alternatives and the corrections
+		// earlier drafts of this comment needed; eval/drift-metric/README.md carries the five-arm
+		// ledger they are rows of. Neither is reproduced here — a third copy is what the root
+		// instruction file's "Documenting a decision" section forbids, and would be the copy nobody
+		// re-measures. LlmInferenceService.severalFindingsAboutOneDrug is canonical for the gate.
+		//
+		// THESE ARE THE MEASURED BYTES, down to the SPACE in front of them, and
+		// LlmProviderUserMessageTest.theAppendedClauseIsExactlyTheseBytes is what holds them as
+		// bytes: an imperative ADDED in this position is a measured hazard and not a hypothetical
+		// one, and until that case existed the class held this string by substrings alone. A
+		// rewording also stops the ledger describing the shipped clause.
+		//
+		// NO FEW-SHOT DEMONSTRATES THIS CLAUSE, AND THAT IS A DECISION — the one exception to the
+		// mirror invariant FOCUS_HINT_LABEL's javadoc states, which points here for it. Mirroring it
+		// would mean restructuring a demonstration rather than adding a line: this clause is a THIRD
+		// element of the real message, a sentence between the question and the model's JSON, and every
+		// "Clinician's query: " line in DEFAULT_SYSTEM_PROMPT is followed immediately by that JSON.
+		// DEFAULT_SYSTEM_PROMPT's two demonstrated finding records name a different fruit each — [4]
+		// Durian, [5] Lychee — so the demonstration prompt fails this clause's own gate: it carries
+		// two findings and they name two subjects. And a demonstration is more instruction
+		// in exactly the position where more instruction is measured to regress, so it needs its own
+		// A/B and cannot be had for free. Unmeasured, and left so deliberately.
+		//
+		// THE BLANK-QUESTION GUARD PREVENTS NOTHING PRODUCTION CAN REACH, and is still worth having.
+		// What protects the warmup's byte-PREFIX is the APPEND POSITION and neither conjunct — warmup
+		// and searchStreaming's cacheSeed both build through the arity that hardcodes the flag false,
+		// so no production caller can present this body with the flag true and the question blank.
+		// The guard is defence against a FUTURE widening of the seed path, which cannot then carry
+		// the clause without reddening warmupShouldNotCarryTheFindingEnumerationClause or
+		// theClauseMustNotBreakTheWarmupPrefixForAQuestionOfAnyLength. Mutate it and read those two.
+		//
+		// THE SUMMARISED BRANCH IS ISSUE #403 AND SHARES EVERY ONE OF THOSE CONSTRAINTS: same
+		// position, same separator, same blank-question guard, its own pinned bytes. It is the
+		// OPPOSITE ask, so the two are one enum and never two flags — a message asking for both
+		// would be the contradiction FindingProse exists to make unrepresentable.
+		if (question != null && !question.trim().isEmpty()) {
+			if (findingProse == FindingProse.ENUMERATED) {
+				sb.append(" Where more than one finding names it, put every one of them on a line of "
+						+ "its own, each with the severity that finding states.");
+			} else if (findingProse == FindingProse.SUMMARISED) {
+				sb.append(" The clinician is shown every finding in full beside your answer, so summarise "
+						+ "rather than list them, citing each finding you rely on and stating its severity.");
+			}
+		}
 		return sb.toString();
 	}
 
@@ -843,6 +1176,32 @@ public class LlmProvider {
 			this.cachedTokens = cachedTokens;
 		}
 
+		/**
+		 * This response continued by {@code continuation} — issue #398's repair pass, whose second
+		 * completion is appended to the first rather than replacing it.
+		 *
+		 * <p><b>It lives here because construction of an {@code LlmResponse} does.</b> Building one
+		 * in {@code LlmInferenceService} instead also put the descriptor
+		 * {@code (Ljava/lang/String;Ljava/util/List;III)V} into that class's constant pool, which is
+		 * a {@code ChartAnswer} constructor's descriptor too — and
+		 * {@code ArchitectureGuardTest.everyAnswerThisModuleBuildsCarriesTheConditionRuleCoverage}
+		 * matches those by STRING, deliberately owning no bytecode parser, so it read the call as a
+		 * coverage-less answer. The guard is right to stay strict; this is the call site moving to
+		 * where it belonged anyway.
+		 *
+		 * <p>Token counts are SUMMED and not replaced: two completions were bought, and the audit
+		 * row is where an operator reads what this pass costs.
+		 *
+		 * @param continuation the second completion, whose answer is appended after this one's
+		 * @param citations the merged citation array, composed by the caller that knows both
+		 * @return the continued response
+		 */
+		LlmResponse continuedWith(LlmResponse continuation, List<Integer> citations) {
+			return new LlmResponse(answer + " " + continuation.getAnswer().trim(), citations,
+					inputTokens + continuation.inputTokens, outputTokens + continuation.outputTokens,
+					cachedTokens + continuation.cachedTokens);
+		}
+
 		String getAnswer() {
 			return answer;
 		}
@@ -874,13 +1233,52 @@ public class LlmProvider {
 		remoteEngine.shutdown();
 	}
 
+	/**
+	 * Whether {@code value} overrides {@link #DEFAULT_SYSTEM_PROMPT} — the ONE definition of what
+	 * counts as a custom system prompt.
+	 *
+	 * <p>Public because {@code ChartSearchAiModuleActivator} warns an operator that a custom prompt
+	 * drops the built-in rules (issue #315), and that warning has to be true of what this class
+	 * actually sends. A second copy of the condition there agreed on the day it was written and
+	 * nothing kept it agreeing; a warning that disagrees with the pipeline is worse than none,
+	 * because it names a specific rule as dropped or kept on stale logic.
+	 */
+	public static boolean isCustomSystemPrompt(String value) {
+		return value != null && !value.trim().isEmpty();
+	}
+
 	protected String getSystemPrompt() {
 		String value = Context.getAdministrationService()
 				.getGlobalProperty(ChartSearchAiConstants.GP_SYSTEM_PROMPT);
-		if (value != null && !value.trim().isEmpty()) {
+		if (isCustomSystemPrompt(value)) {
 			return value.trim();
 		}
 		return DEFAULT_SYSTEM_PROMPT;
+	}
+
+	/**
+	 * Which finding prose this install asks for, given whether the #397 gate fired.
+	 *
+	 * <p>Resolved HERE and not in {@code LlmInferenceService} for the reason {@code search}'s own
+	 * {@code @param enumerateFindings} gives about arities: those two methods are the seam the
+	 * suite's test doubles override, so a mode threaded through them as a new parameter would be
+	 * supplied by production and dropped by every double. The gate stays where it was —
+	 * {@code LlmInferenceService.severalFindingsAboutOneDrug} is still canonical for WHETHER a
+	 * clause is appended, and this decides only WHICH.
+	 *
+	 * <p>{@link ChartSearchAiConstants#GP_DRUG_SAFETY_FINDINGS_RENDERED_BY_CLIENT} ships false, so a
+	 * stock install resolves exactly the two states that existed before issue #403 and its messages
+	 * are byte-identical.
+	 */
+	protected FindingProse findingProse(boolean enumerateFindings) {
+		if (!enumerateFindings) {
+			return FindingProse.UNPROMPTED;
+		}
+		return ChartSearchAiUtils.getBooleanGlobalProperty(
+				ChartSearchAiConstants.GP_DRUG_SAFETY_FINDINGS_RENDERED_BY_CLIENT,
+				ChartSearchAiConstants.DEFAULT_DRUG_SAFETY_FINDINGS_RENDERED_BY_CLIENT)
+						? FindingProse.SUMMARISED
+						: FindingProse.ENUMERATED;
 	}
 
 	protected int getTimeoutSeconds() {

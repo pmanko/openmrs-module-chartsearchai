@@ -20,6 +20,9 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
@@ -41,16 +44,24 @@ import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
 import org.openmrs.module.chartsearchai.util.DateFormatUtil;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.api.ChartTooLargeException;
+import org.openmrs.module.chartsearchai.api.ChartSearchService.ActiveOrderClaims;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.ChartAnswer;
+import org.openmrs.module.chartsearchai.api.ChartSearchService.FindingCitationExtent;
 import org.openmrs.module.chartsearchai.api.ChartSearchService.RecordReference;
+import org.openmrs.module.chartsearchai.api.ChartSearchService.UnstatedFindingSeverity;
 import org.openmrs.module.chartsearchai.api.AuditLogService;
 import org.openmrs.module.chartsearchai.api.PatientAccessCheck;
 import org.openmrs.module.chartsearchai.api.impl.PrewarmBootstrapService;
 import org.openmrs.module.chartsearchai.api.impl.PrewarmStatus;
 import org.openmrs.module.chartsearchai.api.impl.WarmupExecutor;
 import org.openmrs.module.chartsearchai.model.ChartSearchAuditLog;
+import org.openmrs.module.chartsearchai.reference.DrugReferenceLoad;
+import org.openmrs.module.chartsearchai.reference.DrugReferenceService;
+import org.openmrs.module.chartsearchai.reference.DrugSafetyValidator;
+import org.openmrs.module.chartsearchai.reference.PairChipExtent;
 import org.openmrs.module.chartsearchai.reference.SafetyWarning;
 import org.openmrs.module.webservices.rest.web.RestConstants;
+import org.openmrs.util.PrivilegeConstants;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
@@ -85,6 +96,33 @@ public class ChartSearchAiRestController {
 	private static final int MAX_QUESTION_LENGTH = 1000;
 
 	private static final Pattern CONTROL_CHARS = Pattern.compile("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]");
+
+	/**
+	 * The keep-alive frame written while the answer is still being generated: an SSE comment, which
+	 * the spec requires a client to ignore, so this needs no client change and can raise no phantom
+	 * event in the UI.
+	 */
+	private static final String SSE_KEEP_ALIVE_COMMENT = ": keep-alive\n\n";
+
+	/**
+	 * How often {@link #streamAnswer} writes {@link #SSE_KEEP_ALIVE_COMMENT} until the answer is
+	 * finished.
+	 *
+	 * <p>Fifteen seconds, to sit well inside the read timeouts this module gets deployed behind:
+	 * nginx's {@code proxy_read_timeout} defaults to 60s and Cloudflare closes a silent origin
+	 * connection at ~120s. Deliberately not a global property — the only requirement on this number
+	 * is that it be smaller than every such default, and one large enough to need tuning would
+	 * already be broken.</p>
+	 *
+	 * <p>Measured on the chartsearchai.openmrs.org demo 2026-08-19, which is why this exists: with
+	 * Gemma 4 E4B served on that 4-core box, first output arrived after the edge's window and every
+	 * query was closed at ~125s having delivered ZERO bytes — non-streaming {@code /search} as a
+	 * Cloudflare 524 and the stream as a dropped connection carrying nothing. E2B, whose first
+	 * {@code thinking} lands at 27-38s, completed the same question at 149-154s. What decides
+	 * whether a long answer survives is therefore whether something is written EARLY, not whether
+	 * the answer finishes inside the window — so this keep-alive, not a faster model, is the fix.</p>
+	 */
+	private static final long KEEP_ALIVE_INTERVAL_MS = 15000L;
 
 	private static String formatDate(Date date) {
 		return date != null ? DateFormatUtil.formatDate(date) : null;
@@ -125,6 +163,14 @@ public class ChartSearchAiRestController {
 	@Autowired
 	@Qualifier("chartSearchAi.prewarmBootstrapService")
 	private PrewarmBootstrapService prewarmBootstrapService;
+
+	@Autowired
+	@Qualifier("chartSearchAi.drugReferenceService")
+	private DrugReferenceService drugReferenceService;
+
+	@Autowired
+	@Qualifier("chartSearchAi.drugSafetyValidator")
+	private DrugSafetyValidator drugSafetyValidator;
 
 	@RequestMapping(value = "/search", method = RequestMethod.POST)
 	@ResponseBody
@@ -171,10 +217,6 @@ public class ChartSearchAiRestController {
 			return rateLimitError;
 		}
 
-		String preFilter = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
-		boolean preFilterEnabled = !"false".equalsIgnoreCase(preFilter.trim());
-
 		ChartAnswer chartAnswer;
 		long responseTimeMs;
 		try {
@@ -203,34 +245,25 @@ public class ChartSearchAiRestController {
 					HttpStatus.INTERNAL_SERVER_ERROR);
 		}
 
-		ChartSearchAuditLog auditLog = new ChartSearchAuditLog();
-		auditLog.setUser(user);
-		auditLog.setPatient(patient);
-		auditLog.setQuestion(question);
-		auditLog.setAnswer(chartAnswer.getAnswer());
-		auditLog.setReferenceCount(chartAnswer.getReferences().size());
-		auditLog.setSearchMode(preFilterEnabled ? "pre-filter" : "full-chart");
-		auditLog.setResponseTimeMs(responseTimeMs);
-		auditLog.setInputTokens(chartAnswer.getInputTokens() > 0 ? chartAnswer.getInputTokens() : null);
-		auditLog.setOutputTokens(chartAnswer.getOutputTokens() > 0 ? chartAnswer.getOutputTokens() : null);
-		auditLog.setDateCreated(new Date());
-		try {
-			auditLogService.saveAuditLog(auditLog);
-		}
-		catch (Exception e) {
-			log.warn("Failed to save audit log for search query", e);
-		}
+		// One row builder for both request paths. Issue #178 removed the last thing that made this
+		// site and the streaming one differ — each derived the search mode for itself — and what was
+		// left was the same eleven setters written twice. Two sites that must agree about a row's
+		// contents, and agree only by being kept in step by hand, is the structural condition that
+		// let search_mode hold one value for 6036 rows; the next column added would land in one of
+		// them and be silently absent from the other, exactly as cachedTokens is absent from both.
+		String questionId = saveAuditLog(user, patient, question, chartAnswer, responseTimeMs);
 
 		Map<String, Object> response = new HashMap<String, Object>();
 		response.put("answer", chartAnswer.getAnswer());
 		response.put("disclaimer", DISCLAIMER);
 
-		// Shared with the SSE emission sites so all four stay in step — carries the
-		// tri-state `grounded` verdict and the `group` discriminator; see serializeReferences.
+		// Shared with the SSE emission sites so all four stay in step — carries the `grounded`
+		// verdict (withheld for reference material, see groundedForWire) and the `group`
+		// discriminator; see serializeReferences.
 		response.put("references", serializeReferences(chartAnswer.getReferences()));
-		response.put("safetyWarnings", serializeSafetyWarnings(chartAnswer.getSafetyWarnings()));
-		if (auditLog.getAuditLogId() != null) {
-			response.put("questionId", String.valueOf(auditLog.getAuditLogId()));
+		putModuleStatements(response, chartAnswer);
+		if (questionId != null) {
+			response.put("questionId", questionId);
 		}
 
 		return new ResponseEntity<Object>(response, HttpStatus.OK);
@@ -296,13 +329,149 @@ public class ChartSearchAiRestController {
 	}
 
 	/**
+	 * Which drug-reference dataset this module is <em>actually</em> using: {@code
+	 * {enabled, loaded, inert, entryCount, sourceFormat, configuredSourceFormat,
+	 * configuredDataFilePath, origin, findings, arms, crossReactivity}}.
+	 *
+	 * <p>Exists because the answer cannot be got from the log (issue #149). The dataset load is lazy
+	 * and cached for the life of the module, so the most recent {@code "Loaded N …"} line may belong
+	 * to a load performed before the global properties were last edited, or to a previous process
+	 * that a failed restart left running — which is how a verification pass concluded it had switched
+	 * {@code sourceFormat} when it had not. Reading this endpoint performs the load if it has not
+	 * happened yet and otherwise reports the cached one, so what it returns is what the drug-safety
+	 * layer is using at the moment of the call. {@code origin} distinguishes the operator file from
+	 * the bundled fallback, which an entry count alone cannot.
+	 *
+	 * <p>When {@code chartsearchai.drugReference.enabled} is off, reports {@code enabled:false} and
+	 * loads nothing — the feature being switched off is a legitimate state, and polling a status
+	 * endpoint must not be what triggers a 19 MB parse (or the inert warning) on an install that does
+	 * not use it. Both datasets honour that: the {@code crossReactivity} section reports
+	 * {@code loaded:false} without parsing the groups file either.
+	 *
+	 * <p><b>{@code crossReactivity} is the SECOND dataset</b>, added by issue #266. The curated
+	 * cross-reactivity groups load from a global property of their own, alongside whatever
+	 * {@code sourceFormat} is in force, and until that issue their validity findings reached only the
+	 * log — so {@code configured-data-file-not-read} for that file was invisible here, on the one channel
+	 * that can answer after a lazy load. Its own subsection ({@code loaded, groupCount,
+	 * configuredFilePath, origin, findings}) rather than rows in the top-level {@code findings}, because a
+	 * finding naming a file has to be read beside the file it is about; see ADR Decision 48. Everything
+	 * the top-level {@code findings} says about the two channels applies to it unchanged.
+	 *
+	 * <p>Gated on the core {@code Get Global Properties} privilege rather than a clinical one: this
+	 * reports what the drug-reference global properties actually produced and carries no patient data,
+	 * so it needed no new privilege for an operator (or an administrator diagnosing a silent safety
+	 * layer) to read it. Note what that admits: the {@code Authenticated} role holds that privilege by
+	 * default on a Reference Application install, so in practice any logged-in user can read this —
+	 * which is why the body is confined to configuration metadata such a user can already read through
+	 * {@code GET /systemsetting}, and why {@code origin} names the operator file relative to the
+	 * application data directory rather than absolutely (core keeps the absolute path behind
+	 * {@code View Administration Functions}). Anything patient-derived, or the absolute layout of the
+	 * server, does not belong in this response.
+	 */
+	@RequestMapping(value = "/drugreferencestatus", method = RequestMethod.GET)
+	@ResponseBody
+	public ResponseEntity<Object> drugReferenceStatus() {
+		Context.requirePrivilege(PrivilegeConstants.GET_GLOBAL_PROPERTIES);
+		Map<String, Object> body = new LinkedHashMap<String, Object>();
+		body.put("enabled", ChartSearchAiUtils.isDrugReferenceEnabled());
+		body.putAll(drugReferenceService.getLoadStatus().toMap());
+		// APPENDED after the entry load's own keys, never inserted among them: the endpoint's field list
+		// is asserted as an ORDERED list, and appending is what keeps that assertion order-sensitive.
+		body.put("crossReactivity", drugReferenceService.getCrossReactivityLoadStatus().toMap());
+		return new ResponseEntity<Object>(body, HttpStatus.OK);
+	}
+
+	/**
+	 * This patient's STANDING chart findings: every active order her own allergy and condition records
+	 * contraindicate, outside the answer thread (issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/280">#280</a>).
+	 *
+	 * <p><b>Why it is an endpoint of its own and not a key on {@code /search}.</b> The active-order
+	 * contraindication arm is bounded to what the response is about, and what that bound gives up is
+	 * announcing a prescribing error nobody asks a drug-shaped question about. This is the surface it
+	 * was given up TO: a client asks for it, so the finding reaches a clinician who ran no search and
+	 * nothing rides an unrelated answer. ADR Decision 79 carries the measurement behind the bound.
+	 *
+	 * <p>Gated on the same clinical privilege as {@code /search} and resolved through the same
+	 * {@link #resolvePatient}, so the per-patient access check is the one the answer path uses.
+	 *
+	 * <p><b>Deliberately not rate-limited, and the numbers are the argument rather than the
+	 * limiter's shape.</b> Measured 2026-09-07 by driving the real
+	 * {@code DrugSafetyValidator.standingChartAlerts} over the shipped 2283-entry knowledge base,
+	 * best of 15 after 5 warm-up rounds: <b>2.2 ms</b> on an 8-order chart with an allergy and two
+	 * conditions, <b>4.9 ms</b> on a 30-order one — CHEAPER than the drug-safety pass
+	 * {@code /search} already runs on the same charts, which measured 8.7 ms and 25.6 ms, and that
+	 * pass is itself a rounding error beside that endpoint's model call. The precedent that settles it is
+	 * {@link #warmup}: same privilege, same {@code resolvePatient}, no limiter, no audit row, and it
+	 * spawns a background thread that builds a whole chart. This surface is strictly cheaper and
+	 * better bounded than one already shipped. What the existing limiter could not do for it either
+	 * way is count it — it counts this user's audit rows — and there is no row here because the row
+	 * is question-shaped and there is no question.
+	 *
+	 * <p><b>{@code screened} is not decoration.</b> An empty {@code alerts} array otherwise carries
+	 * two unrelated meanings — this chart holds no such finding, and nobody looked — which is the
+	 * distinction issue #378 drew for the condition-rule arm and issue #336 for the interaction
+	 * extent, here on the one surface whose WHOLE payload can be empty. The validator decides it and
+	 * hands both back in one object, so the flag cannot answer for a different pass than the list
+	 * beside it; see {@link DrugSafetyValidator.StandingChartAlerts}, which is canonical for what
+	 * {@code false} covers.
+	 *
+	 * <p><b>And {@code screened} answers only for the CHART.</b> What the loaded DATASET had to ask
+	 * with is a second question, and on the shipped default the answer is nothing: DDInter publishes no
+	 * hand-authored condition rule, so a patient prescribed a drug her recorded condition
+	 * contraindicates gets {@code screened: true} beside an empty {@code alerts}, which this endpoint's
+	 * README section defines as a measurement of none. That is issue #378's distinction, and it is
+	 * stated here the way #378 states it on {@code /search} — the {@code conditionRuleCoverage} key,
+	 * through the shared {@link #putConditionRuleCoverage} so the two surfaces cannot spell one verdict
+	 * two ways, and ungated for the reason {@code DrugSafetyValidator.conditionRuleCoverage()} gives:
+	 * the verdict is knowable whether or not a screen ran, and withholding it where the arms are off
+	 * withholds it exactly where it is worth having. Routing a client to
+	 * {@code GET /chartsearchai/drugreferencestatus} instead is what the first draft did, and it does
+	 * not hold: that endpoint gates on core's {@code Get Global Properties}, a different privilege from
+	 * the one this endpoint requires, which happens to sit on {@code Authenticated} on a stock install
+	 * and which a hardened site can take away. It still answers the WIDER question — every arm, and
+	 * {@code arms.handAuthoredRules.coverage} beside the condition leg — and is still where a client
+	 * goes for that.
+	 *
+	 * <p>The chips are the {@code /search} chips, through the one serializer, so a finding cannot be
+	 * shaped two ways on two surfaces. They carry no {@code interactionPairs} statement because this
+	 * pass raises no interaction chip to bound: it has no question, and the screening arm is gated on
+	 * one asking to be screened (issue #113).
+	 */
+	@RequestMapping(value = "/chartalerts", method = RequestMethod.GET)
+	@ResponseBody
+	public ResponseEntity<Object> chartAlerts(@RequestParam(value = "patient", required = false) String patientUuid) {
+		Context.requirePrivilege(ChartSearchAiConstants.PRIV_QUERY_PATIENT_DATA);
+
+		PatientResolution resolved = resolvePatient(patientUuid);
+		if (resolved.hasError()) {
+			return new ResponseEntity<Object>(
+					errorResponse(resolved.errorMessage), resolved.errorStatus);
+		}
+
+		DrugSafetyValidator.StandingChartAlerts standing =
+				drugSafetyValidator.standingChartAlerts(resolved.patient);
+
+		Map<String, Object> body = new LinkedHashMap<String, Object>();
+		body.put("screened", standing.isScreened());
+		putConditionRuleCoverage(body, drugSafetyValidator.conditionRuleCoverage());
+		body.put("alerts", serializeSafetyWarnings(standing.getAlerts()));
+		return new ResponseEntity<Object>(body, HttpStatus.OK);
+	}
+
+	/**
 	 * Streaming search endpoint using Server-Sent Events. Streams tokens as they are
 	 * generated by the LLM, then sends references and disclaimer as a final "done" event.
 	 *
-	 * <p>Writes SSE events directly to the response output stream in the request
-	 * thread. This avoids the need for {@code SseEmitter}, background threads,
-	 * async servlet support, and proxy privileges — the authenticated user's
-	 * session is naturally available throughout the request.</p>
+	 * <p>Writes SSE events directly to the response output stream in the request thread, which is
+	 * where OpenMRS binds authentication. This avoids the need for {@code SseEmitter}, async servlet
+	 * support, and proxy privileges — the authenticated user's session is naturally available
+	 * throughout the request. It is NOT "no background threads": {@code SseKeepAlive} runs a timer
+	 * that writes comment frames so a reverse proxy never sees a read-idle connection. What holds is
+	 * the narrower thing — no thread but the request thread does OpenMRS WORK, and that timer reads
+	 * no {@code Context} — which is the scope
+	 * {@code ChartSearchAiStreamingTest.streamingEndpoint_shouldNotRunOpenmrsWorkOnBackgroundThreads}
+	 * states and enforces.</p>
 	 *
 	 * <p>SSE event types:</p>
 	 * <ul>
@@ -325,6 +494,15 @@ public class ChartSearchAiRestController {
 	 *       after {@code done} to receive it</li>
 	 *   <li>{@code error} — an error message if something goes wrong</li>
 	 * </ul>
+	 *
+	 * <p>Between those events the stream also carries SSE <em>comments</em> — lines opening with
+	 * {@code :}, one written before generation begins and one every {@code KEEP_ALIVE_INTERVAL_MS}
+	 * until the answer is finished. They are not events and carry no data, so a client must skip any
+	 * line beginning with {@code :} rather than read it as a frame, with whatever parser it uses:
+	 * {@code EventSource} would do that for it, but it issues a GET and sends no body, so it cannot
+	 * reach this POST endpoint. Their only job is to stop a reverse proxy closing a connection it has
+	 * read nothing on; README's Streaming search (SSE) section carries the read timeouts and the demo
+	 * measurements behind them.</p>
 	 */
 	@RequestMapping(value = "/search/stream", method = RequestMethod.POST)
 	public void searchStream(@RequestBody Map<String, String> body,
@@ -408,12 +586,7 @@ public class ChartSearchAiRestController {
 		// Commit the response headers now so chunked transfer starts
 		unwrapped.flushBuffer();
 
-		String preFilterProp = Context.getAdministrationService()
-				.getGlobalProperty(ChartSearchAiConstants.GP_EMBEDDING_PRE_FILTER, "false");
-		String searchMode = !"false".equalsIgnoreCase(preFilterProp.trim())
-				? "pre-filter" : "full-chart";
-
-		streamAnswer(out, patient, sanitizedQuestion, user, searchMode, isAsyncGroundingActive());
+		streamAnswer(out, patient, sanitizedQuestion, user, isAsyncGroundingActive());
 	}
 
 	/**
@@ -442,10 +615,30 @@ public class ChartSearchAiRestController {
 	 *
 	 * <p>Package-private and free of {@code Context} reads so event-order behavior is unit-tested
 	 * directly (see {@code ChartSearchAiStreamEventOrderTest}); {@code searchStream} resolves all
-	 * configuration before delegating here.</p>
+	 * configuration before delegating here. The audit row's search mode is NOT among that
+	 * configuration: it is stated by the answer the pipeline returns (issue #178), so there is no
+	 * parameter for a caller to get wrong and no second derivation to drift from the first.</p>
 	 */
 	void streamAnswer(final OutputStream out, Patient patient, String sanitizedQuestion, User user,
-			String searchMode, boolean asyncGrounding) {
+			boolean asyncGrounding) {
+		streamAnswer(out, patient, sanitizedQuestion, user, asyncGrounding, KEEP_ALIVE_INTERVAL_MS);
+	}
+
+	/**
+	 * As {@link #streamAnswer(OutputStream, Patient, String, User, boolean)}, with the keep-alive
+	 * interval given rather than taken from {@link #KEEP_ALIVE_INTERVAL_MS}.
+	 *
+	 * <p>The interval is a parameter so the periodic writes can be OBSERVED in a test without
+	 * waiting a production interval out — the alternative, a mutable field, would put the value on a
+	 * Spring singleton where one request could change another's. Production callers use the five-arg
+	 * form; nothing but a test should pass this.</p>
+	 *
+	 * @param keepAliveIntervalMillis how often to write {@link #SSE_KEEP_ALIVE_COMMENT} until the
+	 *        answer is finished
+	 */
+	void streamAnswer(final OutputStream out, Patient patient, String sanitizedQuestion, User user,
+			boolean asyncGrounding, long keepAliveIntervalMillis) {
+		final SseKeepAlive keepAlive = SseKeepAlive.start(out, keepAliveIntervalMillis);
 		try {
 			long startTime = System.currentTimeMillis();
 
@@ -471,7 +664,7 @@ public class ChartSearchAiRestController {
 							return;
 						}
 						earlyQuestionId[0] = saveAuditLog(user, patient, sanitizedQuestion,
-								ungrounded, searchMode, System.currentTimeMillis() - startTime);
+								ungrounded, System.currentTimeMillis() - startTime);
 						try {
 							writeSseEvent(out, "done",
 									doneEventJson(ungrounded, earlyQuestionId[0]));
@@ -507,7 +700,7 @@ public class ChartSearchAiRestController {
 				// Classic shape: async off, or the service returned an already-final answer (cache
 				// hit) without surfacing an ungrounded stage — audit and emit the single done.
 				String questionId = saveAuditLog(user, patient, sanitizedQuestion, chartAnswer,
-						searchMode, System.currentTimeMillis() - startTime);
+						System.currentTimeMillis() - startTime);
 				writeSseEvent(out, "done", doneEventJson(chartAnswer, questionId));
 			} else {
 				// done already went out before grounding; deliver the verdicts in the trailing
@@ -515,7 +708,7 @@ public class ChartSearchAiRestController {
 				// replace its reference list wholesale; questionId correlates the two events.
 				Map<String, Object> groundedData = new HashMap<String, Object>();
 				groundedData.put("references", serializeReferences(chartAnswer.getReferences()));
-				groundedData.put("safetyWarnings", serializeSafetyWarnings(chartAnswer.getSafetyWarnings()));
+				putModuleStatements(groundedData, chartAnswer);
 				if (earlyQuestionId[0] != null) {
 					groundedData.put("questionId", earlyQuestionId[0]);
 				}
@@ -559,6 +752,21 @@ public class ChartSearchAiRestController {
 				}
 			}
 		}
+		finally {
+			// Every exit stops the timer, including a client disconnect, which unwinds through the
+			// catch above rather than returning — the case ChartSearchAiStreamKeepAliveTest's
+			// aClientDisconnectStopsTheTimerToo holds, since the happy-path test beside it cannot
+			// tell this finally from a statement at the tail of the try block and stayed green when
+			// the two were swapped. Once stop() returns, no keep-alive can be in flight or begin (see
+			// SseKeepAlive.stop) — which is what lets the flush below take no lock. A comment can
+			// still land after the terminal event, because a task parked on the monitor during the
+			// final write may take it before stop() does. That is harmless: a comment carries no
+			// data, and with async grounding a client already has to keep reading past done. What
+			// must not happen is a write after this method returns, which is the window
+			// SseKeepAlive's stopped flag closes — shutdownNow alone cannot, since interrupting a
+			// thread parked on a monitor does nothing.
+			keepAlive.stop();
+		}
 
 		try {
 			out.flush();
@@ -569,21 +777,42 @@ public class ChartSearchAiRestController {
 	}
 
 	/**
-	 * Persists the audit row for a streaming answer and returns its id as the client-facing
-	 * {@code questionId}, or {@code null} when the save failed — audit failures are logged and
-	 * never break the response, exactly as before the async-grounding split. Shared by the
-	 * classic post-return path and the async early-{@code done} path so both emit identical
-	 * audit rows and {@code done} payloads.
+	 * Persists the audit row for one answer and returns its id as the client-facing
+	 * {@code questionId}, or {@code null} when the save failed — audit failures are logged and never
+	 * break the response, exactly as before the async-grounding split.
+	 *
+	 * <p><b>The only place a row is built.</b> All three write sites go through here: the blocking
+	 * {@code /search} handler, the streaming classic post-return path, and the streaming async
+	 * early-{@code done} path. Before issue #178 the blocking site had its own copy of these
+	 * setters, and the one expression that differed between the copies — how each derived
+	 * {@code searchMode} — is the whole of that issue. The mode now travels on the answer, which left
+	 * two identical copies; keeping them as copies would leave the next column added to this table
+	 * present in one row shape and silently absent from the other, which is the same defect wearing
+	 * a different field's name.
+	 *
+	 * <p>The mode is read off {@code answer}, never re-derived here, so the row states what the
+	 * pipeline actually did rather than what a global property says at write time.
 	 */
 	private String saveAuditLog(User user, Patient patient, String question, ChartAnswer answer,
-			String searchMode, long responseTimeMs) {
+			long responseTimeMs) {
 		ChartSearchAuditLog auditLog = new ChartSearchAuditLog();
 		auditLog.setUser(user);
 		auditLog.setPatient(patient);
 		auditLog.setQuestion(question);
 		auditLog.setAnswer(answer.getAnswer());
 		auditLog.setReferenceCount(answer.getReferences().size());
-		auditLog.setSearchMode(searchMode);
+		// Written from the answer, never re-derived here, for the reason the mode is: by the time this
+		// runs the chart the slice was measured on is gone. A null slice files two nulls rather than
+		// two zeros — see ChartAnswer.getReferenceSlice() for what the distinction is and why the
+		// columns are nullable (issue #229). Note that setInputTokens/setOutputTokens below do NOT
+		// follow that rule — they collapse a measured 0 to null — so this table is not uniform about
+		// it and a reader must not generalise either convention to the other. Named rather than
+		// located: a line count is a claim about layout that the next insertion falsifies, and this
+		// one already had.
+		ChartSearchAiUtils.ReferenceSlice referenceSlice = answer.getReferenceSlice();
+		auditLog.setReferenceSliceRecords(referenceSlice == null ? null : referenceSlice.getRecords());
+		auditLog.setReferenceSliceChars(referenceSlice == null ? null : referenceSlice.getCharacters());
+		auditLog.setSearchMode(answer.getSearchMode());
 		auditLog.setResponseTimeMs(responseTimeMs);
 		auditLog.setInputTokens(answer.getInputTokens() > 0 ? answer.getInputTokens() : null);
 		auditLog.setOutputTokens(answer.getOutputTokens() > 0 ? answer.getOutputTokens() : null);
@@ -592,18 +821,20 @@ public class ChartSearchAiRestController {
 			auditLogService.saveAuditLog(auditLog);
 		}
 		catch (Exception e) {
-			log.warn("Failed to save audit log for streaming query", e);
+			log.warn("Failed to save audit log", e);
 		}
 		return auditLog.getAuditLogId() != null ? String.valueOf(auditLog.getAuditLogId()) : null;
 	}
 
-	/** Serializes the {@code done} event payload: answer, disclaimer, references, questionId. */
+	/** Serializes the {@code done} event payload: the answer, the disclaimer, the references, the
+	 *  questionId, and every statement {@link #putModuleStatements} writes — named rather than
+	 *  enumerated, so this comment cannot fall behind that method's keys, which it already had. */
 	private String doneEventJson(ChartAnswer answer, String questionId) throws IOException {
 		Map<String, Object> doneData = new HashMap<String, Object>();
 		doneData.put("answer", answer.getAnswer());
 		doneData.put("disclaimer", DISCLAIMER);
 		doneData.put("references", serializeReferences(answer.getReferences()));
-		doneData.put("safetyWarnings", serializeSafetyWarnings(answer.getSafetyWarnings()));
+		putModuleStatements(doneData, answer);
 		if (questionId != null) {
 			doneData.put("questionId", questionId);
 		}
@@ -623,6 +854,15 @@ public class ChartSearchAiRestController {
 	/** Test seam: production wires {@link PatientAccessCheck} via {@code Autowired}. */
 	void setPatientAccessCheck(PatientAccessCheck patientAccessCheck) {
 		this.patientAccessCheck = patientAccessCheck;
+	}
+
+	/** Test seam: production wires {@link DrugReferenceService} via {@code Autowired}. */
+	void setDrugReferenceService(DrugReferenceService drugReferenceService) {
+		this.drugReferenceService = drugReferenceService;
+	}
+
+	void setDrugSafetyValidator(DrugSafetyValidator drugSafetyValidator) {
+		this.drugSafetyValidator = drugSafetyValidator;
 	}
 
 	@RequestMapping(value = "/auditlog", method = RequestMethod.GET)
@@ -672,6 +912,13 @@ public class ChartSearchAiRestController {
 			entry.put("question", auditLog.getQuestion());
 			entry.put("answer", auditLog.getAnswer());
 			entry.put("referenceCount", auditLog.getReferenceCount());
+			// The prompt COST beside the answer's USE of it: referenceCount is what the answer
+			// PUBLISHED — since issue #305 that can include a citation the module attached, so it is
+			// not a count of what the model cited; these two are the reference material put in front of the model, most of which
+			// is never cited. Published here because the point of issue #229 is that the size was
+			// unreadable without a log level nobody can durably set.
+			entry.put("referenceSliceRecords", auditLog.getReferenceSliceRecords());
+			entry.put("referenceSliceChars", auditLog.getReferenceSliceChars());
 			entry.put("searchMode", auditLog.getSearchMode());
 			entry.put("responseTimeMs", auditLog.getResponseTimeMs());
 			entry.put("inputTokens", auditLog.getInputTokens());
@@ -900,8 +1147,11 @@ public class ChartSearchAiRestController {
 	 * final {@code done} event (grounded) and the trailing {@code grounded} event of the async
 	 * path. One implementation so a field added here cannot reach some clients and not others.
 	 *
-	 * <p>{@code grounded} is null when grounding is disabled or could not run — clients must render
-	 * null as "unverified", never as "verified".
+	 * <p>{@code grounded} is null when grounding is disabled, could not run, or ran and could not
+	 * certify the citation — the reasons for that last case are enumerated once, in ADR Decision 11's
+	 * {@code grounded} paragraph, and this method restates none of them. Clients must render
+	 * null as "unverified", never as "verified". It is ALSO null, unconditionally, for a
+	 * {@code reference}-group citation: see {@link #groundedForWire}.
 	 *
 	 * <p>{@code group} classifies each reference as chart evidence or module-supplied reference
 	 * prose (see {@link ChartSearchAiUtils#referenceGroup}), and the list is ordered so the groups
@@ -948,7 +1198,7 @@ public class ChartSearchAiRestController {
 			refMap.put("resourceType", ref.getResourceType());
 			refMap.put("resourceUuid", ref.getResourceUuid());
 			refMap.put("date", formatDate(ref.getDate()));
-			refMap.put("grounded", ref.getGrounded());
+			refMap.put("grounded", groundedForWire(ref));
 			refMap.put("group", ChartSearchAiUtils.referenceGroup(ref.getResourceType()));
 			// Citation metadata, for rendering beside the chip: where the cited record came from,
 			// and how many of its interaction partners the cited record does not name (usually because
@@ -958,9 +1208,63 @@ public class ChartSearchAiRestController {
 			// `withheldInteractions` 0 for a chart record, which is that record's real shape.
 			refMap.put("source", ref.getSource());
 			refMap.put("withheldInteractions", ref.getWithheldInteractions());
+			// Who put this citation on the answer (issue #305). True for a chart record an injected
+			// safety_finding the model DID cite was derived from. What a client does with it, and why
+			// it is not derivable from the other fields, is on RecordReference.isAttachedByTheModule
+			// — one home, which README's client section restates for a client author and nothing
+			// else should. Do not restate it here.
+			refMap.put("attachedByTheModule", ref.isAttachedByTheModule());
 			refs.add(refMap);
 		}
 		return refs;
+	}
+
+	/**
+	 * The grounding verdict this citation may publish: the pipeline's verdict for chart evidence,
+	 * and nothing at all — always {@code null} — for module-supplied reference material.
+	 *
+	 * <p>Grounding treats reference material as DEMOTE-ONLY: a pass is withheld as {@code null}
+	 * because a recitation of module-rendered prose embeds near-identically to its source even when
+	 * it swaps subject roles (#106), while a Tier-1 off-topic citation still yields {@code false}.
+	 * That surviving {@code false} was kept on the wire because it carries information — it says the
+	 * citation is not about the record — and it is that value issue #201 removes.
+	 *
+	 * <p>The reason is that no client had a correct reading of it. The verdict's meaning here is
+	 * "off-topic citation", not "unsupported claim", and distinguishing the two requires reading
+	 * {@code group}. The reference frontend classified by {@code resourceType} instead (measured on
+	 * #201 against {@code openmrs-esm-chartsearchai} at {@code 3003cd2}, which does not declare
+	 * {@code group} on its reference type at all), so a {@code safety_finding} fell through to its
+	 * grounding branch and rendered <em>"Unsupported — The cited record may not support this
+	 * statement"</em>, in red, on this module's own deterministic Major-interaction finding. Both
+	 * settlements offered on #201 would fix that one client; the one taken is this, because a field
+	 * that must not be interpreted is a trap and withholding it holds for every client rather than
+	 * for the one that is patched. Nothing about the grounding pass changes: the verifier still
+	 * computes the verdict and {@code RecordReference.getGrounded()} still carries it. Only its
+	 * publication stops here.
+	 *
+	 * <p>{@code null} rather than an omitted key: {@code null} is already this field's documented
+	 * value for "grounding disabled or could not run", clients are already instructed to render it
+	 * as unverified and never as verified, and the key's unconditional presence is a property
+	 * clients rely on. Omitting it would invent a third state and break more for no gain.
+	 *
+	 * <p>Derived through {@link ChartSearchAiUtils#isGroundingDemoteOnly}, never from a list of
+	 * type names — the enumerated form is what left {@code safety_finding} out of the grounding
+	 * carve-out for two releases (#122), and it is the same mistake the client above made. So the
+	 * group this withholding is keyed on is the same one the {@code group} field publishes, and a
+	 * reference type added later is withheld without anyone remembering this method.
+	 *
+	 * <p>Both halves of {@code ChartSearchAiReferenceGroundingWithholdingTest} guard this, and
+	 * neither subsumes the other. Its behavioural sweep catches a hardcoded pair that has fallen
+	 * BEHIND the classifier — measured on issue #354, which added a third reference-group type: the
+	 * old pair reddens five of its cases on a {@code drug_class_note} citation. Its compiled-class
+	 * scan catches one that still AGREES with the classifier, which no behavioural case can see. The
+	 * sentence here used to name only the scan, on the premise that a hardcode always agrees; that
+	 * premise died with the third type.
+	 */
+	private static Boolean groundedForWire(RecordReference ref) {
+		return ChartSearchAiUtils.isGroundingDemoteOnly(ref.getResourceType())
+				? null
+				: ref.getGrounded();
 	}
 
 	/**
@@ -993,6 +1297,104 @@ public class ChartSearchAiRestController {
 	 * Serializes the post-answer drug-safety advisories to the wire shape rendered as chips below the
 	 * answer. Empty list when the drug-reference feature is off or nothing was flagged. The key is
 	 * always present (possibly empty) so the frontend can branch on length without a null check.
+	 *
+	 * <p><b>{@code severity} is published because the alternative is a client parsing English</b>
+	 * (issue #340). It is the rating the two PAIRWISE arms order their chips by before
+	 * {@code DrugSafetyValidator.maxPairChips} cuts the list, and until #340 it stopped here — so the
+	 * only way to badge a Major differently from a Minor was to substring-match
+	 * {@link SafetyWarning#getDetail()}, clinician-facing prose this module rewords freely. Not
+	 * hypothetical: {@code eval/drift-metric/score_probe_safety.py} carries such a parse and its own
+	 * comment calls it "the fault issue #207 exists to have removed". What it publishes is the SOURCE
+	 * dataset's rating, not this module's judgment about what may be done — which is the separate
+	 * thing issue #283 deliberately keeps off the wire ({@code DrugSafetyValidator.licensesWithholding}
+	 * and the {@code STRENGTH_*} clauses stay prompt-facing).
+	 *
+	 * <p>Written verbatim and unnormalized, and NOT coerced into a closed vocabulary. See
+	 * {@link SafetyWarning#getSeverity()} for what a reader may and may not conclude from it; the
+	 * short form is that {@code null} says the rule carries no rating and a non-null value is
+	 * whatever the loaded dataset wrote, which the module's own reader
+	 * ({@code DrugSafetyValidator.severityRank}) trims, case-folds, and treats as unrated when it does
+	 * not recognise it. Null rather than an omitted key, for the reason {@link #groundedForWire}
+	 * gives about its own field: the key's unconditional presence is what lets a client read it
+	 * without first asking whether it is there.
+	 *
+	 * <p><b>{@code restsOnAnUncorroboratedChartMatch} is the chip's own provenance answer</b> (issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/374">#374</a>), read off
+	 * {@link SafetyWarning#restsOnAnUncorroboratedChartMatch()} and never re-derived here. It exists for
+	 * the reason {@code severity} above does: the module had made the judgement, the two injected
+	 * records stated it, and the only clinician-facing surface said nothing — so a chip asserted a
+	 * contraindication of the chart while the {@code safety_finding} beside it hedged. That accessor is
+	 * canonical for what the value means, including the two folds that make {@code false} weaker than
+	 * it reads, and {@code README.md} carries the client contract. Two things NOT to conclude from this
+	 * paragraph's placement beside {@code severity}: the flag is not a strength and must not be read as
+	 * one (ADR Decision 44), and {@code detail} is unchanged by it, so the qualification is the
+	 * client's to render. ADR Decision 92.
+	 *
+	 * <p><b>{@code chartOrderBridges} names which of the patient's own active orders each substance
+	 * the chip NAMES was resolved from</b>, where the order's own displayed name does not reach that
+	 * substance (issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/347">#347</a>). Each
+	 * entry serializes as {@code {substance, orderDisplay}} — the two public getters of
+	 * {@link SafetyWarning.ChartOrderBridge}, and nothing else on that class is a getter.
+	 *
+	 * <p><b>Why the key exists.</b> One response named one prescription two ways — the answer prose
+	 * called it {@code Advil} after the {@code drug_order} record it cited, every chip called it
+	 * {@code Ibuprofen} after the knowledge base — and a clinician reading a chip list beside an
+	 * answer then has to decide whether those are one prescription or two. The chip side must not be
+	 * re-decided (#339's reverted rounds 5-6, and CLAUDE.md), and the module's own statement of the
+	 * correspondence is a clause inside the injected {@code safety_finding}, which reaches a client
+	 * only if the model cites it — measured on #354's reproduction, it did not. So the module states
+	 * it here as well. A client renders it as the order this chip's substance came FROM; it asserts a
+	 * RESOLUTION this module performed and no identity of the prescription, which is precisely what
+	 * #339's reverted rounds could not say.
+	 *
+	 * <p><b>Published VERBATIM, not remapped.</b>
+	 * {@code ChartSearchAiSafetyWarningSeverityWireTest.everyPublicZeroArgumentAccessorOfAWarningNamesAKeyOnTheWire}
+	 * compares each public accessor's own reading against the key it names, so its CONTRACT is that
+	 * the published value equals what the accessor returns — a value the module computes and then
+	 * reshapes is indistinguishable there from issue #340's own defect, a value computed and dropped.
+	 * <b>The suite exercises it</b>: that fixture's chip 7 carries two bridges for this reason, and a
+	 * reshape into maps reddens the guard with the offending value in its message. It did NOT when
+	 * this key was first published — every chip there bridged nothing, so two empty lists compared
+	 * equal without reaching an element — and that is what the chip closes. ADR Decision 70 records
+	 * the state before and after; do not restore the blind spot by removing the chip.
+	 *
+	 * <p>Two consequences of publishing the object, both measured and neither hidden. The JSON field
+	 * names come from {@code ChartOrderBridge}'s getters, so a public getter added there becomes a
+	 * wire field — {@code ChartSearchAiChartOrderBridgeTest.theTwoHalvesAreSeparateFieldsAndNotASentenceToParse}
+	 * pins the JSON field set. And this is the only value on the payload that is not a JDK type, so
+	 * XStream names its element after the CLASS
+	 * ({@code org.openmrs.module.chartsearchai.reference.SafetyWarning_-ChartOrderBridge}) where every
+	 * other element takes one of XStream's own built-in names; README scopes the documented field
+	 * names to JSON for that reason. A closed list of those names stood here and is not kept — it read
+	 * {@code map}/{@code list}/{@code string} while the payload already carried {@code null} and
+	 * {@code linked-hash-map}, and issue #374 added {@code boolean}. XStream marshals FIELDS, so a PRIVATE field added to that class
+	 * also reaches an XML client, and neither of {@code ChartSearchAiChartOrderBridgeTest}'s other two
+	 * cases sees it —
+	 * {@code theTwoHalvesAreSeparateFieldsAndNotASentenceToParse} reads GETTERS, and
+	 * {@code theWholePayloadStillMarshalsForAnXmlClient} only catches a field XStream REFUSES.
+	 * {@code ChartSearchAiChartOrderBridgeTest.everyFieldAnXmlClientReceivesIsAFieldAJsonClientReceives}
+	 * is what closes that, structurally and off {@code getDeclaredFields}: every declared field needs a
+	 * public getter of its own name. Measured — add a private field with no getter and that one case
+	 * reddens while the marshalling case stays green. It is ONE-directional, a field implying a getter
+	 * and never the converse, and its own javadoc says why it has no observable value to assert; read
+	 * that before deleting it as unused. <b>This paragraph said nothing caught the shape until review
+	 * round 1 read it against the guard the same change had added.</b>
+	 *
+	 * <p>Two fields rather than a rendered sentence, for the same reason {@code severity} above is
+	 * published at all: the alternative is a client parsing English. The list is always
+	 * present and is EMPTY where the module bridged nothing. <b>Empty says "no attribution to show",
+	 * and NOT "the chart records these substances."</b> No rule about which chips are empty is offered
+	 * here, and that is deliberate — every draft of one has been measured false, the later ones
+	 * against the real pipeline. The mechanism instead: {@code DrugSafetyValidator.chartOrderBridges} walks
+	 * the SUBJECT against every active order and the PARTNER against the orders its arm allowed to
+	 * witness it, and each item additionally needs {@code addChartOrderBridge}'s
+	 * {@code resolvesFromAny} and a display that does not already name the substance. That clause is
+	 * the whole of it — the last such rule written here was refuted too, and nothing is claimed about
+	 * what a chip's contribution depends on, because the partner witness set is the CALLER's and the
+	 * two arms hand down different ones. Rendering empty as "the chart already records it" would tell
+	 * a clinician she is on a drug she is not, which is issue #347's own confusion inverted inside the
+	 * field added to fix it.
 	 */
 	private List<Map<String, Object>> serializeSafetyWarnings(List<SafetyWarning> warnings) {
 		List<Map<String, Object>> out = new ArrayList<Map<String, Object>>();
@@ -1004,9 +1406,347 @@ public class ChartSearchAiRestController {
 			map.put("type", warning.getType());
 			map.put("drug", warning.getDrug());
 			map.put("detail", warning.getDetail());
+			map.put("severity", warning.getSeverity());
+			// Copied into an ArrayList, and that is a correctness requirement rather than caution —
+			// serializeReferences above copies for its own reason and this is a second one. The
+			// blocking /search response is a ResponseEntity<Object> served by the converters
+			// openmrs-core registers (webservices.rest leaves <mvc:annotation-driven/> commented out),
+			// and for `Accept: application/xml` the one selected for a Map body is
+			// xmlMarshallingHttpMessageConverter, a MarshallingHttpMessageConverter over an
+			// XStreamMarshaller — read off openmrs-web's own openmrs-servlet.xml (the
+			// RequestMappingHandlerAdapter's messageConverters list, lines 117-129 of the 2.8.4
+			// artifact), not inferred — and confirmed on a live request, whose XML body is XStream's
+			// own <map><entry><string>… . XStreamMarshaller refuses java.util.Collections' immutable
+			// wrappers: measured on JDK 21.0.6 with xstream 1.4.21, both
+			// Collections$UnmodifiableRandomAccessList and Collections$EmptyList raise
+			// ConversionException("No converter available") while an ArrayList marshals. (An earlier
+			// draft of this comment attributed it to a modular-JDK access error and quoted "module
+			// java.base does not opens java.util"; no such text appears — the behaviour is what was
+			// verified, the message was not.) chartOrderBridges() returns an unmodifiableList, or
+			// Collections$EmptyList in the empty case, so publishing it as handed turned every
+			// chip-carrying XML response into a 500 — the empty case included.
+			// ChartSearchAiChartOrderBridgeTest.theWholePayloadStillMarshalsForAnXmlClient pins it.
+			map.put("chartOrderBridges",
+				new ArrayList<SafetyWarning.ChartOrderBridge>(warning.chartOrderBridges()));
+			// Issue #374. Needs no copy: the value is an immutable autoboxed Boolean, so there is
+			// nothing for a caller to mutate, and XStream has a converter for it (verified by
+			// marshalling a payload carrying it). "It is a JDK type" is NOT the criterion and was
+			// written here once — both wrappers the paragraph above names are JDK types, and the
+			// non-JDK ChartOrderBridge marshals fine; what XStream refuses is java.util.Collections'
+			// immutable collection wrappers specifically.
+			map.put("restsOnAnUncorroboratedChartMatch", warning.restsOnAnUncorroboratedChartMatch());
 			out.add(map);
 		}
 		return out;
+	}
+
+	/**
+	 * Writes an ANSWER's drug-safety chips AND the statement of how bounded the interaction list
+	 * behind them is, into one payload map. Every surface that emits an answer goes through here,
+	 * since issue #354 by way of {@link #putModuleStatements} — which composes this with the
+	 * module's other statements, and is this method's only caller. Read that method for what those
+	 * are; a list here is one that falls behind, which it already had once.
+	 *
+	 * <p><b>"Every surface that emits an answer" is the whole of the claim, and since issue #280 it
+	 * is narrower than "every surface that emits chips".</b> {@link #chartAlerts} publishes chips
+	 * with no answer behind them: it raises no interaction chip, so there is no extent to state,
+	 * and it says instead whether the screen ran. It shares {@link #serializeSafetyWarnings} so a
+	 * finding is shaped one way on both surfaces, and it must NOT be routed through this method —
+	 * an {@code interactionPairs} key there would assert a screen that never ran.
+	 *
+	 * <p>Named for the CHIPS and not for "findings", deliberately: {@code safety_finding} is a
+	 * reference resource type — the citable record form of a chip — and this method has nothing to
+	 * do with it.
+	 *
+	 * <p><b>One method for both keys, and that is the point</b> (issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/336">#336</a>). A
+	 * capped screen was byte-indistinguishable from a complete one on the wire — 8 of 18 pairs
+	 * withheld, 0 signals — so the completeness statement must travel with the chips it is about,
+	 * and a fourth emission site added later must not be able to publish one without the other. Two
+	 * sites kept in step by hand is the structural condition the {@code search_mode} column's own
+	 * comment above records as having held one value for 6036 rows.
+	 * {@code ChartSearchAiInteractionPairExtentTest} counts the callers of
+	 * {@link #serializeSafetyWarnings} and pins each to the body it belongs in — this one, and
+	 * since issue #280 {@link #chartAlerts}, which is not an answer payload. A caller anywhere
+	 * else fails the build; do not read that as "any caller but this one", which is what it
+	 * asserted before that surface existed.
+	 *
+	 * <p>{@code interactionPairs} is always present and is {@code null} where the interaction check
+	 * stated nothing — see {@code PairChipExtent}, which is canonical for what that does and does
+	 * not mean. It is deliberately NOT the count of {@code interaction} chips beside it: the
+	 * drug-in-play arm raises chips for drugs only the ANSWER named and unrated class chips this
+	 * counts nowhere, so a client must render this as a ratio of pairs, not of chips.
+	 */
+	private void putSafetyChips(Map<String, Object> target, ChartAnswer answer) {
+		target.put("safetyWarnings", serializeSafetyWarnings(answer.getSafetyWarnings()));
+		target.put("interactionPairs", serializePairChipExtent(answer.getPairChipExtent()));
+	}
+
+	/**
+	 * Writes every statement this module makes about an ANSWER of its own — as distinct from the
+	 * answer text, which is the model's. Each surface that emits an answer calls this one method.
+	 *
+	 * <p>Scoped to an answer, and since issue #280 that is narrower than "every payload":
+	 * {@link #chartAlerts} carries no answer, so none of these statements is about anything it
+	 * holds. It makes one of its own instead, {@code screened}, which is about the SCREEN and not
+	 * about a response — see {@link #putSafetyChips}, whose claim narrowed the same way and for
+	 * the same reason.
+	 *
+	 * <p><b>One entry point for the same reason {@link #putSafetyChips} is one</b> (issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/336">#336</a>): a
+	 * payload site added later must not be able to carry the answer while dropping a deterministic
+	 * safety statement beside it. {@code putSafetyChips} keeps its own identity — it is named for the
+	 * CHIPS and the completeness statement that must travel with them, and the class note is neither
+	 * — so this composes the two rather than growing a third key inside it.
+	 * {@code ChartSearchAiUnresolvedDrugClassTest} fails the build on a second call to
+	 * {@code putSafetyChips}, which is what forces every surface through here.
+	 *
+	 * <p>{@code unresolvedDrugClass} is always present and is {@code null} where the module states no
+	 * class — see {@code ChartAnswer.getUnresolvedDrugClass()}, which is canonical for what that
+	 * covers and for why there is no zero to tell it from. It is a bare class NAME rather than an
+	 * object: it carries one datum, and a client renders its own sentence from it rather than the
+	 * record's prose, which is prompt-facing.
+	 *
+	 * <p>Why the key exists at all: the deterministic half of issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/354">#354</a> is a
+	 * {@code drug_class_note} record in the prompt, and a prompt record reaches a client only if the
+	 * model cites it — measured on that issue's own reproduction, it did not, so nothing a
+	 * {@code /search} consumer reads reported the class at all. The module states what it did;
+	 * whether the answer relays it stays the model's.
+	 *
+	 * <p>{@code unfaithfullyRenderedCitations} is the same remedy for the same failure, one issue
+	 * later (<a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/337">#337</a>):
+	 * the citations whose rendering in the answer the module found unfaithful to the record they point
+	 * at. {@code ChartAnswer.getUnfaithfullyRenderedCitations()} is canonical for what it states, for
+	 * why no prose travels with it, and for the difference between {@code null} and an empty list — a
+	 * difference this method preserves rather than flattening.
+	 *
+	 * <p>{@code misattributedOrderCitations} is that remedy once more, one issue later
+	 * (<a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/377">#377</a>): the
+	 * chart citations the answer offered as evidence of an active drug order that cannot be one.
+	 * {@code ChartAnswer.getMisattributedOrderCitations()} is canonical for what it states, for why
+	 * no prose travels with it, and for the difference between {@code null} and an empty list. It
+	 * reaches this method rather than {@code putSafetyChips} for the reason
+	 * {@code unfaithfullyRenderedCitations} does: it is a statement about the ANSWER, not a chip.
+	 *
+	 * <p>{@code unstatedFindingSeverities} is that remedy a third time, back on the issue the first
+	 * one came from (<a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/337">issue
+	 * #337</a>, round three): the citations of safety findings whose RATING the answer states nowhere,
+	 * each carrying that rating since
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/387">#387</a>. It
+	 * reaches this method rather than {@code putSafetyChips} for the reason its two neighbours do —
+	 * it is a statement about the ANSWER, not a chip — and it is emphatically not a restatement of
+	 * the chips' own {@code severity}, which is what the answer was supposed to carry and did not.
+	 * Nor does carrying the rating make it one: the value is the RECORD's, it differs from the chip's
+	 * in form and in extent, and {@link #serializeUnstatedFindingSeverities} carries why.
+	 *
+	 * <p>{@code chartReadForSafety} is the remedy for the failure one layer UNDER all of these
+	 * (<a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/247">#247</a>): not a
+	 * statement the answer got something wrong, but a statement that the chart the whole safety
+	 * layer reasons over could not be READ. A failed allergy, condition or active-order read
+	 * degrades that context to an empty — or, where the read threw part-way, a partial — set, so
+	 * every key above it reports honestly about whatever survived, and the counts a client renders
+	 * are the ones a healthy chart produces. Carried raw — a bare three-valued Boolean,
+	 * like {@code unresolvedDrugClass} and for the same reason, it being one datum — and needing no
+	 * null guard, a Boolean being immutable. {@code ChartAnswer.getChartReadForSafety()} is
+	 * canonical for what each of the three values does and does not assert, in particular that it
+	 * says nothing about whether anything was SCREENED, and for how it differs from
+	 * {@code chartAlerts}' own {@code screened}.
+	 *
+	 * <p>{@code conditionRuleCoverage} is the same remedy again, from the issue beside it
+	 * (<a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/378">#378</a>): what
+	 * the loaded dataset publishes for the hand-authored CONDITION-rule arm, so a client can tell a
+	 * contraindication screen that had no rule to ask from one that asked and found nothing. Always
+	 * present. A bare token rather than an object, like {@code unresolvedDrugClass} and for the same
+	 * reason — it carries one datum. Spelled through {@code DrugReferenceLoad.Coverage.wireToken()},
+	 * the same method {@code GET /chartsearchai/drugreferencestatus} spells
+	 * {@code arms.conditionRules.coverage} with, so one verdict cannot be named two ways on two
+	 * surfaces. {@code ChartAnswer.getConditionRuleCoverage()} is canonical for what each value does
+	 * and does not assert — in particular that it is a statement about the DATASET and never that any
+	 * recorded condition was screened.
+	 *
+	 * <p><b>The copy is a correctness requirement</b> and not caution — the measurement is at
+	 * {@link #serializeSafetyWarnings}, which takes it for the same reason. What is new here is the
+	 * guard around it: unlike {@code chartOrderBridges()} every one of the answer-check accessors can
+	 * return null, and {@code new ArrayList<>(null)} throws. Its ROUTINE trigger is not a failed
+	 * check but the async-grounding early {@code done}: that answer is handed off before any of them
+	 * has run, so {@code LlmInferenceService} passes an explicit {@code null} for each. Mutate a guard
+	 * away and read the failures — the {@code chartsearchai.grounding.async=true} wire cases lose
+	 * their {@code done} event. The failed-check case reaches it too, and whether any path DELIVERS one
+	 * differs by accessor. For the prose and active-order checks none is known: ADR Decision 61
+	 * records that no test reaches theirs, a record throwing on read being pre-empted by
+	 * {@code referenceSlice}, and the one line their catch is documented as covering — a read of
+	 * {@code patient.getPatientId()} — is re-read by both answer methods in their {@code finally}
+	 * timing log, so a throw there errors the request instead; Decision 76 records the same of
+	 * {@code misattributedOrderCitations}. {@code unstatedFindingSeverities} is the exception and
+	 * Decision 78 records it: {@code getFindingSeverity()} is read by nothing else on the answer
+	 * path, so a record that throws on it reaches that check and no earlier one, and a test does.
+	 * The guard stays because it costs one comparison and the alternative is a 500.
+	 *
+	 * <p>{@code activeOrderClaims} takes no such guard, and not because it is trusted: it is an
+	 * immutable value type, so it is carried rather than copied and there is no {@code
+	 * new ArrayList<>(null)} to defend against. What it DOES share with
+	 * {@code misattributedOrderCitations} is the null-versus-measurement distinction and one failure
+	 * state — the two are one check's two answers off one report (issue #379), so a failed check
+	 * states null on both or on neither. {@code ChartSearchService.ActiveOrderClaims} is canonical
+	 * for what a zero and a null each assert, and for why the other key could not be read alone.
+	 */
+	private void putModuleStatements(Map<String, Object> target, ChartAnswer answer) {
+		putSafetyChips(target, answer);
+		target.put("unresolvedDrugClass", answer.getUnresolvedDrugClass());
+		List<Integer> unfaithful = answer.getUnfaithfullyRenderedCitations();
+		target.put("unfaithfullyRenderedCitations",
+			unfaithful == null ? null : new ArrayList<Integer>(unfaithful));
+		List<Integer> misattributed = answer.getMisattributedOrderCitations();
+		target.put("misattributedOrderCitations",
+			misattributed == null ? null : new ArrayList<Integer>(misattributed));
+		target.put("unstatedFindingSeverities",
+			serializeUnstatedFindingSeverities(answer.getUnstatedFindingSeverities()));
+		target.put("activeOrderClaims", serializeActiveOrderClaims(answer.getActiveOrderClaims()));
+		target.put("findingCitations",
+				serializeFindingCitationExtent(answer.getFindingCitationExtent()));
+		target.put("chartReadForSafety", answer.getChartReadForSafety());
+		putConditionRuleCoverage(target, answer.getConditionRuleCoverage());
+	}
+
+	/**
+	 * The wire shape of {@code unstatedFindingSeverities}: one object per offending citation,
+	 * {@code citation} the index the answer printed in brackets and {@code rating} the rating that
+	 * finding's own record states and the answer does not — issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/387">#387</a>.
+	 * {@code null} for an answer whose check stated no measurement and an empty list for one that ran
+	 * and named none, the distinction {@link #putModuleStatements} preserves for every key in this
+	 * family. {@code ChartSearchService.UnstatedFindingSeverity} is canonical for what each entry
+	 * does and does not assert.
+	 *
+	 * <p>Why the two travel in one object rather than on two keys, why this is not the chips
+	 * reconciled against the answer, and how this value differs from a chip's are the value type's own
+	 * javadoc and ADR Decision 78's amendment; neither is restated here.
+	 *
+	 * <p><b>The field is {@code rating} and not {@code severity}, deliberately.</b> This subsystem
+	 * spells the concept "rating" throughout — {@code statableRating},
+	 * {@code ratingThisRecordStates} — and {@code severity} is the operator's own raw field name,
+	 * which a chip publishes and this does not: the two differ in form and in extent, as the value
+	 * type's javadoc sets out. Spelling them apart makes that structural rather than a caveat a
+	 * client has to read, and it costs nothing here because #387 is already changing this key's
+	 * shape, so no consumer ever saw a {@code severity} on it.
+	 *
+	 * <p>The word is already on this module's wire once, as the user's feedback {@code rating} on
+	 * {@code /feedback} and on an {@code /auditlog} row. That is a different concept on different
+	 * endpoints and never in the same object as this one, so the two do not collide; it is named here
+	 * so the reuse reads as noticed rather than as an accident.
+	 *
+	 * <p><b>The entry is spelled out as a map rather than handed to the mapper</b>, which is the one
+	 * place this differs from {@code SafetyWarning.ChartOrderBridge}, the module's other list-published
+	 * two-field type: that one is serialized by the mapper off its getter names, which is why its
+	 * javadoc fixes those names as issue #347's contract. Here the KEYS are the contract README states,
+	 * so they are written as literals and pinned as literals by
+	 * {@code ChartSearchAiUnstatedFindingSeverityTest.theSearchResponseNamesTheFindingsWhoseRatingTheAnswerDropped},
+	 * which compares the raw map — and by THAT case alone, measured: handing the value objects to the
+	 * mapper instead reddens it and nothing else, the SSE cases passing because Jackson renders the
+	 * getters to byte-identical JSON. So renaming an accessor cannot silently move a documented key,
+	 * but only while that one assertion stands. An {@code ArrayList} of {@code LinkedHashMap} is also the shape
+	 * {@link #serializeSafetyWarnings} publishes, which keeps #347's other half satisfied: the
+	 * marshaller refuses {@code Collections}' immutable wrappers, and the accessor hands one out.
+	 */
+	private List<Map<String, Object>> serializeUnstatedFindingSeverities(
+			List<UnstatedFindingSeverity> unstated) {
+		if (unstated == null) {
+			return null;
+		}
+		List<Map<String, Object>> out = new ArrayList<Map<String, Object>>();
+		for (UnstatedFindingSeverity entry : unstated) {
+			Map<String, Object> map = new LinkedHashMap<String, Object>();
+			map.put("citation", entry.getCitation());
+			map.put("rating", entry.getRating());
+			out.add(map);
+		}
+		return out;
+	}
+
+	/**
+	 * The wire shape of {@code findingCitations}: {@code carried} injected safety findings the prompt
+	 * held, {@code cited} of them the answer cited — issue #395, and the base its four neighbours
+	 * each needed and none of them is. {@code null} for an answer whose check stated no measurement,
+	 * never an empty object and never a zeroed one, because zero is itself a measurement here (a
+	 * prompt that carried no finding, which is the shipped default's ordinary state). See
+	 * {@code ChartSearchService.FindingCitationExtent}, which is canonical for what each value does
+	 * and does not assert — in particular that {@code cited == carried} certifies nothing about how
+	 * those findings were stated.
+	 *
+	 * <p>The same shape as {@link #serializePairChipExtent} and {@link #serializeActiveOrderClaims},
+	 * and deliberately not folded into either: that one counts drug PAIRS a screen found and
+	 * reported, the other CLAIMS an answer made and left unevidenced, this one FINDINGS a prompt
+	 * carried and an answer cited. A shared serializer would make one rename move three keys.
+	 */
+	private Map<String, Object> serializeFindingCitationExtent(FindingCitationExtent extent) {
+		if (extent == null) {
+			return null;
+		}
+		Map<String, Object> map = new LinkedHashMap<String, Object>();
+		map.put("carried", extent.getCarried());
+		map.put("cited", extent.getCited());
+		return map;
+	}
+
+	/**
+	 * The wire shape of {@code activeOrderClaims}: {@code stated} active-order claims the answer
+	 * made, {@code uncited} of them offering no chart record — issue #379, and what
+	 * {@code misattributedOrderCitations} could not be read without. {@code null} for an answer whose
+	 * check stated no measurement, never an empty object and never a zeroed one, because zero is
+	 * itself a measurement here (an answer that stated no such claim). See
+	 * {@code ChartSearchService.ActiveOrderClaims}, which is canonical for what each value does and
+	 * does not assert, and for the residues of the run unit the two halves share.
+	 *
+	 * <p>The same shape as {@link #serializePairChipExtent} and deliberately not folded into it: that
+	 * one counts drug PAIRS a screen found and reported, this one counts CLAIMS an answer made and
+	 * left unevidenced, and a shared serializer would make one rename move both keys.
+	 */
+	private Map<String, Object> serializeActiveOrderClaims(ActiveOrderClaims claims) {
+		if (claims == null) {
+			return null;
+		}
+		Map<String, Object> map = new LinkedHashMap<String, Object>();
+		map.put("stated", claims.getStated());
+		map.put("uncited", claims.getUncited());
+		return map;
+	}
+
+	/**
+	 * Writes the {@code conditionRuleCoverage} key, and is the one place that key is SPELLED.
+	 *
+	 * <p>Two surfaces state it and neither derives it from the other: {@link #putModuleStatements}
+	 * takes it off the answer, where {@code LlmInferenceService} resolved it once per method, and
+	 * {@link #chartAlerts} asks {@code DrugSafetyValidator.conditionRuleCoverage()} directly, having no
+	 * answer to read it off. What must not diverge is the KEY and the token, which is why the write
+	 * itself is shared rather than copied — {@code ChartSearchAiConditionRuleCoverageTest.theKeyIsWrittenInExactlyOnePlace}
+	 * counts the literal and fails on a second spelling of it.
+	 *
+	 * <p>{@code null} is present-and-null, never absent: an omitted key is a client's own guess, and
+	 * {@code ChartAnswer.getConditionRuleCoverage()} is canonical for what each value does and does not
+	 * assert — in particular that it is a statement about the DATASET and never that any recorded
+	 * condition was screened.
+	 */
+	private static void putConditionRuleCoverage(Map<String, Object> target,
+			DrugReferenceLoad.Coverage coverage) {
+		target.put("conditionRuleCoverage", coverage == null ? null : coverage.wireToken());
+	}
+
+	/**
+	 * The wire shape of {@code interactionPairs}: {@code found} above-floor pairs, {@code reported}
+	 * of them shown. {@code null} for an answer whose interaction check stated no measurement — never
+	 * an empty object and never a zeroed one, because zero is itself a measurement here (a complete
+	 * screen that related no pairs). See {@code PairChipExtent}, which is canonical for what the
+	 * zero and the absence each do and do not mean, including a screen whose zero is false.
+	 */
+	private Map<String, Object> serializePairChipExtent(PairChipExtent extent) {
+		if (extent == null) {
+			return null;
+		}
+		Map<String, Object> map = new LinkedHashMap<String, Object>();
+		map.put("found", extent.getFound());
+		map.put("reported", extent.getReported());
+		return map;
 	}
 
 	/**
@@ -1030,6 +1770,15 @@ public class ChartSearchAiRestController {
 		writeSseEventOrThrow(out, "references", json);
 	}
 
+	/**
+	 * Writes one SSE event frame.
+	 *
+	 * <p>The frame is serialized first and then written while holding the {@code out} monitor — the
+	 * same monitor {@link SseKeepAlive} takes. The keep-alive writes from its own thread, and two
+	 * unsynchronized writers on one servlet output stream can interleave: a comment landing between
+	 * an event's {@code event:} line and its {@code data:} lines would split one event into two
+	 * malformed ones for every client. Only the write is inside the lock, never the serialization.</p>
+	 */
 	private void writeSseEvent(OutputStream out, String event, String data) throws IOException {
 		StringBuilder sb = new StringBuilder();
 		sb.append("event: ").append(event).append('\n');
@@ -1037,8 +1786,103 @@ public class ChartSearchAiRestController {
 			sb.append("data: ").append(line).append('\n');
 		}
 		sb.append('\n');
-		out.write(sb.toString().getBytes("UTF-8"));
-		out.flush();
+		byte[] frame = sb.toString().getBytes("UTF-8");
+		synchronized (out) {
+			out.write(frame);
+			out.flush();
+		}
+	}
+
+	/**
+	 * The keep-alive for one streaming response: one comment written immediately, the rest on a
+	 * daemon timer, and a {@link #stop()} that a write already in flight cannot race.
+	 *
+	 * <p>One timer per response rather than one shared by the module: a single shared thread would let
+	 * one request's blocked write stall every other request's keep-alive, which is the failure this
+	 * class exists to prevent. The cost is one daemon thread per in-flight streaming response, each
+	 * writing 14 bytes every {@link #KEEP_ALIVE_INTERVAL_MS}.</p>
+	 */
+	private static final class SseKeepAlive {
+
+		private final OutputStream out;
+
+		private final ScheduledExecutorService timer;
+
+		/**
+		 * Guarded by {@code out}: set by {@link #stop()} so a task that wakes after the answer is
+		 * finished writes nothing.
+		 */
+		private boolean stopped;
+
+		private SseKeepAlive(OutputStream out, ScheduledExecutorService timer) {
+			this.out = out;
+			this.timer = timer;
+		}
+
+		/**
+		 * Writes the first comment and schedules the rest.
+		 *
+		 * <p>That first write is on the CALLING thread deliberately. The property that matters is
+		 * that a byte has left before generation begins; scheduling it would make that a race
+		 * against the model's own first token, which is the race this whole mechanism is about.</p>
+		 */
+		static SseKeepAlive start(OutputStream out, long intervalMillis) {
+			ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(runnable -> {
+				Thread thread = new Thread(runnable, "chartsearchai-sse-keepalive");
+				// Daemon so a timer that somehow outlives its request cannot hold up JVM shutdown.
+				thread.setDaemon(true);
+				return thread;
+			});
+			SseKeepAlive keepAlive = new SseKeepAlive(out, timer);
+			keepAlive.write();
+			// Fixed DELAY, not fixed rate: the question a keep-alive answers is "has anything been
+			// written lately", so the clock should start when a write finishes. A write to a slow
+			// client can block for longer than the interval, and at a fixed rate the executor then
+			// owes several runs and fires them back to back into the same congested socket, growing
+			// its queue for as long as the congestion lasts.
+			timer.scheduleWithFixedDelay(keepAlive::write, intervalMillis, intervalMillis,
+					TimeUnit.MILLISECONDS);
+			return keepAlive;
+		}
+
+		private void write() {
+			try {
+				// Encoded outside the lock, for the reason writeSseEvent states: the critical section
+				// holds the write and nothing else.
+				byte[] frame = SSE_KEEP_ALIVE_COMMENT.getBytes("UTF-8");
+				synchronized (out) {
+					if (stopped) {
+						return;
+					}
+					out.write(frame);
+					out.flush();
+				}
+			}
+			catch (IOException e) {
+				// The client is gone. The generation loop discovers that on its own next write and
+				// unwinds through writeSseEventOrThrow — a keep-alive is never the reason a request
+				// fails, and throwing from here would only cancel the schedule in silence.
+				log.debug("Could not write SSE keep-alive, client likely disconnected");
+			}
+			catch (RuntimeException e) {
+				// scheduleWithFixedDelay silently unschedules a task that throws — the documented
+				// behaviour of both periodic schedule methods — so without this the rest of a long
+				// answer would run with no keep-alive and nothing to say why.
+				log.warn("SSE keep-alive failed; the schedule continues", e);
+			}
+		}
+
+		/**
+		 * Stops the timer. Once this returns no keep-alive can be in flight or begin: a task already
+		 * holding the monitor completes its write before this can take it, and one that takes it
+		 * afterwards sees {@code stopped} and returns.
+		 */
+		void stop() {
+			synchronized (out) {
+				stopped = true;
+			}
+			timer.shutdownNow();
+		}
 	}
 
 	/**

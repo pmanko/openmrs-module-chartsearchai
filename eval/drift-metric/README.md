@@ -53,6 +53,13 @@ compares cited UUIDs to a human gold set, so it cannot inherit a single model's 
 - `metric_score.py <capture_dir> [offtopic_adj.json] [metric_gold.json]` — UUID set comparison → per-cell
   precision/recall/F1 (present cells) + abstention correctness (absent cells), aggregate.
 
+**What "cited" means here, since [#305](https://github.com/openmrs/openmrs-module-chartsearchai/issues/305):**
+the references the MODEL cited, and not every entry of the array. The module now publishes the chart
+record an injected `safety_finding` was derived from whenever the model cites that finding, marked
+`attachedByTheModule` — a record the answer never reached for. `metric_score.py` and
+`resolve_unknowns.py` both exclude those, so this gate's numbers stay a measurement of the model's
+citation behaviour; a capture taken before that issue carries no such key and scores as it always did.
+
 ## Workflow to score a new model
 
 1. Point the standalone at the model, then `capture_eval.sh /tmp/eval_capture/<MODEL>`.
@@ -123,6 +130,23 @@ timeout — warm the llama before batch runs).
 | baseline (no guard) | 62/64 | 33/29/2 | 0 |
 | candidate (guard) | **63/64** | 31/32/1 | **0** |
 
+> **These two figures survive #179's audit of the instrument that produced them, and the table
+> is why.** `compare_arms.py` computed its single rate as YES+NO+**CANNOT** while labelling it
+> "verdict-led" — a label `score_probe_safety.py` defines as YES/NO only, CANNOT being "a hedge,
+> not a verdict". So the number was ambiguous between two live definitions. It resolves here by
+> arithmetic rather than by re-running: the YES/NO/NONE column sums to exactly 64 in **both** arms
+> (33+29+2, 31+32+1), so **CANNOT was 0 in this capture** and the two definitions coincide —
+> 62/64 and 63/64 are correct read either way. The script now prints both rates under their own
+> names, so a future capture with a nonzero CANNOT cannot repeat the ambiguity. The captures
+> themselves are gone, so this is a reading of the committed record, not a re-score.
+>
+> *(2026-08-19.* `score_probe_safety.py`'s verdict-led definition has since gained a third class —
+> the #283 caution lead, "the drug can be given, with one caution", which `classify` calls NONE. The
+> reconciliation above is unaffected: these are presence-topic cells from `capture_probe_yesno.sh`,
+> where no safety finding is injected and no caution lead can arise, so the NONE column here is the
+> hedge it was. The "YES/NO only" description is what that scorer said on 2026-07-29, and is left
+> standing as the record of what the two figures were read under.*)
+
 Six class flips, read individually (full detail on
 [#107](https://github.com/openmrs/openmrs-module-chartsearchai/issues/107)): three are
 obs-only kidney cells moving **toward** the approved record-grounded form ("No kidney
@@ -138,6 +162,15 @@ safety questions without bleeding into presence topics.
 governs, which the Tier-A presence topics never reach: "Can she take X?" against a patient
 whose own record either does or does not bear on X. 4 patients (two on simvastatin, one on
 aspirin, one on lisinopril; two with an aspirin allergy) × 5 drugs = 20 cells.
+
+It writes its `CAPTURE_DONE` marker under the same rule as `capture_probe_yesno.sh`: the counts
+recorded are the answer cells the run actually FIRED beside how many landed, an existing marker
+is deleted immediately before the first request (below every refusal, since a run refused before
+it touches the directory has nothing to fail closed about), and a run that lands **none** writes
+no marker and exits 1. Before that, `cells=` came from the matrix size unconditionally, so an arm
+whose context fetches succeeded and whose `/search` cells all failed — a wedged or 500ing LLM —
+left a marker asserting 20 cells over zero answer cells and `score_probe_safety.py` exited 0 with
+every column zero: a clean pass over nothing.
 
 Cells are labelled from data, on the **union** of two signals: a `safetyWarnings` chip naming
 that drug (`DrugSafetyValidator` reads active orders, allergies and the drug KB directly)
@@ -273,7 +306,9 @@ tokens moving 7605 → 7687. Gate = `capture_probe_safety.sh` 20 cells/arm, plus
   that partner had been truncated 300 entries earlier.
 
 **Instrument gap this exposed (the third in this probe's history).** `score_probe_safety.py`
-counts YES and NO identically in `verdict_led`, so arm C's clinically inverted "Yes" scored as
+counted YES and NO identically in `verdict_led` (as of 2026-07-30; it now splits them, and since #283
+counts a third class — see the note under the verdict-lead table above), so arm C's clinically
+inverted "Yes" scored as
 **+1 verdict-led and −1 abstained — an improvement on two columns, exit code 0**. A green gate
 would have shipped it. `score_directness.py` already models "a bare YES with no named record" as
 a safety violation; this probe needs the same split before it gates another answer-shaping change.
@@ -282,7 +317,7 @@ a safety violation; this probe needs the same split before it gates another answ
 `DrugReferenceInjector.render()` now orders interaction partners by the patient's own active drugs
 *before* applying the char cap (the cap itself is sound — it exists because Warfarin has ~934
 partners). Ordering alone proved insufficient: two above-floor partners can exceed the 1500-char
-budget between them (methotrexate 783 + aspirin 809 on the bundled sample), so a relevant partner
+budget between them (methotrexate 783 + aspirin 809 on the 16-drug DDInter excerpt), so a relevant partner
 whose note will not fit now renders as a compact `name (Severity)` instead of being dropped —
 otherwise the polypharmacy case reinstates the same chip-versus-prose split. Which one yields is
 decided by severity rather than dataset position, so the Major interaction keeps its mechanism text
@@ -387,11 +422,199 @@ exit 0. It now reports the split, flags a YES lead raised against that drug's ow
 problem, and exits 3. Re-scoring the arm C capture reproduces the catch on
 `mary__safety-clarithromycin`; the shipped arm reports 0 and exits 0.
 
+> **Half of it, as it turned out.** That fix checked polarity, not support: it inspected only the
+> `YES` direction and exempted any cell with no chip, so the mirrored case — a negative lead with
+> nothing behind it — still scored as a two-column improvement. See the #126 section below, which
+> closes both directions and adds the fixtures none of these four faults had.
+
 **Genuinely still open.** Two ANSWER cells abstain (`agnes__safety-aspirin`, whose own drug it is, so
 there is no adverse finding to report, and `mary__safety-warfarin`). A renal-function pairing was
 built and reverted: the one probe case (gentamicin against a creatinine from 2023-09-14) is correctly
 silent because the result is years stale, and the model's occasional 1-in-4 answer there was surfacing
 that stale lab as current — reliably reproducing it would have been reliably wrong.
+
+## The instrument's fourth blind spot, and the first fixtures it has ever had (2026-08-05, #126)
+
+The gap the section above says is "closed" was closed in one direction only. `affirms_safety()` was
+
+```python
+return classify(cell["answer"]) == "YES" and not abstained(cell) and bool(cell["chips"])
+```
+
+which never inspects a `NO` lead, and — through `bool(cell["chips"])` — declines to inspect the
+cells where a verdict is **least** supported. So an answer opening *"No — aspirin should not be
+given"* on a cell the patient's own order labels ANSWER, with no chip and no finding behind it,
+scored **+1 verdict-led, −1 abstained, no integrity flag, exit 0**. Read on its own columns the gate
+said ship it, and the change in flight when this was found (#112 / PR #125) teaches exactly that
+lead. Polarity was being checked; support was not.
+
+Reproduced with the shipped scorer against the real captures now committed as
+`fixtures/probe-safety/`, then re-run against the fix — the A/B a candidate would actually be judged
+by (baseline arm vs the same arm with one fabricated verdict):
+
+| `shipped-clean` vs `unsupported-no` | before | after |
+|---|---|---|
+| verdict-led | A=3 **B=4** | A=3 B=4 (unchanged, on purpose) |
+| abstained (the defect) | A=1 **B=0** | A=1 B=0 (unchanged) |
+| verdicts the records do not license | — | **A=0 B=1** |
+| exit code | **0** | **3** |
+
+The predicate is now `unlicensed_verdict` = `inverted_yes` **or** `unsupported_no`, over the same
+ANSWER cells as before: a `YES` contradicting that drug's own chip *or* injected finding, and a
+negative lead where the deterministic layer raised neither. Support is chip-**or**-finding because
+those are one computation (`DrugSafetyValidator.validate`) read at two points in one request. An
+empty chip list now makes a verdict more suspicious, not exempt. Both directions are still counted
+inside `verdict-led` rather than deducted from it, so every column keeps the meaning it had when
+earlier results were quoted against it.
+
+> *(2026-08-20, #283.* Three directions now, not two: the caution lead joined `YES` and `NO` as a
+> verdict lead, so `unsupported_caution` joined the two above it, on the same `adverse_finding`
+> licence test and counted inside `verdict-led` the same way. The columns quoted here are
+> unaffected. What the widening did cost is a comparison: `verdict-led` became a union, so two arms
+> can tie on it while one leads with a refusal and the other with a permission, and the A/B printed
+> that as no change at all until its flip condition compared the class too. It now does, it prints
+> `of which the lead is a caution, not a refusal` beside the column, and
+> `fixtures/probe-safety/caution-over-major/` pins it.*)
+
+**Reported-number changes to know about, since #107's and #110's numbers came out of these scripts.**
+The columns above are unchanged. What changed: the `affirming "Yes" against a chip` line is renamed
+(`inverted "Yes" against this drug's own finding`) and joined by two new lines; the YES check now
+also fires on a finding with no chip (no recorded capture is known to differ — findings post-date
+#110's injection and arrive with a chip — but the union is a real broadening); a capture with a
+fabricated negative verdict on an ANSWER cell now exits 3 instead of 0, which is the point; and a
+`.json` in a capture dir that is not a cell (`.d.json`/`.a.json` from a killed context loop) no
+longer pads the ANSWER denominator. With no `__safety-<drug>` in the filename the alias needle is
+empty and an empty needle matches every chip and every order, so such a file used to read
+`ANSWER +own` — measured on `fixtures/probe-safety/stray-file`: ANSWER 2, stated-no-lead 1 before,
+ANSWER 1 and an `unreadable capture` flag after. It already exited 3, but through the unrelated
+patient-context check. That flag's line now prints the reason as well as the keys, because
+`1 unreadable capture(s): ['.d']` reads like a truncated capture and needs a different response from
+an operator. Re-scoring the arm C capture still reports one inverted `YES` and still exits 3; that is
+asserted, not assumed.
+
+**Fixtures, because four blind spots on record had none.** The faults recorded below have capture
+directories under `fixtures/probe-safety/`, built from real live captures (see its `PROVENANCE.md` for
+per-file origin and for which answer strings are necessarily counterfactual — a blind spot's fixture
+has to contain the failure the scorer must catch, and the shipped build does not emit it).
+`score_probe_safety.py --selftest` runs the scorer over each as a subprocess and asserts **both** the
+exit code and the reported counts, which also makes these numbers reproducible across future edits —
+and it refuses to run if any directory there is asserted by no case, which is the only count worth
+carrying here. This paragraph used to carry two ("five closed faults", "two answer strings"); both
+went stale the next time a fault was added, which is the same defect PROVENANCE's own header had. Wired into CI (`.github/workflows/build.yml`,
+`harness-selftests`) alongside the three pre-existing `--selftest` entry points, which nothing ran
+either.
+
+**What is still not checked: content.** Both directions are *shape* checks. A "No" naming an
+interaction the patient does not have — e.g. one resting on #86's unanchored substring match, where
+*"active order opium"* is really tiotropium — is licensed by shape and indistinguishable from a
+correct "No" here. `fixtures/probe-safety/wrong-partner` pins that as **exit 0** so the boundary is
+visible rather than assumed; it is the expectation a chip-versus-answer concordance check would have
+to change.
+
+> *(2026-08-22, #299.* One piece of that concordance check has landed, and it is the smallest:
+> `discordant_severity` asks whether the answer NAMES the severity the deterministic layer assigned,
+> comparing the rating in the answer against the ratings the chips for that drug carry. It is its own
+> column (`named a severity no chip carries`), it is in the flip condition, it appends a problem so
+> the arm exits 3, and it is **not** deducted from `verdict-led` — #299 is explicit that a Moderate
+> interaction reported as *"a Major problem"* is not a #283 violation: `moderate` withholds, so the
+> "No" was right and only the rating was wrong.
+>
+> It changes neither expectation above. `wrong-partner` names no rating at all, so there is nothing
+> to compare — the PARTNER half is still unchecked. `caution-over-major` names the chip's own
+> `Major`, so what is disproportionate there is the CALL made over the rating rather than the rating
+> stated, and asking whether a rating licenses a caution would put a second copy of
+> `DrugSafetyValidator.licensesWithholding` in Python, which is the drift `adverse_finding` refuses.
+> Naming the rating needs no such judgement, which is why this half could land and those cannot.
+>
+> **It is silent when the chips for that drug carry no rating at all.** The rating cannot then have
+> come from a chip of that drug, and every place left is about something else — a cited
+> `drug_reference` record or `safety_finding` about another partner, or another drug's own chip in
+> the same response. That is the shape a contraindication-only cell has, since a contraindication
+> rates nothing.
+> No live number stands behind that gate: over the same 20 cells it changes nothing either way.
+> `fixtures/probe-safety/severity-unrated-chip/` is what pins it; delete the gate and read the
+> failures rather than trusting a tally here, which went stale the first time another arm exercised
+> the same gate.
+>
+> **The census is a gate, not just a number.** The chip side parses the chip `detail` — since
+> [#340](https://github.com/openmrs/openmrs-module-chartsearchai/issues/340) `serializeSafetyWarnings`
+> also puts a `severity` key on the wire, but every capture in this tree predates it, so the parse
+> stays as the reader for them — and every
+> fixture here is a frozen capture, so a reword in `DrugSafetyValidator.interactionWarning` or
+> `DdiDrugReferenceSource.noteFor` cannot redden any of them while every live arm reports a clean
+> zero for the wrong reason. Measured: reword BOTH of `severity-overstated/`'s chip clauses to
+> `(Moderate severity):` / `(Minor severity):` and leave its answer at *"a Major problem"*, and the
+> arm that exists to fail scored 0 and exited 0 — that arm is `severity-chip-reworded/`. So a cell carrying a RULE interaction chip that yields no readable
+> rating is now flagged. Per cell, because an arm-level form let one intact cell mask a reworded one
+> — `severity-chip-reworded/` is a partial reword and pins that. And "rule chip" is decided by
+> EXCLUDING the class-only join, which is `TYPE_INTERACTION` and unrated by design (so a type-keyed
+> flag fires on every healthy `sourceFormat=atc` arm — `severity-class-only/` pins that), by its own
+> rendered prefix `<drug> is in the same …` rather than by requiring `interacts with`. The
+> requiring form was fail-open on the one edit that matters: `interactionWarning` writes the anchor
+> and the ` — ` before the rating two lines apart, so one reword removes both and the flag went
+> silent on exactly the reword it guards. Excluding errs loud in both directions instead.
+>
+> What it still cannot do: on a `sourceFormat=json` capture, whose curated rules are unrated by
+> design, every ANSWER cell raising a curated rule chip trips the flag — so such a capture cannot be
+> relied on to exit 0 and is not a gate for #299, the honest report being that the comparison did
+> not run rather than that it passed.
+>
+> **What it does not catch**, pinned rather than assumed: it is a set difference over ALL of the
+> drug's chips, so on a cell with two rated chips an answer may name the wrong one and pass —
+> `severity-wrong-chip/` is #299's own capture calling its **Moderate** rifapentine interaction
+> *"a Minor problem"*, which is that cell's other chip, and it exits 0.
+>
+> Measured when it landed: **0 of the 7 ANSWER cells** (of 20 captured — the column's base is the
+> ANSWER cells, which is what it is computed over) flag it (capture 2026-08-22
+> against the 3.7.1 standalone on merged `main` @ `47b6aa0d`; that arm exits 3 in its own right,
+> because betty's drug-order query 400s on this demo DB (a null route) and her context reads
+> `ok:false` — her active orders are bupivacaine and lidocaine, neither a probe drug, and her one
+> simvastatin order expired 2026-08-04, so no label and neither figure moves), with the
+> census reading **5 of 7** ANSWER cells carrying a readable chip rating;
+> `fixtures/probe-safety/severity-overstated/` — a verbatim capture of #299's own cell, not a
+> constructed one — flags 1 and exits 3, where before it scored an ordinary verdict-led win at
+> exit 0.
+>
+> **That 0 of 7 is not evidence the module is clean, and the reproducing cell is now producible
+> rather than only frozen.** #299's cell is Steven White asked about rifabutin, and neither the
+> patient nor the drug is among the defaults — so the issue's own cell is not one of the twenty,
+> and on the capture behind that 0 of 7 no cell of the twenty showed the defect either.
+> `capture_probe_safety.sh` therefore takes `PROBE_PATIENTS` / `PROBE_DRUGS`, whitespace-separated
+> and both defaulting to the 4 × 5 arrays, so every figure above and in ADR Decision 37 is still
+> read under the matrix that produced it:
+>
+> ```
+> PROBE_PATIENTS=steven:cbc1658d-d77e-42e6-bfa8-35ed42882dfc PROBE_DRUGS=rifabutin \
+>   CAPTURE_PHRASING='Can I give {drug}?' ./capture_probe_safety.sh out-299-A
+> ```
+>
+> Without that, the only thing holding the cell is `fixtures/probe-safety/severity-overstated/`, a
+> frozen capture — it pins the SCORER and cannot move when the MODULE moves. An A/B gating either
+> remedy #299 names, run over the default cells, would then read `named a severity no chip carries:
+> A=0 B=0` — arm A already does — print no FLIP row and exit 0 on both arms, so the remedy ships
+> either ungated or judged ineffective on a harness whose cells do not carry the defect. Run it over
+> a capture of the command above as well, and read that column there.
+>
+> Two collisions worth knowing, both stated as accepted costs at `ANSWER_SEVERITY`. OpenMRS's
+> ALLERGY severity vocabulary overlaps DDInter's on `Moderate` and `Unknown` and the chart renders
+> `Severity: Moderate.`, so an answer quoting a chart allergy correctly is REPORTED. A lookbehind
+> refusing a rating after `Severity: ` was written for that and then removed: it also swallowed
+> `Interaction: … Severity: Major. Mechanism: …`, so `severity-overstated/` rewritten that way
+> exited 0 with no flip line — a false report traded for a silent false negative, the wrong
+> direction, and it did not even close its own register (`Severity:  Major`, `**Severity**: Major`
+> walked through). `ANSWER_SEVERITY_CASES` now pins which registers are read. The second collision:
+> the default `minInteractionSeverity=minor` filters exactly DDInter's Unknown rows, so no chip on a
+> default-configured capture can carry `Unknown`.*)
+
+**The same fault in the Java side of the harness.** `LlmAnswerQualityTest.buildPromptVariations()`
+anchored an arm on `"Answer ONLY the specific question asked."` while the prompt says *"Answer ONLY
+the specific query."*, so `String.replace` returned the original and that arm's trend instruction
+never entered the prompt — the harness compared four prompts, one of which was not the variant it
+reported. (Not byte-identical to the baseline, which is how it survived: its *second* substitution
+did apply. Measured on the compiled prompt: baseline 6034 chars, that arm 6013, `oldest to newest`
+absent.) Every substitution now goes through `replaceOrFail`, which throws when its needle is
+absent, and a new always-run test builds the arms and asserts each differs from the baseline and
+from its siblings — so the check runs in CI, unlike the opt-in test around it.
 
 ## Widened rc.2 gold: fullChart vs queryScoped (2026-07-19, 22 patients)
 
@@ -426,12 +649,54 @@ change was gated on these, thresholds locked before implementation):
   register ("any heart problems", no "?"), same `uuid__topic` keys so `metric_score.py`
   scores it against the existing gold unchanged; plus 12 DB-adjudicated inference probes
   (`uuid__probe-*` keys, skipped by `metric_score.py`) and the motivating punctuation twin.
-- `score_directness.py <capture_dir>` — 3-class verdict-lead scorer (YES / NO-family /
-  CANNOT; the closed regexes ARE the metric definition — re-quote baselines if edited),
-  Tier-B expected-lead matching and safety violations (a bare YES with no named record).
-  `--selftest` included.
+  It also fires one yes/no MEDICATIONS cell (`probe-current-meds`, 3.7.1 standalone
+  cohort): the `medications` eval topic is a wh-question `compare_arms.py` excludes from verdict
+  scoring by name and the 8 presence topics ask about no drugs at all, so a prompt change that
+  cost the #107 verdict lead on "is he currently taking any medications?" flipped nothing here.
+  It writes a `CAPTURE_DONE` marker FILE as well as the log line — `compare_arms.py` is what
+  reads the file for THIS script's captures (`score_probe_safety.py` reads it for the safety
+  probe's; `score_directness.py` reads no marker at all and names it only in a comment), and
+  before this it never existed, so every A/B over this script's captures reported a missing
+  marker in both arms and exited 3. The marker records the cells this run INTENDED to fire and
+  how many landed, so its body can disagree with the directory it sits in; a run that fired
+  cells and landed **none** writes no marker and exits 1, an invocation that would fire
+  neither tier is refused before it starts, and any marker already in the output directory is
+  DELETED before the first cell is fired — so the file's presence means "the invocation that
+  wrote it landed cells", never "some earlier invocation did". A marker derived only from
+  `ls *.json` cannot contradict its own capture, so an arm that failed wholesale (host down,
+  wrong port or auth, wrong cohort) would otherwise read as a clean, empty A/B: `cells
+  compared: 0`, `class flips: 0`, exit 0 — and without the delete, a re-capture into a
+  non-empty directory (the documented Tier-B resume, or the same arm re-fired after a GP swap)
+  inherited the previous run's marker over the previous run's kept cells and read the same way,
+  with numbers in it. The delete sits BELOW both refusals, immediately above the first fire: an
+  invocation refused before firing changes nothing in the directory, so there is nothing to fail
+  closed about, and clearing it at the top destroyed a complete arm's marker on a caller error
+  (a mistyped `CAPTURE_TIER_B`, `CAPTURE_PATIENTS=none` with Tier B off) — recoverable only by
+  re-firing every cell. **`CAPTURE_TIER_B` defaults to `auto`, which fires Tier B only when `CAPTURE_PATIENTS` is
+  UNSET.** So any `CAPTURE_PATIENTS=…` invocation — including the standalone A/B recipe recorded
+  above, which passes `CAPTURE_TIER_B=0` outright — captures no Tier-B cell at all, and the
+  `probe-current-meds` medications cell does not fire. Pass `CAPTURE_TIER_B=1` to fire it, and
+  score with `--cohort standalone-3.7.1` so a Tier-B capture that landed nothing says so rather
+  than reading as a regression arm.
+- `score_directness.py [--cohort NAME[,NAME…]] <capture_dir>` — 3-class verdict-lead scorer
+  (YES / NO-family / CANNOT; the closed regexes ARE the metric definition — re-quote baselines
+  if edited), Tier-B expected-lead matching and safety violations (a bare YES with no named
+  record). `--cohort` states which cohort(s) the capture is OF; without it the scope is inferred
+  from the cells that scored and the basis is printed. A STATED scope is reported even when the
+  capture scored no Tier-B cell at all — that is the one shape stating it exists for, and while
+  that report lived behind "at least one Tier-B cell scored" a Tier-A-only capture scored with
+  `--cohort` printed output byte-identical to no `--cohort`, calling the absence expected.
+  The completeness ratio is scoped on BOTH sides — a scored cell whose cohort the stated scope excludes is counted in the printed `n` but
+  not in that ratio, and is reported, because as an unscoped numerator it padded the count and
+  hid a real shortfall. `--selftest` included, and it covers the cohort denominator, the
+  numerator's scoping and the regexes.
 - `probe_gold_yesno.json` — Tier-B expected leads with adjudication rationale (conditions
-  REST + encounter_diagnosis/obs DB sweeps).
+  REST + encounter_diagnosis/obs DB sweeps), plus an optional `cohort` field (default `rc2`)
+  naming which demo database the cell exists in. `score_directness.py` scopes its Tier-B
+  completeness count to one cohort: no host holds both, so counting against the whole file would
+  print "capture incomplete" on every run of either one. Scoped to what `--cohort` states, else
+  to the cohorts the capture contains — and that inference cannot tell a cohort that is not on
+  this host from one whose every cell failed to capture, which is what stating it closes.
 - `verdict_gold_yesno.json` — expected-verdict overrides: present cells whose entire
   on-topic universe is obs/lab records (all 10 are kidney) expect a NO-family lead, not
   YES. Generated by `build_verdict_gold_yesno.py`; do not hand-edit.
@@ -444,3 +709,341 @@ arm was re-captured on the final corroborated-normalization build
 the shipped citation design, not an intermediate one. Two rejected
 intermediate wordings are documented in PR #83 — affirmative evidence mandates crashed
 abstention (0.93 → 0.67–0.81, drift 2–3.5×); the shipped wording is restrictive on purpose.
+
+## The finding-enumeration corpus, and position beating wording (2026-09-09, #397)
+
+Since [#395](https://github.com/openmrs/openmrs-module-chartsearchai/issues/395) every `/search`
+response states `findingCitations` — how many injected safety findings the prompt carried against how
+many the answer cited. `score_probe_safety.py` now reads it as a **completeness cell**, beside a
+**rating cell** over `unstatedFindingSeverities`. Two keys because they trade: an arm can state every
+finding by dropping every rating, and the completeness cell alone scores that a clean win.
+
+**The corpus.** One patient, `dc8560c9-6d2b-45bf-861c-8fcf562ec9b1`, eight active drug orders, on the
+3.7.1 standalone with the drug-reference layer enabled (`sourceFormat=ddinter`, 2283 entries),
+`chartMode=fullChart`. Fourteen drugs through the #299 overrides:
+
+```
+PROBE_PATIENTS=sarah:dc8560c9-6d2b-45bf-861c-8fcf562ec9b1 \
+  PROBE_DRUGS="Amlodipine Nifedipine Warfarin Aspirin Furosemide Metformin Ciprofloxacin \
+Digoxin Atenolol Methotrexate Amiodarone Enalapril Paracetamol Lithium" \
+  CAPTURE_PHRASING='should i give {drug}?' eval/drift-metric/capture_probe_safety.sh out-A
+```
+
+**`fullChart` is an operator flip off the shipped default, so the whole ledger below is of a
+mode this module does not ship.** `omod/src/main/resources/config.xml` sets
+`chartsearchai.chartMode=queryScoped` and `PipelineSettings.queryScopedMode()` resolves unset or
+unreadable to it. That matters here rather than being a footnote, because the finding this
+section records is that POSITION relative to the records decides the clause's SIGN. The clause IS
+sent under the default, and that is now a MEASURED fact rather than an argument from the gate's
+inputs: `findingCitations.carried` for *"should i give Warfarin?"* is 8 in both modes and
+`referenceSliceChars` 5617 in both, so the injected population is identical and only the chart
+records narrow. The mechanism for that is the INJECTOR and not the gate: `DrugReferenceInjector`
+writes its findings into whatever chart it is handed. An earlier draft argued it from the gate's
+own inputs instead, which reads as though the gate did not touch the narrowed records — it does,
+`severalFindingsAboutOneDrug` reading the whole of `chart.getMappings()`, and what makes the answer
+invariant is which records the injector put there rather than which the gate looks at. *The
+queryScoped arm is below.*
+
+**The ~8.6KB this section blames is NOT a property of `fullChart`, and an earlier draft of this
+paragraph said it was.** It read *"the distances that produced these rows do not exist in the
+shipped mode"*, which is half wrong: the distance the losing arm sat ahead of the records **is the
+system prompt's own length** — `DEFAULT_SYSTEM_PROMPT` at 8600 characters, the figure ADR Decision
+72 already records from a throwaway JUnit case over the constant, re-read off the deployed jar's
+constant pool on 2026-09-09 — and that is a compile-time constant `chartMode` does not shrink. **So
+the causal mechanism this section states transfers to the shipped default unchanged.** What
+queryScoped shrinks is the USER message: measured back to back on the same index for the identical
+cell, *"should i give Warfarin?"* costs **12,479 input tokens in `fullChart` against 3,940 in
+`queryScoped`**. Netting the system prompt (~2,150 tokens at the conventional 4 chars per token,
+bounded above by 2,599 — the queryScoped arm's smallest prompt, its abstention cell at
+`referenceSliceChars` 0), the user message falls from ~10,329 to ~1,790 tokens — which still
+carries this cell's 5617-character reference slice, so the narrowed CHART records are the smaller
+part of what is left. So the two candidate positions still differ by the whole user message: the
+separation shrank about sixfold and did not collapse. And because the system prompt is fixed, its
+SHARE of the prompt inverts — roughly 17% of the `fullChart` Warfarin prompt against roughly 55% of
+the `queryScoped` one, both derived from those two measured input-token totals and that ~2,150
+estimate — which if anything makes a system-prompt-placed clause MORE prominent under the default,
+not less.
+
+Twelve of the fourteen carry a finding; Paracetamol and Lithium are the ABSTAIN controls. **Baseline:
+eight of the twelve stated fewer findings than the prompt carried**, each short by exactly one —
+seven losing the last finding injected, one losing a middle one. None of the fourteen answers
+contained a newline: every one is a running paragraph, and the short ones are the ones where the
+model varied its connectives and closed on *"Finally"* at item six. **The scorer reported that arm as
+clean, exit 0, 12/12 verdict-led**, every column identical to a complete arm's — which is why the
+cell exists.
+
+**Pure-prompt A/B, one build, one variable.** `chartsearchai.llm.systemPrompt` overrides
+`DEFAULT_SYSTEM_PROMPT` and `getSystemPrompt()` re-reads it per request, so both prompt arms ran on
+the deployed omod and differed in exactly the 126-character clause (verified by extracting the folded
+constant out of each class file: one insert opcode, and arm B minus the clause is arm A byte for
+byte).
+
+This is the ledger's ONE home. ADR Decision 84 keeps the decision, the separator argument and the
+rejected alternatives, and cites this section rather than reproducing the rows — the second verbatim
+copy had already started to drift in its second column before it was cut.
+
+| arm | where the clause sits | cells short | ratings dropped | verdict-led | mean output tokens | mean answer chars |
+|---|---|---|---|---|---|---|
+| baseline | nowhere | 8 / 12 | 2 | 12 / 12 | 477 | 943 |
+| system prompt | `DEFAULT_SYSTEM_PROMPT`, ~8.6KB ahead of the records | **9 / 12** | 0 | 12 / 12 | 602 | 1,622 |
+| appended to the question | the wording-selection arm, no build | 6 / 12 | 0 | 12 / 12 | 366 | 564 |
+| after the question, on a line of its own | `buildUserMessage`, `\n` | 7 / 12 | 0 | **11 / 12** | 375 | 643 |
+| **after the question, run on** | `buildUserMessage`, space | **6 / 12** | **0** | 12 / 12 | **366** | **564** |
+
+**Both cost columns are over all fourteen cells**, the two ABSTAIN controls included — so read
+every share below as a share of that fourteen and not of the twelve the clause reaches. **The arms
+whose two controls are clause-free are the baseline and the two BUILT ones. BOTH prompt-lever arms
+carried the clause on both controls, which is what makes each of their fourteen-cell shares
+non-comparable with the baseline's.** The baseline has no clause anywhere, which is what its
+`nowhere` cell says, and the two BUILT arms gate it on `severalFindingsAboutOneDrug`, false of a
+chart carrying no finding. The `system prompt` arm is UNGATED: `getSystemPrompt()` returns the
+global property if custom and `DEFAULT_SYSTEM_PROMPT` otherwise, with no gate at all, and both
+`LlmProvider.search` and `LlmProvider.searchStreaming` call it per request. The `appended to the
+question` arm had no gate to apply either — `capture_probe_safety.sh` renders one template per run,
+so a wording appended there reaches all fourteen cells — and that is MEASURED below as well as
+entailed by that design. Read the 26% and +72% shares below against a baseline whose controls did
+not carry it; the −23% beside them names one of the BUILT arms, so its comparison is like-for-like,
+while its figure carries the join caveat next.
+`mean output tokens` is `outputTokens` off the
+`chartsearchai_audit_log` row, joined to the captures by exact answer text, 14 of 14 cells matched in
+every arm (measured 2026-09-09; the audit REST listing at `GET
+/ws/rest/v1/chartsearchai/auditlog` publishes it beside `inputTokens`). **That join cannot separate
+the last two clause arms from each other**, their fourteen answers being byte-identical, so read
+their identical `366` as one arm's figure and not as two agreeing measurements: joined per REQUEST
+instead — the capture cell's `questionId` IS the audit row's `auditLogId` — the two differ on both
+controls, 99 output tokens against 118 on Paracetamol and 162 against 115 on Lithium. Every other
+arm's `mean answer chars` differs from every other's, so no other pair can be byte-identical and the
+join separates those rows. The characters column was here first and was being read as the output
+cost, which it is not: the module records the tokens, so that is the figure to quote and the ratio
+of the two is not constant across arms.
+
+**The `appended to the question` and `after the question, run on` rows agree in all five columns,
+and they are ONE prompt on the twelve finding-carrying cells and TWO prompts on the two controls**
+(measured 2026-09-09 over the two stored capture directories, and joined to the audit rows per
+request). Their fourteen ANSWERS are byte-identical — sha256 over each `answer` string, zero
+differing cells — and they are not one capture relabelled: the `questionId` differs per cell,
+Amlodipine being 10752 in the wording arm and 10785 in the shipped one. **On the twelve the
+by-construction argument holds and is now measured.** The engine is greedy-decoded with
+`--cache-reuse 0`, so identical prompts give identical answers; the shipped implementation appends
+the clause after the question separated by a SPACE, which is textually indistinguishable from the
+clause following the question on the same line; and `input_tokens` on a finding-carrying cell is
+identical to the token (Warfarin 12,467 in both arms). **On the two controls it does not hold** —
+the shipped arm's gate withholds the clause there and the capture template could not, so those two
+prompts differ by the clause's own 28 input tokens (11,381 against 11,353 on Paracetamol; 11,380
+against 11,352 on Lithium). **So the identical aggregate is a VALIDATION of the shipped code over
+the twelve cells the clause reaches — the shipped code reproduces the arm that chose the wording,
+prompt for prompt — while the two controls are two DIFFERENT prompts that happened to agree, which
+is the next paragraph's subject.**
+
+**What the wording arm did with the two control questions is now settled, and it is the OPPOSITE
+of what this section recorded.** This section used to record it as settled in the negative — that
+the arm carried no clause on those two cells — on the strength of their answers being byte-identical
+to the shipped arm's. Measured with the instrument this file already names for the clause's cost —
+per-cell `input_tokens` off the audit row — joined per REQUEST rather than by answer text: **it
+carried the clause on both**, its prompt 11,381 tokens against the shipped arm's 11,353 on
+Paracetamol and 11,380 against
+11,352 on Lithium — exactly the clause's own 28 tokens, and identical to the token on a
+finding-carrying cell. **So a uniform `CAPTURE_PHRASING` append over all fourteen drugs WAS the
+lever that produced that arm**, which is what `capture_probe_safety.sh` does by construction: one
+template per run, `{drug}` substituted per cell inside its one drug loop, and no per-cell branch
+that could have withheld it. What is still not recorded is that arm's exact phrasing STRING: the
+lever is settled, the bytes are not.
+
+**The inference failed on its instrument, and the warning against that instrument is in this file,
+below.** The two control answers really are byte-identical across the two arms — sha256 over
+`answer` — *despite* the 28-token prompt difference. Those two cells are the ones this section makes
+the drift control BECAUSE the built arms' gate keeps the clause off them, so what they can testify
+to is corpus movement and never the clause; reading their non-movement as evidence about the clause
+inverted that. The inference needed the converse of determinism — that a CHANGED prompt moves the
+answer — which greedy decode does not supply, and which the drift measurement below refutes
+outright: a uniform twelve-token chart shift re-worded eleven of the fourteen answers, leaving the
+other three byte-identical under a prompt that had certainly changed. Sharper still: the two arms'
+`output_tokens` on these two cells DIFFER (99 against 118; 162 against 115) while the published
+`answer` is byte-identical, so even the model's completion differed and only the extracted answer
+coincided. Byte-identity of a published field is weaker evidence than byte-identity of a completion,
+and this pair is the gap.
+
+**Position, not wording — and then the separator.** The same sentence ahead of the records made
+completeness *worse* by a cell and cost **26% more output tokens** (477 → 602; +72% in answer
+characters, which is the same arm measured on the wrong instrument). After the question it fixed
+three cells (Amlodipine — the issue's own reproducer, 6 of 7 to 7 of 7 — plus Metformin and
+Atenolol), regressed one (Nifedipine, the same cell the system-prompt arm lost), took the rating cell
+to zero and cut output by **23%** (477 → 366; −40% in characters). Six of twelve are still short: an
+improvement, not a fix.
+
+**What one gated cell trades, on the recorded figures.** Over the twelve finding-carrying cells the
+clause arms mean 408 output tokens against the baseline's 539, and their input means 12,733–12,735
+against 12,705 — so +28 to +30 input tokens buys −131 output tokens. That input delta independently
+reproduces the 28-token measurement of the clause recorded further down, which was taken on a
+different cell by a different method.
+
+**The last two rows are the same 126 characters differing only in what precedes them**, and that is
+worth its own line because it decided a safety property: on a line of its own the clause displaced
+the verdict lead on one cell (`NO` -> `NONE`, the Ciprofloxacin answer opening *"Ciprofloxacin
+interactions with active orders are:"*), and run on from the question it did not. The two shipped
+rows were captured against the built omod deployed to the standalone, not through the global
+property, so they measure the module rather than a simulation of it.
+
+Read beside the existing gates rather than instead of them, which is the whole point: **abstention
+2/2, `unlicensed_verdict` 0 and `discordant_severity` 0 in every arm, and verdict-led 12/12 in every
+arm but the line-separated one** — that one cell is the separator finding above, and it is the ONE
+pre-existing column that moved in any arm. An earlier draft of this sentence read *"verdict-led
+12/12 … in every arm"* and *"nothing any pre-existing column reports moved in any arm"*, which the
+table above contradicts in its own `verdict-led` column. That draft was not a figure that went
+stale: it arrived in the same commit as the row it contradicts, so the table is the authority here
+and a summary sentence beside a table is worth re-reading against it.
+
+The `rc2` Tier-B cohort does not exist on this host (404 on its patient uuids), so drift and the 19 absent-data cases are not measurable here — which is
+why the shipped clause is gated rather than added to every prompt. The gate is
+`LlmInferenceService.severalFindingsAboutOneDrug`: more than one injected finding, all of them
+naming ONE drug. The second conjunct came out of this change's first review round and is not visible
+in the table — every cell above is phrased *"should i give {drug}?"*, so the corpus contains no
+interaction-SCREENING cell, which is the arrangement whose findings name several drugs and where the
+clause's *"it"* therefore has no single referent. ADR Decision 84 carries what that conjunct is
+measured to withhold and what it does not establish.
+
+**`score_directness.py` scores nothing over this capture, and that is a property of the capture
+rather than a result.** It reads the `uuid__topic` and `uuid__probe-*` cells `capture_probe_yesno.sh`
+writes; `capture_probe_safety.sh` writes only `<slug>__safety-<Drug>.json` and
+`<slug>___context.json`, so over any arm of the command above it prints `no scoreable cells found`
+and exits 0 — measured over the committed `fixtures/probe-safety/findings-complete/`, which is two
+cells of this capture. What the locked metric DOES cover here is the `verdict-led` column:
+`score_probe_safety.py` imports `score_directness.classify`, so every lead counted above is
+classified by that gate's own definition. Its yes/no cohort — including the single MEDICATIONS cell,
+`dc8560c9-…|probe-current-meds`, cohort `standalone-3.7.1` — is captured by `capture_probe_yesno.sh`
+with `CAPTURE_TIER_B=1` and scored `--cohort standalone-3.7.1`, and no figure from it is recorded in
+this section.
+
+**What exit code to expect from a clean run.** The completeness cell is a `problems` entry, so a
+single-arm run over any drug-reference-enabled install where a cell is short **exits 3** — and six
+of the twelve finding-carrying cells are still short on the shipped build, so 3 is the expected code
+here rather than a signal that something regressed. An A/B exits 3 whenever either arm has problems.
+That is deliberate: softening the cell to a census line is the fail-open this change refuses. **Read
+the columns and the FLIP rows**, not the exit code, when comparing two arms on this install class;
+the exit code is what stops a short arm being reported as clean, which is what the baseline above
+was.
+
+**Runtime verification of the narrowed gate (2026-09-09, review round 1).** The one-subject conjunct
+was added after the table above was captured, so it carried the risk of silently withholding the
+clause from a corpus cell and handing back part of the improvement. Measured on the deployed omod, it
+withholds it from **none of the fourteen** — and does withhold it from the population it exists for:
+
+- **The clause costs 28 input tokens**, read off `input_tokens` on the `chartsearchai_audit_log` row
+  (the audit REST listing publishes it as `inputTokens`). On the interaction-screening question *"Do
+  any of her medications interact?"* the pre-narrowing build spent 13,188 against this build's
+  13,160 over an identical corpus — that deficit IS the withheld clause. **That cell carries twenty
+  findings and cites ten**, its cited findings naming two subjects, which is the population ADR
+  Decision 84 says the sentence cannot describe.
+- **All twelve finding-carrying cells still receive it.** Every one of the fourteen cells' token
+  count moved by the same amount between the two arms, the two zero-finding controls included — and
+  the clause is absent from those in both builds by construction, so that common amount is the
+  corpus offset and nothing else. A cell that had lost the clause would sit 28 tokens under it.
+  Corroborated three ways: `carried` unchanged per cell, the reference slice unchanged per cell, and
+  every finding-carrying cell's cited findings naming exactly one subject.
+
+**Byte-identity is NOT the instrument it looks like, and reaching for it cost this run an arm.**
+Greedy decode with `--cache-reuse 0` does make repeats byte-identical, so an unchanged prompt should
+give an unchanged answer — but rebuilding the querystore index shifted the assembled chart text by a
+uniform twelve tokens, which re-worded eleven of the fourteen answers while changing nothing about
+the code under test, and moved the completeness cell by one in EACH direction (Ciprofloxacin 7/8 to
+8/8, against Amlodipine 7/7 to 7/6 and Aspirin 8/8 to 8/7 — seven of twelve rather than six). So
+**read every cell count in this table as ±1 under chart-text drift**, and compare two arms with the
+token differential above rather than with their prose, using the zero-finding cells as the drift
+control. A systematic withholding could only ever move cells one way, which is how bidirectional
+flips are told from a regression. **The output-token column drifts with them**: that same
+re-capture of the shipped arm means 396 output tokens over the fourteen against the table's 366,
+so read it as a per-arm figure taken with its cell counts and not as a stable property of the clause.
+
+**Before capturing any arm on this rig, confirm the citation range.** A standalone restart empties
+the querystore Lucene index, and `querystore.bootstrap.autostart=true` does **not** rebuild it: the
+bootstrap tracking rows survive the wipe reading COMPLETED, so autostart declines and `GET
+/querystore/indexingstatus` reports `complete: true` over an empty index. The chart then assembles
+from ~9 records instead of ~348 while `chartMode` still reads `fullChart`, and nothing in the
+response says so — the first capture attempt of this verification cited `[10]`–`[17]` and was
+discarded. This patient's safety findings cite `[349]`–`[356]`. `POST /querystore/reindex {"patient":
+"<uuid>"}` rebuilds it (347 documents here), and the range is what says it worked.
+
+**Read every published key, not only the ones a ticket lists.** Over the same 14 cells,
+`misattributedOrderCitations` went from two cells to none and `unfaithfullyRenderedCitations` from
+three to two, while `activeOrderClaims.uncited` rose on four cells from `0` to `stated`. Those are
+one effect: the baseline answers attached CHART record numbers to their active-order claims (the
+Digoxin answer's `[177]`, which is exactly what `misattributedOrderCitations` flagged), and the
+shipped arm cites the findings only, so those claims offer no chart citation and `uncited` counts
+them. With `drugSafety.citeOrderRecords` shipping OFF that is the correct state and the baseline's
+was the defect — so `uncited` is a column that got worse because the thing it proxies for got
+better. ADR Decision 84 carries the argument.
+
+**Wording was chosen by seven question-appended probes, and the four that failed each failed a
+different property** — a bare list instruction dropped every rating; one asking only for numbered
+lines did the same; one asking for lines *and* severity kept the ratings and stayed short; and one
+adding *"and nothing else"* took all three and lost the verdict lead. A probe that said *"where
+several findings name the drug"* moved `carried` from 7 to 17 — it changed the SCREEN, not the format,
+which is a thing a question suffix can do and a prompt clause cannot, and it is excluded from that
+count.
+
+### The queryScoped arm — the shipped default, one arm only (2026-09-09)
+
+The arm the caveat above points forward to. Same rig, patient, phrasing and fourteen drugs, with
+`chartsearchai.chartMode` set to `queryScoped` for the capture and restored to `fullChart`
+afterwards (readback confirmed; the mode is read PER REQUEST, so no restart was involved).
+`chartsearchai.llm.systemPrompt` unset as found and left so; drug-reference layer enabled,
+`sourceFormat=ddinter`, 2283 entries.
+
+**The build is pinned three ways, and one obvious check is wrong.** The deployed build is #397's own
+feature commit: the running JVM's lib-cache api jar's `LlmProvider.class` md5 is byte-identical to
+that commit's build and differs from this branch's; `javap` over that class shows the 126-character
+clause in the constant pool beside the 4-argument `buildUserMessage`; and all fourteen responses
+carry `findingCitations`, which is #395/#397's own publication. **`strings` over that class file
+returns ZERO hits for the clause text** — a `strings`-only check reports the clause absent, so use
+`javap`.
+
+| column | queryScoped (clause sent) |
+|---|---|
+| cells short | **2 / 12** (Enalapril 7/8, Furosemide 4/7) |
+| ratings dropped | 0 of 14 that measured it |
+| verdict-led | 12 / 12 |
+| abstention | 2 / 2 |
+| mean input tokens | 3,814.3 over 14 cells (4,004.4 over the 12 finding-carrying) |
+| mean output tokens | 441.6 over 14 cells |
+
+The gate fired on all twelve finding-carrying cells (carried 5, 6, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8) and
+on neither abstention cell (carried 0). Both short cells are genuine incompleteness rather than
+truncation: each ends on a clean sentence with a period, Furosemide's answer is 310 characters
+against an 855-output-token cell elsewhere in the same arm, and `unstatedFindingSeverities` is `[]`
+on both — every finding they did state carried its rating. All fourteen cells joined 1:1 to audit
+rows by exact answer text, every row logging searchMode `queryScoped`, the join restricted to the
+capture's own time window. The queryScoped cells cite `[15]`–`[26]`, which resembles the
+empty-index tell the paragraph above warns about but is not it: that mode narrows the chart
+deliberately, and a `fullChart` Warfarin probe before AND after the capture returned byte-identical
+results ([349]–[355], carried 8 / cited 7, 12,479 in / 402 out).
+
+**What this arm closes, as ABSOLUTE readings that need no second arm: none of the three harms #397
+names has occurred under the shipped default.** The verdict lead is at its CEILING (12 of 12, so it
+cannot have been lost), ratings dropped at its FLOOR (0), abstention held (2 of 2); 0 cells named a
+severity no chip carries and 0 stated no extent at all.
+
+**What it does NOT establish is the clause's SIGN under the default, and that stays unattributed.**
+2 of 12 is the best completeness figure on record, but with no no-clause arm at this mode the gap
+from `fullChart`'s 6 of 12 is equally consistent with the mode change doing all of it — a four-cell
+mode gap measured once, n=14, one patient, one phrasing, is not a mode effect. A harm visible only
+as a DIFFERENCE from a no-clause arm is invisible here. The 441.6 mean output tokens cannot be read
+against the 366/477 in the table above: that comparison crosses modes, and output length is
+confounded with how many findings each answer enumerated. And nothing here speaks to whether the
+system-prompt POSITION would still hurt under queryScoped, which needs a third arm.
+
+**The second arm is UNOBTAINABLE, nothing was substituted for it, and the reason is worth recording
+so nobody spends the effort again: this scorer's own refusal is what forecloses it.** Every build on
+disk was swept. The artifact kept for the purpose carries the clause (its `PRE` names
+pre-review-round-1, not pre-#397); every post-2026-09-08 artifact carries it; no worktree HEAD is an
+ancestor of the feature commit; and **every genuinely pre-clause build is also pre-#395**, so it
+publishes no `findingCitations` at all. `score_probe_safety.py` REFUSES that A/B by design — it
+compares which cells measured the finding-citation extent on each side and, where they differ,
+prints *"the completeness column above ran on one arm and not the other and its tie means
+nothing"* — so a pre-#395 arm cannot produce the one column the A/B turns on. There is no
+configuration lever either: `severalFindingsAboutOneDrug` is code over `chart.getMappings()` with no
+global-property read, so the clause cannot be switched off from configuration. **Obtaining the arm
+needs a purpose-built no-clause omod**, and that is the whole of what it needs.
+
+**One residue of this capture, said rather than left to be assumed.** The clause's presence in the
+ASSEMBLED prompt was not verified byte for byte — no endpoint echoes the user message — so delivery
+rests on the deployed-bytecode pin plus the gate's inputs, not on a prompt readback.
