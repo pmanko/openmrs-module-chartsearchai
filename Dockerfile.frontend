@@ -7,6 +7,13 @@ ARG CACHE_BUST
 RUN git clone --depth 1 https://github.com/openmrs/openmrs-esm-chartsearchai.git /esm
 
 WORKDIR /esm
+# Record WHICH commit was cloned, and ship it with the assembly. Without it, a stale
+# deploy is invisible: measured 2026-09-15, the served ESM directory held files from two
+# builds — the numbered chunks from the current one and the ENTRY bundle the importmap
+# names from a build 11 hours older — so the browser ran pre-merge code while every file
+# the gate could name was present and the deploy reported success. The entry is byte-
+# identical in size across those builds (83,245), so nothing comparing sizes sees it.
+RUN git rev-parse HEAD > /esm/ESM_SHA
 RUN yarn install --immutable && yarn build && yarn pack
 
 FROM --platform=$BUILDPLATFORM node:24-alpine AS build-spa
@@ -19,7 +26,108 @@ WORKDIR /app
 
 RUN openmrs assemble --mode config --config spa-build-config.json
 
+# Served as a plain file so the post-deploy gate can ask what it is looking at.
+#
+# Its mtime is NOT the assembly's: `COPY --from` preserves the source's, and the source was
+# written by `git rev-parse` in the stage above, before `yarn build`. So it is the EARLIEST
+# artifact of its own build, minutes older than anything `openmrs assemble` wrote. That ordering
+# is the whole basis of the gate's provenance check — an entry bundle older than this stamp
+# cannot have come from this build — which is why the assertion below exists rather than a
+# comment claiming it.
+#
+# Whether precompress writes a sibling for it depends on the sha's own compressibility, and it does
+# not matter either way: the base image's nginx serves a `.sha` from its plain-file location, with
+# no encoding negotiation (see the assertion below). The gate reads the plain file, at the mtime
+# `COPY --from` preserved.
+COPY --from=chartsearchai-esm /esm/ESM_SHA /app/dist/chartsearchai-esm.sha
+
+# Give the assembled SPA the pre-compressed siblings the base image's nginx
+# expects. Without them the base's own siblings answer for these files — see
+# the deletion in the next stage.
+#
+# This runs in the BUILDPLATFORM stage on purpose. It compressed 6031 files in
+# 61s here, natively; the final stage is built once per target platform, so
+# doing it there would run the whole pass under qemu for linux/arm64 — where,
+# measured 2026-08-25, a shell loop doing only the gzip half took 441s in an
+# emulated amd64 container.
+COPY precompress-spa.mjs /app/precompress-spa.mjs
+RUN node /app/precompress-spa.mjs /app/dist
+
+# Assert that ordering here, where it is cheap, instead of discovering it on a deploy. If a later
+# edit moves the COPY above after the assembly, or `openmrs assemble` ever normalises mtimes, the
+# gate's comparison inverts and fails every healthy deploy — a check that cries wolf gets muted,
+# which is worse than not having it. Nothing else in the build or the gate verifies this.
+#
+# It checks the COMPRESSED siblings too, because those are what a browser is served and therefore
+# what the gate's Last-Modified comparison actually reads. precompress-spa.mjs stamps each sibling
+# from its source, so the ordering should survive compression — "should" being the reason this
+# asserts it rather than a comment claiming it.
+#
+# The positive control is the ENTRY's own `.br`. The stamp's own siblings are deliberately NOT
+# compared: read against the base image's nginx (openmrs-distro-referenceapplication,
+# frontend/nginx.conf), `try_files $uri$enc_suffix …` appears only inside extension-scoped
+# locations — service-worker.js, `\.js$`, `\.css$`, `\.json$`, `\.svg$` — and a `.sha` matches none
+# of them. It falls through to the plain-file location, so no browser is ever served a compressed
+# variant of it and comparing those siblings would prove nothing. The entry bundle is ~83 KB, is
+# a `.js`, and always compresses, so its `.br` is what establishes that precompress ran over this
+# assembly at all.
+RUN node -e 'const {existsSync,statSync,readFileSync}=require("fs"); \
+  const spec=(JSON.parse(readFileSync("/app/dist/importmap.json","utf8")).imports||{})["@openmrs/esm-chartsearchai-app"]; \
+  if(!spec){console.error("importmap does not name the ESM");process.exit(1);} \
+  const entry="/app/dist/"+spec.replace(/^\.\//,""); \
+  const stamp=statSync("/app/dist/chartsearchai-esm.sha").mtimeMs, e=statSync(entry).mtimeMs; \
+  console.log("stamp mtime",stamp,"entry mtime",e,entry); \
+  if(stamp>e){console.error("stamp is NEWER than the entry bundle: the gate provenance check would invert");process.exit(1);} \
+  if(!existsSync(entry+".br")){console.error("precompress wrote no .br for the entry bundle, so nothing here verified what a browser is served");process.exit(1);} \
+  console.log("entry .br present, so precompress ran over this assembly");'
+
 # Use the official O3 frontend image as the base — it has the correct
 # index.html (with SPA bootstrap), nginx config, and env var substitution.
 FROM openmrs/openmrs-reference-application-3-frontend:nightly
+
+# Drop the base's pre-compressed siblings BEFORE the copy below, never after —
+# the copy brings the assembled SPA's own siblings with it.
+#
+# The base's nginx answers a request with <file>.br or <file>.gz when one
+# exists, picking the encoding from Accept-Encoding via a map in its config,
+# and it tries .br first. It pre-compresses its own assembly (3900 of each) and
+# `openmrs assemble` emitted none, so the copy replaced importmap.json and
+# routes.registry.json while leaving the base's stale siblings beside them.
+# nginx then handed every browser the base's 46-module importmap, which does
+# not name @openmrs/esm-chartsearchai-app. The ESM's own bundle shipped and was
+# reachable — a new filename has no stale sibling to shadow it — the app simply
+# never imported it, so no icon appeared on the patient chart.
+#
+# A plain curl sends no Accept-Encoding and read the correct plain file, which
+# is why this survived every check that was not a browser. Measured 2026-08-25
+# against the image published that morning: the plain importmap.json named the
+# ESM, importmap.json.gz and importmap.json.br both did not.
+#
+# Both variants matter and neither is redundant: .br is what a browser gets, so
+# a pattern covering only .gz would have left the defect in place. Anything
+# added to the nginx encoding map later belongs in this pattern too.
+#
+# The base's own module bundles stay behind, now uncompressed and unreferenced
+# by the new importmap, exactly as unreferenced as they were before.
+RUN find /usr/share/nginx/html \( -name '*.gz' -o -name '*.br' \) -delete
+
 COPY --from=build-spa /app/dist /usr/share/nginx/html
+
+# Guard the two files that decide whether the ESM is loaded at all.
+#
+# The .gz halves are checked by content. The .br halves are checked by mtime
+# against their source, because this stage has no brotli decompressor and
+# precompress-spa.mjs stamps every sibling with its source's mtime — so a
+# sibling the base image left behind carries the base's timestamp and fails,
+# while one that came from the assembly matches.
+#
+# This fails the build on the shape described above: against the image
+# published before this commit, both greps exit 1.
+RUN set -eux; \
+    cd /usr/share/nginx/html; \
+    gzip -cd importmap.json.gz | grep -q '@openmrs/esm-chartsearchai-app'; \
+    gzip -cd routes.registry.json.gz | grep -q 'chartsearchai'; \
+    for f in importmap.json routes.registry.json; do \
+      test -f "$f.br"; \
+      test "$(stat -c %Y "$f.br")" = "$(stat -c %Y "$f")"; \
+    done

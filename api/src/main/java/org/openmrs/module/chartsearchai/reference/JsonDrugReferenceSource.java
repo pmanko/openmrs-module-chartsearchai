@@ -33,9 +33,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * so the module ships with working defaults (the shared
  * {@link ReferenceDataFiles} resolution).
  *
- * <p>This is the curated/hand-authored source. For authoritative datasets
- * (e.g. WHO ATC) see {@link AtcDrugReferenceSource}; the source is chosen by
- * {@code chartsearchai.drugReference.sourceFormat}.
+ * <p>This is the curated/hand-authored source, selected by
+ * {@code chartsearchai.drugReference.sourceFormat=json}. It was the DEFAULT until ADR Decision 36 moved
+ * that to {@link DdiDrugReferenceSource}, and what it is still the only source of is DOSING: its four
+ * seeded entries carry the age bands the dose-excess check needs, which neither DDInter nor a WHO ATC
+ * export publishes. It also remains the parser a mistyped {@code sourceFormat} falls through to, so a
+ * document of another format reaching it is a live case rather than a hypothetical — see
+ * {@code DrugReferenceService.effectiveFormat}. For authoritative datasets see
+ * {@link AtcDrugReferenceSource} and {@link DdiDrugReferenceSource}.
  */
 public class JsonDrugReferenceSource implements DrugReferenceSource {
 
@@ -45,23 +50,67 @@ public class JsonDrugReferenceSource implements DrugReferenceSource {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
 
+	private volatile String lastLoadOrigin;
+
+	private volatile List<DrugReferenceValidity.Finding> lastLoadFindings = Collections.emptyList();
+
 	@Override
 	public List<DrugReference> load() {
-		return ReferenceDataFiles.loadWithClasspathFallback(
-				ChartSearchAiConstants.GP_DRUG_REFERENCE_DATA_FILE_PATH, CLASSPATH_DEFAULT,
+		ReferenceDataFiles.Loaded<DrugReference> loaded = ReferenceDataFiles.loadWithClasspathFallback(
+				ChartSearchAiConstants.GP_DRUG_REFERENCE_DATA_FILE_PATH,
+				ChartSearchAiConstants.DEFAULT_DRUG_REFERENCE_DATA_FILE_PATH, CLASSPATH_DEFAULT,
 				"drug-reference entries", JsonDrugReferenceSource::parse);
+		lastLoadOrigin = loaded.getOrigin();
+		lastLoadFindings = loaded.getValidity().getFindings();
+		return loaded.getItems();
+	}
+
+	@Override
+	public String lastLoadOrigin() {
+		return lastLoadOrigin;
+	}
+
+	@Override
+	public List<DrugReferenceValidity.Finding> lastLoadFindings() {
+		return lastLoadFindings;
 	}
 
 	/**
-	 * Parse a dataset stream into reference entries. Entries with a blank {@code id} or
-	 * {@code name} are dropped (with a warning): a name-less entry would render
-	 * {@code "Drug reference — null"} into the citable record and a {@code null} drug into the
-	 * safety warnings, and an id-less one has no stable citation {@code resourceUuid}.
-	 * Package-private and static so tests can exercise the real parser against the real dataset.
+	 * The form for a caller that wants only the entries — package-private and static so tests can
+	 * exercise the real parser against the real dataset. Delegates; see {@link #parse(InputStream,
+	 * DrugReferenceValidity)} for what parsing this dataset means, and
+	 * {@link DdiDrugReferenceSource#parse(InputStream)} for why what the parser found wrong with the
+	 * DOCUMENT still reaches the log from here.
 	 */
 	static List<DrugReference> parse(InputStream in) throws IOException {
+		DrugReferenceValidity validity = new DrugReferenceValidity();
+		List<DrugReference> parsed = parse(in, validity);
+		validity.logTo(log);
+		return parsed;
+	}
+
+	/**
+	 * Parse a dataset stream into reference entries, reporting what only this parser can see about the
+	 * document to {@code validity} — the {@link ReferenceDataFiles.DatasetParser} form, and the one the
+	 * load takes. Entries with a blank {@code id} or {@code name} are dropped (with a warning): a
+	 * name-less entry would render {@code "Drug reference — null"} into the citable record and a
+	 * {@code null} drug into the safety warnings, and an id-less one has no stable citation
+	 * {@code resourceUuid}.
+	 *
+	 * <p>The curated schema is the DEFAULT format, so the document this parser is likeliest to be handed
+	 * by mistake is one of another format — a DDInter export named by {@code dataFilePath} while
+	 * {@code sourceFormat} was left alone. That declares no {@code entries}, and used to load as zero in
+	 * the same silence issue #242 records on the DDInter side. Nothing is counted as discarded: a
+	 * document with no {@code entries} carries nothing this parser can read, which is what tells an
+	 * operator it is a file of another format rather than a mis-shaped one of this.
+	 */
+	static List<DrugReference> parse(InputStream in, DrugReferenceValidity validity) throws IOException {
 		Dataset dataset = MAPPER.readValue(in, Dataset.class);
 		if (dataset == null || dataset.entries == null) {
+			// The format's NAME, not "whatever the default is" — those are equal today and mean
+			// different things, and only one of them stays right if the default moves.
+			validity.datasetMissingARequiredTable(ChartSearchAiConstants.DRUG_REFERENCE_SOURCE_JSON,
+					Collections.singletonList("entries"), "entries", 0);
 			return Collections.emptyList();
 		}
 		List<DrugReference> usable = new ArrayList<DrugReference>();

@@ -43,6 +43,12 @@ import org.springframework.stereotype.Component;
  * {@link RecordMapping} text, by contrast, always retains the inline date so the
  * grounding verifier can still resolve a cited date.
  *
+ * <p>It also states, on a drug-order record whose order the chart builder could resolve, whether
+ * that order is in force ({@link #ACTIVE_ORDER_LABEL} / {@link #INACTIVE_ORDER_LABEL}, issue #317).
+ * querystore's rendered text cannot say: it renders no marker at all for an order that lapsed by its
+ * {@code auto_expire_date}, so such a prescription would otherwise reach the model byte-shaped
+ * exactly like one still being taken.
+ *
  * <p>It also appends an obs-group label (e.g. {@code "(part of: Basic metabolic panel)"})
  * after the body of any record that carries obs-group metadata, so the LLM can cluster
  * the atomic members of a lab panel / vital-signs set — see {@link #groupMembershipLabel}.
@@ -69,6 +75,111 @@ public class PatientChartSerializer {
 	private static final Pattern TRAILING_ZERO_DECIMAL = Pattern.compile("(?<![\\w.])(\\d+)\\.0(?![\\w.])");
 
 	/**
+	 * What a drug-order record's line says when the module has read the patient's orders and this
+	 * one is among the active ones, and when it is not (issue #317).
+	 *
+	 * <p><strong>The wording is a measured decision, and the measurement is why these two strings and
+	 * not the obvious ones.</strong> Five wordings were run on the host standalone
+	 * ({@code chartMode=fullChart}, drug reference on), n=3 per cell, each sample separated by a
+	 * question on another patient so it re-prefills instead of measuring llama's KV prefix cache
+	 * (issue #315's methodology finding). The cell: patient {@code a7090f70}, whose Simvastatin order
+	 * lapsed by its {@code auto_expire_date} while a Bupivacaine and a Lidocaine order are live,
+	 * asked <em>"what medications is the patient taking?"</em>. Every arm was stable 3/3.
+	 *
+	 * <p>{@code ". Active order: yes/no"} (this feature's first wording), {@code ". Active: yes/no"},
+	 * {@code ". Status: active/inactive"} and {@code ". Order status: active/not active"} all answered
+	 * <em>"No active medications are recorded"</em> — a denial of two live prescriptions, which is a
+	 * false negative in the dangerous direction and the issue #118 self-contradiction sentence
+	 * verbatim, since the same payload carries two safety chips naming those very two drugs. These
+	 * two strings answered <em>"The patient is currently taking Bupivacaine [3] and Lidocaine [4]"</em>,
+	 * citing both.
+	 *
+	 * <p><strong>The last two arms are the discriminator, and they are why this is a diagnosis rather
+	 * than a lucky string.</strong> They share the field name, the frame and the position, and differ
+	 * only in the value token — and it is the arm whose value is "active" that denies. The negative
+	 * mark's own word was being lifted into the model's absent-data sentence, whose template
+	 * ({@code LlmProvider}: "name what is missing", "No alcohol use is recorded.") has nothing to
+	 * borrow from "not in force". That is issue #110's failure class reaching a FIELD, which is what
+	 * this javadoc used to argue a field was safe from. What the wording does NOT decide is whether
+	 * the model reads the two live records at all: base — no mark anywhere — answers this same cell
+	 * <em>"The patient is taking Simvastatin Co 20mg [8]"</em> 3/3, naming the lapsed drug and citing
+	 * neither live one. The model overlooks those two records on this question shape either way; the
+	 * wording decides what it then says about the record it does read.
+	 *
+	 * <p>What did not move across the five, and what this wording costs. <em>"is he currently taking
+	 * any medications?"</em> on the same patient is answered correctly by every one of them
+	 * (Bupivacaine and Lidocaine, the lapsed Simvastatin excluded, 3/3 each) where base includes the
+	 * lapsed drug — so no arm was chosen at that cell's expense. The cost is on the
+	 * one-stopped-order patient ({@code 21580018}) asked the same "what medications" question:
+	 * {@code ". Active order: no"} answered <em>"No active medications are recorded. The record for
+	 * Nevirapine shows it was stopped on 2026-08-24 [1]"</em> and this wording answers <em>"No active
+	 * medications are recorded."</em> — the same verdict, without the cited record behind it.
+	 *
+	 * <p><strong>Since issue #315 the negative string has a SECOND consumer: the system prompt.</strong>
+	 * {@code LlmProvider.DEFAULT_SYSTEM_PROMPT} composes {@link #INACTIVE_ORDER_LABEL} into the rule
+	 * telling the model that an answer naming a drug from such a record must say the order is no
+	 * longer in force. It composes the CONSTANT, so a rename carries into the prompt automatically and
+	 * cannot leave it teaching a token no record carries. A rename is NOT silent — the case named
+	 * below reddens on it — but what that case shows is a changed MARK, not a changed prompt rule, and
+	 * nothing can show the latter: both sides of {@code prompt.contains(INACTIVE_ORDER_LABEL)} are the
+	 * same inlined constant and move together. So the red is the signal to re-run BOTH A/Bs; the one
+	 * in this javadoc and Decision 47's are separate ledgers and neither transfers to the other.
+	 *
+	 * <p>A change to either string is a change to what every chart says to the model, and needs its
+	 * own interleaved A/B before it ships; the measurement above is what one looks like, and issue
+	 * #315's five-wording attempt at a prompt rule is the other reason to expect one word to matter.
+	 * {@code DrugOrderCurrencyMarkTest.theTwoMarksAreSpelledExactlyAsMeasured} pins both as literals,
+	 * so such a change has to redden a test rather than being made by accident; every other assertion
+	 * compares the constant to itself and cannot see a rename. ADR Decision 46 carries this same
+	 * ledger in the durable record, beside what the mark costs the {@code fullChart} KV-reuse
+	 * invariant and the one end-to-end effect nobody has measured.
+	 *
+	 * <p>Three things it says on purpose. It reports {@code Order.isActive()} and nothing more — the
+	 * module's own authoritative predicate, and the same question the drug-safety layer asks of the
+	 * same data. Not, however, through the same call: the safety layer screens on
+	 * {@code getActiveOrders}, which evaluates the predicate in SQL. They agree on every leg checked
+	 * and differ where {@code Order.isActive()} throws and the SQL answers, which
+	 * {@code QueryStoreChartBuilder.readingOf} handles per order — so "the chart and the chips cannot
+	 * disagree" is a claim about the two predicates, and it is not enforced by their sharing a call
+	 * site, because they do not share one. It is enforced by a case:
+	 * {@code DrugOrderCurrencyMarkTest.theTwoPredicatesTheModuleAsksAgreeOnEveryOrderEitherCanEvaluate}
+	 * drives both over one patient's whole drug-order list and asserts they classify each order
+	 * alike, excluding — and asserting — the throwing row. It says "not in force"
+	 * rather than "ended" or "stopped", because absence from the active set is not a claim about a
+	 * stop date — an order whose {@code dateActivated} is in the future is not in force either — and
+	 * is not a claim about whether the patient is taking anything. It deliberately does NOT borrow the
+	 * noun {@code DrugReferenceInjector.renderActiveOrder} uses ("Active drug order:"), which the
+	 * first wording did, on the reasoning that one vocabulary per axis beats two. That reasoning is
+	 * still sound and it lost to the measurement above. So the model can see a trailing
+	 * {@code ". Order status: not in force"} field on one record and a leading "Active drug order:"
+	 * record type on another, and nothing here makes the prompt uniform on that axis. And it is a
+	 * plain field in querystore's own
+	 * {@code ". Label: value"} idiom rather than a sentence, because issue #110 measured that prose
+	 * inside a record gets recited into the answer as though it were clinical content — necessary,
+	 * and now known not to be sufficient: a field's VALUE gets recited too.
+	 *
+	 * <p>Being recited is the POINT here, which is what separates this from issue #117 and the rule
+	 * {@code README} draws from it — that a field belongs beside the citation rather than inside the
+	 * record, because everything in a record's text is quotable. What #117 forbids in the text is the
+	 * module's own BOOKKEEPING (a truncation counter, a dataset attribution), which a clinician-facing
+	 * answer should never carry. Whether a prescription is in force is a fact about the patient's
+	 * record, and an answer that repeats it is doing the right thing — repeating it about the record it
+	 * is on. What the measurement above adds is that the same readability lets a negative value be
+	 * repeated about the WHOLE chart, which is why the value's own words are part of the decision and
+	 * not only the field's. The same answer also rides
+	 * structurally on {@link RecordMapping#getOrderActive()}, for the consumer that needs to branch on
+	 * it rather than read it. That field is deliberately not published on the wire — not because a
+	 * client could derive it (the wire carries no record text at all, only the citation's index, type,
+	 * uuid, date, grounding verdict, group, source and withheld count), but because a client
+	 * navigates to the order itself by {@code resourceUuid} and reads its status from the chart, which
+	 * is authoritative and current in a way a copy taken at answer time would not be.
+	 */
+	public static final String ACTIVE_ORDER_LABEL = ". Order status: in force";
+
+	/** The negative half of {@link #ACTIVE_ORDER_LABEL}; see there for the wording's reasons. */
+	public static final String INACTIVE_ORDER_LABEL = ". Order status: not in force";
+
+	/**
 	 * Serialize a pre-filtered list of records into numbered text lines.
 	 *
 	 * @param patient the patient whose demographics to include
@@ -86,7 +197,9 @@ public class PatientChartSerializer {
 	 * query) uses this to attach 1-based indices alongside the chart text — the LLM prompt then
 	 * carries a short "Records ranked by similarity to the query: 3, 7, 12" hint after the chart so
 	 * the variable-bytes portion of the prompt is tiny while the chart prefix stays stable
-	 * across queries for the same patient (the property llama-server's KV-cache reuse needs).
+	 * across queries for the same patient (the property llama-server's KV-cache reuse needs) —
+	 * stable across QUESTIONS, that is; since issue #317 a drug-order record's line also states
+	 * whether that order is in force, so the bytes move when an order's status does.
 	 *
 	 * @param patient the patient whose demographics to include
 	 * @param records the records to serialize
@@ -170,6 +283,19 @@ public class PatientChartSerializer {
 			// patient?" answers directly instead of echoing a birthdate. No-op for non-patient records,
 			// which never co-occur with a group label (a group member is never the patient record).
 			appendLiveAge(body, record, patient);
+			// The order-currency mark, for a drug-order record whose order the module could resolve.
+			// Part of the BODY rather than a separate label so it reaches the chart line and the
+			// grounding mapping by construction: they must not be able to disagree about whether the
+			// model was told this prescription is in force.
+			//
+			// That is a statement about those two AGREEING, and it settles nothing about grounding.
+			// RecordMapping.getText() is the citation verifier's embedding input and its Tier-2
+			// entailment premise, so every drug-order record's premise is now ~5 tokens longer. The
+			// effect on cosine has NOT been measured here, and the margin it would sit inside is
+			// narrow — ChartSearchAiConstants records ~0.03 between supported and unrelated pairs on
+			// the e5 embedder this deployment shape recommends. Treated as an open question rather
+			// than a closed one; the PR records what was and was not measured end to end.
+			body.append(orderCurrencyLabel(record));
 			String bodyBase = body.toString();
 			// Obs-group (e.g. lab-panel / vital-signs-set) membership label, " (part of: <panel>)" or "",
 			// surfaced inline so the LLM can cluster atomic members of the same group. querystore carries
@@ -182,7 +308,8 @@ public class PatientChartSerializer {
 			// per-record view must still contain it. Grounding behaviour is therefore unchanged.
 			String renderedText = dateLabelPrefix(dateLabel) + bodyBase + groupLabel;
 			mappings.add(new RecordMapping(index, record.getResourceType(), record.getResourceUuid(),
-					record.getDate(), renderedText));
+					record.getDate(), renderedText, null, 0, record.getOrderActive(),
+					record.getOrderStopDate()));
 
 			// Chart line: show the date only on the first record of a same-date run (an undated record
 			// resets the run, so the next dated record shows its date again); otherwise drop it. With
@@ -257,6 +384,27 @@ public class PatientChartSerializer {
 	}
 
 	/**
+	 * The order-currency label for a record ({@link #ACTIVE_ORDER_LABEL} /
+	 * {@link #INACTIVE_ORDER_LABEL}), or {@code ""} when the module cannot say.
+	 *
+	 * <p>Silence is the whole guard, and it is why this reads a three-valued answer rather than a
+	 * boolean. Several unrelated situations arrive here as {@code null} — enumerated once, on
+	 * {@link SerializedRecord#getOrderActive()}, and not restated here so this javadoc cannot go stale
+	 * as that list grows. What they share is the only thing this method needs: nothing is known, and
+	 * rendering any of them as "no" would tell a clinician a prescription had ended on the strength of
+	 * the module not knowing.
+	 * That is the fail-closed hazard issue #317 names, and
+	 * {@code PatientClinicalContext.contraindicationRecordsRead()} is the same distinction one layer
+	 * along: a chart the module could not read is not a chart that records nothing.
+	 */
+	private static String orderCurrencyLabel(SerializedRecord record) {
+		if (record == null || record.getOrderActive() == null) {
+			return "";
+		}
+		return record.getOrderActive().booleanValue() ? ACTIVE_ORDER_LABEL : INACTIVE_ORDER_LABEL;
+	}
+
+	/**
 	 * Appends the patient's <em>current</em> age to querystore's {@code patient} demographics record line.
 	 * Computed live from the {@link Patient} rather than read from the indexed text, because age changes
 	 * over time while the index stores only birthdate. No-op for non-patient records or when age is unknown.
@@ -310,9 +458,11 @@ public class PatientChartSerializer {
 	/**
 	 * The serialized patient chart with numbered records, index mapping, and (in focus-hint
 	 * prefilter mode) the 1-based indices of records the retrieval ranked highest by similarity.
-	 * The {@link #getText()} bytes are a function of the patient only — the focus indices are
+	 * The {@link #getText()} bytes do not vary with the question — the focus indices are
 	 * the per-query payload that rides alongside and is rendered at the end of the LLM prompt
-	 * by {@code LlmProvider.buildUserMessage}.
+	 * by {@code LlmProvider.buildUserMessage}. Question-independent is not time-independent: the
+	 * bytes are a function of the patient and of their order status as read when the chart was
+	 * assembled (issue #317), as they already were of the patient's current age.
 	 */
 	public static class PatientChart {
 
@@ -322,6 +472,19 @@ public class PatientChartSerializer {
 
 		private final List<Integer> focusIndices;
 
+		// THE STAMPS START HERE — queryScoped, preFiltered, completeResourceTypes. Each records what
+		// the BUILDER decided, so a later consumer reads the chart that was actually assembled
+		// instead of re-deriving it from a global property that may since have changed.
+		//
+		// Adding a fourth? It must also be carried across DrugReferenceInjector.injectRecords, which
+		// rebuilds this object from scratch to append its records — a fresh PatientChart defaults
+		// every stamp to "not set", so a stamp that is not copied there is silently lost on any
+		// question that matches the drug reference, and lost in the fail-OPEN direction. That has
+		// been the failure twice: once for queryScoped (a slice persisted under a patient's KV
+		// scope) and once for preFiltered (a focus-hinted prompt filed in the audit log as a plain
+		// full chart, issue #178). Each stamp has a regression test in DrugReferenceInjectorTest;
+		// a fourth needs one too.
+
 		/** Whether this chart is a question-dependent query-scoped slice (set by the scoped
 		 *  builder via {@link #markQueryScoped}) rather than the stable full chart. Carried ON
 		 *  the chart so downstream KV decisions are made against the chart that was actually
@@ -329,6 +492,13 @@ public class PatientChartSerializer {
 		 *  chart (a transient GP-read failure, or an operator flip mid-request), and persisting
 		 *  a slice prompt under a patient's KV scope would purge their real full-chart entry. */
 		private boolean queryScoped;
+
+		/** Whether this chart carries the similarity focus hint the {@code embedding.preFilter}
+		 *  global property turns on — the second of the two full-chart shapes, and only ever set on
+		 *  a chart that is not {@link #queryScoped}. Carried ON the chart for the same reason that
+		 *  flag is: the audit row naming which mode assembled a prompt has to follow the chart that
+		 *  was built, and a later re-read of the GP can disagree with the read that built it. */
+		private boolean preFiltered;
 
 		/** The resource types this chart carries COMPLETELY — every record querystore holds of
 		 *  that type for this patient. Only a query-scoped slice needs to state this: the full
@@ -373,6 +543,21 @@ public class PatientChartSerializer {
 		 *  race-free signal for KV decisions (see the field note). */
 		public boolean isQueryScoped() {
 			return queryScoped;
+		}
+
+		/** Marks this chart as carrying the preFilter focus hint. Called by the full-chart builder
+		 *  from the same {@code usePreFilter} it dispatched on, and again by
+		 *  {@code DrugReferenceInjector} on its rebuilt chart — a rebuild that dropped the stamp
+		 *  would file a focus-hinted prompt in the audit log as a plain full chart. */
+		public void markPreFiltered() {
+			this.preFiltered = true;
+		}
+
+		/** True when this chart carries the preFilter focus hint — the race-free signal for which of
+		 *  the two full-chart shapes assembled it, and (with {@link #isQueryScoped()}) what
+		 *  {@code ChartBuildingStrategy.searchModeLabel} names in the audit row. */
+		public boolean isPreFiltered() {
+			return preFiltered;
 		}
 
 		/** Declares the resource types this chart carries completely. Called by the scoped chart
@@ -425,12 +610,36 @@ public class PatientChartSerializer {
 	/**
 	 * Maps a sequential index used in the LLM prompt back to the OpenMRS resource.
 	 *
-	 * <p>{@link #getText()} is the record's content — the part the LLM reads and may quote.
-	 * {@link #getSource()} and {@link #getWithheldInteractions()} are <em>about</em> the record
-	 * rather than part of it, and are deliberately kept off the text: anything inside it is
-	 * quotable, and a model told to cite records recited the module's own truncation counter and
-	 * dataset attribution into a clinician-facing answer (issue #117). Metadata a client should
-	 * render beside a citation therefore travels as its own field, never as prose.
+	 * <p>{@link #getText()} is the record's content — the part the LLM reads and may quote. The other
+	 * accessors are <em>about</em> the record rather than part of it, and {@link #getSource()},
+	 * {@link #getWithheldInteractions()} and {@link #getDerivedFrom()} are deliberately kept off the
+	 * text: anything inside it is quotable, and a model told to cite records recited the module's own
+	 * truncation counter and dataset attribution into a clinician-facing answer (issue #117). Anything
+	 * of that kind therefore travels as its own field, never as prose — whether a client renders it
+	 * beside the citation (the first two) or the module reads it back to decide what to publish (the
+	 * third).
+	 *
+	 * <p>{@link #getFindingSeverity()} is carried only where the rendered text states it too, since
+	 * an answer cannot have dropped a word the record never gave it (issue #337). It is beside the
+	 * record so a consumer need not parse for it — which is exactly {@link #getOrderActive()}'s rule
+	 * (issue #317: never re-derive it, and in particular never from the rendered text), and that
+	 * field is in both places as well, {@code orderCurrencyLabel} rendering it into the body. So is
+	 * {@link #getDate()}. "Never as prose" is a rule about metadata the model has no business
+	 * reciting, which none of those three is.
+	 *
+	 * <p>{@link #getDosingCeilings()} (issue #276) is the exception to "about the record rather than
+	 * part of it": it is a COPY of numbers {@link #getText()} itself states, carried so that a
+	 * post-answer check can compare the answer against them without parsing that text — the one
+	 * field here that DUPLICATES part of the text rather than describing it or standing beside it.
+	 * {@link #getOrderDrugNamed()} below is the one that describes it, and the two claims are about
+	 * different things. It is never rendered FROM: the text is written first and this collected from
+	 * what was written.
+	 *
+	 * <p>{@link #getOrderDrugNamed()} (issue #294) is a fourth of the kind the module reads back to
+	 * decide what to publish, and the one that says something about {@link #getText()} rather than
+	 * standing beside it: whether that text names the drug of the order it is about. It is never
+	 * rendered, and a reader must not look for it in the prose — deciding it from the text is exactly
+	 * what {@link #getOrderActive()}'s rule forbids, for the same reason.
 	 */
 	public static class RecordMapping {
 
@@ -449,6 +658,95 @@ public class PatientChartSerializer {
 		private final int withheldInteractions;
 
 		/**
+		 * Whether the {@code Order} this record was serialized from is in force right now, or
+		 * {@code null} when the module cannot say — the structural half of the label the chart line
+		 * carries, and the form a consumer reads rather than re-deriving from prose (issue #317).
+		 * See {@code SerializedRecord.getOrderActive()} for why the {@code null} cases are one answer.
+		 */
+		private final Boolean orderActive;
+
+		/**
+		 * When the {@code Order} this record was serialized from stopped being in force, or
+		 * {@code null} where the module states no such date — the structural form a consumer reads
+		 * rather than looking for a date in {@link #getText()} (issue #315).
+		 *
+		 * <p>Written in exactly ONE place, {@code QueryStoreChartBuilder.toSerializedRecords}, beside
+		 * {@link #orderActive} and off the same one authoritative order read, and pinned there by
+		 * {@code ArchitectureGuardTest.theOrderStopDateStampIsWrittenInOnePlace}.
+		 * {@code SerializedRecord.orderStopDate} is canonical for what it is and for the asymmetry that
+		 * is its contract; pointed at rather than restated, so this javadoc cannot go stale against it.
+		 */
+		private final Date orderStopDate;
+
+		/**
+		 * The rating an injected {@code safety_finding} states, where an answer stating that finding
+		 * ought to state the rating too — {@code null} on every other record, and on a finding whose
+		 * rating has no word worth requiring (issue #337). Written in exactly ONE place,
+		 * {@code DrugReferenceInjector}'s finding mapping, off {@code SafetyWarning.getSeverity()}
+		 * through {@code DrugSafetyValidator.statableRating}, which is canonical for which ratings
+		 * answer null and why. Never re-derived from {@link #getText()}: a knowledge-base mechanism
+		 * can itself contain a rating word.
+		 */
+		private final String findingSeverity;
+
+		/**
+		 * The numbers of the chart records this record was DERIVED from, empty where it was not
+		 * derived from any — the provenance of a record this module injected, and the form a consumer
+		 * reads rather than parsing it out of {@link #getText()} (issue #305).
+		 *
+		 * <p>See {@link #getDerivedFrom()} for what it is written for and by whom.
+		 */
+		private final List<Integer> derivedFrom;
+
+		/**
+		 * Whether the drug of the {@code Order} this record is about is NAMED in the record — {@code
+		 * TRUE} it is, {@code FALSE} this module rendered the record for an active order whose display
+		 * is not a drug name, and {@code null} the module cannot say, which is every record that is not
+		 * one this module injected for an active order (issue #294).
+		 *
+		 * <p>Written in exactly ONE place, {@code DrugReferenceInjector}'s {@code active_drug_order}
+		 * mapping, off {@code DrugSafetyValidator.displayNamesADrug} — canonical for that question, and
+		 * asked of the ORDER. Never re-derived from {@link #getText()}: that is the rule
+		 * {@link #orderActive} carries for the same reason (issue #317), and a bare
+		 * {@code [ATC N02BA01]} is not something a text test can tell from a drug name a clinician
+		 * typed.
+		 *
+		 * <p><b>The record and the display are one string by construction, which is what makes this a
+		 * fact about the RECORD and not only about the order.</b>
+		 * {@code DrugReferenceInjector.renderActiveOrder} is {@code "Active drug order: " +
+		 * order.getDisplay() + "."}, so the display is the whole of what the record says the drug is.
+		 * A richer rendering would leave the stamp {@code FALSE} for a record that had since gained a
+		 * name — withholding a verdict it could then give, which is the fail-safe direction — so
+		 * whoever changes that method re-decides this stamp with it.
+		 *
+		 * <p><b>{@code null} is not a certificate.</b> It says this producer stated no answer, never
+		 * that the record names a drug; a querystore-retrieved {@code drug_order} for a nameless order
+		 * is exactly that case and is graded as before.
+		 */
+		private final Boolean orderDrugNamed;
+
+		/**
+		 * The daily dosing ceilings an injected {@code drug_reference} record's own text states for
+		 * this patient's age — {@code null} on every other record, and on one whose text states none
+		 * (issue #276). Each element is the ceiling as the record spells it, the bytes
+		 * {@code DrugReferenceInjector.dosingNumbers} writes after {@code "maximum "} (for example
+		 * {@code "4000 mg/day"}), and the list is STRICTEST FIRST and distinct.
+		 *
+		 * <p>Written in exactly ONE place, {@code DrugReferenceInjector}'s {@code drug_reference}
+		 * mapping, collected from the clauses that method actually APPENDED rather than from the
+		 * bands behind them — a band publishing no daily maximum contributes nothing, because the
+		 * text states nothing, and a sibling row the section skipped is not in the record to be
+		 * quoted. Never re-derived from {@link #getText()}: that is {@link #orderActive}'s rule
+		 * (issue #317) and {@link #orderDrugNamed}'s (issue #294), and here it would parse numbers
+		 * out of operator-authored free text that can pair anything with anything.
+		 *
+		 * <p>The ORDER is the load-bearing part and is decided where the numbers are doubles, in the
+		 * writer; a consumer reads position 0 as "the strictest this record publishes" and never
+		 * sorts the list itself, which as strings would order {@code "300"} before {@code "50"}.
+		 */
+		private final List<String> dosingCeilings;
+
+		/**
 		 * Backward-compatible constructor that carries no source text. Mappings
 		 * built this way cannot be grounding-checked; the grounding verifier
 		 * treats a null/blank text as "cannot verify" and leaves the citation
@@ -463,12 +761,129 @@ public class PatientChartSerializer {
 		}
 
 		/**
-		 * Full constructor, including the citation metadata that must not live in {@code text}
-		 * (see the class doc). A chart record has neither, so the shorter constructors default
-		 * them to "no attribution, nothing withheld".
+		 * The citation-metadata overload: it carries the two fields that must not live in
+		 * {@code text} (see the class doc). A chart record has neither, so the shorter constructors
+		 * default them to "no attribution, nothing withheld".
+		 *
+		 * <p>Not the full constructor — it defaults {@link #orderActive} to {@code null} ("the module
+		 * cannot say") and, since issues #337, #305 and #294, {@link #findingSeverity},
+		 * {@link #derivedFrom} and {@link #orderDrugNamed} as well. <b>The widest is the rung that takes
+		 * {@link #orderDrugNamed}, several below this one</b>, and the distinction is worth the name
+		 * because a caller reaching for "the full constructor" through this javadoc would silently drop
+		 * a drug-order record's currency answer, when that order stopped, a finding's rating, an
+		 * injected record's provenance or whether it names its drug. <b>Neither name the next rung as
+		 * the full one nor count the rungs between</b>: this sentence did both, and each went stale.
+		 * The ladder has grown under such a sentence repeatedly, most recently for issue #315 — which
+		 * is the reason for the rule and not a tally to keep current.
 		 */
 		public RecordMapping(int index, String resourceType, String resourceUuid, Date date, String text,
 				String source, int withheldInteractions) {
+			this(index, resourceType, resourceUuid, date, text, source, withheldInteractions, null);
+		}
+
+		/**
+		 * The order-currency overload. Every shorter constructor defaults that answer to {@code null}
+		 * — "the module cannot say" — which is right for an injected record (no {@code Order} behind
+		 * it) and for every caller that has not read the patient's orders.
+		 *
+		 * <p>Not the full constructor since issue #337: it defaults {@link #findingSeverity} to
+		 * {@code null}, which is right for every record that is not an injected safety finding, since
+		 * issue #305 {@link #derivedFrom} to empty with it, since issue #294
+		 * {@link #orderDrugNamed} to {@code null} as well, and since issue #315
+		 * {@link #orderStopDate} — which is the rung immediately below. The rung below is not the full
+		 * one either, so reaching through this javadoc for "the full constructor" means reading down to
+		 * the one that takes every field rather than counting rungs from here.
+		 */
+		public RecordMapping(int index, String resourceType, String resourceUuid, Date date, String text,
+				String source, int withheldInteractions, Boolean orderActive) {
+			this(index, resourceType, resourceUuid, date, text, source, withheldInteractions,
+					orderActive, (Date) null);
+		}
+
+		/**
+		 * The stop-date rung, carrying the other half of the one order read — see
+		 * {@link #orderStopDate}. Every shorter constructor defaults it to {@code null}, "the module
+		 * states no stop date", which is right for every record that is not a drug order and for
+		 * every caller that has not read the patient's orders.
+		 *
+		 * <p>It sits immediately BELOW the order-currency rung rather than at the bottom of the ladder,
+		 * and the two halves sit adjacent in every rung below it, because {@code ArchitectureGuardTest}
+		 * tells two constructors from the rest by their descriptor TAILS. The widest constructor's own
+		 * javadoc is canonical for that constraint and for what mutating a placement reddens; it is not
+		 * restated here. Not the full constructor — the widest is the one taking
+		 * {@link #orderDrugNamed}.
+		 */
+		public RecordMapping(int index, String resourceType, String resourceUuid, Date date, String text,
+				String source, int withheldInteractions, Boolean orderActive, Date orderStopDate) {
+			this(index, resourceType, resourceUuid, date, text, source, withheldInteractions,
+					orderActive, orderStopDate, null);
+		}
+
+		/**
+		 * The finding-rating overload. Every shorter constructor defaults that answer to {@code null} —
+		 * "this record states no rating an answer owes" — which is right for every record but an
+		 * injected {@code safety_finding}, the one thing that has a rating at all.
+		 *
+		 * <p>Not the full constructor since issue #305: it defaults {@link #derivedFrom} to empty, which
+		 * is right for every record that was not derived from a chart record of this patient's, and
+		 * since issue #294 {@link #orderDrugNamed} to {@code null} with it. The rungs above this one
+		 * each said "the full one is below" and were each overtaken by the next issue, this one
+		 * included, which is why every rung names the widest by the parameter only it takes rather than
+		 * by a count that the next insertion falsifies.
+		 */
+		public RecordMapping(int index, String resourceType, String resourceUuid, Date date, String text,
+				String source, int withheldInteractions, Boolean orderActive, Date orderStopDate,
+				String findingSeverity) {
+			this(index, resourceType, resourceUuid, date, text, source, withheldInteractions, orderActive,
+					orderStopDate, findingSeverity, null);
+		}
+
+		/**
+		 * The provenance overload, carrying the chart records an injected record was derived from — see
+		 * {@link #getDerivedFrom()}. Every shorter constructor defaults it to empty, "derived from no
+		 * chart record", which is right for a chart record (it IS the record) and for every injected
+		 * record whose provenance the module could not resolve.
+		 *
+		 * <p>Not the full constructor since issue #294: it defaults {@link #orderDrugNamed} to {@code
+		 * null}, "the module cannot say", which is right for every record but one this module injected
+		 * for an active order. The widest is the rung that takes {@link #orderDrugNamed} — named and
+		 * not located, because the ladder has repeatedly grown under a "the one below is the full one"
+		 * sentence, which is what this javadoc used to say.
+		 */
+		public RecordMapping(int index, String resourceType, String resourceUuid, Date date, String text,
+				String source, int withheldInteractions, Boolean orderActive, Date orderStopDate,
+				String findingSeverity, List<Integer> derivedFrom) {
+			this(index, resourceType, resourceUuid, date, text, source, withheldInteractions, orderActive,
+					orderStopDate, findingSeverity, derivedFrom, null, null);
+		}
+
+		/**
+		 * The widest constructor, including whether the record names the drug of the order it is about
+		 * — see {@link #orderDrugNamed} — and the ceilings its text states, see
+		 * {@link #dosingCeilings}. Every shorter constructor defaults both to {@code null}, "the
+		 * module cannot say" and "this producer measured no ceilings".
+		 *
+		 * <p><b>Issue #276 inserted {@code dosingCeilings} BEFORE {@code orderDrugNamed} rather than
+		 * appending it or giving it a rung of its own, and the placement is load-bearing.</b>
+		 * {@code ArchitectureGuardTest} tells two constructors from the rest by their descriptor
+		 * TAILS: the provenance rung is the only one ending in a list, and this one the only one
+		 * ending in a list followed by a {@code Boolean}. Every other placement breaks one of those
+		 * two tails — a second list changes which descriptors end how. Appended after
+		 * {@code orderDrugNamed}, added as a rung below, or inserted here while KEEPING the old
+		 * rung that preceded it: each was run and each reddens. Which case, and how many, differs
+		 * between them, so mutate the placement and read the failures rather than trusting a list
+		 * here. That is why the rung gained the parameter instead of being joined by a sibling.
+		 *
+		 * <p><b>Issue #315 met the same constraint and answered it the same way</b>, inserting
+		 * {@link #orderStopDate} beside {@link #orderActive} in this rung and in every rung below the
+		 * order-currency one. Appending it here, or giving it a rung beneath this one, breaks a tail
+		 * and reddens that guard — so read the constraint as binding any future parameter, not as
+		 * #276's own.
+		 */
+		public RecordMapping(int index, String resourceType, String resourceUuid, Date date, String text,
+				String source, int withheldInteractions, Boolean orderActive, Date orderStopDate,
+				String findingSeverity, List<Integer> derivedFrom, List<String> dosingCeilings,
+				Boolean orderDrugNamed) {
 			this.index = index;
 			this.resourceType = resourceType;
 			this.resourceUuid = resourceUuid;
@@ -476,6 +891,24 @@ public class PatientChartSerializer {
 			this.text = text;
 			this.source = source;
 			this.withheldInteractions = withheldInteractions;
+			this.orderActive = orderActive;
+			this.orderStopDate = orderStopDate;
+			this.findingSeverity = findingSeverity;
+			// Copied and wrapped rather than stored as handed, for the reason SafetyWarning gives of its
+			// own list: this travels onto a PatientChart a caller keeps reasoning over. Never null, so no
+			// reader branches on absence — empty is the honest answer wherever nothing was resolved.
+			this.derivedFrom = derivedFrom == null || derivedFrom.isEmpty()
+					? Collections.<Integer> emptyList()
+					: Collections.unmodifiableList(new ArrayList<Integer>(derivedFrom));
+			// Copied and wrapped for the reason derivedFrom is. Unlike it this stays NULLABLE and an
+			// empty list collapses INTO that null, deliberately: the field has one consumer, whose
+			// gate is "fewer than two ceilings to compare", and a record stating none and a record
+			// stating one are the same answer to it as a record nobody measured. So the field states
+			// the ceilings or it states nothing, and no reader is left deciding which kind of
+			// nothing it holds — a distinction nothing would pin.
+			this.dosingCeilings = dosingCeilings == null || dosingCeilings.isEmpty() ? null
+					: Collections.unmodifiableList(new ArrayList<String>(dosingCeilings));
+			this.orderDrugNamed = orderDrugNamed;
 		}
 
 		public int getIndex() {
@@ -529,11 +962,13 @@ public class PatientChartSerializer {
 		 * that the citation shows a subset. 0 when it shows them all, and for every record that has
 		 * no interactions to withhold.
 		 *
-		 * <p>Two rules withhold, and outside a broad dataset the second dominates: the per-record
-		 * render budget, and — once a partner the patient is actually on is shown — the remaining
-		 * dataset being represented by one partner rather than rendered in full. A large count
-		 * therefore usually means "not relevant to this patient" rather than "did not fit", so it
-		 * must not be presented to a clinician as an omission for length.
+		 * <p>Three rules withhold, and the render budget is rarely the one that bites: the per-record
+		 * render budget; once a partner the patient is actually on is shown, the remaining dataset
+		 * being represented by one partner rather than rendered in full; and, when NO partner the
+		 * patient is on is shown, the rest being represented by a bounded handful of them named with
+		 * their severities ({@code DrugReferenceInjector.MAX_TAIL_PARTNERS_WHEN_NOTHING_PATIENT_SPECIFIC}, issue
+		 * #355). A large count therefore usually means "not relevant to this patient" rather than
+		 * "did not fit", so it must not be presented to a clinician as an omission for length.
 		 *
 		 * <p>Structural for the same reason as {@link #getSource()}: as a text tail ("and 824 more
 		 * interactions on file") the model recited it as though it were clinical content. The
@@ -542,6 +977,111 @@ public class PatientChartSerializer {
 		 */
 		public int getWithheldInteractions() {
 			return withheldInteractions;
+		}
+
+		/**
+		 * @return {@code TRUE} when {@code Order.isActive()} holds for this record's order,
+		 *         {@code FALSE} when the module read that order and it does not, {@code null} when
+		 *         the module cannot say.
+		 *
+		 *         <p>Structural rather than re-read from {@link #getText()} for the reason the
+		 *         active-order reconciliation records: keying a decision on another module's display
+		 *         prose cannot see an end the prose does not carry, which is exactly the auto-expiry
+		 *         gap issue #317 exists to close.
+		 */
+		public Boolean getOrderActive() {
+			return orderActive;
+		}
+
+		/**
+		 * @return when this record's order stopped being in force, or {@code null} where the module
+		 *         states no such date. {@code SerializedRecord.orderStopDate} is canonical for why
+		 *         {@code null} is not a claim that the order is still in force — {@link
+		 *         #getOrderActive()} is the only thing that answers that — and for why the module
+		 *         does not derive a date core did not give it.
+		 */
+		public Date getOrderStopDate() {
+			return orderStopDate;
+		}
+
+		/**
+		 * @return the numbers of the chart records this record was DERIVED from, most often empty.
+		 *
+		 *         <p>Written in exactly one place — {@code DrugReferenceInjector}, for the
+		 *         {@code safety_finding} records it appends (issue #305) — and read in exactly one
+		 *         place, {@code LlmInferenceService.extractCitedReferences}, which surfaces these
+		 *         records as citations whenever the record carrying them is itself cited. A chart
+		 *         record's own list is always empty: it IS the record, so there is nothing behind it.
+		 *
+		 *         <p><b>Empty is not a denial, and the situations it covers are enumerated HERE and
+		 *         nowhere else</b> — the rule the nested drug-safety instructions state for
+		 *         {@code SerializedRecord.orderActive}, for the reason that one records: the list grew
+		 *         each time a refusal was added, and every other site went on stating the shorter one.
+		 *         So the upstream carriers document their own layer and point here; do not restate this
+		 *         list at any of them. A consumer must not read emptiness as "this claim rests on
+		 *         nothing in the chart".
+		 *
+		 *         <p>Five situations, from the two layers above this one. From
+		 *         {@code SafetyWarning.chartRecords()}: the record is not a contraindication finding at
+		 *         all (an interaction's evidence is an ORDER, attributed on issue #379's own path); the
+		 *         context stated no provenance, which is every context assembled by hand; or the module
+		 *         could read no allergy or condition rows for this patient. From
+		 *         {@code DrugReferenceInjector.chartRecordNumbers}: this chart carries no record for the
+		 *         uuid — a query-scoped slice need not carry the patient's allergies at all — or it
+		 *         carries more than one, which the citing reading refuses rather than guessing between.
+		 *
+		 *         <p>Structural rather than appended to {@link #getText()}, like {@link #getSource()}
+		 *         and {@link #getWithheldInteractions()} and for the same measured reason: anything
+		 *         inside the text is quotable, and the model has recited the module's own bookkeeping
+		 *         into a clinician-facing answer (issue #117).
+		 */
+		public List<Integer> getDerivedFrom() {
+			return derivedFrom;
+		}
+
+		/**
+		 * @return whether this record names the drug of the {@code Order} it is about — {@code TRUE} it
+		 *         does, {@code FALSE} this module rendered it for an active order whose display is not
+		 *         a drug name, {@code null} the module cannot say. See {@link #orderDrugNamed}, which
+		 *         is canonical for the single writer, for why it is never re-derived from
+		 *         {@link #getText()}, and for why {@code null} is not a certificate.
+		 *
+		 *         <p>Its one reader is the citation-grounding pass, which publishes NO verdict for a
+		 *         citation of a record answering {@code FALSE}: a record that names no drug gives
+		 *         neither tier a question that is the citation's own (issue #294).
+		 */
+		public Boolean getOrderDrugNamed() {
+			return orderDrugNamed;
+		}
+
+		/**
+		 * @return the daily dosing ceilings this record's own text states for the patient it was
+		 *         built for, STRICTEST FIRST and distinct, each spelled as the record spells it
+		 *         ({@code "4000 mg/day"}); {@code null} where this record states none — see
+		 *         {@link #dosingCeilings}, which is canonical for what is carried and by whom.
+		 *         Unmodifiable when non-null. Position 0 is the strictest; never sort it at a
+		 *         consumer.
+		 */
+		public List<String> getDosingCeilings() {
+			return dosingCeilings;
+		}
+
+		/**
+		 * @return the rating this record states that an answer citing it ought to state too, or
+		 *         {@code null} where there is none — every record that is not an injected
+		 *         {@code safety_finding}, and a finding whose rating carries no word worth requiring.
+		 *         {@code DrugSafetyValidator.statableRating} is canonical for that second case.
+		 *
+		 *         <p>Metadata ABOUT the record and deliberately not part of {@link #getText()}, the
+		 *         discipline this class's own javadoc states — with the qualification that this field
+		 *         is non-null only where the rendered text states the rating as well, which is not
+		 *         every dataset. {@code DrugReferenceInjector.ratingThisRecordStates} is canonical for
+		 *         that condition and for why it is a fact about the data rather than about this
+		 *         module. What the field buys is that "which rating did this finding state" has one
+		 *         answer rather than one per parse.
+		 */
+		public String getFindingSeverity() {
+			return findingSeverity;
 		}
 	}
 }

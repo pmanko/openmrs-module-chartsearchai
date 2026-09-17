@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -71,7 +72,7 @@ public class ChartSearchAiStreamEventOrderTest {
 	}
 
 	// SSE decoding lives in SseEvents so this class and the reference-grouping tests cannot
-	// drift apart on the wire format again; the decoder there is this class's original one.
+	// drift apart on the wire format again.
 	private List<SseEvent> emittedEvents() {
 		return SseEvents.parse(out);
 	}
@@ -89,7 +90,7 @@ public class ChartSearchAiStreamEventOrderTest {
 			throws Exception {
 		controller.setChartSearchService(new LiveStubService());
 
-		controller.streamAnswer(out, patient(), "any infections?", user(), "full-chart", true);
+		controller.streamAnswer(out, patient(), "any infections?", user(), true);
 
 		List<String> types = eventTypes();
 		int doneIdx = types.indexOf("done");
@@ -117,7 +118,7 @@ public class ChartSearchAiStreamEventOrderTest {
 	public void syncGrounding_keepsClassicSingleDoneWithVerdicts() throws Exception {
 		controller.setChartSearchService(new LiveStubService());
 
-		controller.streamAnswer(out, patient(), "any infections?", user(), "full-chart", false);
+		controller.streamAnswer(out, patient(), "any infections?", user(), false);
 
 		List<String> types = eventTypes();
 		assertFalse(types.contains("grounded"),
@@ -135,10 +136,10 @@ public class ChartSearchAiStreamEventOrderTest {
 		// (with verdicts) and no grounded event, even though async mode is on.
 		controller.setChartSearchService(new CacheHitStubService());
 
-		controller.streamAnswer(out, patient(), "any infections?", user(), "full-chart", true);
+		controller.streamAnswer(out, patient(), "any infections?", user(), true);
 
 		List<String> types = eventTypes();
-		assertEquals(1, frequency(types, "done"), "exactly one done event; got " + types);
+		assertEquals(1, Collections.frequency(types, "done"), "exactly one done event; got " + types);
 		assertFalse(types.contains("grounded"),
 				"no grounded event when the answer was final at return; got " + types);
 		JsonNode done = MAPPER.readTree(eventOfType("done").data);
@@ -150,9 +151,9 @@ public class ChartSearchAiStreamEventOrderTest {
 	public void asyncGrounding_emitsExactlyOneDone() throws Exception {
 		controller.setChartSearchService(new LiveStubService());
 
-		controller.streamAnswer(out, patient(), "any infections?", user(), "full-chart", true);
+		controller.streamAnswer(out, patient(), "any infections?", user(), true);
 
-		assertEquals(1, frequency(eventTypes(), "done"),
+		assertEquals(1, Collections.frequency(eventTypes(), "done"),
 				"async mode must not double-emit done; got " + eventTypes());
 	}
 
@@ -174,21 +175,11 @@ public class ChartSearchAiStreamEventOrderTest {
 			}
 		});
 
-		controller.streamAnswer(out, patient(), "any infections?", user(), "full-chart", true);
+		controller.streamAnswer(out, patient(), "any infections?", user(), true);
 
-		assertEquals(1, frequency(eventTypes(), "done"),
+		assertEquals(1, Collections.frequency(eventTypes(), "done"),
 				"a misbehaving double-fire must not double-emit done; got " + eventTypes());
-		assertEquals(1, frequency(eventTypes(), "grounded"));
-	}
-
-	private static int frequency(List<String> list, String value) {
-		int n = 0;
-		for (String s : list) {
-			if (s.equals(value)) {
-				n++;
-			}
-		}
-		return n;
+		assertEquals(1, Collections.frequency(eventTypes(), "grounded"));
 	}
 
 	private static ChartSearchService.ChartAnswer ungroundedAnswer() {
@@ -206,7 +197,7 @@ public class ChartSearchAiStreamEventOrderTest {
 	public void streamAnswer_emitsPreliminaryEvent_whenServiceStreamsPreviewReasoning() throws Exception {
 		controller.setChartSearchService(new PreliminaryStubService());
 
-		controller.streamAnswer(out, patient(), "any infections?", user(), "full-chart", true);
+		controller.streamAnswer(out, patient(), "any infections?", user(), true);
 
 		List<String> types = eventTypes();
 		assertTrue(types.contains("preliminary"),
