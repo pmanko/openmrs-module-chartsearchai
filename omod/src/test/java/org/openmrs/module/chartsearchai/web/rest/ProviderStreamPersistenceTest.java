@@ -27,6 +27,7 @@ import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.api.AuditLogService;
 import org.openmrs.module.chartsearchai.api.conversation.ConversationDAO;
 import org.openmrs.module.chartsearchai.api.conversation.ConversationService;
+import org.openmrs.module.chartsearchai.api.provider.AccountContext;
 import org.openmrs.module.chartsearchai.api.provider.AnswerEnvelope;
 import org.openmrs.module.chartsearchai.api.provider.BundledClinicalAnswerProvider;
 import org.openmrs.module.chartsearchai.api.provider.CancellationSignal;
@@ -88,6 +89,11 @@ public class ProviderStreamPersistenceTest extends BaseModuleWebContextSensitive
 		assertEquals("turn_done", turn.getTerminalState());
 		assertEquals(auditId, turn.getAuditLog().getAuditLogId());
 		assertEquals("Persisted answer", auditLogs.getAuditLog(auditId).getAnswer());
+		JsonNode storedContext = new ObjectMapper().readTree(turn.getProviderPayload()).path("accountContext");
+		assertEquals(payload.path("accountContext"), storedContext);
+		assertEquals("openmrs_session", storedContext.path("source").asText());
+		assertEquals(Context.getAuthenticatedUser().getUuid(), storedContext.path("user_uuid").asText());
+		assertTrue(storedContext.path("effective_roles").toString().contains("Authenticated"));
 	}
 
 	@Test
@@ -123,7 +129,7 @@ public class ProviderStreamPersistenceTest extends BaseModuleWebContextSensitive
 		controller.setProviderRegistry(new ClinicalAnswerProviderRegistry(Collections.singletonList(provider)));
 		ByteArrayOutputStream output = new ByteArrayOutputStream();
 		controller.streamProviderTurn(output, Context.getPatientService().getPatient(2), "Question",
-				"bundled", mode, null, null);
+				"bundled", mode, null, null, AccountContext.fromSession(Context.getUserContext()));
 		return output;
 	}
 

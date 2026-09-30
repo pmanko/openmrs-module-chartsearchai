@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -20,13 +21,18 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.Test;
 import org.openmrs.Patient;
+import org.openmrs.Role;
+import org.openmrs.User;
+import org.openmrs.api.context.UserContext;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.api.conversation.PriorClinicalTurn;
 
@@ -37,6 +43,39 @@ import org.openmrs.module.chartsearchai.api.conversation.PriorClinicalTurn;
  * a live hub.
  */
 public class HubClinicalAnswerProviderTest {
+
+	@Test
+	public void outboundRequestKeepsTheCapturedAccountContext() throws Exception {
+		User user = new User(1);
+		user.addRole(new Role("Organizational: Doctor"));
+		AccountContext account = AccountContext.fromSession(new UserContext(null) {
+			@Override
+			public User getAuthenticatedUser() {
+				return user;
+			}
+
+			@Override
+			public Set<Role> getAllRoles() {
+				return user.getAllRoles();
+			}
+
+			@Override
+			public Locale getLocale() {
+				return Locale.ENGLISH;
+			}
+		});
+		TurnRequest request = new TurnRequest(patient(), "Question", "conversation", "request",
+				ProviderMode.QUERY_SCOPED, "profile-a", Collections.emptyList(), account);
+		ScriptedHubTransport transport = new ScriptedHubTransport();
+		transport.events = Collections.singletonList(wire("done", answerPayload("Answer")));
+		provider(transport, "http://hub.example/v1/chat/completions")
+				.execute(request, new CollectingSink(), CancellationSignal.NONE).toCompletableFuture().get();
+
+		assertEquals(1, transport.calls.get());
+		assertSame(account, transport.lastRequest.getAccountContext());
+		assertEquals(Collections.singletonList("Organizational: Doctor"),
+				transport.lastRequest.getAccountContext().getAssignedRoles());
+	}
 
 	private static Patient patient() {
 		Patient patient = new Patient();

@@ -36,6 +36,8 @@ public final class TurnRequest {
 
 	private final List<PriorClinicalTurn> priorClinicalTurns;
 
+	private final AccountContext accountContext;
+
 	/**
 	 * @param mode the caller-requested context mode, or {@code null} to use the provider's
 	 *        configured default; a provider must fail explicitly rather than silently substitute
@@ -54,6 +56,13 @@ public final class TurnRequest {
 	 */
 	public TurnRequest(Patient patient, String question, String conversationId, String requestId,
 			ProviderMode mode, String profileId, List<PriorClinicalTurn> priorClinicalTurns) {
+		this(patient, question, conversationId, requestId, mode, profileId, priorClinicalTurns,
+				AccountContext.unavailable());
+	}
+
+	public TurnRequest(Patient patient, String question, String conversationId, String requestId,
+			ProviderMode mode, String profileId, List<PriorClinicalTurn> priorClinicalTurns,
+			AccountContext accountContext) {
 		this.patient = patient;
 		this.question = question;
 		this.conversationId = conversationId;
@@ -62,6 +71,7 @@ public final class TurnRequest {
 		this.profileId = profileId;
 		this.priorClinicalTurns = priorClinicalTurns == null ? Collections.emptyList()
 				: Collections.unmodifiableList(priorClinicalTurns);
+		this.accountContext = accountContext == null ? AccountContext.unavailable() : accountContext;
 	}
 
 	public Patient getPatient() {
@@ -90,5 +100,9 @@ public final class TurnRequest {
 
 	public List<PriorClinicalTurn> getPriorClinicalTurns() {
 		return priorClinicalTurns;
+	}
+
+	public AccountContext getAccountContext() {
+		return accountContext;
 	}
 }
