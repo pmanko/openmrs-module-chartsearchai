@@ -23,6 +23,8 @@ import java.util.function.Consumer;
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
+import org.openmrs.module.chartsearchai.api.ChartTooLargeException;
+import org.openmrs.module.chartsearchai.api.provider.CancellationSignal;
 import org.openmrs.module.chartsearchai.api.ChartSearchService;
 import org.openmrs.module.chartsearchai.api.impl.LlmProvider.LlmResponse;
 import org.openmrs.module.chartsearchai.reference.ChartReadStatus;
@@ -78,6 +80,9 @@ public class LlmInferenceService implements ChartSearchService {
 	@Autowired
 	private DrugSafetyValidator drugSafetyValidator;
 
+	@Autowired
+	private TokenCounter tokenCounter;
+
 	/** Test seam: production wires {@link CitationGroundingVerifier} via {@link Autowired}. */
 	void setCitationGroundingVerifier(CitationGroundingVerifier citationGroundingVerifier) {
 		this.citationGroundingVerifier = citationGroundingVerifier;
@@ -91,6 +96,11 @@ public class LlmInferenceService implements ChartSearchService {
 	/** Test seam: production wires {@link DrugSafetyValidator} via {@link Autowired}. */
 	void setDrugSafetyValidator(DrugSafetyValidator drugSafetyValidator) {
 		this.drugSafetyValidator = drugSafetyValidator;
+	}
+
+	/** Test seam: production wires the engine-specific exact counter via Spring. */
+	void setTokenCounter(TokenCounter tokenCounter) {
+		this.tokenCounter = tokenCounter;
 	}
 
 	/** Test seam: production wires {@link LlmProvider} via {@link Autowired}.
@@ -128,6 +138,7 @@ public class LlmInferenceService implements ChartSearchService {
 			// canonical for the three answers and for why that pass rather than validate's.
 			ChartReadStatus chartRead = new ChartReadStatus();
 			chart = drugReferenceInjector.inject(chart, patient, question, chartRead);
+			ensurePromptFits(chart, question);
 			// Resolved once, off the chart that was actually assembled, and carried on the answer —
 			// so the audit row the REST layer writes states the mode instead of re-deriving it
 			// (issue #178). After inject() deliberately: that is the chart the LLM sees.
@@ -300,8 +311,9 @@ public class LlmInferenceService implements ChartSearchService {
 			// no consumer can re-derive from the chips themselves. Which arm states it, and when none
 			// does, is PairChipExtent's and ChartAnswer.getPairChipExtent()'s to say, not a sink site's.
 			PairChipExtent.Sink pairExtent = new PairChipExtent.Sink();
-			List<SafetyWarning> safetyWarnings = drugSafetyValidator.validate(response.getAnswer(), question,
-					patient, chart.getMappings(), pairExtent);
+			DrugSafetyValidator.SafetyCheckResult safetyResult = drugSafetyValidator.validateWithStatus(
+					response.getAnswer(), question, patient, chart.getMappings(), pairExtent);
+			List<SafetyWarning> safetyWarnings = safetyResult.getWarnings();
 			// MEASURED on the model's own prose, so the key reports what the MODEL stated; the answer is
 			// COMPLETED below, so what a client is handed names every order the findings it CITES cover
 			// (issue #516) — `cited`, off the injected records, and never the chips above, which include
@@ -344,7 +356,7 @@ public class LlmInferenceService implements ChartSearchService {
 					findingCitationExtent, chartRead.stated(), conditionRuleCoverage, orderStopDates,
 					findingPartnerCoverage, false, interactionClaimPairs, cautionLedOverWithholding,
 					unfoundedFindingSeverities, doseCeilingCoverage, unsupportedEndedOrderClaims,
-					unstatedSignificanceQualifiers);
+					unstatedSignificanceQualifiers, safetyResult.getStatus(), safetyResult.getIssues());
 			outcome = "ok";
 			return answer;
 		}
@@ -619,6 +631,16 @@ public class LlmInferenceService implements ChartSearchService {
 			Consumer<String> tokenConsumer, Consumer<String> reasoningConsumer,
 			Consumer<List<RecordReference>> citationsConsumer,
 			Consumer<ChartAnswer> ungroundedAnswerConsumer, Consumer<String> preliminaryReasoningConsumer) {
+		return searchStreaming(patient, question, tokenConsumer, reasoningConsumer, citationsConsumer,
+				ungroundedAnswerConsumer, preliminaryReasoningConsumer, CancellationSignal.NONE);
+	}
+
+	@Override
+	public ChartAnswer searchStreaming(Patient patient, String question,
+			Consumer<String> tokenConsumer, Consumer<String> reasoningConsumer,
+			Consumer<List<RecordReference>> citationsConsumer,
+			Consumer<ChartAnswer> ungroundedAnswerConsumer, Consumer<String> preliminaryReasoningConsumer,
+			CancellationSignal cancellation) {
 		// LOG FORMAT — stable contract: same field set as search() with op=searchStreaming
 		// in the log tag, plus previewMs (progressive-reasoning preview pass) and groundMs (Tier-2
 		// grounding, timed separately so the tail is visible). Streaming is the path the frontend
@@ -639,6 +661,7 @@ public class LlmInferenceService implements ChartSearchService {
 			// canonical for the three answers and for why that pass rather than validate's.
 			ChartReadStatus chartRead = new ChartReadStatus();
 			chart = drugReferenceInjector.inject(chart, patient, question, chartRead);
+			ensurePromptFits(chart, question);
 			// One resolution for BOTH answers this method produces (issue #178). The early-done path
 			// audits the ungrounded answer and the classic path audits the returned one, so a mode
 			// each of them derived separately is two audit-write sites that can disagree — which is
@@ -703,7 +726,7 @@ public class LlmInferenceService implements ChartSearchService {
 			LlmResponse response = llmProvider.searchStreaming(
 					chartTextOrPlaceholder(chart), chart.getFocusIndices(), question, tokenConsumer,
 					reasoningConsumer, kvCacheScope, enumerateFindings, referenceRecords,
-					chart.getDrugsAlreadyOrdered());
+					chart.getDrugsAlreadyOrdered(), cancellation);
 			llmMs = System.currentTimeMillis() - llmStart;
 			inputTokens = response.getInputTokens();
 			cachedTokens = response.getCachedTokens();
@@ -774,7 +797,8 @@ public class LlmInferenceService implements ChartSearchService {
 					response.getCachedTokens(), Collections.<SafetyWarning> emptyList(), searchMode,
 					referenceSlice, null, unresolvedDrugClass, null, null, null, null, null, null,
 					chartRead.stated(), conditionRuleCoverage, orderStopDates, null, false, null,
-					cautionLedOverWithholding, null, doseCeilingCoverage, unsupportedEndedOrderClaims, null));
+					cautionLedOverWithholding, null, doseCeilingCoverage, unsupportedEndedOrderClaims, null,
+					DrugSafetyValidator.STATUS_UNAVAILABLE, Collections.emptyList()));
 
 			// After the user-visible handoff, before grounding: the exact comparisons over what the
 			// answer did with the records it cites — the class-code defects a set-membership
@@ -861,8 +885,9 @@ public class LlmInferenceService implements ChartSearchService {
 			// no consumer can re-derive from the chips themselves. Which arm states it, and when none
 			// does, is PairChipExtent's and ChartAnswer.getPairChipExtent()'s to say, not a sink site's.
 			PairChipExtent.Sink pairExtent = new PairChipExtent.Sink();
-			List<SafetyWarning> safetyWarnings = drugSafetyValidator.validate(response.getAnswer(), question,
-					patient, chart.getMappings(), pairExtent);
+			DrugSafetyValidator.SafetyCheckResult safetyResult = drugSafetyValidator.validateWithStatus(
+					response.getAnswer(), question, patient, chart.getMappings(), pairExtent);
+			List<SafetyWarning> safetyWarnings = safetyResult.getWarnings();
 			// MEASURED on the model's own prose, so the key reports what the MODEL stated; the answer is
 			// COMPLETED below, so what a client is handed names every order the findings it CITES cover
 			// (issue #516) — `cited`, off the injected records, and never the chips above, which include
@@ -905,7 +930,7 @@ public class LlmInferenceService implements ChartSearchService {
 					findingCitationExtent, chartRead.stated(), conditionRuleCoverage, orderStopDates,
 					findingPartnerCoverage, false, interactionClaimPairs, cautionLedOverWithholding,
 					unfoundedFindingSeverities, doseCeilingCoverage, unsupportedEndedOrderClaims,
-					unstatedSignificanceQualifiers);
+					unstatedSignificanceQualifiers, safetyResult.getStatus(), safetyResult.getIssues());
 			outcome = "ok";
 			return answer;
 		}
@@ -973,10 +998,10 @@ public class LlmInferenceService implements ChartSearchService {
 		PairChipExtent.Sink pairExtent = new PairChipExtent.Sink();
 		// Every chip whose finding the composed text states is published as stated, so a client does not
 		// repeat it in full beneath the answer that just said it — asked of the module's own text.
+		DrugSafetyValidator.SafetyCheckResult safetyResult = drugSafetyValidator.validateWithStatus(
+				markersOf(composed), question, patient, mappings, pairExtent);
 		List<SafetyWarning> safetyWarnings = DrugReferenceInjector.withFindingCitations(
-				ModuleAnswerStatement.markStated(composed,
-						drugSafetyValidator.validate(markersOf(composed), question, patient, mappings, pairExtent)),
-				mappings);
+				ModuleAnswerStatement.markStated(composed, safetyResult.getWarnings()), mappings);
 		String answer = FindingPartnerCoverageCheck.withUnstatedPartnersNamed(composed,
 				extractCitedReferences(composed, null, mappings), mappings, drugSafetyValidator);
 		// Issue #472's statement too, so the two paths cannot differ — though no composed answer is
@@ -999,11 +1024,29 @@ public class LlmInferenceService implements ChartSearchService {
 		ungroundedAnswerConsumer.accept(new ChartAnswer(answer, references, 0, 0, 0,
 				Collections.<SafetyWarning> emptyList(), searchMode, referenceSlice, null,
 				unresolvedDrugClass, null, null, null, null, null, null, chartReadForSafety,
-				conditionRuleCoverage, orderStopDates, null, true, null, null, null, doseCeilingCoverage, null, null));
+				conditionRuleCoverage, orderStopDates, null, true, null, null, null, doseCeilingCoverage, null, null,
+				DrugSafetyValidator.STATUS_UNAVAILABLE, Collections.emptyList()));
 		return new ChartAnswer(answer, references, 0, 0, 0, safetyWarnings, searchMode, referenceSlice,
 				pairExtent.stated(), unresolvedDrugClass, null, null, null, null, null, null,
 				chartReadForSafety, conditionRuleCoverage, orderStopDates, null, true, null, null, null,
-				doseCeilingCoverage, null, null);
+				doseCeilingCoverage, null, null, safetyResult.getStatus(), safetyResult.getIssues());
+	}
+
+	/**
+	 * Final exact preflight after all deterministic chart and knowledge-reference injection. The
+	 * selector budgets its chart view earlier, but only this layer can measure the complete prompt
+	 * that will reach the model.
+	 */
+	void ensurePromptFits(PatientChart chart, String question) {
+		if (tokenCounter == null || !tokenCounter.isAvailable()) {
+			return;
+		}
+		int inputTokens = tokenCounter.countPrompt(chartTextOrPlaceholder(chart),
+				chart.getFocusIndices(), question);
+		if (inputTokens > tokenCounter.inputBudget()) {
+			throw new ChartTooLargeException("The complete chart, reference material, and question "
+					+ "exceed the configured model input budget.");
+		}
 	}
 
 	/** {@code answer}'s inline citation markers alone, ascending and space-separated — what the chips pass
