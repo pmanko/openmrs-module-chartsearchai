@@ -17,16 +17,25 @@
 # and don't transfer to other embedders without re-tuning — so we don't
 # provision a chartsearchai-side embedder here.
 #
-# Operator wiring (global properties) required for fresh deployments —
-# both modules ship these with empty/false defaults, so the files this
-# script provisions are unused until an operator points the GPs at them:
+# Retrieval wiring (global properties). Both modules ship these with
+# empty/false defaults, so the files provisioned here would be unused
+# until something points the properties at them:
 #   chartsearchai.querystore.enabled    = true
 #   querystore.embedding.modelFilePath  = querystore/model.onnx
 #   querystore.embedding.vocabFilePath  = querystore/vocab.txt
 #   querystore.embedding.queryModelFilePath = (empty — single encoder)
-# A follow-up change will move those defaults into querystore's config.xml
-# so a fresh deploy works without manual GP wiring; until then, the
-# project README's deployment section is the source of truth.
+# configure_retrieval_gps below now writes them, on every start and only
+# where the property is blank, so a deliberately-set value survives a
+# start that verifies. Two writes are not blank-only:
+# chartsearchai.querystore.enabled on the seed path, which
+# maybe_seed_demo_data asserts outright because a freshly imported dump
+# carries its own value for it, and the withdrawal on a start that
+# verified no embedder, which blanks the two embedder paths and the
+# query-encoder row beside them whatever they held — an operator's own
+# value included. They used to be an operator step, which meant they
+# lived nowhere but the demo's database and a
+# --destroy-volumes deploy deleted the wiring along with it; see that
+# function for what the resulting unconfigured-embedder state costs.
 
 # When started as root (deployments without a separate init container that
 # chowns the volume), heal pre-Apr-27 root-owned contents and drop to the
@@ -58,57 +67,43 @@ mkdir -p "$QS_DIR" "$LLM_DIR"
 # (graph file + separate `model.onnx_data` weights sidecar). Downloading
 # only the graph file produces a tiny "successful" file that the ONNX
 # runtime can open but cannot execute — the bug shape that broke the
-# previous L6-v2 download. The size guard below is the second line of
-# defense against any future upstream format change.
+# previous L6-v2 download. Since #444 the pinned revision and digest rule
+# that out ahead of the size check, which stays for its diagnostic.
+#
+# Every model file below is fetched from the immutable revision recorded
+# in model-manifest.tsv and refused unless it hashes to the sha256
+# committed beside it — on EVERY start, not only after a fresh download,
+# because /openmrs/data outlives the container. ADR Decision 106 carries
+# why, and what happens to a file that fails. "On every start" is a claim
+# about where these two calls sit as much as about what they call, so
+# ModelDownloadPinningGuardTest
+# .everyArtifactTheEntrypointProvisionsIsFetchedUnconditionally refuses a
+# test of the file's own presence wrapped around either of them.
+#
+# A refusal leaves chart search OFF and the start RUNNING. What makes that
+# fail-closed is the ledger, not a stopped container: nothing is recorded
+# for a refused artifact, so require_verified declines below, no path to it
+# is written, and whatever path the row holds is taken back, an operator's
+# own included — by blanking the row, or, where that cannot be confirmed,
+# by moving the copy out from under the name it carries. Exiting here
+# instead cost the whole instance and the SPA with it, for a chart-search
+# dependency. Decision 106's amendment records what was observed and what
+# is inferred from it.
+. /usr/local/bin/model-manifest.sh
+
 ONNX_FILE="$QS_DIR/model.onnx"
 VOCAB_FILE="$QS_DIR/vocab.txt"
-HF_EMBED="https://huggingface.co/Xenova/e5-base-v2/resolve/main"
-ONNX_MIN_BYTES=200000000  # ~200MB; well under e5's ~440MB self-contained size
-VOCAB_MIN_BYTES=200000    # ~200KB; well under e5's ~230KB vocab.txt
 
-if [ ! -f "$ONNX_FILE" ]; then
-  echo "Downloading e5-base-v2 ONNX model (~440MB)..."
-  # --speed-time/--speed-limit abort a stalled connection after 60s rather
-  # than hanging the container start indefinitely; a partial file then
-  # trips the size guard below, which rm's it so the next start retries
-  # from zero.
-  curl -fsSL --speed-time 60 --speed-limit 1024 -o "$ONNX_FILE" "$HF_EMBED/onnx/model.onnx"
-fi
+fetch_or_degrade embedder-e5-base-v2-onnx "$ONNX_FILE" "e5-base-v2 ONNX embedder (~440MB)" \
+  "A graph-only ONNX file from an external-data export is ~1MB and the" \
+  "runtime fails late, at first inference, with a misleading \"Not a" \
+  "directory\" error reading a sidecar weights file that is not there." \
+  "The revision is pinned, so it cannot have changed shape upstream: a" \
+  "truncated transfer is the likely cause and a restart is the remedy."
 
-# Size guard. A graph-only ONNX file from an external-data export is
-# ~1MB and the runtime fails late, at first inference, with a misleading
-# "Not a directory" error trying to read a sidecar weights file that
-# doesn't exist next to the graph. Catch that at download time.
-ONNX_BYTES=$(stat -c %s "$ONNX_FILE" 2>/dev/null || stat -f %z "$ONNX_FILE" 2>/dev/null || echo 0)
-if [ "$ONNX_BYTES" -lt "$ONNX_MIN_BYTES" ]; then
-  echo "ERROR: $ONNX_FILE is only ${ONNX_BYTES} bytes (expected at least ${ONNX_MIN_BYTES})." >&2
-  echo "       The HuggingFace ONNX export likely changed shape upstream." >&2
-  echo "       Remove $ONNX_FILE and re-run; if the file is still small," >&2
-  echo "       the source repo's onnx/model.onnx is now external-data format" >&2
-  echo "       and the sidecar (model.onnx_data) must be staged alongside it." >&2
-  rm -f "$ONNX_FILE"
-  exit 1
-fi
-echo "Embedder ready: $ONNX_FILE (${ONNX_BYTES} bytes)."
-
-if [ ! -f "$VOCAB_FILE" ]; then
-  echo "Downloading e5-base-v2 vocab..."
-  curl -fsSL --speed-time 60 --speed-limit 1024 -o "$VOCAB_FILE" "$HF_EMBED/vocab.txt"
-fi
-
-# Vocab size guard, parallel to the ONNX one. e5-base-v2's WordPiece vocab
-# is ~230KB. A short or empty vocab would either fail tokenizer init or,
-# worse, silently degrade embeddings as missing tokens fall back to [UNK]
-# — both modes are easier to diagnose at startup than at first query.
-VOCAB_BYTES=$(stat -c %s "$VOCAB_FILE" 2>/dev/null || stat -f %z "$VOCAB_FILE" 2>/dev/null || echo 0)
-if [ "$VOCAB_BYTES" -lt "$VOCAB_MIN_BYTES" ]; then
-  echo "ERROR: $VOCAB_FILE is only ${VOCAB_BYTES} bytes (expected at least ${VOCAB_MIN_BYTES})." >&2
-  echo "       Truncated vocab fails tokenizer init or silently degrades to [UNK] fallbacks." >&2
-  echo "       Remove the file and re-run; if it stays small, the upstream export changed." >&2
-  rm -f "$VOCAB_FILE"
-  exit 1
-fi
-echo "Vocab ready: $VOCAB_FILE (${VOCAB_BYTES} bytes)."
+fetch_or_degrade embedder-e5-base-v2-vocab "$VOCAB_FILE" "e5-base-v2 vocab" \
+  "A truncated vocab fails tokenizer init or, worse, silently degrades" \
+  "embeddings as missing tokens fall back to [UNK]."
 
 # ---- LLM: Gemma 4 E4B Instruct, Q4_K_M -------------------------------------
 # Chosen over Gemma 4 E2B, Gemma 4 26B-MoE, and Llama-3.2-3B as the
@@ -124,59 +119,128 @@ echo "Vocab ready: $VOCAB_FILE (${VOCAB_BYTES} bytes)."
 # E4B holds the benign/malignant distinction, keeps citations focused on
 # clinically-relevant records, and fits in ~5GB of memory.
 #
-# Background the download and resume on container restart via `curl -C -`
-# so OpenMRS can become healthy without waiting for the transfer; deploy
-# health-poll loops time out at ~5min, but the actual download can take
-# longer on slow networks. Chart search queries return errors until the
-# .partial file is renamed to its final name.
-# Inner worker: actually performs the download and the .partial→final
-# rename. Receives all required values as positional args so each
+# Background the work and resume on container restart via `curl -C -` so
+# OpenMRS can become healthy without waiting for it. On a volume whose
+# weights already verify, that work is the hash alone and nothing is
+# downloaded or renamed; on a fresh or failing one it is the transfer,
+# which can take far longer than the deploy's health budget allows
+# (docker-compose.yml gives the backend a 30m start_period). Chart search
+# queries return errors for as long as no verified file is in place —
+# including the window after a file that WAS serving is refused.
+# Inner worker: fetches and verifies, or verifies what is already on the
+# volume. Receives all required values as positional args so each
 # backgrounded invocation has its own argument snapshot — reading globals
 # from a backgrounded subshell would race with the parent shell's next
-# fetch_llm_in_background call overwriting them.
+# fetch_llm_in_background call overwriting them. fetch_and_verify keeps the
+# same discipline, and prefixes every variable of its own with _mm_.
+#
+# A refusal here stops nothing, as the embedder's no longer does either: the
+# weights are fetched in the background precisely so OpenMRS can come up
+# without them, and chart search already reports its own error while the
+# file is absent. The difference that remains is the WAITING — these two run
+# in background subshells and the embedder's run in this shell, because the
+# ledger the property write consults cannot be written from a subshell.
+# What matters in both is that rejected bytes are deleted rather than left
+# under the name config.xml points modelFilePath at — on the codes that
+# report a deletion. Codes 4 and 5 report none: 4 never opens the target,
+# so whatever is at that name is untouched, and 5 could not hash what is
+# at it, which the catch-all arm below says outright.
 _download_llm_file() {
-  _url=$1
-  _partial=$2
-  _target=$3
-  _label=$4
-  # --speed-time/--speed-limit aborts if avg throughput stays under 1 KB/s
-  # for 60s, so a stalled TCP connection (Hugging Face hangs the socket
-  # without closing it) doesn't leave curl waiting on a dead peer
-  # indefinitely. On the next container start (operator-initiated under
-  # the default restart=no policy), curl -C - resumes from .partial.
-  if curl -fsSL -C - --speed-time 60 --speed-limit 1024 -o "$_partial" "$_url"; then
-    mv "$_partial" "$_target"
-    echo "$_label downloaded: $_target"
+  _id=$1
+  _target=$2
+  _label=$3
+  if fetch_and_verify "$_id" "$_target" "$_label"; then
+    record_weights_state "$_id" "verified:$_id"
+    echo "$_label ready: $_target"
   else
-    echo "$_label download failed; restart the backend container to retry (curl -C - resumes from the .partial file)."
+    # $? is the condition's status here. Which message is honest depends on it, and the library's
+    # code table is what says which is which: a refusal has already deleted the file, so there is
+    # nothing for curl -C - to resume from and saying otherwise would send an operator looking for
+    # a .partial that is not there. Code 6 is the one that also has to report a LOSS — a copy that
+    # was on the volume is gone and no verified replacement took its place — so it may not fall into 3's wording,
+    # which promises the opposite, nor into the catch-all's, which says the file is still there.
+    _code=$?
+    # The artifact id and the library's code, never the path: the line below is for the container
+    # log, and this is for the deployment nobody can open a shell on.
+    record_weights_state "$_id" "refused:$_id:$_code"
+    case $_code in
+      1|2) echo "$_label was refused and deleted; restart the backend container to fetch it again from the start." >&2 ;;
+      3)   if [ -f "$_target.partial" ]; then
+             echo "$_label download failed part-way; restart the backend container to retry (curl -C - resumes from the .partial file)." >&2
+           else
+             echo "$_label could not be fetched at all; restart the backend container to retry." >&2
+           fi ;;
+      4)   echo "$_label could not be resolved from model-manifest.tsv — no such row, or no manifest in the image — so this is a packaging error and a restart will not help." >&2 ;;
+      6)   echo "$_label was refused and deleted, and the pinned revision could not then be reached to replace it, or what it served could not be measured, or could not be hashed or put in place, so the volume no longer holds a copy of it; restart the backend container to retry the download." >&2 ;;
+      *)   echo "$_label could not be hashed (code $_code), so it is still on disk unverified; restart the backend container to retry." >&2 ;;
+    esac
   fi
 }
 
 # Helper: emit the start/resume log line and background the actual
-# download. $1 url, $2 filename (under $LLM_DIR), $3 human label, $4 size
-# hint, $5 availability-note fragment appended to the log line — callers
-# pass the served-vs-standby wording so the helper itself doesn't encode
-# which model is currently active.
+# download. $1 manifest id, $2 filename (under $LLM_DIR), $3 human label,
+# $4 size hint, $5 availability-note fragment appended to the log line —
+# callers pass the served-vs-standby wording so the helper itself doesn't
+# encode which model is currently active.
 #
 # Each invocation backgrounds, so two calls run in parallel — total volume
-# need on /openmrs/data is now ~8GB (E4B ~5GB + E2B ~3GB).
+# need on /openmrs/data is now ~8GB (E4B ~5GB + E2B ~3GB). A weights file
+# already present is no longer skipped: it is re-hashed in the background
+# for the reason the embedder is, and replaced if it is not the artifact the
+# manifest records. That is asserted of this function rather than of the
+# library — EntrypointVolumeVerificationTest pastes it in and runs it with
+# the target already there — because the skip it replaces lived HERE, and
+# the library cannot be the site that declines to call it.
 fetch_llm_in_background() {
-  url=$1
+  artifact_id=$1
   filename=$2
   label=$3
   size_hint=$4
   availability_note=$5
   target="$LLM_DIR/$filename"
-  partial="$target.partial"
-  if [ -f "$target" ]; then
-    return
-  fi
-  if [ -f "$partial" ]; then
-    echo "Resuming $label download (${size_hint}) in background${availability_note}..."
-  else
-    echo "Starting $label download (${size_hint}) in background${availability_note}..."
-  fi
-  _download_llm_file "$url" "$partial" "$target" "$label" &
+  # One framing line. Which of verify / resume / download actually happens is the library's
+  # decision and the library logs it, so testing the file's state here as well would be a second
+  # copy of that logic whose only job is to guess the first one's answer.
+  echo "Providing $label (${size_hint}) in background${availability_note}..."
+  # Recorded here, in the start's own shell and before the fork, so the artifact is in the state
+  # directory before anything can read it — a fetch that has not reached its first line yet reads
+  # as fetching. And named in WEIGHTS_ARTIFACTS, which publish_weights_status, forked later from
+  # this same shell, inherits: that is how it tells an artifact with no file from one that verified.
+  WEIGHTS_ARTIFACTS="${WEIGHTS_ARTIFACTS:+$WEIGHTS_ARTIFACTS }$artifact_id"
+  record_weights_state "$artifact_id" "fetching:$artifact_id"
+  _download_llm_file "$artifact_id" "$target" "$label" &
+}
+
+# What each weights fetch came to, for chartsearchai.models.weightsStatus (#467): one empty file per
+# artifact under WEIGHTS_STATE_DIR, whose NAME is its entry — `fetching:<id>`, `refused:<id>:<code>`
+# or `verified:<id>`. The name rather than the contents, because the likeliest way a ~5GB fetch fails
+# is a full volume, and writing even a few bytes of contents there fails with it, leaving the entry
+# at `fetching:` for good; a rename needs no data blocks. The fetches only RECORD here; publish_weights_status, started below the demo seed, is
+# what puts it in the database. A subshell forked this early cannot do that itself: seed_sql and the
+# connection it needs are not defined until further down, and maybe_seed_demo_data then drops every
+# table and restores a snapshot of the chartsearchai properties taken before the drop — so a row
+# written from here would be wiped, or overwritten with an older start's value. Reset once per
+# start, before anything is forked, so what is in it is this start's.
+WEIGHTS_STATE_DIR="$LLM_DIR/.weights-status"
+WEIGHTS_ARTIFACTS=''
+rm -rf "$WEIGHTS_STATE_DIR"
+mkdir -p "$WEIGHTS_STATE_DIR"
+
+# record_weights_state <id> <entry> — renames the artifact's file to <entry>, which is never seen as
+# half of either name; creates it where there is none yet. A scan that races the rename can list
+# the old name, the new one, both or neither; publish_weights_status reads neither as unrecorded.
+# The create is `true >`, never `: >`: a redirection that fails on a special builtin such as `:`
+# exits a non-interactive dash, the image's /bin/sh, so a state directory that could not be made
+# would end the start before OpenMRS does — a failed diagnostic has to be a failed command.
+record_weights_state() {
+  for _rws_file in "$WEIGHTS_STATE_DIR"/*":$1" "$WEIGHTS_STATE_DIR"/*":$1:"*; do
+    [ -e "$_rws_file" ] || continue
+    mv -f "$_rws_file" "$WEIGHTS_STATE_DIR/$2" && return 0
+    rm -f "$_rws_file"
+  done
+  true > "$WEIGHTS_STATE_DIR/$2" && return 0
+  echo "could not record $2 for chartsearchai.models.weightsStatus." >&2
+  return 1
 }
 
 # E4B is the default served model (config.xml defaults
@@ -185,14 +249,14 @@ fetch_llm_in_background() {
 # flipping the GP between the two filenames and waiting for llama-server's
 # idle-restart to pick up the new weights — no redeploy required.
 fetch_llm_in_background \
-  "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf" \
+  llm-gemma-4-e4b \
   "gemma-4-E4B-it-Q4_K_M.gguf" \
   "Gemma 4 E4B Q4_K_M" \
   "~5GB" \
   "; chart search will be unavailable until it completes"
 
 fetch_llm_in_background \
-  "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf" \
+  llm-gemma-4-e2b \
   "gemma-4-E2B-it-Q4_K_M.gguf" \
   "Gemma 4 E2B Q4_K_M" \
   "~3GB" \
@@ -203,8 +267,15 @@ fetch_llm_in_background \
 # the first time a backend built with this entrypoint boots against a DB that
 # hasn't been seeded with it yet. This is how the chartsearchai.openmrs.org demo
 # gets its dataset without any direct DB access: the seed runs in-container
-# against the `db` service over the compose network, on an ordinary deploy — no
-# volume wipe, so the downloaded models and runtime properties are untouched.
+# against the `db` service over the compose network.
+#
+# Two deploy shapes reach here, and they are not equivalent. On an ordinary
+# deploy nothing is wiped, so the models and runtime properties survive and the
+# sentinel below skips the seed entirely. On a --destroy-volumes deploy this is
+# the code that repopulates an empty database — and the database it hands back
+# is then complete while openmrs-data is empty, which is a combination OpenMRS
+# does not otherwise produce. The two steps after this function exist for that
+# case and must stay downstream of it.
 #
 # Safety:
 #   * Gated by a sentinel global property -> runs exactly once.
@@ -214,7 +285,11 @@ fetch_llm_in_background \
 #     bricks the demo.
 #   * Snapshots and restores the server's own chartsearchai/querystore global
 #     properties, so the dump's config (LLM endpoint, model paths) does not
-#     overwrite the operator's wiring.
+#     overwrite the operator's wiring. Two properties are then set deliberately
+#     AFTER that restore — querystore.bootstrap.autostart and
+#     chartsearchai.querystore.enabled — because a freshly imported dump brings
+#     its own values for both and they describe the dump, not this server. That
+#     is the one place the restore is overridden on purpose.
 # The repairs mirror what loading this dump requires (orphan rows, stale module
 # changelog rows, liquibase checksums); see commit history for the rationale.
 DEMO_DUMP_URL="${CHARTSEARCHAI_DEMO_DUMP_URL:-https://github.com/openmrs/openmrs-module-chartsearchai/releases/download/demo-data-5284-2026-05-19/openmrs-2.8-refapp-demo-5284-patients-2026-05-19.sql.gz}"
@@ -339,6 +414,16 @@ SQL
   seed_sql "$DB_NAME" -e \
     "INSERT INTO global_property (property, property_value, uuid) VALUES ('querystore.bootstrap.autostart','true', UUID()) ON DUPLICATE KEY UPDATE property_value='true';" || true
 
+  # The dump carries chartsearchai.querystore.enabled=false baked in, so the
+  # blank-only wiring below cannot reach it and a re-seeded demo would come back
+  # with retrieval switched off. Asserted here rather than there because this is
+  # where the demo's intended configuration is being established from scratch —
+  # it runs after the operator-GP snapshot is restored, alongside the autostart
+  # line above, and only on the seed path, so an ordinary boot never overrides a
+  # deliberate false.
+  seed_sql "$DB_NAME" -e \
+    "INSERT INTO global_property (property, property_value, uuid) VALUES ('chartsearchai.querystore.enabled','true', UUID()) ON DUPLICATE KEY UPDATE property_value='true';" || true
+
   rm -f "$_dump" "$_gp"
   _count=$(seed_sql -N "$DB_NAME" -e 'SELECT COUNT(*) FROM patient' 2>/dev/null)
   seed_status "done: $_count patients"
@@ -346,6 +431,438 @@ SQL
 }
 
 maybe_seed_demo_data || echo "[demo-seed] seed step errored; continuing to start OpenMRS."
+
+# ---- does this database already carry an OpenMRS schema? --------------------
+# The three steps below all need to tell a virgin database from one this
+# entrypoint (or a previous boot) has already populated — and, separately, from
+# one they could not reach at all.
+#
+# Memoised, because those steps ask up to six times between them and
+# every miss pays a full connect timeout against a DB that is not answering.
+# record_cpu_breadcrumb further down caps its own wait for exactly that reason —
+# "doesn't add another 30s to an already-failing boot" — and this keeps that
+# true rather than quietly spending the budget just above it. Safe to cache over
+# this window: maybe_seed_demo_data has already done the 60s wait, and these
+# calls all land within a second of each other.
+DB_REACHABLE=""
+db_reachable() {
+  if [ -z "$DB_REACHABLE" ]; then
+    if command -v mariadb >/dev/null 2>&1 && seed_sql -N -e "SELECT 1" >/dev/null 2>&1; then
+      DB_REACHABLE=yes
+    else
+      DB_REACHABLE=no
+    fi
+  fi
+  [ "$DB_REACHABLE" = yes ]
+}
+
+# Four core tables rather than one, so a stray leftover table cannot pass for a
+# schema. Answers no when the DB is unreachable; schema_absent_because below is
+# what keeps that from being reported as "empty".
+openmrs_schema_present() {
+  db_reachable || return 1
+  _tables=$(seed_sql -N -e \
+    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$DB_NAME' \
+     AND table_name IN ('global_property','patient','person','users')" 2>/dev/null | tr -dc '0-9')
+  [ -n "$_tables" ] && [ "$_tables" -ge 4 ]
+}
+
+# Why openmrs_schema_present said no. "I could not ask" must not be reported as
+# "the database is empty": the two lead an operator to opposite conclusions while
+# reading these lines during an outage, and an unreachable DB is an ordinary path
+# here, not a freak one — maybe_seed_demo_data logs and survives it a few lines up.
+schema_absent_because() {
+  if db_reachable; then
+    echo "'$DB_NAME' carries no OpenMRS schema"
+  else
+    echo "'$DB_NAME' could not be reached, so whether it carries a schema is unknown"
+  fi
+}
+
+# ---- align the automated installer with the database that now exists --------
+# The base image regenerates its automated-installation script on every boot
+# (startup-init.sh writes $OMRS_HOME/openmrs-server.properties out of the
+# OMRS_CONFIG_* environment), and startup.sh then drives OpenMRS's
+# InitializationFilter with it by curl-ing /openmrs/ shortly after Tomcat comes
+# up. That script carries create_tables=${OMRS_CONFIG_CREATE_TABLES}, which the
+# deployed compose sets to true.
+#
+# create_tables=true means "this database is empty, build the schema". That is
+# right for a virgin install and wrong for every database this entrypoint hands
+# to OpenMRS: maybe_seed_demo_data above imports a COMPLETE OpenMRS database, so
+# on the first boot after a volume wipe (deploy.yml's `reset` input, which passes
+# --destroy-volumes) the installer runs against a schema that already exists. It
+# dies on the first CREATE TABLE of the 2.8.x schema-only snapshot — "Table
+# 'allergy' already exists" — and the install is abandoned. /openmrs/ then
+# redirects to /openmrs/initialsetup for the life of the container, so a visitor
+# to the demo gets an installation screen. (The application itself does come up
+# behind that redirect on this path — modules load and the REST API answers --
+# which is why nothing downstream complained: the old healthcheck probed
+# /openmrs/ and was satisfied by the very redirect that was the symptom, and the
+# deploy had already reported success. Both are addressed alongside this: see
+# the HEALTHCHECK in Dockerfile.backend.)
+#
+# It clears on a restart — the abandoned install leaves openmrs-runtime.properties
+# behind, so the next boot skips the wizard — which is exactly why it bites only
+# the first boot after a wipe and why steady-state checks never see it.
+#
+# So decide create_tables from the database rather than from the environment.
+# The same correction covers a wipe of openmrs-data alone (db-data kept), where
+# the schema likewise predates the installer.
+#
+# Keep this even though the next step usually makes it moot. Writing the runtime
+# properties stops the installer from running at all, so create_tables is then
+# never read — but that write can fail (it says so and falls through), and this
+# is what makes that fallback land on a working instance instead of the wizard.
+# The two are a pair: do not drop one as redundant with the other.
+if openmrs_schema_present; then
+  echo "[install] '$DB_NAME' already carries an OpenMRS schema; installing with create_tables=false."
+  OMRS_CONFIG_CREATE_TABLES=false
+  export OMRS_CONFIG_CREATE_TABLES
+else
+  echo "[install] $(schema_absent_because); leaving create_tables=${OMRS_CONFIG_CREATE_TABLES:-unset} as it stands."
+fi
+
+# ---- hand OpenMRS the runtime properties for the database just prepared -----
+# openmrs-runtime.properties is what tells OpenMRS "this database is ready".
+# Without it, Listener latches "initial setup is needed" at context init and
+# /openmrs/ redirects to /openmrs/initialsetup for the entire life of the JVM —
+# even once the automated install has run, written that file itself and started
+# the application successfully. Measured on the published image with the
+# create_tables correction above in place: the install completes cleanly, the
+# context refreshes, /openmrs/ws/rest/v1/session answers 200, and /openmrs/ still
+# serves the setup wizard until the container is restarted. A visitor to
+# /openmrs sees an installation screen on a server that is actually running.
+#
+# The file only ever lives in the openmrs-data volume, so a --destroy-volumes
+# deploy deletes it while the seed refills the database — and those two have to
+# agree about whether the database is ready. Write it here, from the credentials
+# that have just queried this database successfully, so the first boot after a wipe is
+# indistinguishable from a steady-state one and no wizard is involved at all.
+#
+# Narrow on purpose: only when the schema is really present and the file is
+# really absent. An existing file is never rewritten (startup-init.sh merges its
+# own extras into it), and a genuinely empty database still gets the ordinary
+# first-install path. Skipping the wizard also leaves the seeded dump's own admin
+# credentials in place, which is what every non-reset deploy has always had.
+write_runtime_properties_if_missing() {
+  _rtp_file="/openmrs/data/openmrs-runtime.properties"
+  if [ -f "$_rtp_file" ]; then
+    echo "[runtime-properties] $_rtp_file already present; leaving it untouched."
+    return 0
+  fi
+  if ! openmrs_schema_present; then
+    echo "[runtime-properties] $(schema_absent_because); leaving the first-install wizard to write it."
+    return 0
+  fi
+
+  _db_port="${OMRS_DB_PORT:-3306}"
+  _db_args="?autoReconnect=true&sessionVariables=default_storage_engine=InnoDB&useUnicode=true&characterEncoding=UTF-8"
+  # Java's Properties parser splits on the FIRST unescaped separator, so ':' and
+  # '=' inside the value need no escaping; the wizard escapes them only because
+  # Properties.store() always does.
+  ( umask 077; cat > "$_rtp_file" <<EOF
+#Written by backend-init.sh for a database this entrypoint prepared
+connection.driver_class=com.mysql.jdbc.Driver
+connection.url=jdbc:mysql://${DB_HOST}:${_db_port}/${DB_NAME}${_db_args}
+connection.username=${DB_USER}
+connection.password=${DB_PASS}
+auto_update_database=${OMRS_CONFIG_AUTO_UPDATE_DATABASE:-true}
+module.allow_web_admin=${OMRS_CONFIG_MODULE_WEB_ADMIN:-true}
+EOF
+  )
+  if [ -s "$_rtp_file" ]; then
+    echo "[runtime-properties] wrote $_rtp_file for ${DB_USER}@${DB_HOST}:${_db_port}/${DB_NAME}; OpenMRS starts without the setup wizard."
+  else
+    echo "[runtime-properties] could not write $_rtp_file; falling back to the setup wizard." >&2
+    rm -f "$_rtp_file"
+  fi
+}
+write_runtime_properties_if_missing || echo "[runtime-properties] step errored; continuing to start OpenMRS."
+
+# ---- retrieval wiring (global properties) ----------------------------------
+# This script provisions querystore/model.onnx and querystore/vocab.txt at the
+# top, but the properties that point querystore at them live in the DATABASE,
+# and both modules ship them empty. Until now they were set by hand on the demo,
+# so a --destroy-volumes deploy deleted the wiring along with the database. The
+# header of this file has described exactly these as an operator step with a
+# "follow-up change" pending since the querystore migration; this is it.
+#
+# Leaving them unset costs more than a disabled feature. maybe_seed_demo_data
+# turns querystore.bootstrap.autostart on, so the next start sweeps every record
+# of all 5,284 seeded patients — and with modelFilePath unset each record throws
+# IllegalStateException out of OnnxEmbeddingProvider and is logged with a full
+# stack trace. Measured against the published image on a wiped volume: 112MB of
+# stack traces in the first eight minutes and still climbing, on a host that also
+# ships its logs to Loki.
+#
+# Written only where the property is blank, so an operator who deliberately
+# points these elsewhere keeps their value — the same courtesy the seed already
+# extends by snapshotting chartsearchai%/querystore% across the import.
+gp_set_if_blank() {
+  seed_sql "$DB_NAME" -e \
+    "INSERT INTO global_property (property, property_value, uuid) VALUES ('$1','$2',UUID()) \
+     ON DUPLICATE KEY UPDATE property_value = IF(property_value IS NULL OR property_value = '', '$2', property_value);" \
+    >/dev/null 2>&1
+}
+
+gp_value() {
+  seed_sql -N "$DB_NAME" -e \
+    "SELECT COALESCE(property_value,'') FROM global_property WHERE property='$1'" 2>/dev/null
+}
+
+# Takes the embedder paths back to the empty string, and answers whether the DATABASE now carries
+# that verdict rather than whether the statements were issued. Three rows go: the two querystore
+# resolves with optional=false, and the query-encoder path beside them, which the last paragraph
+# below is about. Each property is spelled at its own statement, the way the sweep's is: a helper
+# taking the name as $1 would hide it from the guard
+# that reads this file for where a model path is published (ModelDownloadPinningGuardTest
+# .noModelPathReachesAGlobalPropertyExceptBehindTheLibrarysVerifiedLedger).
+#
+# Every step's status is read, and then the two optional=false values are read back. What the suite
+# pins is that SOME status is read: turn every `|| _wd_issued=no` here into `|| true` and
+# EntrypointRetrievalWiringTest.theUnverifiedCopyIsPutOutOfReachWhenTheDatabaseCouldNotBeReached,
+# .theUnverifiedCopyIsPutOutOfReachWhenTheMariadbClientIsAbsent and
+# .theDiagnosisStaysTheLastStartsWhereThisStartCouldNotWriteIt go red, because a read-back alone
+# answers empty for a database that could not be asked at all — the same answer a withdrawn row
+# gives, fail-open in the one direction this whole gate exists to close. No step is pinned on its
+# own, though: discard the UPDATEs' status, or the reads', or the -z tests on this function's last
+# line, and nothing reds: on every branch these cases drive, what is left still
+# answers. They all stay anyway, since a discarded UPDATE error is what let the start go on
+# saying "its paths are blanked" over a row that still named the file — but on what is driven they
+# are defence in depth over each other rather than separate detectors, and no case tells them
+# apart. configure_retrieval_gps acts on the answer.
+#
+# Every UPDATE is ISSUED before any status is acted on. Chained with `|| return 1` the vocab's
+# UPDATE was never issued on a database that rejected the model path's, so a store that would have
+# taken it kept a row naming half an embedder this start did not verify — and querystore resolves the
+# vocab with optional=false too. One statement's rejection is no verdict on the next. On a database
+# that is not answering, each statement here costs its own connect timeout, which is the same order
+# as the reads and writes below this call already pay on that path.
+#
+# The third row is querystore's query encoder, `querystore.embedding.queryModelFilePath`. querystore
+# resolves it with optional=true, nothing in this repository writes it, and a start that verifies
+# leaves it alone — so a start that verifies never puts a value there for this to take back. What
+# reaches it is a deployment that pointed it at the file these fetches write to: on a refusal that
+# deletes nothing the copy is still on the volume, the quarantine does not run where the withdrawal
+# lands, and querystore opens an ONNX session over bytes this start refused, which is the state #444
+# is about. Its statement joins the answer below through the same `_wd_issued`; it is NOT read back,
+# and that is residue rather than coverage — a database that takes the statement and leaves the row
+# standing is caught for the two rows above and not for this one.
+withdraw_embedder_paths() {
+  _wd_issued=yes
+  seed_sql "$DB_NAME" -e \
+    "UPDATE global_property SET property_value='' WHERE property='querystore.embedding.modelFilePath';" \
+    >/dev/null 2>&1 || _wd_issued=no
+  seed_sql "$DB_NAME" -e \
+    "UPDATE global_property SET property_value='' WHERE property='querystore.embedding.vocabFilePath';" \
+    >/dev/null 2>&1 || _wd_issued=no
+  seed_sql "$DB_NAME" -e \
+    "UPDATE global_property SET property_value='' WHERE property='querystore.embedding.queryModelFilePath';" \
+    >/dev/null 2>&1 || _wd_issued=no
+  _wd_model=$(gp_value 'querystore.embedding.modelFilePath') || _wd_issued=no
+  _wd_vocab=$(gp_value 'querystore.embedding.vocabFilePath') || _wd_issued=no
+  [ "$_wd_issued" = yes ] && [ -z "$_wd_model" ] && [ -z "$_wd_vocab" ]
+}
+
+# The instrument that needs no database: take the FILE out of the two names querystore loads, so a
+# row this start could not withdraw names nothing loadable — for those two names and no others,
+# which the last paragraph below is about. querystore resolves both of these paths with
+# optional=false, and ModelFileResolver throws "Model file not found" for a path with no file at it
+# exactly as OnnxEmbeddingProvider throws for a blank one — so this leaves querystore in the same
+# state a landed withdrawal does, by the other route.
+#
+# Moved rather than deleted, and for the reason file_bytes will not answer 0 for a file it could not
+# measure: code 5 is "this copy could not be hashed", which is a statement about the tools and not
+# about the bytes, and deleting on it would re-download the same file every start to delete it
+# again. An operator keeps the copy, and the next start finds the target absent and fetches the
+# recorded artifact from zero.
+#
+# BOTH copies go, for the reason the withdrawal blanks every row it reaches when one artifact was
+# refused: the gate's unit is the pair, and an embedder without its vocab is not half-configured
+# but unusable. Where only one was refused that costs the other a re-download, which is the price of
+# the pair being the unit everywhere rather than here alone.
+#
+# So the lines below, and the suffix, are about the EMBEDDER and never about the bytes of the file
+# they name. Two shapes reach here with a copy that verified: one artifact refused and the other
+# not, and a verification taken where this shell cannot read it, which refuses nothing at all —
+# MODEL_MANIFEST_REFUSED is empty in the second and _embedder_status says so. Calling either copy
+# refused would put an operator-facing line at odds with the property beside it.
+#
+# It reaches LESS far than the withdrawal, and that is worth stating: the withdrawal blanks whatever
+# the row names, an operator's own path included, while this reaches only the two targets the fetches
+# above wrote to. So a row naming a file this module never provisioned survives this path — which is
+# outside #444 either way, its subject being bytes this module fetched.
+quarantine_unverified_embedder() {
+  for _q_file in "$ONNX_FILE" "$VOCAB_FILE"; do
+    [ -f "$_q_file" ] || continue
+    if mv -f "$_q_file" "$_q_file.unverified" 2>/dev/null; then
+      echo "[retrieval-wiring] moved $_q_file aside to $_q_file.unverified; nothing can load it under the name a global property names." >&2
+    else
+      echo "[retrieval-wiring] could not move $_q_file aside, so querystore may still load an embedder this start did not verify." >&2
+    fi
+  done
+}
+
+configure_retrieval_gps() {
+  # Why the sweep has to go off, set by whichever check below finds a reason and empty until one
+  # does. Assigned here rather than defaulted, so a value arriving in the environment is not a
+  # reason anything measured — the same discipline MODEL_MANIFEST_VERIFIED keeps.
+  _sweep_off_because=''
+
+  # Why this start cannot write a global property at all. Computed rather than RETURNED on, which is
+  # the correction: two unconditional early returns used to sit here — "mariadb client absent", and the schema probe — and either left the
+  # decline arm below unreached, so a row an earlier good start wrote went on naming a file this
+  # start refused at a code that deletes nothing, with querystore.bootstrap.autostart still true.
+  # That is the CWE-494 state #444 removes, reached through the gate meant to close it, and while
+  # fetch_or_degrade's predecessor exited the container it was unreachable. ADR Decision 106.
+  #
+  # It is a DIAGNOSTIC, and never a verdict on whether a row is standing — which is what a third arm
+  # below asserted off it until neither probe could support that. The schema check wants four tables,
+  # so a database carrying global_property without one of the other three answers no while the row is
+  # there and an UPDATE on it lands; and both probes query without a database argument while every
+  # write below passes "$DB_NAME", so a DB_NAME that does not name the database OpenMRS actually uses
+  # answers no for a schema that is entirely present and rejects every write. schema_absent_because
+  # is what keeps "I could not ask" out of the wording either way.
+  #
+  # What that costs on a database that is not answering, stated because it is what the returns
+  # bought: they paid at most one connect timeout for the whole function, and every statement below
+  # now pays its own — the reachability probe, the withdrawal's own statements, then the reads and writes
+  # after it. Count them off issuedStatements() in
+  # EntrypointRetrievalWiringTest.theUnverifiedCopyIsPutOutOfReachWhenTheDatabaseCouldNotBeReached,
+  # which drives exactly that branch, rather than trusting a number written here. It costs nothing
+  # measurable on the ordinary compose failure, where the db container is down and the connection
+  # fails at once; the shape that spends it is an address that black-holes, and there it is
+  # spent on top of the 60s maybe_seed_demo_data already waited, against the backend's 30m health
+  # start_period in docker-compose.yml. seed_sql sets no connect timeout on the client, so bounding
+  # it is a lever left open rather than one measured and rejected.
+  _store_unwritable_because=''
+  if ! command -v mariadb >/dev/null 2>&1; then
+    _store_unwritable_because='the mariadb client is absent from this image'
+  elif ! openmrs_schema_present; then
+    _store_unwritable_because=$(schema_absent_because)
+  fi
+
+  # #444: this is where a model file's path leaves the script and becomes something querystore
+  # loads, so it may only stand for bytes THIS start verified. require_verified answers that from
+  # the library's own record of what ran in this shell rather than from where the fetches above are
+  # written — so moving them, wrapping them in a function called later, or taking them in a
+  # subshell leaves these two properties carrying no path instead of pointing querystore at bytes
+  # nothing checked. A start reaches here with nothing in the ledger two ways now, and they need
+  # not be told apart because the answer is the same: the fetch above was REFUSED — which no
+  # longer stops the start — or its verification was taken in a subshell, which records nothing
+  # this shell can read. ADR Decision 106.
+  #
+  # The decline arm WITHDRAWS the paths rather than merely withholding the write, and that is
+  # what makes it fail-closed on a deployment past its first good start. gp_set_if_blank
+  # deliberately leaves an already-written row standing, so that property is non-blank whatever this
+  # start did; and a refusal does not always cost the file the row names — of the codes that report
+  # no deletion, 4 (no manifest row resolves the artifact, so the target is never opened) and 5 (it
+  # could not be hashed) both leave the copy where it was. Withholding the write would then leave
+  # querystore loading an ONNX file still on the volume that this start refused to check, with
+  # OpenMRS up and the healthcheck green. Withdrawing costs an operator their own
+  # path on a start that refused, which is the same courtesy the sweep's own UPDATE below already
+  # declines to extend, and the next good start writes the module's path back. The sweep goes off
+  # on the same verdict, and says so HERE rather than leaving it to the blank-path test below,
+  # which cannot tell a path this start withdrew from one that was never written.
+  #
+  # Two outcomes, because the withdrawal can fail to land and a row that stands unwithdrawn is the
+  # state being removed: it landed, or it did not and the file is put out of reach instead, which
+  # needs no database. There is deliberately no third arm for "there was no row to take back": only
+  # a probe could answer that, a probe can answer no while a row stands, and being wrong there
+  # leaves querystore pointed at bytes this start did not verify. What asserting it saved was one
+  # re-download on a reachable database that has never carried a schema.
+  if require_verified embedder-e5-base-v2-onnx embedder-e5-base-v2-vocab; then
+    gp_set_if_blank 'querystore.embedding.modelFilePath' "${ONNX_FILE#/openmrs/data/}"
+    gp_set_if_blank 'querystore.embedding.vocabFilePath' "${VOCAB_FILE#/openmrs/data/}"
+    _embedder_status='verified in this start'
+  else
+    _sweep_off_because='the embedder did not verify in this start'
+    # Whichever way the refusal came, the entry the library recorded for it is what an operator
+    # gets to read; an empty one is the subshell shape, where the bytes may well have verified
+    # somewhere this shell cannot see.
+    _embedder_status="not verified in this start:${MODEL_MANIFEST_REFUSED:- no refusal was recorded, so the verification was taken where this shell cannot read it}"
+    if withdraw_embedder_paths; then
+      echo "[retrieval-wiring] the embedder has not verified in this start, so its paths are blanked; any value already in the database was an earlier start's and no verdict on this one." >&2
+    else
+      echo "[retrieval-wiring] the embedder has not verified in this start and the withdrawal of its paths could not be confirmed (${_store_unwritable_because:-the database did not take the write}); taking the copies on the volume out of reach instead, where this start left any." >&2
+      quarantine_unverified_embedder
+    fi
+  fi
+
+  # Nothing below is SKIPPED on the probe's answer, and each statement anything rests on reads its
+  # own status rather than having its outcome predicted — the sweep's UPDATE and the diagnosis's
+  # INSERT here, as the withdrawal's do above. The switch does not and is not relied on to; the
+  # read-backs read theirs only to say so on the summary line, never to decide anything. The two returns this function used
+  # to open with predicted the outcome for all of them — and a prediction is what made the arm above
+  # unreachable, and what would now skip the sweep switch below on a probe answer that can be no
+  # while the row is there and the UPDATE lands, for the reasons the diagnostic above carries.
+  if [ -n "$_store_unwritable_because" ]; then
+    echo "[retrieval-wiring] $_store_unwritable_because, so a global property this start writes may not land; querystore may stay unconfigured and chart search off."
+  fi
+
+  # The retrieval switch, which names no file and needs no verdict on any bytes.
+  gp_set_if_blank 'chartsearchai.querystore.enabled' 'true'
+
+  # The refusal's own diagnosis, in the one channel a deployment nobody can open a shell on has:
+  # readable at GET /ws/rest/v1/systemsetting?q=chartsearchai.models.embedderStatus, the way
+  # seed_status and record_cpu_breadcrumb are. A withdrawn path and a sweep switched off say chart
+  # search is off and nothing about WHY, so a digest refusal, a missing manifest row, a failed
+  # transfer and a verification taken in a subshell are one state seen from outside — and only the
+  # last of those is recoverable by restarting. It carries the artifact id and the library's code
+  # and never a path, which is what the withdrawal above exists to take back.
+  _embedder_status=$(printf %s "$_embedder_status" | sed "s/'/''/g")
+  seed_sql "$DB_NAME" -e \
+    "INSERT INTO global_property (property,property_value,uuid) VALUES ('chartsearchai.models.embedderStatus','$_embedder_status',UUID()) ON DUPLICATE KEY UPDATE property_value='$_embedder_status';" \
+    >/dev/null 2>&1 || echo "[retrieval-wiring] could not record chartsearchai.models.embedderStatus." >&2
+
+  # How each of these is SHOWN on the last line of this function, empty until a read fails. A
+  # gp_value that failed answers the empty string, which is the answer a blanked row gives too, so
+  # that line read "withdrawn and swept off" over the two branches where nothing this start wrote
+  # could land and the rows were still standing — the shape ADR Decision 106 records a third arm
+  # being removed for, a log asserting the opposite so nobody looks. The VALUES stay empty, because
+  # the tests below have to read an unreadable path as no path configured and try the sweep switch
+  # anyway; only the display changes. The vocab has no shown form because that line does not carry
+  # it. Assigned here rather than defaulted, for the reason _sweep_off_because is.
+  _model_shown='' _enabled_shown='' _autostart_shown=''
+  _model_gp=$(gp_value 'querystore.embedding.modelFilePath') || _model_shown='(could not be read)'
+  _vocab_gp=$(gp_value 'querystore.embedding.vocabFilePath')
+  _enabled_gp=$(gp_value 'chartsearchai.querystore.enabled') || _enabled_shown='(could not be read)'
+
+  # Never leave the combination that floods: a bootstrap sweep enabled with no embedder to run it.
+  # These tests answer the one case the gate above cannot: the gate PASSED and a write it gates did
+  # not take — gp_set_if_blank discards its own errors, so reading the properties back is the only
+  # thing that knows. Since the decline arm withdraws, the two now agree on a refused start rather
+  # than only the gate firing; the reasons stay separate because they name different causes, and
+  # the gate's is the one printed, because it names what changed in THIS start.
+  #
+  # BOTH paths are read, because either one missing is enough to throw once per record: querystore
+  # resolves the vocab with optional=false as well, so a vocab the write did not reach throws where
+  # the model path alone would have read as configured.
+  if [ -z "$_model_gp" ]; then
+    _sweep_off_because="${_sweep_off_because:-no embedder path is configured}"
+  elif [ -z "$_vocab_gp" ]; then
+    _sweep_off_because="${_sweep_off_because:-no vocab path is configured beside the embedder path}"
+  fi
+  if [ -n "$_sweep_off_because" ]; then
+    # Read the statement's status for the reason withdraw_embedder_paths reads its own: an UPDATE
+    # the database rejects, discarded, left the start asserting the sweep was off over a row that
+    # still said true.
+    if seed_sql "$DB_NAME" -e \
+      "UPDATE global_property SET property_value='false' WHERE property='querystore.bootstrap.autostart';" \
+      >/dev/null 2>&1; then
+      echo "[retrieval-wiring] $_sweep_off_because; querystore.bootstrap.autostart forced to false so the sweep cannot fail per record."
+    else
+      echo "[retrieval-wiring] $_sweep_off_because, and querystore.bootstrap.autostart could not be written, so the sweep may still run and fail once per record." >&2
+    fi
+  fi
+
+  # Read after the switch above rather than inside the line below, so its own status is readable at
+  # all: a command substitution in an argument discards it.
+  _autostart_gp=$(gp_value 'querystore.bootstrap.autostart') || _autostart_shown='(could not be read)'
+  echo "[retrieval-wiring] chartsearchai.querystore.enabled=${_enabled_shown:-$_enabled_gp} querystore.embedding.modelFilePath=${_model_shown:-$_model_gp} bootstrap.autostart=${_autostart_shown:-$_autostart_gp}"
+}
+configure_retrieval_gps || echo "[retrieval-wiring] step errored; continuing to start OpenMRS."
 
 # ---- CPU / RAM breadcrumb (diagnostic) -------------------------------------
 # Records the host CPU model, the ISA-extension subset that matters for
@@ -380,5 +897,109 @@ record_cpu_breadcrumb() {
     || echo "[cpu-breadcrumb] could not write GP (DB unreachable?); continuing."
 }
 record_cpu_breadcrumb || true
+
+# ---- the weights fetches' outcome, readable over REST ----------------------
+# GET /ws/rest/v1/systemsetting?q=chartsearchai.models.weightsStatus (#467). The weights are fetched
+# in background subshells, so their verdict reaches neither MODEL_MANIFEST_REFUSED nor
+# chartsearchai.models.embedderStatus, and on a deployment nobody can open a shell on an echo from a
+# subshell reaches no one — #466 ran for a day with no model file and the only symptom a 500.
+#
+# The value is one entry per artifact, space-separated: `fetching:<id>` while its fetch runs,
+# `refused:<id>:<code>` with the library's exit code once it failed, `unrecorded:<id>` for an
+# artifact this start fetched whose state it could not record, and nothing once it verified, so a
+# start whose weights all verified leaves the row present and empty. It carries ids and codes and
+# never a path, the rule the embedder's status keeps.
+#
+# The ONE writer, so the two fetches never read-modify-write one row against each other. Started
+# below the demo seed, so nothing it writes is dropped or overwritten by the seed's snapshot
+# restore — ModelDownloadPinningGuardTest.theWeightsStatusIsPublishedOnlyByOneWriterStartedAfterTheDemoSeed.
+# That costs nothing a deployment can see, because nothing serves REST until startup.sh below.
+#
+# It polls the state directory and writes whenever what it reads differs from the last value that
+# LANDED, reading each statement's status: a virgin database has no global_property table until
+# OpenMRS creates it, so an outcome recorded before then is sent again until it is taken rather
+# than counted the first time it was sent. It ends on the first scan with no fetch running that
+# reads the value that landed; with nothing running and the database still refusing, it gives up
+# after 900 refused writes two seconds apart — at least half an hour, the order of the backend's
+# health start_period — and says so.
+#
+# It composes from WEIGHTS_ARTIFACTS, the artifacts this start forked a fetch for, and not from
+# what the directory happens to list: an artifact with no file is `unrecorded:`, never absent, since
+# absent is what a verified artifact reads as. A scan can miss a file that a rename is moving, so a
+# value with an `unrecorded:` entry is written only once a second scan in a row reads it too; a
+# rename that has finished by then is read as its new name.
+publish_weights_status() {
+  command -v mariadb >/dev/null 2>&1 || { echo "[weights-status] mariadb client absent; chartsearchai.models.weightsStatus is not recorded."; return 0; }
+  _ws_landed=no
+  _ws_landed_value=''
+  _ws_idle_misses=0
+  _ws_scanned_before=''
+  while :; do
+    _ws_listed='' _ws_value='' _ws_running=no _ws_unrecorded=no
+    for _ws_file in "$WEIGHTS_STATE_DIR"/*; do
+      # Only the pattern itself, left unexpanded by an empty directory, is skipped. A name the glob
+      # listed and a rename then took away still stands for that artifact's previous entry.
+      if [ "$_ws_file" = "$WEIGHTS_STATE_DIR/*" ] && [ ! -e "$_ws_file" ]; then
+        continue
+      fi
+      _ws_listed="${_ws_listed:+$_ws_listed }${_ws_file##*/}"
+    done
+    # Every fetch records itself before it is forked, so an empty directory is a recording that
+    # failed for every artifact, and this start has nothing of its own to publish.
+    if [ -z "$_ws_listed" ]; then
+      echo "[weights-status] no weights fetch recorded its state, so chartsearchai.models.weightsStatus is not written." >&2
+      return 1
+    fi
+    for _ws_id in $WEIGHTS_ARTIFACTS; do
+      _ws_found=no
+      for _ws_entry in $_ws_listed; do
+        case $_ws_entry in
+          *":$_ws_id" | *":$_ws_id:"*) _ws_found=yes ;;
+          *) continue ;;
+        esac
+        case $_ws_entry in
+          verified:*) continue ;;
+          fetching:*) _ws_running=yes ;;
+        esac
+        _ws_value="${_ws_value:+$_ws_value }$_ws_entry"
+      done
+      if [ "$_ws_found" = no ]; then
+        _ws_unrecorded=yes
+        _ws_value="${_ws_value:+$_ws_value }unrecorded:$_ws_id"
+      fi
+    done
+    # A value naming an unrecorded artifact is held back until a second scan in a row reads it: the
+    # first may have missed a file mid-rename.
+    if [ "$_ws_unrecorded" = yes ] && [ "$_ws_scanned_before" != "scanned:$_ws_value" ]; then
+      :
+    elif [ "$_ws_landed" = no ] || [ "$_ws_value" != "$_ws_landed_value" ]; then
+      _ws_sql=$(printf %s "$_ws_value" | sed "s/'/''/g")
+      # A connect timeout of its own, so a database address that black-holes costs each attempt
+      # seconds rather than the OS's TCP timeout, and the bound below stays of the order it says.
+      if seed_sql --connect-timeout=5 "$DB_NAME" -e "INSERT INTO global_property (property,property_value,uuid) VALUES ('chartsearchai.models.weightsStatus','$_ws_sql',UUID()) ON DUPLICATE KEY UPDATE property_value='$_ws_sql';" >/dev/null 2>&1; then
+        _ws_landed=yes
+        _ws_landed_value=$_ws_value
+        _ws_idle_misses=0
+      else
+        _ws_landed=no
+        [ "$_ws_running" = yes ] || _ws_idle_misses=$((_ws_idle_misses + 1))
+      fi
+    fi
+    _ws_scanned_before="scanned:$_ws_value"
+    # A scan that missed a file mid-rename reads it as unrecorded rather than as verified, so it
+    # differs from what landed and does not end this.
+    if [ "$_ws_running" = no ]; then
+      if [ "$_ws_landed" = yes ] && [ "$_ws_value" = "$_ws_landed_value" ]; then
+        return 0
+      fi
+      if [ "$_ws_idle_misses" -ge 900 ]; then
+        echo "[weights-status] the database refused chartsearchai.models.weightsStatus 900 times with no fetch running; giving up on: ${_ws_value:-every weights artifact verified}" >&2
+        return 1
+      fi
+    fi
+    sleep 2
+  done
+}
+publish_weights_status &
 
 exec /openmrs/startup.sh

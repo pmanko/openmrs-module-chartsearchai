@@ -30,7 +30,7 @@ import org.junit.jupiter.api.Test;
 public class DrugSafetyValidatorTest {
 
 	private DrugSafetyValidator validator() {
-		return DrugReferenceTestSupport.validator(DrugReferenceTestSupport.bundledService());
+		return DrugReferenceTestSupport.validator(DrugReferenceTestSupport.curatedService());
 	}
 
 	/**
@@ -62,6 +62,12 @@ public class DrugSafetyValidatorTest {
 
 	private Set<String> set(String... values) {
 		return DrugReferenceTestSupport.set(values);
+	}
+
+	private void assertStatedDailyDose(String answer, String statedDaily) {
+		List<SafetyWarning> warnings = validator().validate(answer, ctx(5, null, null, null));
+		assertTrue(detailContains(warnings, SafetyWarning.TYPE_OVERDOSE, "ibuprofen", statedDaily),
+				"\"" + answer + "\" should state " + statedDaily + ", got " + warnings);
 	}
 
 	@Test
@@ -111,7 +117,14 @@ public class DrugSafetyValidatorTest {
 
 	@Test
 	public void noFalsePositiveWhenAnswerNeedsNoReference() {
-		// Chart-sufficient answer naming no reference drug -> no warnings.
+		// Chart-sufficient answer naming no reference drug -> no warnings. Read the arrangement, not
+		// only the assertion: since issue #143 that is no longer an unconditional property of the
+		// module, because the patient's own active orders are checked against her allergies too. TWO
+		// things keep this case at zero, and neither alone would be worth relying on: her one order
+		// (warfarin) resolves to no entry in the curated dataset this case runs on, and the response is
+		// about her blood pressure, which the subject-matter scoping of that arm requires it not to be.
+		// Give her an order the dataset carries and this call still warns about nothing — it takes a
+		// response about the drug or about the allergy as well.
 		List<SafetyWarning> warnings = validator().validate(
 				"The patient's most recent blood pressure is 120/80 mmHg [1].",
 				ctx(40, set("warfarin"), set("nsaid"), null));
@@ -120,11 +133,16 @@ public class DrugSafetyValidatorTest {
 
 	@Test
 	public void frequencyParsingMapsEveryNHoursToDosesPerDay() {
-		assertEquals(4, DrugSafetyValidator.frequencyPerDay("one tablet every 6 hours"));
-		assertEquals(3, DrugSafetyValidator.frequencyPerDay("every 8 hours"));
-		assertEquals(2, DrugSafetyValidator.frequencyPerDay("twice daily"));
-		assertEquals(3, DrugSafetyValidator.frequencyPerDay("three times a day"));
-		assertEquals(0, DrugSafetyValidator.frequencyPerDay("as needed for pain"));
+		// Read through validate, so the frequency is parsed from the folded clause production builds
+		// (issue #272). 1300 mg is over the 1200 mg/day age 2-11 ceiling at any frequency, so the chip
+		// always fires and the daily total it states moves with the doses-per-day parsed.
+		assertStatedDailyDose("Ibuprofen 1300 mg one tablet every 6 hours.", "~5200 mg/day");
+		assertStatedDailyDose("Ibuprofen 1300 mg every 8 hours.", "~3900 mg/day");
+		assertStatedDailyDose("Ibuprofen 1300 mg twice daily.", "~2600 mg/day");
+		assertStatedDailyDose("Ibuprofen 1300 mg three times a day.", "~3900 mg/day");
+		// No frequency and once daily both count as one dose a day, so this pins that "as needed" is
+		// not read as a multiple — the 0-versus-1 difference itself reaches no output and is not pinned.
+		assertStatedDailyDose("Ibuprofen 1300 mg as needed for pain.", "~1300 mg/day");
 	}
 
 	@Test
@@ -163,8 +181,8 @@ public class DrugSafetyValidatorTest {
 	@Test
 	public void frequencyWordFormsRequireWordBoundaries() {
 		// "bd" inside "abdominal" must not be read as twice-daily; a real "bd" still parses.
-		assertEquals(0, DrugSafetyValidator.frequencyPerDay("for abdominal discomfort"));
-		assertEquals(2, DrugSafetyValidator.frequencyPerDay("ibuprofen 200 mg bd"));
+		assertStatedDailyDose("Ibuprofen 1300 mg for abdominal discomfort.", "~1300 mg/day");
+		assertStatedDailyDose("Ibuprofen 1300 mg bd.", "~2600 mg/day");
 	}
 
 	@Test
@@ -204,8 +222,9 @@ public class DrugSafetyValidatorTest {
 	@Test
 	public void classContraindicationForRecordedAllergyToTheNamedDrug() throws IOException {
 		// The single most important case: the answer names a drug the patient is allergic to. ATC
-		// entries carry no rules, so only the class layer catches it (the allergy resolves to the
-		// same reference drug the answer recommends).
+		// entries carry no rules, so only the allergen arm catches it — by IDENTITY, not by class
+		// (the allergy resolves to the very entry the answer recommends). That distinction is what
+		// issue #135 turned on: identity needs no ATC code, so it must not be gated on one.
 		List<SafetyWarning> warnings = atcValidator().validate(
 				"Ibuprofen 200 mg as needed.",
 				ctx(40, null, set("ibuprofen"), null));
@@ -217,7 +236,7 @@ public class DrugSafetyValidatorTest {
 	public void contraindicationFiresWhenQuestionNamesDrugButAnswerDoesNot() throws IOException {
 		// Reliability fix: the clinician asks about ibuprofen and the patient has a recorded ibuprofen
 		// allergy, but the LLM's answer phrases it by class ("an NSAID allergy") and NEVER writes
-		// "ibuprofen". The safety net must still fire — it keys off the QUESTION (findByQuery), not only
+		// "ibuprofen". The safety net must still fire — it keys off the QUESTION (findImpliedByQuery), not only
 		// the answer's word choice. Pre-fix, the answer named no drug, so nothing was checked.
 		List<SafetyWarning> warnings = atcValidator().validate(
 				"The patient has an allergy to NSAID (drug allergen).",
@@ -257,9 +276,10 @@ public class DrugSafetyValidatorTest {
 	@Test
 	public void drugInBothQuestionAndAnswerWarnsOnlyOnce() throws IOException {
 		// A drug named in BOTH the question and the answer must be checked once, not twice. The
-		// question∪answer union dedups by identity, which holds only because findByQuery resolves
-		// against the shared getAll() cache; this pins that contract so a future findByQuery that
-		// returned copies (breaking dedup) would fail here rather than silently double-warn.
+		// question∪answer union dedups by identity, which holds only because findImpliedByQuery returns
+		// the shared getAll() cache's own objects (it filters that walk in place rather than copying rows);
+		// this pins that contract so a future findImpliedByQuery that returned copies (breaking dedup)
+		// would fail here rather than silently double-warn.
 		List<SafetyWarning> warnings = atcValidator().validate(
 				"Ibuprofen 200 mg as needed.",
 				"Is ibuprofen safe for her?",
@@ -330,9 +350,11 @@ public class DrugSafetyValidatorTest {
 	@Test
 	public void duplicateAllergyAliasesProduceASingleContraindication() {
 		// advil and brufen are both ibuprofen aliases; two allergy records that resolve to the same
-		// reference drug must produce ONE class contraindication, not one per alias. (Real bundled
-		// JSON dataset, whose curated rules do NOT key on these brand aliases — so the class layer is
-		// the only thing that fires, and it must dedupe by resolved allergen.)
+		// reference drug must produce ONE contraindication, not one per alias. (Real bundled JSON
+		// dataset, whose curated rules do NOT key on these brand aliases — so the only thing that
+		// fires is the allergen arm's IDENTITY comparison, which must dedupe by resolved allergen.
+		// Not the class comparison, despite both living in that arm: the aliases resolve to the very
+		// entry in play, which is the distinction issue #135 turned on.)
 		List<SafetyWarning> warnings = validator().validate(
 				"Ibuprofen 200 mg as needed.",
 				ctx(40, null, set("advil", "brufen"), null));

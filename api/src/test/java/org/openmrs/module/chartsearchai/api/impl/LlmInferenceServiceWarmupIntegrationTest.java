@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.function.Consumer;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -22,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.openmrs.Patient;
 import org.openmrs.module.chartsearchai.api.impl.LlmProvider.LlmResponse;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.PatientChart;
+import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.AlreadyOrderedDrug;
 
 /**
  * Verifies that {@link LlmInferenceService#warmup(Patient)} correctly delegates
@@ -257,14 +259,22 @@ public class LlmInferenceServiceWarmupIntegrationTest {
 
 		// LlmProvider's super has @Autowired engine fields that will be null in tests.
 		// Override the methods the test code might trigger indirectly to be safe.
+		//
+		// These are the ONE entry point of each, the ones LlmInferenceService actually calls, rather
+		// than the convenience arities they used to be (issue #397): a tripwire on an arity nothing
+		// reaches is a tripwire that cannot fire.
 		@Override
-		public LlmResponse search(String numberedRecords, String question) {
+		public LlmResponse search(String numberedRecords, List<Integer> focusIndices, String question,
+				boolean enumerateFindings, LlmEngine.ReferenceRecords referenceRecords,
+				List<AlreadyOrderedDrug> drugsAlreadyOrdered) {
 			throw new UnsupportedOperationException("warmup tests should never reach search");
 		}
 
 		@Override
-		public LlmResponse searchStreaming(String numberedRecords, String question,
-				Consumer<String> tokenConsumer) {
+		public LlmResponse searchStreaming(String numberedRecords, List<Integer> focusIndices,
+				String question, Consumer<String> tokenConsumer, Consumer<String> reasoningConsumer,
+				String cacheScope, boolean enumerateFindings, LlmEngine.ReferenceRecords referenceRecords,
+				List<AlreadyOrderedDrug> drugsAlreadyOrdered) {
 			throw new UnsupportedOperationException("warmup tests should never reach searchStreaming");
 		}
 	}

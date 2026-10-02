@@ -9,12 +9,17 @@
  */
 package org.openmrs.module.chartsearchai.api.impl;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 
 /**
  * Maps a clinician's question to the record types whose records belong <em>complete</em> in a
@@ -47,9 +52,13 @@ import java.util.regex.Pattern;
  * plus {@code patient} and {@code obs}, which this router never scopes ({@code patient} is
  * always included by the builder; {@code obs} is the similarity path's domain).
  *
- * <p>Public only so the drug-safety layer can reuse {@link #isInteractionScreening} — question
- * intent is classified here and must not be classified a second time elsewhere. Every other member
- * stays package-private.
+ * <p>Public only so the drug-safety layer can reuse this router's classification of a question —
+ * {@link #isInteractionScreening}, and the three domain predicates {@link #asksAboutMedications},
+ * {@link #asksAboutAllergies} and {@link #asksAboutConditions} that scope its contraindication arm.
+ * Question intent is classified here and must not be classified a second time elsewhere, which is the
+ * whole of what earns a member its {@code public}: every member that is not read outside this package
+ * stays package-private, and a new one becomes public only by being a classification a caller would
+ * otherwise re-derive.
  */
 public final class QueryScopeRouter {
 
@@ -119,27 +128,268 @@ public final class QueryScopeRouter {
 	private static final Pattern INTERACTION_CUES = cues("interact(?:s|ed|ing|ion|ions)?");
 
 	/**
+	 * The SECOND way a question asks for an interaction screen: it asks after the SAFETY of the
+	 * medications the patient is already on, or after CHANGING them, without using the word
+	 * "interact" at all. Word-boundary anchored via {@link #cues} like every other family here.
+	 *
+	 * <p>Measured live on the :8081 3.7.1 standalone on 2026-09-10, over sixteen DDI questions on
+	 * eight patients: with {@link #isInteractionScreening} requiring an {@code interact*} word,
+	 * <em>"Should I stop any of the medications he is on?"</em> screened NOTHING on a patient whose
+	 * <em>"Are any of his current medications interacting with each other?"</em> reported a
+	 * <b>Major</b> pair — same patient, same chart, same request path. A clinician asking the most
+	 * natural review question was the one who saw no hazard.
+	 *
+	 * <p><b>Why this does not re-open #143's over-reach.</b> The bar is not "mentions medications" —
+	 * that is the widening `DrugSafetyValidator.SubjectMatter`'s rules forbid, and it would put
+	 * interaction chips on <em>"What medications is the patient taking?"</em>. Every member here
+	 * asks about a medication's SAFETY or about STOPPING or CHANGING one, so a chip it
+	 * raises is still tied to what was asked. An ENUMERATION request carries none of them, which is
+	 * what keeps {@code DrugSafetyInteractionScreeningTest}'s two eager-firing guards green — and
+	 * those guards, not this list, are what a new member has to be measured against.
+	 *
+	 * <p>Deliberately NOT here: "review" unqualified (a "records review" is not a drug question) and
+	 * bare "check". Both carry everyday non-medication senses in a chart question, which is the
+	 * reason {@link #INTERACTION_CUES} gives for excluding "conflict" and "interfere".
+	 */
+	private static final Pattern MEDICATION_SAFETY_CUES = cues(
+			"safe", "unsafe", "safety", "danger(?:ous)?", "harmful", "risk(?:s|y)?",
+			"worry", "worried", "worrying", "concern(?:s|ed|ing)?",
+			"problem(?:s|atic)?", "wrong",
+			"stop(?:ped|ping)?", "discontinue(?:d)?", "deprescribe(?:d)?",
+			"change(?:d|s)?", "adjust(?:ed|ment|ments)?");
+
+	/**
 	 * True when the question asks to be SCREENED for drug interactions — "are there any drug
 	 * interactions with her current medications?", "do any of her meds interact?" — as opposed to
 	 * merely mentioning medications. Consumed by {@code DrugSafetyValidator}, which has no way to
 	 * anchor such a question on a named drug and instead screens the patient's own active orders
 	 * against each other (issue #113).
 	 *
-	 * <p>Two cues must BOTH hold: an {@code interact*} word, and the router's own
-	 * {@link Intent#MEDICATIONS} classification. Reusing that classification rather than writing a
-	 * second drug vocabulary is the point — "medication-domain question" keeps one definition — and
-	 * it is what makes the trigger conservative: a question about how a patient interacts with their
-	 * care team carries no medication cue and screens nothing. The accepted cost is that a bare
-	 * "any interactions?" does not trigger; in practice a clinician names what might interact
-	 * ("drug", "meds", "medications", "prescriptions"), all of which the MEDICATIONS cues cover.
+	 * <p>Two things must BOTH hold: the question asks for a reading of the drugs themselves
+	 * ({@link #asksForADrugSafetyReading} — an {@code interact*} word, OR a safety-or-change cue),
+	 * and the router's own {@link Intent#MEDICATIONS} classification. Reusing that classification
+	 * rather than writing a second drug vocabulary is the point — "medication-domain question" keeps
+	 * one definition — and it is what makes the trigger conservative: a question about how a patient
+	 * interacts with their care team carries no medication cue and screens nothing. The accepted cost
+	 * is that a bare "any interactions?" does not trigger; in practice a clinician names what might
+	 * interact ("drug", "meds", "medications", "prescriptions"), all of which the MEDICATIONS cues
+	 * cover.
+	 *
+	 * <p><b>The second cue family is not a loosening of the first.</b> Until 2026-09-10 an
+	 * {@code interact*} word was NECESSARY, and a live sixteen-question measurement found that a
+	 * <b>Major</b> pair reported for "are any of his current medications interacting?" was invisible
+	 * to "should I stop any of the medications he is on?" on the same chart. What licenses a screen
+	 * is a question about the drugs' SAFETY or about CHANGING them, of which naming an interaction is
+	 * one case; {@link #MEDICATION_SAFETY_CUES} carries the rest, and why an ENUMERATION request is
+	 * still not one of them.
 	 *
 	 * <p>Note this is a cue predicate, NOT an {@link Intent}: interaction screening changes what the
 	 * safety layer checks, not which record types a slice must contain, so — like
 	 * {@link #isTemporal} — it deliberately stays out of the enumeration-scope mapping.
 	 */
 	public static boolean isInteractionScreening(String question) {
-		return question != null && INTERACTION_CUES.matcher(question).find()
+		return question != null && asksForADrugSafetyReading(question)
 				&& matchedIntents(question).contains(Intent.MEDICATIONS);
+	}
+
+	/**
+	 * Whether the question asks for a reading of the drugs themselves — either naming an
+	 * interaction ({@link #INTERACTION_CUES}) or asking after their safety or a change to them
+	 * ({@link #MEDICATION_SAFETY_CUES}). The disjunction is what {@link #isInteractionScreening}
+	 * conjoins with the MEDICATIONS intent, and it is a separate method so each family can be
+	 * mutated on its own: neuter either alternative and read which cases redden. Public for
+	 * {@code ConflictingOrderStatement}, which asks it on its own: an allergy question asking whether
+	 * something is safe is a drug-safety question, whatever intent it matched.
+	 */
+	public static boolean asksForADrugSafetyReading(String question) {
+		return INTERACTION_CUES.matcher(question).find()
+				|| MEDICATION_SAFETY_CUES.matcher(question).find();
+	}
+
+	/** One word of a question, as {@link #words} splits it: letters and digits, with a trailing
+	 *  apostrophe suffix kept attached so "can't" and "patient's" are words of their own. */
+	private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]+(?:['’][\\p{L}]+)?");
+
+	/**
+	 * The word {@code DrugReferenceInjector} puts where a question names the drug it proposes, so
+	 * {@link #asksWhetherToGiveADrug} can read WHERE the name stood — issue #469. A question that
+	 * spells it literally yields it as a word too, and is then refused: every shape has exactly one
+	 * mark, and the drug the injector resolved adds its own.
+	 */
+	public static final String DRUG_NAME = "_drug_";
+
+	/**
+	 * The words of {@code text}, lower-cased, in order — the ONE tokenizer both question grammars
+	 * below read. {@link #DRUG_NAME} is kept as a word. Issue #469.
+	 */
+	public static List<String> words(String text) {
+		List<String> words = new ArrayList<String>();
+		if (text == null) {
+			return words;
+		}
+		String[] parts = text.toLowerCase(Locale.ROOT).split(Pattern.quote(DRUG_NAME), -1);
+		for (int p = 0; p < parts.length; p++) {
+			if (p > 0) {
+				words.add(DRUG_NAME);
+			}
+			Matcher matcher = WORD.matcher(parts[p]);
+			while (matcher.find()) {
+				words.add(matcher.group().replace('\u2019', '\''));
+			}
+		}
+		return words;
+	}
+
+	private static final String PATIENT = "(?:her|him|them|the patient|this patient)";
+
+	private static final String POSSESSIVE = "(?:her|his|their|the patient's|this patient's)";
+
+	private static final String MEDICATIONS = "(?:current |active )?(?:medications|meds|medicines|prescriptions)";
+
+	private static final String D = Pattern.quote(DRUG_NAME);
+
+	/**
+	 * The question shapes a proposal of ONE drug may take, over {@link #words} joined by single spaces
+	 * with the drug's name marked {@link #DRUG_NAME} — issue #469. A GRAMMAR and not a word list: two
+	 * forms of this predicate were bags of words, and each was defeated by words it admitted in an
+	 * order it did not mean — a second question joined to the proposal, a purpose or a first-person
+	 * question built from admitted words. A shape states word ORDER, so a question carrying anything
+	 * a shape does not name is not admitted.
+	 */
+	private static final List<Pattern> PROPOSAL_SHAPES = shapes(
+			// "Can I give her ibuprofen?", "Should I start her on clarithromycin?", "Can I give
+			// ibuprofen to her?"
+			"(?:can|could|may|should) (?:i|we) (?:safely )?(?:give|start|prescribe|administer|add) (?:"
+					+ PATIENT + " )?(?:on )?" + D + "(?: to " + PATIENT + ")?(?: now| today)?",
+			// "Can this patient take warfarin?", "Can she take ibuprofen?"
+			"(?:can|could|may|should) (?:she|he|they|the patient|this patient) (?:safely )?(?:take|start|be given|be started on) "
+					+ D + "(?: now| today)?",
+			// "Is it safe to give her ibuprofen?", "Is it safe to start her on clarithromycin?", "Is it
+			// safe to add prednisone for her?" — the patient after the drug too (issue #548), the
+			// allowance the first and fourth shapes make, as a reordering of "Is it safe for her to add
+			// prednisone?", which this shape already admits.
+			"is it (?:safe|ok|okay|appropriate) (?:for " + PATIENT + " )?to (?:(?:give|start|prescribe|administer|add) (?:"
+					+ PATIENT + " )?(?:on )?|take )" + D + "(?: for " + PATIENT + ")?(?: now| today)?",
+			// "Is ibuprofen safe for her?", "Is ibuprofen appropriate for this patient?"
+			"is " + D + " (?:safe|ok|okay|appropriate)(?: for " + PATIENT + ")?(?: now| today)?",
+			// "Would ibuprofen be appropriate for her?"
+			"(?:would|will) " + D + " be (?:safe|ok|okay|appropriate)(?: for " + PATIENT + ")?",
+			// "Is ibuprofen safe to add?", "Is ibuprofen safe to give her?" — the drug before "safe to", the
+			// fourth shape's word order with the third's verbs (ADR Decision 134). No purpose, no second drug.
+			"is " + D + " (?:safe|ok|okay|appropriate) to (?:give|start|prescribe|administer|add|use)(?: (?:to |for )?"
+					+ PATIENT + ")?(?: now| today)?",
+			// "Can ibuprofen be started?", "Can ibuprofen be given to her?" — the drug as the passive subject
+			// (ADR Decision 134). Only verbs of giving: "be stopped" or "be avoided" would read a "No" backwards.
+			"(?:can|could|may|should) " + D + " be (?:safely )?(?:given|started|prescribed|administered|added)(?: (?:to|for) "
+					+ PATIENT + ")?(?: now| today)?");
+
+	/**
+	 * The question shapes a request to screen the patient's OWN medications against each other may
+	 * take — issue #469. A grammar for the reason {@link #PROPOSAL_SHAPES} is: the word list it
+	 * replaced admitted "Does this drug interact with her medications?", every word of which was on
+	 * it, and answered it with her own pairs.
+	 */
+	private static final List<Pattern> SCREEN_SHAPES = shapes(
+			// "Are there any drug interactions with her current medications?"
+			"(?:are|is) there (?:any )?(?:drug )?interactions? (?:with|between|among) " + POSSESSIVE + " " + MEDICATIONS,
+			// "Are any of her current medications interacting with each other?", "Do any of her meds
+			// interact?", "Do her medications interact with each other?"
+			"(?:are|do) (?:any of )?" + POSSESSIVE + " " + MEDICATIONS + " (?:interact|interacting)"
+					+ "(?: with (?:each other|one another))?",
+			// "Does she have any drug interactions I should know about?"
+			"(?:does|do) (?:she|he|they|the patient|this patient) have any (?:drug )?interactions?"
+					+ "(?: (?:between|among) " + POSSESSIVE + " " + MEDICATIONS + ")?(?: i should know about)?");
+
+	private static List<Pattern> shapes(String... shapes) {
+		List<Pattern> patterns = new ArrayList<Pattern>(shapes.length);
+		for (String shape : shapes) {
+			patterns.add(Pattern.compile(shape));
+		}
+		return Collections.unmodifiableList(patterns);
+	}
+
+	private static boolean fitsAShape(List<String> words, List<Pattern> shapes) {
+		if (words == null || words.isEmpty()) {
+			return false;
+		}
+		String joined = String.join(" ", words);
+		for (Pattern shape : shapes) {
+			if (shape.matcher(joined).matches()) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a question proposes giving ONE drug and asks nothing else — asked of its {@link #words}
+	 * with the drug's own name already marked {@link #DRUG_NAME}. Issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/469">#469</a>: it bounds
+	 * which proposals {@code DrugReferenceInjector} answers with a withholding "No", which is the
+	 * polarity of every shape in {@link #PROPOSAL_SHAPES}.
+	 *
+	 * <p><b>A closed grammar, and fail-CLOSED, and the direction is the whole design.</b> A question
+	 * fitting no shape keeps the model call it has always had, so a phrasing it misses costs nothing it
+	 * did not cost before; only an ADMISSION can go wrong. That is why this may be a closed list where
+	 * {@link #isInteractionScreening} had to be widened after a list MISSED screens (ADR Decision 89):
+	 * there a miss hid a hazard, here a miss hides nothing.
+	 *
+	 * <p><b>Except to one reader</b> (issue #548): {@code DrugSafetyValidator.validate} states that a drug
+	 * the question proposes is already in her orders only where this admits the question, so a phrasing
+	 * it misses withholds that fact — which is how <em>"Is it safe to add prednisone for her?"</em> went
+	 * untold until its shape was admitted. A miss there costs the statement, never a refusal. ADR Decision
+	 * 129.
+	 */
+	public static boolean asksWhetherToGiveADrug(List<String> wordsWithTheDrugMarked) {
+		return fitsAShape(wordsWithTheDrugMarked, PROPOSAL_SHAPES);
+	}
+
+	/**
+	 * Whether a question naming no drug asks to screen the patient's OWN medications against each other
+	 * and nothing else — one of {@link #SCREEN_SHAPES}, for the reason {@link #asksWhetherToGiveADrug}
+	 * gives. Issue #469. It does not ask {@link #isInteractionScreening} as well, and the reason is its
+	 * one caller: {@code DrugReferenceInjector} admits a screen only where an interaction finding was
+	 * raised for a question naming no drug, and only the screening arm, gated on that very predicate,
+	 * raises one.
+	 */
+	public static boolean asksOnlyToScreenHerMedications(String question) {
+		return fitsAShape(words(question), SCREEN_SHAPES);
+	}
+
+	/**
+	 * Whether {@code question} is in the MEDICATION domain, by the router's own classification.
+	 *
+	 * <p>Public for the same reason {@link #isInteractionScreening} is, and reusing
+	 * {@link #matchedIntents} for the same reason it does: one definition of "medication-domain
+	 * question", never a second drug vocabulary. The drug-safety layer asks it as a WIDENING signal
+	 * on the drug side of a contraindication — a question about what the patient is taking makes her
+	 * whole active-order list the response's subject matter even when the prose writes no individual
+	 * drug name, which a gate reading only the words would miss. It never narrows anything: a
+	 * question naming a drug the dataset recognises carries no cue word here ("Can I give her
+	 * bupivacaine?" matches none of the cues) and is already handled by the drug-in-play arm.
+	 */
+	public static boolean asksAboutMedications(String question) {
+		return matchedIntents(question).contains(Intent.MEDICATIONS);
+	}
+
+	/**
+	 * As {@link #asksAboutMedications}, for the ALLERGY domain — one of the two widening signals on the
+	 * FINDING side. A question about her allergies makes her recorded allergies the subject matter, so a
+	 * drug one of them contraindicates is worth a chip even where the answer names neither.
+	 */
+	public static boolean asksAboutAllergies(String question) {
+		return matchedIntents(question).contains(Intent.ALLERGIES);
+	}
+
+	/**
+	 * As {@link #asksAboutAllergies}, for the CONDITION domain — the other widening signal on the
+	 * finding side, because the finding a contraindication rule fires on is an allergy OR a condition
+	 * and the two lists have equal claim to being what was asked about. Kept a separate predicate rather
+	 * than folded into one "asks about her records": the drug-safety layer widens per LIST, so a
+	 * question about her problem list must not put her allergy records in scope as well.
+	 */
+	public static boolean asksAboutConditions(String question) {
+		return matchedIntents(question).contains(Intent.CONDITIONS);
 	}
 
 	/**
@@ -189,11 +439,17 @@ public final class QueryScopeRouter {
 		return Collections.unmodifiableSet(union);
 	}
 
-	/** The querystore resource types included complete for {@code intent}; empty for TOPICAL. */
+	/** The querystore resource types included complete for {@code intent}; empty for TOPICAL.
+	 *  {@code drug_order} reads {@link ChartSearchAiConstants#RESOURCE_TYPE_DRUG_ORDER} because this
+	 *  module declares that type and other production sites read it — mutate the constant and read
+	 *  the compiler, rather than trusting a count here, which has already gone stale once. The rest
+	 *  are querystore contract strings written as literals, whatever this module declares elsewhere;
+	 *  declaring one is a reference-group decision
+	 *  ({@code ChartSearchAiReferenceGroupTest} sweeps every declared type) rather than a rename. */
 	static Set<String> typedSlice(Intent intent) {
 		switch (intent) {
 			case MEDICATIONS:
-				return setOf("drug_order", "medication_dispense");
+				return setOf(ChartSearchAiConstants.RESOURCE_TYPE_DRUG_ORDER, "medication_dispense");
 			case ALLERGIES:
 				return setOf("allergy");
 			case PROGRAMS:
@@ -203,7 +459,7 @@ public final class QueryScopeRouter {
 			case VISITS:
 				return setOf("visit", "encounter");
 			case ORDERS:
-				return setOf("drug_order", "test_order", "referral_order");
+				return setOf(ChartSearchAiConstants.RESOURCE_TYPE_DRUG_ORDER, "test_order", "referral_order");
 			default:
 				return Collections.emptySet();
 		}

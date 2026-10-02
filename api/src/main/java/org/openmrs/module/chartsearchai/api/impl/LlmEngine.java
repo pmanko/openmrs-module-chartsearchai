@@ -13,6 +13,8 @@ import java.util.function.Consumer;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import org.openmrs.module.chartsearchai.ChartSearchAiUtils;
+
 /**
  * Abstraction for LLM inference engines. Implementations handle the actual
  * model invocation (local or remote) while prompt construction and response
@@ -51,9 +53,37 @@ public interface LlmEngine {
 	/**
 	 * Run inference with streaming, calling the consumer for each token fragment.
 	 *
+	 * <p>{@link LocalLlmEngine} and {@link RemoteLlmEngine} both spend this on a JDK
+	 * {@code HttpRequest.timeout()}, which stops applying once the inference server's response
+	 * headers arrive; the token stream is then read lazily out of
+	 * {@code BodyHandlers.ofInputStream()}, which the timeout does not reach. So
+	 * {@code timeoutSeconds} caps the wait for the FIRST output and not the call. How LONG that
+	 * stream may run is bounded for neither engine. How MUCH it may deliver is bounded for
+	 * {@link RemoteLlmEngine} only, whose peer is an administrator-configured network address and
+	 * therefore untrusted (issue #446); {@link LocalLlmEngine}'s peer is this module's own
+	 * subprocess and its stream is bounded in neither dimension. Measured 2026-08-20 against a local
+	 * {@code llama-server} on CPU ({@code -ngl 0}, Llama-3.2-3B-Q4_K_M): a cold prefill raised
+	 * {@code HttpTimeoutException} at 2.0s and at 8.0s against timeouts of exactly those lengths,
+	 * while a cache-warm request under a 20s timeout returned headers at 117ms and then streamed for
+	 * 23.8s without raising one. Those figures come from a standalone client issuing the same two
+	 * calls both of them make here, {@code HttpRequest.timeout(...)} and
+	 * {@code send(request, BodyHandlers.ofInputStream())}, rather than from this method, which needs a
+	 * running module: the model and the prompt decide only how long the prefill takes, which is what
+	 * the 2.0s and 8.0s runs turn on, and neither reaches the JDK behaviour being measured. The same
+	 * behaviour reproduces with no inference server at all, against a socket that sends headers and
+	 * then stalls, on Java 11, 17 and 21 alike and with {@code ofString()} as well. It is also a
+	 * PER-CALL budget rather than a per-invocation one: {@link LocalLlmEngine} spends it again on
+	 * each KV-cache slot call the KV-scoped forms below can make around the completion.</p>
+	 *
+	 * <p>The non-streaming forms, {@link #infer(String, String, int)} and
+	 * {@link #warmup(String, String, int)}, keep the "maximum wall-clock seconds" wording
+	 * deliberately: whether a server that does not stream withholds its headers until the answer is
+	 * complete was not measured, and if it does then that wording holds there.</p>
+	 *
 	 * @param systemPrompt the system prompt
 	 * @param userMessage the user message (patient records + question)
-	 * @param timeoutSeconds maximum wall-clock seconds for the request
+	 * @param timeoutSeconds seconds to wait for the inference server's first output, NOT a bound on
+	 *        the token stream that follows it — see above
 	 * @param tokenConsumer called with each token fragment as it is generated
 	 * @return the inference result containing the full generated text and input/output token counts
 	 */
@@ -81,6 +111,62 @@ public interface LlmEngine {
 	default InferenceResult inferStreaming(String systemPrompt, String userMessage, int timeoutSeconds,
 			Consumer<String> tokenConsumer, String cacheScope, String cacheSeed) {
 		return inferStreaming(systemPrompt, userMessage, timeoutSeconds, tokenConsumer);
+	}
+
+	/**
+	 * As {@link #infer(String, String, int)}, for a chart-answer prompt whose chart may carry the
+	 * module's own reference records — issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/512">#512</a>. An
+	 * answer over such a prompt is expected to restate those records, and an engine that penalises
+	 * repeating the prompt has to stop doing so for it; {@link LocalLlmEngine} is the engine that
+	 * does, and ADR Decision 117 is canonical for why and for what the other requests keep.
+	 *
+	 * <p>Abstract rather than a default that falls back to the 3-arg form, deliberately: such a
+	 * default is how an engine silently drops the argument and keeps the penalty, and a test double
+	 * that records the value it was handed never sees what the engine did with it.
+	 *
+	 * @param referenceRecords whether the prompt carries reference-group records, from
+	 *        {@link ReferenceRecords#in}
+	 */
+	InferenceResult infer(String systemPrompt, String userMessage, int timeoutSeconds,
+			ReferenceRecords referenceRecords);
+
+	/**
+	 * As {@link #inferStreaming(String, String, int, Consumer, String, String)}, for a chart-answer
+	 * prompt whose chart may carry the module's own reference records. Abstract for the reason
+	 * {@link #infer(String, String, int, ReferenceRecords)} gives.
+	 *
+	 * @param referenceRecords whether the prompt carries reference-group records, from
+	 *        {@link ReferenceRecords#in}
+	 */
+	InferenceResult inferStreaming(String systemPrompt, String userMessage, int timeoutSeconds,
+			Consumer<String> tokenConsumer, String cacheScope, String cacheSeed,
+			ReferenceRecords referenceRecords);
+
+	/**
+	 * Whether a prompt's chart carries reference-group records (issue #512). Read off the chart the
+	 * model is handed, through {@link #in}, and never off a resource-type name or the rendered text.
+	 */
+	enum ReferenceRecords {
+
+		/** The chart carries no reference-group record. */
+		ABSENT,
+
+		/** The chart carries at least one reference-group record. */
+		PRESENT;
+
+		/**
+		 * The one reading of a chart's {@link ChartSearchAiUtils#referenceSlice}: present when it
+		 * counts a record. The slice is what already decides "reference material" for the audit row,
+		 * through {@link ChartSearchAiUtils#referenceGroup}, so this question has no type list of its
+		 * own.
+		 *
+		 * @param slice the slice of the chart the prompt is built from, may be null
+		 * @return {@link #PRESENT} when the slice counts at least one record, else {@link #ABSENT}
+		 */
+		public static ReferenceRecords in(ChartSearchAiUtils.ReferenceSlice slice) {
+			return slice != null && slice.getRecords() > 0 ? PRESENT : ABSENT;
+		}
 	}
 
 	/**
