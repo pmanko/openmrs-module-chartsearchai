@@ -995,6 +995,64 @@ resources, and `TurnPreemptionRegistry` cancels the previous turn when another
 starts in the same conversation. Their existing tests include the shared
 `api/src/test/resources/conformance/dual-provider-conformance.v1.json` fixture.
 
+### Shared behavior requirements
+
+The [provider interface reference](docs/provider-interface.md) documents the wire
+vocabulary. Product conformance covers behavior, not identical generated prose or
+identical engine internals. Bundled local/remote inference remains supported;
+Hub adds capabilities without becoming a dependency of bundled-only installations.
+
+The stable conceptual boundary carries:
+
+| Object | Required information |
+| --- | --- |
+| Provider descriptor | Identity, label, enabled/ready/default state, modes, capabilities and an unavailable reason where relevant |
+| Turn request | Patient, conversation, provider/mode, question, prior clinical turns and request identity |
+| Turn event | Type, order, provider/mode and the available answer, validation, evidence, In-Depth, warnings and timing |
+| Turn result | Final answer envelope, provider/mode, validation, evidence, warnings, timing and terminal state |
+
+Every accepted turn has one terminal `turn_done` or `turn_error`. An answer-bearing
+turn emits `answer_done` first; an early failure may terminate without an answer.
+Optional events require the advertised capability. An unavailable capability must
+not leave progress waiting or imply a successful check. Errors carry normalized
+machine-readable codes. Providers are never silently substituted. The frontend
+uses the common lifecycle, with toggleable incremental display; it does not call
+model services directly or invent missing provider capabilities.
+
+The OpenMRS layer owns patient/user authorization, conversation identity, durable
+history, provider/mode attribution, feedback, rate-limit accounting, retention
+and audit. Provider output remains content-agnostic: the Java relay does not
+reinterpret Hub clinical checks or evidence. Stateless providers receive required
+prior clinical turns from this layer. Provider execution caches are disposable
+optimizations, never authoritative conversation state or a correctness dependency.
+Existing bundled cache behavior retains its product-owned contract; the Hub's
+source/cache policy is [Hub-owned](https://github.com/pmanko/med-agent-hub/blob/main/README.md#querystore-context-and-freshness).
+
+QueryStore owns OpenMRS record projection, clinical date semantics, authorized
+full/ranked reads, freshness and tiered selection under its
+[API and ADR](https://github.com/pmanko/openmrs-module-querystore/blob/main/docs/rest-api.md).
+Engines adapt returned records, compose prompts and enforce exact budgets; they
+must report selected/excluded stable IDs and reasons. Budgets are ceilings, not
+fill targets. Mandatory and typed-complete evidence may not be silently dropped.
+Full-chart mode retains the complete stable ledger before question-specific
+content or fails explicitly; modes are explicit, never automatically switched.
+Temporal facts, citations and safety use the complete ledger, not just the prompt
+slice. Engine overflow and mandatory-context overflow remain explicit errors.
+
+Every answer presented as Checked requires a deterministic result for substance,
+malformed/non-ledger dates, date/value bindings, appointments, last visit and
+supported trends. Review edits are checked again and their citations resolved
+again; grounding binds to the final answer. Prior-turn citation numbers cannot
+resolve against current evidence. Rejected, edited or low-confidence output stays
+inspectable for manual review with its limitations; a failed check cannot appear
+Checked. Optional In-Depth is checked before display by its owning provider.
+Safety-check execution and coverage remain defined below; shared status does not
+claim identical clinical rule coverage across engines.
+
+Cross-project release acceptance belongs to [OpenClinAI](https://github.com/pmanko/openclinai.org/blob/main/specs/roadmap.md#5-track-a-openmrs-contribution-delivery).
+The [harness conformance protocol](https://github.com/pmanko/clinical-ai-validation-harness/blob/main/specs/artifacts/planning/openmrs-dual-provider-conformance-contract.md)
+owns shared fixture distribution and evidence, not application behavior.
+
 ## Safety-check execution status
 
 `DrugSafetyValidator.validateWithStatus` returns warnings, a `checked`, `limited`
