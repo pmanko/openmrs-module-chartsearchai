@@ -142,6 +142,18 @@ public class LlmInferenceServiceListedMedicationsContextTest extends BaseModuleC
 		return numbers.get(0).intValue();
 	}
 
+	/**
+	 * The sentence ADR Decision 147 states after an answer that leaves out {@code drug}'s findings against her own
+	 * orders: each finding's first sentence, with its rating and no marker.
+	 */
+	private static String ownOrderMajor(String prompt, String drug) {
+		String lines = " Not stated above, against this patient's own orders: " + drug
+				+ " interacts with active order Rifampicin (rifampin) — Major.";
+		// Amlodipine also relates Moderate to her aspirin order, which those answers leave out too.
+		return !"Amlodipine".equals(drug) ? lines
+				: lines + " Amlodipine interacts with active order Acetylsalicylic acid (aspirin) — Moderate.";
+	}
+
 	private static void assertAChip(ChartAnswer answer, String drug, String partner, String severity) {
 		for (SafetyWarning chip : answer.getSafetyWarnings()) {
 			if (drug.equals(chip.getDrug()) && severity.equals(chip.getSeverity())
@@ -190,8 +202,9 @@ public class LlmInferenceServiceListedMedicationsContextTest extends BaseModuleC
 		assertAChip(answer, "Amlodipine", "rifamp", "Major");
 		assertReported(answer.getCautionLedOverWithholding(),
 				findingNumber(recorder.prompt, "Amlodipine", "rifamp"));
-		assertEquals(AMLODIPINE_CAUTION_LEAD + NONE_OF_THE_LIST, answer.getAnswer(),
-				"the module states what the chart holds of the list, and the verdict the model wrote is untouched");
+		assertEquals(AMLODIPINE_CAUTION_LEAD + ownOrderMajor(recorder.prompt, "Amlodipine") + NONE_OF_THE_LIST,
+				answer.getAnswer(), "the module states the Major against her own order the answer left out and what "
+						+ "the chart holds of the list, and the verdict the model wrote is untouched");
 	}
 
 	@Test
@@ -206,9 +219,10 @@ public class LlmInferenceServiceListedMedicationsContextTest extends BaseModuleC
 				findingNumber(recorder.prompt, "Amlodipine", "rifamp"));
 		assertEquals(answer.getCautionLedOverWithholding(), early.get(0).getCautionLedOverWithholding(),
 				"resolved before the early done, so the early done carries the same report as the final answer");
-		assertEquals(AMLODIPINE_CAUTION_LEAD + NONE_OF_THE_LIST, answer.getAnswer(),
-				"the streaming path completes the final answer too");
-		assertEquals(AMLODIPINE_CAUTION_LEAD + NONE_OF_THE_LIST, early.get(0).getAnswer(),
+		assertEquals(AMLODIPINE_CAUTION_LEAD + ownOrderMajor(recorder.prompt, "Amlodipine") + NONE_OF_THE_LIST,
+				answer.getAnswer(), "the streaming path completes the final answer too");
+		assertEquals(AMLODIPINE_CAUTION_LEAD + ownOrderMajor(recorder.prompt, "Amlodipine") + NONE_OF_THE_LIST,
+				early.get(0).getAnswer(),
 				"and the early done, which is the answer a streaming client is handed first: the chart stated the "
 						+ "list's drugs before the model was asked");
 	}
@@ -224,7 +238,7 @@ public class LlmInferenceServiceListedMedicationsContextTest extends BaseModuleC
 		assertAChip(answer, "Fluconazole", "rifamp", "Major");
 		assertReported(answer.getCautionLedOverWithholding(),
 				findingNumber(recorder.prompt, "Fluconazole", "rifamp"));
-		assertEquals(lead + NONE_OF_THE_LIST, answer.getAnswer());
+		assertEquals(lead + ownOrderMajor(recorder.prompt, "Fluconazole") + NONE_OF_THE_LIST, answer.getAnswer());
 	}
 
 	/**
@@ -305,17 +319,19 @@ public class LlmInferenceServiceListedMedicationsContextTest extends BaseModuleC
 
 		assertReported(answer.getCautionLedOverWithholding(),
 				findingNumber(recorder.prompt, "Amlodipine", "rifamp"));
-		assertEquals(AMLODIPINE_CAUTION_LEAD, answer.getAnswer(), "the question listed nothing, so nothing is stated");
+		assertEquals(AMLODIPINE_CAUTION_LEAD + ownOrderMajor(recorder.prompt, "Amlodipine"), answer.getAnswer(),
+				"the question listed nothing, so no list sentence is stated; the Major against her own order is");
 	}
 
 	/** A listed drug an active order of hers resolves to is on her chart, and is not named. */
 	@Test
 	public void aListedDrugSheHoldsAnActiveOrderForIsNotNamed() throws IOException {
-		ChartAnswer answer = serviceAnswering(AMLODIPINE_CAUTION_LEAD, obs()).service.search(patient,
+		Recorder recorder = serviceAnswering(AMLODIPINE_CAUTION_LEAD, obs());
+		ChartAnswer answer = recorder.service.search(patient,
 				"The patient is currently on Rifampicin, Nevirapine, Stavudine, is it safe to give Amlodipine?");
 
-		assertEquals(AMLODIPINE_CAUTION_LEAD + " The chart holds no active order for Nevirapine or Stavudine.",
-				answer.getAnswer());
+		assertEquals(AMLODIPINE_CAUTION_LEAD + ownOrderMajor(recorder.prompt, "Amlodipine")
+				+ " The chart holds no active order for Nevirapine or Stavudine.", answer.getAnswer());
 	}
 
 	/**
@@ -324,12 +340,12 @@ public class LlmInferenceServiceListedMedicationsContextTest extends BaseModuleC
 	 */
 	@Test
 	public void aListedDrugADrugOrderRecordNamesIsNotNamed() throws IOException {
-		ChartAnswer answer = serviceAnswering(AMLODIPINE_CAUTION_LEAD, obs(),
-			DrugReferenceTestSupport.drugOrderRecord(2, "Stavudine 30mg", Boolean.FALSE, null)).service.search(
-				patient, AMLODIPINE_QUESTION);
+		Recorder recorder = serviceAnswering(AMLODIPINE_CAUTION_LEAD, obs(),
+			DrugReferenceTestSupport.drugOrderRecord(2, "Stavudine 30mg", Boolean.FALSE, null));
+		ChartAnswer answer = recorder.service.search(patient, AMLODIPINE_QUESTION);
 
-		assertEquals(AMLODIPINE_CAUTION_LEAD + " The chart holds no active order for Lamivudine or Nevirapine.",
-				answer.getAnswer());
+		assertEquals(AMLODIPINE_CAUTION_LEAD + ownOrderMajor(recorder.prompt, "Amlodipine")
+				+ " The chart holds no active order for Lamivudine or Nevirapine.", answer.getAnswer());
 	}
 
 	/**
@@ -663,12 +679,98 @@ public class LlmInferenceServiceListedMedicationsContextTest extends BaseModuleC
 		@Override
 		public LlmResponse searchStreaming(String numberedRecords, List<Integer> focusIndices,
 				String question, Consumer<String> tokenConsumer, Consumer<String> reasoningConsumer,
-				String cacheScope, boolean enumerateFindings, LlmEngine.ReferenceRecords referenceRecords,
+				String cacheScope, String cacheSeedRecords, boolean enumerateFindings, LlmEngine.ReferenceRecords referenceRecords,
 				List<AlreadyOrderedDrug> drugsAlreadyOrdered) {
 			tokenConsumer.accept(withFindingNumbers(answer, numberedRecords));
 			return search(numberedRecords, focusIndices, question, enumerateFindings, referenceRecords,
 					drugsAlreadyOrdered);
 		}
+	}
+
+	/**
+	 * A model's answer that leaves out a finding about the drug proposed against one of her own orders has it stated
+	 * after it (ADR Decision 147): fluconazole against her rifampicin, rated Major, in the finding's own first
+	 * sentence, citing no marker — and neither the finding about the listed nevirapine against her
+	 * rifampicin nor the one relating fluconazole to the listed nevirapine, which her chart does not hold.
+	 */
+	@Test
+	public void aFindingAboutTheDrugProposedAgainstHerOwnOrderIsStatedWhereTheAnswerLeftItOut() throws IOException {
+		Recorder recorder = serviceAnswering("Fluconazole can be given, with one caution.", obs());
+		ChartAnswer answer = recorder.service.search(patient, FLUCONAZOLE_QUESTION);
+
+		int own = findingNumber(recorder.prompt, "Fluconazole", "rifamp");
+		assertEquals("Fluconazole can be given, with one caution. Not stated above, against this patient's own orders: "
+				+ "Fluconazole interacts with active order Rifampicin (rifampin) — Major." + NONE_OF_THE_LIST,
+				answer.getAnswer());
+		assertFalse(answer.getAnswer().contains("[" + own + "]"),
+				"the statement cites no marker, so none points at a record the answer's references do not carry");
+		assertEquals(Collections.singletonList(Integer.valueOf(own)), answer.getFindingsStatedByTheModule(),
+				"the response names the finding the module's sentence states, so a client can join its chip to it");
+	}
+
+	/** An answer citing that finding has nothing stated after it (ADR Decision 147). */
+	@Test
+	public void aFindingTheAnswerCitesIsNotStatedAgain() throws IOException {
+		Recorder probe = serviceAnswering("x", obs());
+		probe.service.search(patient, FLUCONAZOLE_QUESTION);
+		int own = findingNumber(probe.prompt, "Fluconazole", "rifamp");
+		String modelAnswer = "Fluconazole should not be given with her rifampicin, a Major interaction [" + own + "].";
+
+		ChartAnswer answer = serviceAnswering(modelAnswer, obs()).service.search(patient, FLUCONAZOLE_QUESTION);
+
+		assertEquals(modelAnswer + NONE_OF_THE_LIST, answer.getAnswer());
+		assertEquals(Collections.emptyList(), answer.getFindingsStatedByTheModule(),
+				"a measurement of none: the answer cited the finding, so the module stated nothing");
+	}
+
+	/**
+	 * A proposal question's response publishes no chip about a drug it merely lists that her chart does not hold (ADR
+	 * Decision 148): nevirapine against her rifampicin order is a fact about a drug the question says
+	 * she takes, not about whether fluconazole may be given. The fluconazole chips — against her own rifampicin, and
+	 * the pair with the listed nevirapine, whose subject is fluconazole — stay.
+	 */
+	@Test
+	public void aProposalQuestionPublishesNoChipAboutADrugItOnlyLists() throws IOException {
+		ChartAnswer answer = serviceAnswering("Fluconazole can be given, with one caution.", obs()).service.search(
+				patient, FLUCONAZOLE_QUESTION);
+
+		for (SafetyWarning chip : answer.getSafetyWarnings()) {
+			assertFalse(chip.isAboutADrugOtherThanTheOneProposed() && !chip.isAboutAnotherOfHerMedications(),
+					"no chip about a listed drug she is not on, was: " + chip);
+			assertFalse("Nevirapine".equals(chip.getDrug()), "the listed nevirapine raises no chip, was: " + chip);
+		}
+		chip(answer, "Fluconazole", "rifamp", "Major");
+		chip(answer, "Fluconazole", "nevirapine", "Moderate");
+	}
+
+	/**
+	 * A question asking whether she has ever taken a drug publishes no interaction chip about giving it (ADR Decision
+	 * 151): <em>"Has she ever taken fluconazole?"</em>, asked of Susan, published the warning that fluconazole
+	 * interacts with her lidocaine, which is not what was asked. Here fluconazole relates to her rifampicin order
+	 * Major, and a proposal of it publishes that chip.
+	 */
+	@Test
+	public void aQuestionAskingWhetherSheHasTakenADrugPublishesNoInteractionChipAboutGivingIt() throws IOException {
+		chip(serviceAnswering("No.", obs()).service.search(patient, "Can I give her fluconazole?"), "Fluconazole",
+				"rifamp", "Major");
+
+		for (String question : new String[] { "Has she ever taken fluconazole?", "Was she ever on fluconazole?",
+				"Did the patient ever take fluconazole?", "Has fluconazole ever been prescribed for her?" }) {
+			ChartAnswer answer = serviceAnswering("The records do not address fluconazole.", obs()).service.search(
+					patient, question);
+			for (SafetyWarning chip : answer.getSafetyWarnings()) {
+				assertFalse(SafetyWarning.TYPE_INTERACTION.equals(chip.getType()) && "Fluconazole".equals(chip.getDrug()),
+						question + " publishes no interaction chip about fluconazole, was: " + chip);
+			}
+		}
+	}
+
+	/** A question asking how a drug relates to her medications is not a history question, and keeps its chips (ADR
+	 *  Decision 151). */
+	@Test
+	public void aQuestionAboutHowADrugInteractsKeepsItsChips() throws IOException {
+		chip(serviceAnswering("It interacts with her rifampicin.", obs()).service.search(patient,
+				"Does fluconazole interact with her medications?"), "Fluconazole", "rifamp", "Major");
 	}
 
 	private static final class TestableService extends LlmInferenceService {
@@ -864,18 +966,17 @@ public class LlmInferenceServiceListedMedicationsContextTest extends BaseModuleC
 	}
 
 	/**
-	 * A chip whose subject is not the drug the question proposes says so (ADR Decision 137): asked about fluconazole,
-	 * the listed nevirapine screened against her rifampicin order is a finding about nevirapine, not fluconazole,
-	 * while the findings headed by fluconazole — against her order, and against the listed nevirapine — are about
-	 * the drug asked about.
+	 * The findings headed by the drug the question proposes say they are about it (ADR Decision 137): asked about
+	 * fluconazole, those against her order and against the listed nevirapine. The chip about the listed nevirapine
+	 * itself, which says the opposite, is no longer published (ADR Decision 148), and
+	 * {@code .aProposalQuestionPublishesNoChipAboutADrugItOnlyLists} is what now pins that the validator marks it: a
+	 * chip it stopped marking would be published, and that case would see it.
 	 */
 	@Test
 	public void aChipAboutADrugOtherThanTheOneProposedSaysSo() throws IOException {
 		ChartAnswer answer = serviceAnswering("Fluconazole can be given, with one caution.", obs()).service.search(
 				patient, FLUCONAZOLE_QUESTION);
 
-		assertTrue(chip(answer, "Nevirapine", "rifamp", "Major").isAboutADrugOtherThanTheOneProposed(),
-				"the listed nevirapine against her rifampicin order is not about fluconazole");
 		assertFalse(chip(answer, "Fluconazole", "rifamp", "Major").isAboutADrugOtherThanTheOneProposed(),
 				"fluconazole against her own order is about the drug asked about");
 		assertFalse(chip(answer, "Fluconazole", "nevirapine", "Moderate").isAboutADrugOtherThanTheOneProposed(),
@@ -924,7 +1025,5 @@ public class LlmInferenceServiceListedMedicationsContextTest extends BaseModuleC
 				chip(answer, "Fluconazole", "rifamp", "Major").getFindingCitation());
 		assertEquals(Integer.valueOf(againstNevirapine),
 				chip(answer, "Fluconazole", "nevirapine", "Moderate").getFindingCitation());
-		assertEquals(Integer.valueOf(findingNumber(recorder.prompt, "Nevirapine", "rifamp")),
-				chip(answer, "Nevirapine", "rifamp", "Major").getFindingCitation());
 	}
 }

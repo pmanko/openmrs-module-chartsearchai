@@ -118,7 +118,7 @@ public class ChartSearchAiOrderStopDateTest {
 				Collections.<ChartSearchService.RecordReference> emptyList(), 0, 0, 0,
 				Collections.<SafetyWarning> emptyList(), null, null, null, null, null, null, null,
 				null, null, null, null, null, stated, null, false, null, null, null, null, null, null,
-				DrugSafetyValidator.STATUS_UNAVAILABLE, Collections.emptyList());
+				DrugSafetyValidator.STATUS_UNAVAILABLE, Collections.emptyList(), null, false);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -310,7 +310,7 @@ public class ChartSearchAiOrderStopDateTest {
 					Collections.<ChartSearchService.RecordReference> emptyList(), 0, 0, 0,
 					Collections.<SafetyWarning> emptyList(), null, null, null, null, null, null, null,
 					null, null, null, null, null, stated, null, false, null, null, null, null, null, null,
-					DrugSafetyValidator.STATUS_UNAVAILABLE, Collections.emptyList()));
+					DrugSafetyValidator.STATUS_UNAVAILABLE, Collections.emptyList(), null, false));
 			return answer();
 		}
 

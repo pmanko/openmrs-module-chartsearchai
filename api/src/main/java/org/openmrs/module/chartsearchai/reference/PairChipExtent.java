@@ -11,7 +11,9 @@ package org.openmrs.module.chartsearchai.reference;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * How many drug pairs one question's interaction check found, and how many of them it reported —
@@ -277,17 +279,28 @@ public final class PairChipExtent {
 		/** Whether every one of those orders has started — see {@link #onStartedOrdersOnly()}. */
 		private final boolean onStartedOrdersOnly;
 
+		/** Whether the row stated carries a mechanism — see {@link #mechanismOnFile()}. */
+		private final Boolean mechanismOnFile;
+
 		public BelowFloorPair(String drug, String partner, String severity) {
-			this(drug, partner, severity, Collections.<String> emptyList(), false);
+			this(drug, partner, severity, Collections.<String> emptyList(), false, null);
 		}
 
 		BelowFloorPair(String drug, String partner, String severity, List<String> herOrders,
-				boolean onStartedOrdersOnly) {
+				boolean onStartedOrdersOnly, Boolean mechanismOnFile) {
 			this.drug = drug;
 			this.partner = partner;
 			this.severity = severity;
 			this.herOrders = Collections.unmodifiableList(new ArrayList<String>(herOrders));
 			this.onStartedOrdersOnly = onStartedOrdersOnly;
+			this.mechanismOnFile = mechanismOnFile;
+		}
+
+		/** The row's {@code DrugReference.Interaction.mechanismOnFile()}: {@code null} where its source says
+		 *  nothing. A module-composed answer says no mechanism is on file only where every pair's is
+		 *  {@code FALSE} (ADR Decision 144). */
+		Boolean mechanismOnFile() {
+			return mechanismOnFile;
 		}
 
 		/**
@@ -341,6 +354,8 @@ public final class PairChipExtent {
 
 		private PairChipExtent stated;
 
+		private Map<Object, PairChipExtent> perQuestionSubstance = Collections.emptyMap();
+
 		/**
 		 * States what the interaction check found and reported. Public for the same reason the
 		 * {@code List<SafetyWarning> warnings} accumulator one level up is a plain public list: the
@@ -371,6 +386,23 @@ public final class PairChipExtent {
 		 */
 		public PairChipExtent stated() {
 			return stated;
+		}
+
+		/**
+		 * What the DRUG-IN-PLAY arm stated about each substance the question resolved, keyed on
+		 * {@code DrugReference.substanceGroupKey()}, whichever arm {@link #stated()} is — ADR Decision 149. A question
+		 * listing drugs before the one it proposes opens the question-pair arm, which then states the field, and
+		 * {@code DrugReferenceInjector} still needs what the drug proposed relates to among her orders. Never on the
+		 * wire: the published statement is {@link #stated()} alone, and a second number there would be the sum of
+		 * two populations this class's javadoc forbids. {@code null} where that arm stated nothing about it.
+		 */
+		PairChipExtent statedFor(Object substance) {
+			return perQuestionSubstance.get(substance);
+		}
+
+		/** Written once per pass by {@code DrugSafetyValidator.validate}, its only caller — see {@link #statedFor}. */
+		void recordPerQuestionSubstance(Map<Object, PairChipExtent> extents) {
+			perQuestionSubstance = Collections.unmodifiableMap(new LinkedHashMap<Object, PairChipExtent>(extents));
 		}
 	}
 }

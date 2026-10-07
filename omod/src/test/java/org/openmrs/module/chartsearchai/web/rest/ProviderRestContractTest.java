@@ -127,7 +127,7 @@ public class ProviderRestContractTest {
 				Arrays.asList(3), Arrays.asList(new ChartSearchService.UnstatedFindingSeverity(2, "Major")),
 				null, new ChartSearchService.ActiveOrderClaims(2, 1), null, null,
 				DrugReferenceLoad.Coverage.PUBLISHED, null, null, false, null, null, null, null, null, null,
-				"checked", Collections.emptyList());
+				"checked", Collections.emptyList(), Arrays.asList(2), true);
 		AnswerEnvelope envelope = AnswerEnvelope.fromPayload(answerPayload("Aspirin 81mg."), source);
 		provider.events = Arrays.asList(
 				TurnEvent.of(TurnEventType.TURN_STARTED, 0, "bundled"),
@@ -149,11 +149,15 @@ public class ProviderRestContractTest {
 			assertEquals(2, payload.path("activeOrderClaims").path("stated").asInt(), type);
 			assertEquals(1, payload.path("activeOrderClaims").path("uncited").asInt(), type);
 			assertEquals("published", payload.path("conditionRuleCoverage").asText(), type);
+			assertEquals(2, payload.path("findingsStatedByTheModule").get(0).asInt(), type);
+			assertTrue(payload.path("asksWhetherSheHasTakenADrug").asBoolean(), type);
 			assertTrue(payload.has("interactionPairs"),
 					type + " must state interactionPairs even when none was measured");
 		}
 		assertEquals(Arrays.asList(3), conversations.lastFinishedPayload.get("misattributedOrderCitations"));
 		assertEquals("published", conversations.lastFinishedPayload.get("conditionRuleCoverage"));
+		assertEquals(Arrays.asList(2), conversations.lastFinishedPayload.get("findingsStatedByTheModule"));
+		assertEquals(Boolean.TRUE, conversations.lastFinishedPayload.get("asksWhetherSheHasTakenADrug"));
 	}
 
 	@Test

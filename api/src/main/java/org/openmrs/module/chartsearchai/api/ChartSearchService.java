@@ -1118,7 +1118,7 @@ public interface ChartSearchService {
 			this(answer, references, inputTokens, outputTokens, cachedTokens, safetyWarnings, searchMode,
 					referenceSlice, pairChipExtent, unresolvedDrugClass, unfaithfullyRenderedCitations,
 					null, null, null, null, null, null, null, null, null, false, null, null, null, null, null, null,
-					DrugSafetyValidator.STATUS_UNAVAILABLE, java.util.Collections.emptyList());
+					DrugSafetyValidator.STATUS_UNAVAILABLE, java.util.Collections.emptyList(), null, false);
 		}
 
 		/**
@@ -1160,9 +1160,14 @@ public interface ChartSearchService {
 				List<UnfoundedFindingSeverity> unfoundedFindingSeverities,
 				DrugReferenceLoad.Coverage doseCeilingCoverage,
 				List<String> unsupportedEndedOrderClaims,
-				List<Integer> unstatedSignificanceQualifiers, String safetyStatus, List<String> safetyIssues) {
+				List<Integer> unstatedSignificanceQualifiers, String safetyStatus, List<String> safetyIssues,
+				List<Integer> findingsStatedByTheModule, boolean asksWhetherSheHasTakenADrug) {
 			this.safetyStatus = safetyStatus;
 			this.safetyIssues = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(safetyIssues));
+			this.asksWhetherSheHasTakenADrug = asksWhetherSheHasTakenADrug;
+			// Null survives as null, the rule every list above shares (ADR Decision 147).
+			this.findingsStatedByTheModule = findingsStatedByTheModule == null ? null
+					: java.util.Collections.unmodifiableList(new java.util.ArrayList<Integer>(findingsStatedByTheModule));
 			// Null survives as null, the rule every list above shares (ADR Decision 136).
 			this.unstatedSignificanceQualifiers = unstatedSignificanceQualifiers == null ? null
 					: java.util.Collections.unmodifiableList(new java.util.ArrayList<Integer>(unstatedSignificanceQualifiers));
@@ -1623,8 +1628,10 @@ public interface ChartSearchService {
 		}
 
 		/**
-		 * Whether this answer's text was composed by the module from its own drug-safety findings,
-		 * with no model asked to write it — issue
+		 * Whether this answer's text was composed by the module from its own drug-safety check — its
+		 * findings, or for a proposal that raised none what the interaction check related below the
+		 * severity floor or did not relate at all (ADR Decisions 142, 143) — with no model asked to write
+		 * it — issue
 		 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/469">#469</a>,
 		 * {@code chartsearchai.drugSafety.answerFromFindings}, ADR Decision 108. Published as the
 		 * {@code answeredByTheModule} response key, the answer-level counterpart of
@@ -1987,6 +1994,36 @@ public interface ChartSearchService {
 
 		/** @see #getUnstatedSignificanceQualifiers() */
 		private final List<Integer> unstatedSignificanceQualifiers;
+
+		/** @see #getFindingsStatedByTheModule() */
+		private final List<Integer> findingsStatedByTheModule;
+
+		/** @see #asksWhetherSheHasTakenADrug() */
+		private final boolean asksWhetherSheHasTakenADrug;
+
+		/**
+		 * Whether the question asked whether the patient has EVER taken one drug — {@code
+		 * QueryScopeRouter.asksWhetherSheHasTakenADrug}, read off the chart the injector stamped
+		 * ({@code PatientChart.getHistoryQuestionDrugRows()}) and never re-asked of the question here (ADR Decision 156).
+		 * Published as the {@code asksWhetherSheHasTakenADrug} key, so a client can draw the chips beside such an answer
+		 * apart from the answer: they are about that drug's place in her chart, not a reading of the question. {@code
+		 * false} on every other question, and on a pass that built no such stamp.
+		 */
+		public boolean asksWhetherSheHasTakenADrug() {
+			return asksWhetherSheHasTakenADrug;
+		}
+
+		/**
+		 * @return the record numbers of the findings the module's own sentence after a model's answer states — <em>"Not
+		 *         stated above, against this patient's own orders: …"</em> (ADR Decision 147) — ascending in chart order,
+		 *         published as the {@code findingsStatedByTheModule} key, so a client can join each one's chip
+		 *         ({@code SafetyWarning.getFindingCitation()}) to the sentence, which cites no marker. {@code []} where it
+		 *         stated none; {@code null}, no measurement, on an answer the module wrote, which states every finding
+		 *         in its own lines.
+		 */
+		public List<Integer> getFindingsStatedByTheModule() {
+			return findingsStatedByTheModule;
+		}
 
 		/**
 		 * @return the citation indexes, ascending, of the safety findings the answer cites whose record says the

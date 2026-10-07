@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -337,6 +338,10 @@ public class LlmInferenceService implements ChartSearchService {
 			completedAnswer = EndedOrderStatement.withEndedOrdersStated(completedAnswer,
 					EndedOrderStatement.unstatedEndedOrders(response.getAnswer(), safetyWarnings,
 							drugSafetyValidator));
+			// And the findings about the drug proposed against her own orders the answer does not cite (ADR
+			// Decision 147), asked of the MODEL's prose.
+			completedAnswer = OwnOrderFindingStatement.withUnstatedOwnOrderFindings(completedAnswer, cited,
+					chart.getMappings(), chart.getProposalOwnOrderFindingLines());
 			// And the drugs the question listed as hers that her chart holds no active order for (issue
 			// #515), as the pre-answer pass stamped them on the chart.
 			completedAnswer = ListedDrugStatement.withListedDrugsStated(completedAnswer,
@@ -348,7 +353,8 @@ public class LlmInferenceService implements ChartSearchService {
 					ConflictingOrderStatement.state(question, completedAnswer, safetyWarnings);
 			completedAnswer = conflicting.getAnswer();
 			// ADR Decision 138: each chip's own record number, joined while the chart is in hand.
-			safetyWarnings = DrugReferenceInjector.withFindingCitations(conflicting.getWarnings(), chart.getMappings());
+			safetyWarnings = aboutTheDrugAsked(
+					DrugReferenceInjector.withFindingCitations(conflicting.getWarnings(), chart.getMappings()), chart);
 			ChartAnswer answer = new ChartAnswer(completedAnswer, references,
 					response.getInputTokens(), response.getOutputTokens(),
 					response.getCachedTokens(), safetyWarnings, searchMode, referenceSlice,
@@ -358,7 +364,9 @@ public class LlmInferenceService implements ChartSearchService {
 					findingCitationExtent, chartRead.stated(), conditionRuleCoverage, orderStopDates,
 					findingPartnerCoverage, false, interactionClaimPairs, cautionLedOverWithholding,
 					unfoundedFindingSeverities, doseCeilingCoverage, unsupportedEndedOrderClaims,
-					unstatedSignificanceQualifiers, safetyResult.getStatus(), safetyResult.getIssues());
+					unstatedSignificanceQualifiers, safetyResult.getStatus(), safetyResult.getIssues(),
+					OwnOrderFindingStatement.statedFindings(response.getAnswer(), cited, chart.getMappings(),
+							chart.getProposalOwnOrderFindingLines()), !chart.getHistoryQuestionDrugRows().isEmpty());
 			outcome = "ok";
 			return answer;
 		}
@@ -581,7 +589,7 @@ public class LlmInferenceService implements ChartSearchService {
 				// written as a literal (issue #512): it states what the prompt carries, which for this
 				// chart is none, and a read cannot go stale if that ever changes.
 				llmProvider.searchStreaming(focused.getText(), focused.getFocusIndices(), question,
-						DISCARD_TOKENS, previewReasoningConsumer, null, false,
+						DISCARD_TOKENS, previewReasoningConsumer, null, null, false,
 						LlmEngine.ReferenceRecords.in(ChartSearchAiUtils.referenceSlice(focused.getMappings())),
 						focused.getDrugsAlreadyOrdered());
 			}
@@ -662,6 +670,12 @@ public class LlmInferenceService implements ChartSearchService {
 			// because the injector's pass is what states it; ChartAnswer.getChartReadForSafety() is
 			// canonical for the three answers and for why that pass rather than validate's.
 			ChartReadStatus chartRead = new ChartReadStatus();
+			// The chart as warmup builds it, before the question's reference records are appended:
+			// the KV seed, so this query restores the same saved entry a chart-open warmup made and
+			// computes everything the question added on top of it (ADR Decision 157). Seeded off the
+			// injected chart instead, a drug question keys an entry of its own, made from whatever the
+			// slot last held — and the answer depends on that history again.
+			String uninjectedRecords = chartTextOrPlaceholder(chart);
 			chart = drugReferenceInjector.inject(chart, patient, question, chartRead);
 			// One resolution for BOTH answers this method produces (issue #178). The early-done path
 			// audits the ungrounded answer and the classic path audits the returned one, so a mode
@@ -729,7 +743,7 @@ public class LlmInferenceService implements ChartSearchService {
 			String kvCacheScope = chart.isQueryScoped() ? null : kvCacheScopeFor(patient);
 			LlmResponse response = llmProvider.searchStreaming(
 					chartTextOrPlaceholder(chart), chart.getFocusIndices(), question, tokenConsumer,
-					reasoningConsumer, kvCacheScope, enumerateFindings, referenceRecords,
+					reasoningConsumer, kvCacheScope, uninjectedRecords, enumerateFindings, referenceRecords,
 					chart.getDrugsAlreadyOrdered(), cancellation);
 			llmMs = System.currentTimeMillis() - llmStart;
 			inputTokens = response.getInputTokens();
@@ -755,7 +769,7 @@ public class LlmInferenceService implements ChartSearchService {
 						llmProvider.searchStreaming(chartTextOrPlaceholder(chart),
 								chart.getFocusIndices(),
 								findingEnumerationRepairQuestion(owedRepair), tokenConsumer,
-								reasoningConsumer, kvCacheScope, false, referenceRecords,
+								reasoningConsumer, kvCacheScope, uninjectedRecords, false, referenceRecords,
 								noDrugsAlreadyOrdered()),
 						owedRepair, chart.getMappings());
 				llmMs += System.currentTimeMillis() - repairStart;
@@ -795,14 +809,17 @@ public class LlmInferenceService implements ChartSearchService {
 			// The listed-drug sentence (issue #515) is on this answer too: the chart stamped it before the
 			// model was asked, so unlike the ended-order sentence it owes the chips nothing.
 			ungroundedAnswerConsumer.accept(new ChartAnswer(
-					ListedDrugStatement.withListedDrugsStated(response.getAnswer(),
+					ListedDrugStatement.withListedDrugsStated(OwnOrderFindingStatement.withUnstatedOwnOrderFindings(
+							response.getAnswer(), cited, chart.getMappings(), chart.getProposalOwnOrderFindingLines()),
 							chart.getListedDrugsWithNoActiveOrder()), cited,
 					response.getInputTokens(), response.getOutputTokens(),
 					response.getCachedTokens(), Collections.<SafetyWarning> emptyList(), searchMode,
 					referenceSlice, null, unresolvedDrugClass, null, null, null, null, null, null,
 					chartRead.stated(), conditionRuleCoverage, orderStopDates, null, false, null,
 					cautionLedOverWithholding, null, doseCeilingCoverage, unsupportedEndedOrderClaims, null,
-					DrugSafetyValidator.STATUS_UNAVAILABLE, Collections.emptyList()));
+					DrugSafetyValidator.STATUS_UNAVAILABLE, Collections.emptyList(),
+					OwnOrderFindingStatement.statedFindings(response.getAnswer(), cited, chart.getMappings(),
+							chart.getProposalOwnOrderFindingLines()), !chart.getHistoryQuestionDrugRows().isEmpty()));
 
 			// After the user-visible handoff, before grounding: the exact comparisons over what the
 			// answer did with the records it cites — the class-code defects a set-membership
@@ -913,6 +930,10 @@ public class LlmInferenceService implements ChartSearchService {
 			completedAnswer = EndedOrderStatement.withEndedOrdersStated(completedAnswer,
 					EndedOrderStatement.unstatedEndedOrders(response.getAnswer(), safetyWarnings,
 							drugSafetyValidator));
+			// And the findings about the drug proposed against her own orders the answer does not cite (ADR
+			// Decision 147), asked of the MODEL's prose.
+			completedAnswer = OwnOrderFindingStatement.withUnstatedOwnOrderFindings(completedAnswer, cited,
+					chart.getMappings(), chart.getProposalOwnOrderFindingLines());
 			// And the drugs the question listed as hers that her chart holds no active order for (issue
 			// #515), as the pre-answer pass stamped them on the chart.
 			completedAnswer = ListedDrugStatement.withListedDrugsStated(completedAnswer,
@@ -924,7 +945,8 @@ public class LlmInferenceService implements ChartSearchService {
 					ConflictingOrderStatement.state(question, completedAnswer, safetyWarnings);
 			completedAnswer = conflicting.getAnswer();
 			// ADR Decision 138: each chip's own record number, joined while the chart is in hand.
-			safetyWarnings = DrugReferenceInjector.withFindingCitations(conflicting.getWarnings(), chart.getMappings());
+			safetyWarnings = aboutTheDrugAsked(
+					DrugReferenceInjector.withFindingCitations(conflicting.getWarnings(), chart.getMappings()), chart);
 			ChartAnswer answer = new ChartAnswer(completedAnswer, references,
 					response.getInputTokens(), response.getOutputTokens(),
 					response.getCachedTokens(), safetyWarnings, searchMode, referenceSlice,
@@ -934,7 +956,9 @@ public class LlmInferenceService implements ChartSearchService {
 					findingCitationExtent, chartRead.stated(), conditionRuleCoverage, orderStopDates,
 					findingPartnerCoverage, false, interactionClaimPairs, cautionLedOverWithholding,
 					unfoundedFindingSeverities, doseCeilingCoverage, unsupportedEndedOrderClaims,
-					unstatedSignificanceQualifiers, safetyResult.getStatus(), safetyResult.getIssues());
+					unstatedSignificanceQualifiers, safetyResult.getStatus(), safetyResult.getIssues(),
+					OwnOrderFindingStatement.statedFindings(response.getAnswer(), cited, chart.getMappings(),
+							chart.getProposalOwnOrderFindingLines()), !chart.getHistoryQuestionDrugRows().isEmpty());
 			outcome = "ok";
 			return answer;
 		}
@@ -975,7 +999,7 @@ public class LlmInferenceService implements ChartSearchService {
 	 * derives from), {@code orderStopDates}, the chips and their pair extent.
 	 *
 	 * <p><b>The chips pass reads the question and the composed answer's CITATIONS, never its prose</b> —
-	 * {@code validate} is handed the answer's markers alone ({@link #markersOf}). The composed text names
+	 * {@code validate} is handed the markers of its finding lines alone ({@link #findingLineMarkersOf}). The composed text names
 	 * her own orders, and scoping the order-driven contraindication arm by text the module itself just
 	 * wrote would be circular: the ticket's M8 and N5 cells are a model's answer raising a chip the
 	 * question alone does not. The markers are a different input: each line cites the chart record of
@@ -1003,9 +1027,10 @@ public class LlmInferenceService implements ChartSearchService {
 		// Every chip whose finding the composed text states is published as stated, so a client does not
 		// repeat it in full beneath the answer that just said it — asked of the module's own text.
 		DrugSafetyValidator.SafetyCheckResult safetyResult = drugSafetyValidator.validateWithStatus(
-				markersOf(composed), question, patient, mappings, pairExtent);
-		List<SafetyWarning> safetyWarnings = DrugReferenceInjector.withFindingCitations(
-				ModuleAnswerStatement.markStated(composed, safetyResult.getWarnings()), mappings);
+				findingLineMarkersOf(composed, mappings), question, patient, mappings, pairExtent);
+		List<SafetyWarning> safetyWarnings = aboutTheDrugAsked(DrugReferenceInjector.withFindingCitations(
+				ModuleAnswerStatement.markStated(composed, safetyResult.getWarnings()),
+				mappings), chart);
 		String answer = FindingPartnerCoverageCheck.withUnstatedPartnersNamed(composed,
 				extractCitedReferences(composed, null, mappings), mappings, drugSafetyValidator);
 		// Issue #472's statement too, so the two paths cannot differ — though no composed answer is
@@ -1014,13 +1039,13 @@ public class LlmInferenceService implements ChartSearchService {
 		answer = EndedOrderStatement.withEndedOrdersStated(answer,
 				EndedOrderStatement.unstatedEndedOrders(composed, safetyWarnings,
 						drugSafetyValidator));
-		// And issue #515's, for the same reason — though no composed answer is to a question listing
-		// drugs today: answersFromFindings admits one naming a single substance.
-		answer = ListedDrugStatement.withListedDrugsStated(answer, chart.getListedDrugsWithNoActiveOrder());
+		// And issue #515's: a proposal after a list is composed since ADR Decision 149, and the sentence takes a
+		// line of its own, since the composed lines end in markers.
+		answer = ListedDrugStatement.withListedDrugsStatedOnALine(answer, chart.getListedDrugsWithNoActiveOrder());
 		List<RecordReference> references = extractCitedReferences(answer, null, mappings);
 		List<ChartSearchService.OrderStopDate> orderStopDates =
 				ChartSearchAiUtils.orderStopDates(answer, references, mappings);
-		log.info("Answered from the module's own safety findings, no model call (issue #469) "
+		log.info("Answered from the module's own drug-safety check, no model call (issue #469) "
 				+ "patient={} findings={}", patient == null ? null : patient.getPatientId(),
 				ChartSearchAiUtils.safetyFindingMappings(mappings).size());
 		tokenConsumer.accept(answer);
@@ -1029,11 +1054,13 @@ public class LlmInferenceService implements ChartSearchService {
 				Collections.<SafetyWarning> emptyList(), searchMode, referenceSlice, null,
 				unresolvedDrugClass, null, null, null, null, null, null, chartReadForSafety,
 				conditionRuleCoverage, orderStopDates, null, true, null, null, null, doseCeilingCoverage, null, null,
-				DrugSafetyValidator.STATUS_UNAVAILABLE, Collections.emptyList()));
+				DrugSafetyValidator.STATUS_UNAVAILABLE, Collections.emptyList(), null,
+				!chart.getHistoryQuestionDrugRows().isEmpty()));
 		return new ChartAnswer(answer, references, 0, 0, 0, safetyWarnings, searchMode, referenceSlice,
 				pairExtent.stated(), unresolvedDrugClass, null, null, null, null, null, null,
 				chartReadForSafety, conditionRuleCoverage, orderStopDates, null, true, null, null, null,
-				doseCeilingCoverage, null, null, safetyResult.getStatus(), safetyResult.getIssues());
+				doseCeilingCoverage, null, null, safetyResult.getStatus(), safetyResult.getIssues(), null,
+				!chart.getHistoryQuestionDrugRows().isEmpty());
 	}
 
 	/**
@@ -1053,14 +1080,54 @@ public class LlmInferenceService implements ChartSearchService {
 		}
 	}
 
-	/** {@code answer}'s inline citation markers alone, ascending and space-separated — what the chips pass
-	 *  reads of a composed answer (see {@link #answerFromTheModule}). */
-	private static String markersOf(String answer) {
+	/**
+	 * The markers of {@code answer}'s lines that state a FINDING — that cite a {@code safety_finding} record — alone,
+	 * ascending and space-separated: what the chips pass reads of a composed answer (see {@link #answerFromTheModule}).
+	 * A line listing rows below the severity floor cites her orders too, so a clinician can open them, but is not a
+	 * finding about them, and her other conflicts with those orders are not what the answer is about (ADR Decision
+	 * 145). Decided from the record a marker cites, never from the line's words.
+	 */
+	private static String findingLineMarkersOf(String answer, List<RecordMapping> mappings) {
+		Set<Integer> findings = new HashSet<Integer>();
+		for (RecordMapping finding : ChartSearchAiUtils.safetyFindingMappings(mappings)) {
+			findings.add(Integer.valueOf(finding.getIndex()));
+		}
+		Set<Integer> cited = new TreeSet<Integer>();
+		for (String line : answer.split("\n")) {
+			Set<Integer> markers = ChartSearchAiUtils.citedIndexes(line);
+			if (!Collections.disjoint(markers, findings)) {
+				cited.addAll(markers);
+			}
+		}
 		StringBuilder markers = new StringBuilder();
-		for (Integer index : new TreeSet<Integer>(ChartSearchAiUtils.citedIndexes(answer))) {
+		for (Integer index : cited) {
 			markers.append(markers.length() == 0 ? "" : " ").append('[').append(index).append(']');
 		}
 		return markers.toString();
+	}
+
+	/**
+	 * The chips a response publishes: all but those about a drug the question proposes nothing about and that is not one
+	 * of her own prescriptions (ADR Decision 148) — {@code SafetyWarning.isAboutADrugOtherThanTheOneProposed()} and not
+	 * {@code isAboutAnotherOfHerMedications()}: in practice a drug the question only LISTS as hers, which her chart does
+	 * not hold. On <em>"The patient is currently on Abacavir, Lopinavir / ritonavir, … is it safe to give
+	 * Fluconazole?"</em> eight of twelve chips were that regimen's interactions with itself and her orders, nothing about
+	 * fluconazole. A conflict of one of her OWN orders stays — her allergy to a drug she is prescribed, beside an answer
+	 * whose finding is about that order (ADR Decision 140). Nor any interaction chip about GIVING the drug a question
+	 * asks whether she has ever taken (ADR Decision 151, {@code DrugReferenceInjector.isAboutGivingTheDrugAHistoryQuestionNames}):
+	 * <em>"Has she ever taken fluconazole?"</em> published that fluconazole interacts with her lidocaine. Taken off where the chips are final, so every check before
+	 * it still reads them.
+	 */
+	private static List<SafetyWarning> aboutTheDrugAsked(List<SafetyWarning> chips, PatientChart chart) {
+		List<SafetyWarning> published = new ArrayList<SafetyWarning>(chips.size());
+		for (SafetyWarning chip : chips) {
+			if ((!chip.isAboutADrugOtherThanTheOneProposed() || chip.isAboutAnotherOfHerMedications())
+					&& !DrugReferenceInjector.isAboutGivingTheDrugAHistoryQuestionNames(chip,
+							chart.getHistoryQuestionDrugRows())) {
+				published.add(chip);
+			}
+		}
+		return published;
 	}
 
 	/**

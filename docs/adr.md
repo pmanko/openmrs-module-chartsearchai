@@ -142,8 +142,23 @@ This document captures the architectural decisions made for the Chart Search AI 
 - [Decision 136: An answer dropping a cited finding's unknown-significance qualifier is reported](#decision-136-an-answer-dropping-a-cited-findings-unknown-significance-qualifier-is-reported)
 - [Decision 137: A chip about a drug other than the one proposed says so](#decision-137-a-chip-about-a-drug-other-than-the-one-proposed-says-so)
 - [Decision 138: Each chip names the record number of its own finding](#decision-138-each-chip-names-the-record-number-of-its-own-finding)
+- [Decision 139: A concision sentence in the system prompt was measured and rejected](#decision-139-a-concision-sentence-in-the-system-prompt-was-measured-and-rejected)
 - [Decision 140: A proposal whose findings are all cautions about the drug is answered with the cautions found](#decision-140-a-proposal-whose-findings-are-all-cautions-about-the-drug-is-answered-with-the-cautions-found)
 - [Decision 142: A proposal related to her orders only below the severity floor is answered with those rows](#decision-142-a-proposal-related-to-her-orders-only-below-the-severity-floor-is-answered-with-those-rows)
+- [Decision 143: A proposal related to none of her orders is answered with what the interaction check established](#decision-143-a-proposal-related-to-none-of-her-orders-is-answered-with-what-the-interaction-check-established)
+- [Decision 144: A below-floor answer states a bottom line scoped to the interaction data](#decision-144-a-below-floor-answer-states-a-bottom-line-scoped-to-the-interaction-data)
+- [Decision 145: An order a composed answer lists only below the floor does not scope its chips](#decision-145-an-order-a-composed-answer-lists-only-below-the-floor-does-not-scope-its-chips)
+- [Decision 146: A below-floor statement cites the data and not her orders](#decision-146-a-below-floor-statement-cites-the-data-and-not-her-orders)
+- [Decision 147: A finding about the drug proposed against her own order is stated where a model's answer leaves it out](#decision-147-a-finding-about-the-drug-proposed-against-her-own-order-is-stated-where-a-models-answer-leaves-it-out)
+- [Decision 148: A proposal question publishes no chip about a listed drug she is not on](#decision-148-a-proposal-question-publishes-no-chip-about-a-listed-drug-she-is-not-on)
+- [Decision 149: A proposal after a list of drugs is answered with what the check established for the drug proposed](#decision-149-a-proposal-after-a-list-of-drugs-is-answered-with-what-the-check-established-for-the-drug-proposed)
+- [Decision 150: A proposal after a list is answered from its findings about the drug proposed](#decision-150-a-proposal-after-a-list-is-answered-from-its-findings-about-the-drug-proposed)
+- [Decision 151: A question whether she has ever taken a drug publishes no chip about giving it](#decision-151-a-question-whether-she-has-ever-taken-a-drug-publishes-no-chip-about-giving-it)
+- [Decision 152: A question whose first word lost its leading letters is read as the word it was clipped from](#decision-152-a-question-whose-first-word-lost-its-leading-letters-is-read-as-the-word-it-was-clipped-from)
+- [Decision 153: A module's "No" states brief lines, keeping a folded class sentence](#decision-153-a-modules-no-states-brief-lines-keeping-a-folded-class-sentence)
+- [Decision 154: A question whether she has ever taken a drug no order of hers carried is answered by the module](#decision-154-a-question-whether-she-has-ever-taken-a-drug-no-order-of-hers-carried-is-answered-by-the-module)
+- [Decision 155: A question whether she has ever taken a drug her orders carried states each order and whether it is in force](#decision-155-a-question-whether-she-has-ever-taken-a-drug-her-orders-carried-states-each-order-and-whether-it-is-in-force)
+- [Decision 156: A response says whether its question asked if she has ever taken a drug](#decision-156-a-response-says-whether-its-question-asked-if-she-has-ever-taken-a-drug)
 - [Known limitations](#known-limitations)
 - [Planned future work](#planned-future-work)
 - [Appendix A: Measurements whose only home was CLAUDE.md](#appendix-a-measurements-whose-only-home-was-claudemd)
@@ -2096,7 +2111,16 @@ Three additive, data-driven extensions:
 
 ## Decision 28: Query-scoped slice charts (chartMode=queryScoped)
 
-**Status: Accepted** (July 2026) — implemented behind `chartsearchai.chartMode`, which now defaults to `queryScoped` (it shipped defaulting to `fullChart`; see the update below). Complements — and in scoped mode disengages — the warmup/prewarm/KV-persistence machinery of Decisions 12 and 26.
+**Status: Accepted** (July 2026) — implemented behind `chartsearchai.chartMode`, which defaults to `fullChart` again since 2026-10 (it shipped defaulting to `fullChart`, defaulted to `queryScoped` from 2026-07; see the two updates below). Complements — and in scoped mode disengages — the warmup/prewarm/KV-persistence machinery of Decisions 12 and 26.
+
+**Update (2026-10, default flipped back to `fullChart`).** Taken by the maintainer, against this decision's own
+measurements, which still stand and were not re-run: on a CPU host a not-yet-warmed patient's first answer is
+73–74 s in full-chart mode against 12–27 s scoped, and the 40-cell adjudicated gate scored full-chart lower on mean F1,
+abstention and off-topic citations. Recommended against when asked. What prompted it is that a scoped slice does not
+carry every record, so a check reading the prompt's chart — Decision 154's test that no record names the drug — sees
+only what the slice retrieved. `config.xml` and `CHART_MODE_DEFAULT` both read `fullChart`; an install whose row for
+`chartsearchai.chartMode` already stores a value keeps it, so this moves only installs that never set it. The warmup,
+prewarm and KV-persistence machinery this decision disengaged re-engages under the default.
 
 **Update (2026-07, default flipped to `queryScoped`).** After validation, `queryScoped` became the default (`config.xml` defaultValue + the `CHART_MODE_DEFAULT` constant both readers use). Evidence: a 22-patient drift-metric A/B — scoped beat fullChart on meanF1 (0.748 vs 0.668), abstention (0.86 vs 0.74), and off-topic drift (181 vs 477: the focused slice keeps the small model from citing a whole chart's worth of noise) — plus a CPU latency check where scoped's cold first answer was ~3× faster (no full-chart prefill). Consequences: (1) the full-chart prefill machinery (warmup, prewarm bootstrap, per-patient KV persistence, progressive-reasoning preview) is now dormant by default — it re-engages only when an operator sets `chartMode=fullChart`; (2) the fail-safe direction reverses — an *absent or unreadable* `chartMode` GP now resolves to `queryScoped`, though a GP set to any non-`queryScoped` value (including a typo) still resolves to fullChart, so a mistyped value fails toward the whole chart. `fullChart` remains supported for many-questions-per-patient sessions where its warm-cache reuse and completeness-over-focus are preferred.
 
@@ -2529,6 +2553,7 @@ Same harness, the same box, run against each head's production code in turn, on 
 - **−** The pre-answer pass still resolves `findForActiveOrders` TWICE over one context — once in `DrugReferenceInjector.injectRecords` and again inside the `validate` it calls — which `DrugSafetyValidator` already records as cost. That is a repeat to REMOVE rather than a fold to hoist, it needs no new type, and by the argument above its share GROWS now that the folding is gone. Not taken here; CLAUDE.md's #151 bullet prescribes the shape ("wherever a caller already holds the resolved list, pass it down rather than resolving again"). **Taken since, by exactly that shape: Decision 58, issue [#255](https://github.com/openmrs/openmrs-module-chartsearchai/issues/255).**
 - **−** The identity guard rests on probes inserted into the dataset. They carry a shared alias so that more than one scan reaches them, so they DO match one synthetic order name and one synthetic allergen — they publish no codes and no rules, so they raise no chip, but they are no longer inert by construction and a future arm keyed on something other than codes or rules would notice them.
 - **−** **Three siblings of this defect are left standing, each measured and each prototyped by the review that found them.** They are not folding, which is why they are not here. (1) `DrugReference.isNamed` re-derives `normalizeName(alias)` per alias per call — 219,170 calls in a ten-drug pass and 79% of that pass's `normalizeName` total, with `StringLatin1.toLowerCase` at 29% of leaf samples — the review's own profiling run, not the counter run above, so do not read it against that run's needle-side figure in the Alternatives list; an index-aligned `normalizedAliases` derived in `setAliases` beside `foldedAliases` measured 28.1 → 22.5 ms at ten drugs, chip hashes identical — that review's own chart, whose ten-drug pass is the 28.1, and not this decision's 28.0, which it is within a tenth of by coincidence. This decision's rejected-alternatives list declines the NEEDLE side of `normalizeName` and is right to; this is the HAYSTACK side, which nothing had measured. (2) `findByDrugName` sweeps the whole dataset, and one order name can be swept several times in a pass: two sites resolve recorded names — `findForActiveOrders` and `orderPartners` — each builds its own `impliedByName`, and that cache memoises the substance narrowing rather than the sweep. Measured on one arrangement, 2 / 3 / 4 sweeps of a single name at one / two / three unmapped orders carrying it. Those sweeps are the 597,480 constant comparisons in the counter table above. **No RULE for the count is stated here. Four were written and each was measured false**, so take the measurement above as one arrangement's and not as a law: the two sites neither key alike (`findForActiveOrders` iterates the deduplicated name set; `substanceRowsNamedBy` memoises per ORDER) nor run over the same orders, and every rule written over one of those facts was falsified by the other. The saving is what was measured, not the count: a per-pass map threaded down beside it, CLAUDE.md's own #151 shape, measured 12.5 → 7.8 ms at one drug in play — on the reviewing agent's own chart, whose absolutes are its own, not this decision's, which measures 17.0 ms in that cell. A cross-pass FIELD memo is worth more and must not be taken — #172's forbidden shape, keyed on chart-supplied names and so unbounded. (3) `normalizedAtcCodes()` allocates a fresh `LinkedHashSet` per call, 45,364 times in a ten-drug pass; deriving it in `setAtcCodes` measured 28.1 → 26.2 ms, on that same review's chart. A fourth, unmeasured: `PatientClinicalContext.containsFolded` re-derives `foldDiacritics(value)` for every haystack element on every call over the pass-invariant allergy and condition sets — the same shape, bounded by matched rules rather than by the dataset.
+
 
 ## Known limitations
 
@@ -13364,6 +13389,44 @@ of the key was cited (openmrs-esm-chartsearchai#50).
 Pinned by `LlmInferenceServiceListedMedicationsContextTest.eachChipNamesTheRecordNumberOfItsOwnFinding`; the wire by
 `ChartSearchAiSafetyWarningSeverityWireTest.everyPublicZeroArgumentAccessorOfAWarningNamesAKeyOnTheWire`.
 
+## Decision 139: A concision sentence in the system prompt was measured and rejected
+
+**Status: Rejected** (October 2026) — measured, nothing shipped.
+
+### Context
+
+The fluconazole list answer (*"The patient is currently on Lamivudine, Nevirapine, Stavudine, is it safe to give
+Fluconazole?"*, patient `763e6e5f-c489-4bab-8a55-c379f085dd1c`) copies each of its two findings' mechanism text in
+full, cites each record twice, and the two mechanism texts are identical. A user-supplied DDI prompt (rejected on
+2026-09-24) carried a concision rule, and the narrowest form of it was tried in the default prompt alone.
+
+### What was measured
+
+Arm A the shipped `DEFAULT_SYSTEM_PROMPT` (9232 characters, read off a live capture); arm B the same with ONE
+sentence after *"Cite EVERY record you reference by its number in brackets (e.g. [1], [3])."*: *"State each finding
+once and cite its record once; do not repeat a mechanism sentence you have already written."* Written by SQL hex and
+read back byte for byte; the 3.7.1 standalone at :8081, `main` @ d183c5bf, local Gemma 4 E4B, cache TTL 0. The 20
+default `capture_probe_safety.sh` cells and 6 target cells; the pass rule was written before either capture.
+
+- **The target moved**: over the 6 target cells, repeated markers 3 → 1 and repeated sentences 2 → 0.
+- **A finding was dropped**: the fluconazole answer cited [50] and [51] in A and only [51] in B, losing fluconazole
+  against her own lidocaine order — despite the default prompt's *"Include ALL relevant records in your answer —
+  never omit any for brevity."*
+- **Seven verdicts moved, in both directions**: *"Can I give her ibuprofen?"* and betty erythromycin went from a
+  caution to *"No — … should not be given"* on Unknown-severity pairs only; joshua warfarin from *"No"* to an
+  abstention; mary aspirin from a caution to an abstention; betty clarithromycin from a caution to no verdict;
+  joshua clarithromycin and erythromycin from no verdict to a caution on Unknown pairs.
+- The severity columns tied (no severity no chip carries, no unlicensed verdict, in either arm).
+
+### The decision
+
+Not shipped. It fails the pass rule on a dropped finding, changed verdicts and broken abstentions. This is the
+fourth prompt edit measured against these cells to move verdicts it was not aimed at, after the 2026-09-24
+user-supplied prompt, the 2026-09-29 merged DDI prompt and #566's scoped caution lead (all recorded on their own
+issues and notes). Do not re-propose a concision or citation-count sentence in the prompt without new evidence; the
+duplication is a property of the model's prose that this module states in no other place, and the deterministic
+alternative is the module composing the answer itself.
+
 ## Decision 140: A proposal whose findings are all cautions about the drug is answered with the cautions found
 
 **Status: Accepted** (October 2026) — implemented, no issue. Extends [Decision 108](#decision-108-a-drug-safety-question-the-module-resolved-itself-is-answered-from-its-own-findings-and-the-model-is-not-asked-to-restate-them).
@@ -13472,7 +13535,7 @@ and `.aComposedLineCitesItsOrdersRecordAndTheChipsAreScopedByIt`.
 
 ## Decision 142: A proposal related to her orders only below the severity floor is answered with those rows
 
-**Status: Accepted** (October 2026) — implemented, no issue. Extends [Decision 140](#decision-140-a-proposal-whose-findings-are-all-cautions-about-the-drug-is-answered-with-the-cautions-found).
+**Status: Accepted** (October 2026) — implemented, no issue. Extends [Decision 140](#decision-140-a-proposal-whose-findings-are-all-cautions-about-the-drug-is-answered-with-the-cautions-found). Its answer's wording is amended by [Decision 144](#decision-144-a-below-floor-answer-states-a-bottom-line-scoped-to-the-interaction-data).
 
 ### Context
 
@@ -13523,3 +13586,1047 @@ Pinned by `LlmInferenceServiceAnswerFromFindingsContextTest.aProposalRelatedToHe
 `.aBelowFloorAnswerDoesNotDependOnHowTheProposalIsWorded`, `.aPairBelowARaisedFloorIsStatedWithItsOwnRating`,
 `.aBelowFloorQuestionThatProposesNothingStillAsksTheModel` and `.aBelowFloorPairOnAnOrderThatHasNotStartedStillAsksTheModel`.
 
+## Decision 143: A proposal related to none of her orders is answered with what the interaction check established
+
+**Status: Accepted** (October 2026) — implemented, issue [#592](https://github.com/openmrs/openmrs-module-chartsearchai/issues/592).
+Extends [Decision 142](#decision-142-a-proposal-related-to-her-orders-only-below-the-severity-floor-is-answered-with-those-rows),
+and narrows, for this one shape, the rule that the module never composes a negative
+([Decision 108](#decision-108-a-drug-safety-question-the-module-resolved-itself-is-answered-from-its-own-findings-and-the-model-is-not-asked-to-restate-them)).
+
+### Context
+
+Patient Mark Smith `de4b0d62`, on chloroquine and diphenhydramine. Asked *"Can I give him nystatin?"* (and epinephrine and
+amoxicillin), the response stated `interactionPairs {"found": 0, "reported": 0, "belowFloor": []}`: the drug-in-play arm
+compared the drug against both of his orders and the reference data relates it to neither, at any rating. The model
+answered *"The records do not address Nystatin."* — the sentence it also writes for a drug the module never resolved
+(#591's "paracetamol"), so a clinician could not tell "checked, related to none of his orders" from "never looked up".
+Nothing in the prompt said the check had run: the drug's `drug_reference` record carried only the dataset's partners for
+it, under `DATASET_TAIL_LEAD`, behind the prefix the system prompt says marks material that is not this patient's.
+
+### The decision
+
+- **The module answers it**: `DrugReferenceInjector.composeFromNoPair`, beside `composeFromBelowFloor` in the branch that
+  runs where no finding was raised: *"The interaction check relates Nystatin to none of this patient's 2 active
+  medications. [n]"*, citing the drug's reference record. Taken by the maintainer on #592.
+- **The count is of her active ORDERS**, the prescriptions her medication list shows, so a combination prescription counts
+  once. It was first the substances they resolve to (`substanceGroupKey`), which review found reading 3 beside two
+  prescriptions, one of them lamivudine / stavudine; reproduced as the composed sentence before the change.
+- **It is a statement about the CHECK and the one negative ANSWER the module composes.** Never "can be given", never "safe",
+  never that the patient has no interactions. Decision 108's refusal of "no interactions were found" is about TRUTH —
+  such a sentence is true only of checks that ran over everything — and this one claims the interaction check alone, and
+  only where that check ran over her whole list: an extent stated with `found == 0` and an empty `belowFloor`
+  (`DrugSafetyValidator.belowFloorPairs` is the complement of the above-floor grouping over the same her-order test, so
+  together they say the drug's rows were compared against every substance her orders resolve, at every rating), on a chart
+  read for safety with every active order resolved — the branch's own conjuncts, Decision 142's.
+- **Fail-closed**, through `DrugReferenceInjector.proposedDrugsRecord`, which `composeFromBelowFloor` now shares: the
+  question resolves one substance, not one of hers, and proposes it; and the drug's reference record is in the chart. Her
+  orders must resolve at least one substance, and every one of them must have started: the sentence calls them her
+  active medications, which an order scheduled for later is not yet — Decision 142's reason for refusing a line on one.
+- **The data must speak to the pair in both directions.** The proposed drug carries interaction rows of its own —
+  otherwise the check compared it against nothing: an `atc` install carries none, and a drug can carry none in any
+  source. And no row of her orders' entries names it (`DrugSafetyValidator.anyRuleIdentifiesAny`, over `identifies`):
+  the drug-in-play arm reads the PROPOSED drug's rows alone, and while the `ddinter` loader files every pair under both
+  of its drugs, a curated file need not (`drug-reference-no-pair-one-direction.json` poses it). Both found by review,
+  each reproduced by a case below as the composed sentence before its guard.
+- **The contraindication arms are on** (the injection's own `ContraindicationReading`, which asks
+  `DrugSafetyValidator.reportsContraindications` once for it). With them off an allergy to
+  the drug proposed raises nothing, so "no finding" would no longer include her allergy records, and the model, which
+  reads them, answers. Found by review; reproduced as the composed sentence before the guard.
+- **It cites the drug's record alone.** The sentence relates none of her orders, so citing their records would put them
+  in the chips pass's subject matter for a statement about none of them.
+- **The drug is named by `DrugSafetyValidator.interactionSubject`** over the rows the record was rendered for — the row
+  this response names the substance by, the computation `SubstanceSubjects.subjectOf` makes for a chip and for Decision
+  142's lines.
+
+### Measured
+
+:8081 (RefApp 3.7.1 standalone, shipped DDInter knowledge base, local E4B), 2026-10-05: `main` @ 315d10db against this
+branch, 23 cells, one run each — the thirteen questions of the 2026-10-02 sweep and ten more. Five cells moved, each a
+single-drug proposal whose response states `{"found": 0, "reported": 0, "belowFloor": []}`: Mark Smith's epinephrine,
+nystatin (two phrasings) and amoxicillin, from *"The records do not address Nystatin."* to *"The interaction check relates
+Nystatin to none of this patient's 2 active medications. [24]"*, and Kamwara's mebendazole, from *"The records do not
+address whether Mebendazole can be given."* to the same sentence with her 3. Each cites the drug's `drug_reference`
+record and nothing else, and the count equals the patient's number of active orders on both charts. The other eighteen
+cells were byte-identical in answer, `answeredByTheModule`, `interactionPairs` and chip details — among them both
+below-floor proposals Decision 142 answers, a proposal raising an allergy finding, and a question naming nystatin
+without proposing it. Re-run on the build carrying the two-direction guards below, all 23 cells were byte-identical to
+the first run of this branch: on the `ddinter` data, which files each pair under both drugs, neither guard moves an
+answer.
+
+### Residue
+
+- An order resolved to only SOME of its substances — a combination the data files under one constituent — passes
+  `everyActiveOrderResolves`, so its other substances were not compared: Decision 108's residue, stated in the answer's
+  scope rather than removed.
+- An allergy recorded under a name the data cannot resolve raises no finding (`DrugSafetyValidator.recordedAllergens`
+  skips it), so the module composes this sentence beside it. Refusing on any unresolved allergen was not taken: the
+  context does not say which allergy records are drug allergies, so a food or environmental allergy would refuse
+  every such patient. Before this decision the model answered such a proposal; whether it raised the allergy was not
+  measured.
+- A recorded condition is not checked where the loaded data publishes no condition rule — `conditionRuleCoverage`
+  reads `absent` on the shipped `ddinter` and `atc` sources — so the module composes this sentence beside a condition
+  that may rule the drug out. Refusing wherever coverage is absent and the chart records a condition would refuse
+  nearly every patient with one, the allergy alternative's trade. Whether the model raised such a condition before
+  this decision was not measured.
+
+### Rejected alternative
+
+**A FINDING-prefixed record stating that the check ran, with the model still answering.** Refuted before any code was
+written: where a "Safety finding" record names the drug asked about, the shipped system prompt's finding branch offers
+two leads only — open with "No", or state that the drug can be given (`LlmProvider`'s safety paragraph) — and the record
+states neither strength clause. So the model would be pushed into a refusal nothing licenses or a clearance, and
+Decision 87 measured the model copying such a record's negative lead into its verdict. Changing the system prompt instead
+is the lever Decision 84's ledger closed.
+
+### Not pinned
+
+Mutating each guard of `composeFromNoPair` and `proposedDrugsRecord` against `LlmInferenceServiceAnswerFromFindingsContextTest`
+reddens a case for the proposal test, the started test, the contraindication-arms test, the
+interaction-rows test, the reverse direction and the empty `belowFloor`, each the case named for it below — the last
+through a pair `composeFromBelowFloor` refuses because her order, known by its ATC code alone, names no drug a line
+could print, beside an aspirin entry carrying no row that names the drug proposed, so the reverse-direction guard cannot
+refuse it first. The others stay green: a null
+extent and the subject lookup, which no case reaches with the other guards passing; and, each reached first by another
+guard there,
+`found == 0` (a raised finding is what a nonzero count is, and the branch runs only with none), her substances non-empty (a chart with no medication record states no extent at all),
+not-hers and one-substance (a drug she takes raises the already-ordered finding; two substances open the question-pair
+arm, whose extent carries no `belowFloor`), and the record's row match (the cases inject one reference record). They are
+kept as the gate's own statement of what it requires, as Decision 142 kept its unpinned refusal.
+
+Pinned by `LlmInferenceServiceAnswerFromFindingsContextTest.aProposalTheDataRelatesToNoneOfHerOrdersIsAnsweredWithWhatTheCheckEstablished`,
+`.anAnswerOfNoPairDoesNotDependOnHowTheProposalIsWorded`, `.aQuestionOfNoPairThatProposesNothingStillAsksTheModel`,
+`.aProposalOfNoPairWhoseReferenceRecordIsNotInTheChartStillAsksTheModel`,
+`.aProposalOfNoPairBesideAnOrderTheDataCannotNameStillAsksTheModel`,
+`.aProposalOfNoPairBesideAnOrderThatHasNotStartedStillAsksTheModel`,
+`.aProposalARowOfHerOwnOrdersNamesStillAsksTheModel`, `.aProposalOfADrugWithNoInteractionRowsStillAsksTheModel`,
+`.aProposalOfNoPairWithTheContraindicationArmsOffStillAsksTheModel`,
+`.aProposalRelatedToHerOrdersOnlyByAPairNoLineCanStateStillAsksTheModel`,
+`.anAnswerOfNoPairCountsEveryMedicationTheCheckComparedTheDrugAgainst` and
+`.anAnswerOfNoPairCountsACombinationPrescriptionAsOneMedication`.
+
+## Decision 144: A below-floor answer states a bottom line scoped to the interaction data
+
+**Status: Accepted** (October 2026) — implemented, no issue. Its wording is amended by [Decision 146](#decision-146-a-below-floor-statement-cites-the-data-and-not-her-orders). Amends [Decision 142](#decision-142-a-proposal-related-to-her-orders-only-below-the-severity-floor-is-answered-with-those-rows).
+
+### Context
+
+Decision 142's answer to *"Is clarithromycin safe for her?"* listed four lines, each ending *"— Unknown."*, and gave no
+call. Read by hand for what a clinician gets from it: no bottom line; "unknown severity" open to being read as "probably
+minor"; one non-statement four times. A "yes" is not available — the check covers rated pairs in its data and nothing
+beyond drug interactions — and a "no" is the refusal Decision 142 removed. What the data does license is a call about
+itself.
+
+### The decision
+
+- **One sentence with a bottom line scoped to the interaction data**, then its scope on a line of its own:
+  *"The interaction data gives no rated reason to withhold Clarithromycin: it lists 4 of this patient's orders against
+  it — Lidocaine, Metoclopramide, Neomycin and Tiotropium — none with a severity or mechanism on file. [45] [6] [8] [7]
+  [4]"* / `DrugReferenceInjector.BELOW_FLOOR_SCOPE`, *"Interactions the data does not rate, and anything beyond drug
+  interactions, are not covered."*
+- **"No mechanism on file" is the data's statement, never an inference**: `DrugReference.Interaction.mechanismOnFile()`,
+  written by `DdiDrugReferenceSource` alone off the note it writes — its no-mechanism branch — and carried on each pair.
+  A source that says nothing (every other source) gets *"none with a severity rated"*.
+- **A rated row below a raised floor is named with its rating** — *"ASPIRIN (Minor) — each rated below the level this
+  module reports as a finding"*.
+- **"This patient's orders"**, not "her": the answer reaches patients of either sex.
+- **A caution answer states its drug's rows below the floor too** (removed by [Decision 146](#decision-146-a-below-floor-statement-cites-the-data-and-not-her-orders)), on a closing line: *"It also lists Lidocaine and
+  Tiotropium against it, with no severity or mechanism on file. [45] [6] [4]"* — `belowFloorClosingLine`, through the
+  one reading of those rows both answers share (`BelowFloorRows`). Before it, *"Is aspirin safe for her?"* named its one
+  Minor caution and said nothing of the two rows against her lidocaine and tiotropium, while a drug with no finding was
+  answered with exactly such rows. Not on a "No": its lead is a stronger reason the rows would only dilute.
+
+The risk, accepted on the record: a reader may take *"gives no rated reason to withhold"* as a clearance. The scope line
+is there to say it is not one.
+
+### The gate
+
+Pre-registered, :8081, local E4B, the shipped prompt, 2026-10-05: `main` @ 61497e47 against this branch over 57 cells —
+round 3's 20 on the DDI rig's patients, the 20 of `capture_probe_safety.sh`, Susan's six, the five clarithromycin
+phrasings and five more proposals. **It passed.** The 19 cells main answers with Decision 142's lead were rewritten to
+the one sentence, each naming exactly main's orders with exactly main's markers, each saying no severity or mechanism is
+on file — every one a DDInter Unknown row with no mechanism — with their chips unchanged. The other 38 were
+byte-identical.
+
+A second round, for the closing line, against that first round's build over the same 57 cells, **passed**: seven caution
+answers gained exactly one closing line naming exactly their below-floor pairs' orders, every pair a DDInter Unknown row
+with no mechanism; the other 50 were byte-identical. No chip was lost. Three cells gained chips, each a recorded allergy
+to an order the closing line now cites — Susan's aspirin and erythromycin answers her lidocaine and tiotropium allergies,
+her fluconazole answer the tiotropium one.
+
+Pinned by `LlmInferenceServiceAnswerFromFindingsContextTest.aProposalRelatedToHerOrdersOnlyBelowTheFloorIsAnsweredWithThoseRows`,
+`.aPairBelowARaisedFloorIsStatedWithItsOwnRating` and `.aSourceSilentOnMechanismsIsNotSaidToCarryNone`.
+
+## Decision 145: An order a composed answer lists only below the floor does not scope its chips
+
+**Status: Accepted** (October 2026) — implemented, no issue. Since [Decision 146](#decision-146-a-below-floor-statement-cites-the-data-and-not-her-orders) a listing line cites no order of hers at all. Narrows
+[Decision 140](#decision-140-a-proposal-whose-findings-are-all-cautions-about-the-drug-is-answered-with-the-cautions-found)'s
+chips rule.
+
+### Context
+
+Decision 140 handed the chips pass of a composed answer every marker it carries, so that a contraindication of an order a
+FINDING is about stands beside the answer as beside a model's citing that order. Decisions 142 and 144 then gave composed
+answers lines that cite her orders without stating a finding about them — the rows below the floor. On *"Is aspirin safe
+for her?"* the closing line *"It also lists Lidocaine and Tiotropium against it …"* cited her lidocaine and tiotropium
+orders, and her recorded allergies to both came up beside an answer about aspirin: real conflicts, with no bearing on the
+question, present only because a line listed those orders.
+
+### The decision
+
+- **The chips pass of a composed answer reads the markers of its FINDING lines alone** —
+  `LlmInferenceService.findingLineMarkersOf`: a line whose markers include a `safety_finding` record. Decided from the
+  record a marker cites, never from the line's words. A line listing rows below the floor still cites her orders, so a
+  clinician can open them.
+- **What it gives up**: the incidental catch — her allergy to a drug she is prescribed, raised beside a question about
+  another drug. It stays on `/chartalerts` (ADR Decision 79), and beside any answer about that order.
+
+### The gate
+
+Pre-registered, :8081, local E4B, the shipped prompt, 2026-10-05: PR #594 @ 967c4b89 against this change over 57
+cells. Every answer was byte-identical — the change moves only what the chips pass reads — and no cell the model
+answers moved, no composed cell gained a chip, and Susan's fluconazole answer kept her lidocaine allergy, its finding
+line citing that order. Composed answers lost 23 contraindication chips. 21 were the case the change is for, an allergy
+to an order only a listing line cited. **The gate failed as written on the other two, and the failure was accepted**:
+Betty's erythromycin and clarithromycin answers lost *"Bupivacaine is in the same ATC class (N01BB) as the patient's
+allergy to Lidocaine — possible cross-reactivity"*, a chip about an order no line cites. The rule allowed a loss only
+for a chip about a cited order; this one came in through the allergen side — the listing line cited her lidocaine
+order, which made her lidocaine allergy subject matter, and her bupivacaine order cross-reacts with it. With the
+answers byte-identical and the listing line's marker the only input removed, the chip existed only because a line
+listed an order; it is the case the change is for, which the rule did not anticipate.
+
+Pinned by `LlmInferenceServiceAnswerFromFindingsContextTest.anOrderListedOnlyOnACautionAnswersClosingLineDoesNotBringItsConflictsBesideIt`
+and `.anOrderListedOnlyOnABelowFloorAnswerDoesNotBringItsConflictsBesideIt`; Decision 140's half by
+`.aComposedLineCitesItsOrdersRecordAndTheChipsAreScopedByIt`.
+
+## Decision 146: A below-floor statement cites the data and not her orders
+
+**Status: Accepted** (October 2026) — implemented, no issue. Amends [Decision 144](#decision-144-a-below-floor-answer-states-a-bottom-line-scoped-to-the-interaction-data).
+
+### Context
+
+Decision 144's sentence named the orders its rows were against and cited each order's record. Read by hand on *"Is
+ibuprofen safe for her?"*: lidocaine, metoclopramide and tiotropium are rows the data lists with no rating and no
+mechanism, none a recognised concern with ibuprofen. Naming them suggested they were the issue; their records say she
+takes them, nothing about ibuprofen. The citations had served one purpose besides — scoping the chips — and Decision 145
+had just ended that for these lines.
+
+### The decision
+
+- **The statement cites the drug's reference record alone** — the record listing the rows, which is the evidence for
+  the claim — and names no order: *"The interaction data gives no rated reason to withhold Ibuprofen: none of its 3 rows
+  against this patient's orders carries a severity or mechanism. [45]"*; a caution answer's closing line *"The
+  interaction data also lists it against 2 more of this patient's orders, with no severity or mechanism on file. [45]"*.
+  A rated row below a raised floor states its rating: *"its row … is rated Minor, below the level this module reports as
+  a finding"*.
+- **Which orders** is one click away, in that record.
+- **A caution answer no longer states its rows below the floor at all.** Decision 144's closing line was read by hand
+  on *"should i give her panadol?"*: two rows against her neomycin and tiotropium, unrated, with no mechanism, neither
+  a recognised concern with paracetamol — a line a clinician can do nothing with. Where a finding answers the question,
+  the unrated rows beside it add nothing to it; where none does, they are the whole of what the data holds, and the
+  below-floor answer still states them.
+- **The citable-order condition is gone with the citations**; an order that has not started still keeps the model call,
+  the sentence speaking of her current orders.
+
+### The gate
+
+Pre-registered, :8081, local E4B, the shipped prompt, 2026-10-05: `main` @ 69083eec against this change over 57 cells.
+**It passed.** In 26 cells the below-floor sentence or closing line alone changed, each now citing only the drug's
+reference record main's cited, stating main's count of orders, naming none, and keeping "or mechanism" where main said
+it. Every cell's chips were main's; the other 31 were byte-identical.
+
+A second round, removing the closing line, against that round's build over the same 57 cells and *"should i give her
+panadol?"*, **passed**: the eight caution answers carrying the line lost exactly it, and nothing else moved — every
+other cell and every chip byte-identical.
+
+Pinned by `LlmInferenceServiceAnswerFromFindingsContextTest.aProposalRelatedToHerOrdersOnlyBelowTheFloorIsAnsweredWithThoseRows`,
+`.aPairBelowARaisedFloorIsStatedWithItsOwnRating`, `.aCautionAnswerAlsoStatesTheRowsBelowTheFloor` and the two
+`.anOrderListedOnly…` cases.
+
+## Decision 147: A finding about the drug proposed against her own order is stated where a model's answer leaves it out
+
+**Status: Accepted** (October 2026) — implemented, no issue. Beside [Decision 90](#decision-90-the-safety-prose-summarises-the-findings-the-client-already-renders-and-states-each-ones-severity-while-doing-it)
+and [Decision 100](#decision-100-an-order-the-answer-leaves-unnamed-is-named-by-the-module-not-by-asking-the-model-again).
+
+### Context
+
+*"The patient is currently on Abacavir, Lopinavir / ritonavir, Didanosine and Trimethoprim and sulfamethoxazole is it
+safe to give Fluconazole?"* (patient Susan) was answered by the model *"Fluconazole can be given, with several cautions:
+…"*, citing three interactions with drugs her chart does not hold and saying nothing of the one Moderate interaction
+with her own lidocaine order. Decision 90 lets the prose summarise, the client drawing every finding as a chip, so the
+finding was on screen; but the answer's own text put the weight on three relationships that rest on the question's
+word and none on the one in her chart.
+
+### The decision
+
+- **After a model's answer, the module states each finding about the drug the question proposes against one of her
+  own orders that the answer does not cite**: *"Not stated above, against this patient's own orders: Fluconazole
+  interacts with active order Lidocaine — Moderate."* — `OwnOrderFindingStatement`, before the list's
+  no-active-order sentence, on the early `done` and the final answer alike.
+- **Which findings, and their words, are the injector's**, stamped on the chart
+  (`PatientChart.getProposalOwnOrderFindingLines()`): interactions stating a proposal clause whose every subject row is
+  of a drug the question proposes — a single-drug proposal's, or a list question's drug after its list. A question-pair
+  finding states both drugs' rows, so one relating the drug to a merely LISTED one is not among them. The line is the
+  finding's `briefDetail`.
+- **It cites no marker**, as Decision 100's sentence cites none. A first build appended each finding's `[n]`, which the
+  answer's references did not carry, so the marker resolved to nothing — the browser found it, the lidocaine chip open
+  beside an answer naming `[55]`. Carrying it would have meant a second writer of `attachedByTheModule`, which
+  `extractCitedReferences` alone writes, for the chart evidence behind a finding the MODEL cited (ADR Decision 80). The
+  finding's chip, which the answer does not cite, would then be drawn in full beside the sentence that names it — so
+  the response names those findings structurally, `ChartAnswer.getFindingsStatedByTheModule()` (the
+  `findingsStatedByTheModule` key), resolved by `OwnOrderFindingStatement.statedFindings`, the reading the sentence
+  itself is built from, and a client folds their chips as stated.
+- **Which are cited is `SafetyFindingCitationExtentCheck.citedFindingIndexes`**, the one reading of that.
+- **It never rewrites the model's prose**, so a "can be given" stands beside the line stating a Major; Decision 119's
+  `cautionLedOverWithholding` still reports that pairing.
+- A composed answer states all its findings already and is not touched.
+
+- **A blank answer is left as it was**, as the repair pass leaves it: what it cites is read off the structured array.
+
+### The gate
+
+Pre-registered, :8081, local E4B, the shipped prompt, 2026-10-05: `main` @ 9182aa7f against this change over 63 cells —
+gate 11's 58 and five list questions, the reported one among them. **It passed.** Three model answers gained the
+statement, each naming a finding about the drug proposed against her own order that the answer did not cite, with its
+rating (then still with its marker, since removed): the reported question's *"Fluconazole interacts with active order
+Lidocaine — Moderate"*, Susan's
+rifampicin list question's Minor against the same order, and Joshua's aspirin probe's Moderate against his lisinopril.
+Every module-written answer, every chip and the other 57 cells were byte-identical.
+
+### What the tests carry
+
+Twelve cases of four other classes — the partner completion, the finding-enumeration repair, the scheduled-partner
+naming and a chain case — had fixtures whose model answer leaves such a finding uncited, so their final answers gained
+the statement. Each now reads its own sentence off the answer with the statement taken off its end
+(`OwnOrderFindingStatementTestSupport.withoutTheOwnOrderStatement`, which fails where anything but the statement
+follows), and the partner completion's "never credited" cases read the completion's sentence alone. What the statement
+says is pinned by the two cases below, and six cases of `LlmInferenceServiceListedMedicationsContextTest` carry it beside
+their list sentence.
+
+Pinned by `LlmInferenceServiceListedMedicationsContextTest.aFindingAboutTheDrugProposedAgainstHerOwnOrderIsStatedWhereTheAnswerLeftItOut`
+and `.aFindingTheAnswerCitesIsNotStatedAgain`; six cases of that class pin the line beside their list sentence.
+
+## Decision 148: A proposal question publishes no chip about a listed drug she is not on
+
+**Status: Accepted** (October 2026) — implemented, no issue. Narrows what
+[Decision 137](#decision-137-a-chip-about-a-drug-other-than-the-one-proposed-says-so) marks into what a response publishes.
+
+### Context
+
+*"The patient is currently on Abacavir, Lopinavir / ritonavir, Didanosine and Trimethoprim and sulfamethoxazole is it
+safe to give Fluconazole?"* (patient Susan) raised twelve chips. Four were about fluconazole. Eight were the listed
+regimen's own interactions with itself and with her orders — lopinavir with didanosine, ritonavir with
+co-trimoxazole, sulfamethoxazole with her lidocaine, rated Major — none bearing on whether fluconazole may be given, and
+none about drugs her chart holds. Decision 137 already marked them and the reference client set them apart, behind a
+line; read by hand, they remained noise for the question asked.
+
+### The decision
+
+- **A response publishes no chip that is about a drug other than the one the question proposes and is not one of her own
+  prescriptions** — `isAboutADrugOtherThanTheOneProposed()` and not `isAboutAnotherOfHerMedications()`:
+  `LlmInferenceService.aboutTheDrugAsked`, where each answer's chips are final, on the model's paths and the module's.
+  Every check before it still reads them.
+- **A conflict of one of her own orders stays**: her recorded allergy to a drug she is prescribed, beside an answer whose
+  finding is about that order — Decision 140's chip, which "everything not about the drug" would have taken off. That
+  choice was put to the user and the narrower rule chosen.
+- **The findings stay in the prompt**; the model may still write about them, and a client reaches their records through
+  the references. They are raised on a question about those drugs.
+
+### The gate
+
+Pre-registered, :8081, local E4B, the shipped prompt, 2026-10-05: `main` @ 9182aa7f against this change over 63 cells.
+**It passed.** Every answer was byte-identical. Seven cells lost sixteen chips, each about a drug the question lists and
+her chart does not hold, none about the drug proposed or one of her own prescriptions; the reported question's twelve
+became its four about fluconazole. Every other chip was main's.
+
+### What it costs
+
+A Major among the listed drugs — sulfamethoxazole with her lidocaine, on that question — is no longer a chip. It is about
+drugs her chart does not hold; were she on co-trimoxazole, her chart would hold it and the chip would be hers.
+
+Pinned by `LlmInferenceServiceListedMedicationsContextTest.aProposalQuestionPublishesNoChipAboutADrugItOnlyLists`, which
+also pins that the validator marks such a chip — one it stopped marking would be published — and
+`LlmInferenceServiceAnswerFromFindingsContextTest.aComposedLineCitesItsOrdersRecordAndTheChipsAreScopedByIt` for the
+own-order half.
+
+## Decision 149: A proposal after a list of drugs is answered with what the check established for the drug proposed
+
+**Status: Accepted** (October 2026) — implemented, no issue. Extends
+[Decision 142](#decision-142-a-proposal-related-to-her-orders-only-below-the-severity-floor-is-answered-with-those-rows) and
+[Decision 143](#decision-143-a-proposal-related-to-none-of-her-orders-is-answered-with-what-the-interaction-check-established)
+to a question listing drugs before its proposal. One whose findings are about the drug proposed is
+[Decision 150](#decision-150-a-proposal-after-a-list-is-answered-from-its-findings-about-the-drug-proposed)'s.
+
+### Context
+
+*"The patient is currently on Lamivudine, Nevirapine, Stavudine, is it safe to give metformin?"*, asked of patient Susan,
+whose chart holds none of the three, was answered by the model *"The records do not address the safety of giving
+Metformin."*, and the module added that her chart holds no order for the three. The response said the interaction check
+had run: `interactionPairs` `{"found": 0}`, and `findingCitations` `{"carried": 1, "cited": 0}` — one finding in the
+prompt, which the answer did not cite. The shipped data relates metformin to four of her orders,
+and to each drug listed, only by rows rated Unknown with no mechanism. Asked of metformin alone, the module answers from those
+rows (Decision 142). Two things kept it from doing so here. The three listed drugs make four substances, which opens the
+question-pair arm; that arm then states `interactionPairs`, and the drug-in-play arm's rows below the floor are dropped.
+And the carried finding made the finding list non-empty, while both compositions require an empty one.
+
+### The decision
+
+- **The module answers it**: `DrugReferenceInjector.composeAfterAList`. It hands `composeFromBelowFloor`, then
+  `composeFromNoPair`, the drug proposed alone. It hands them, as that drug's extent, the drug-in-play arm's own
+  statement about its substance. It then adds a second line: *"The check of Metformin against Lamivudine, Nevirapine and
+  Stavudine, also named in the question, raised no finding."* The listed drugs are named as a chip names a substance
+  (`DrugSafetyValidator.interactionSubject`), in the question's order — only those her orders do not resolve to, and
+  the line is left out where her orders resolve them all. A listed drug she holds is one of her orders, which the
+  first line already covers; naming it again repeated that check, as the gate found on Kamwara's cell. The sentence that her chart holds none of them
+  takes a line of its own (`ListedDrugStatement.withListedDrugsStatedOnALine`), because the composed lines end in
+  markers.
+- **The drug-in-play arm states each question substance to the caller** — `PairChipExtent.Sink.statedFor`, recorded by
+  `validate` beside the published statement on the same pass. It is never on the wire: one key must not carry two
+  populations, which is `PairChipExtent`'s own rule.
+- **Fail-closed**, beyond the two compositions' gates, all on the injection's own resolutions:
+  - The question lists drugs (`listedBeforeTheProposal`) and proposes one substance besides them.
+  - The question's own pairs were stated and every one reported, `found == reported`. A pair `maxPairChips` withheld may
+    be one of the drug proposed, and it raises no finding.
+  - The drug-in-play arm's statement about the drug proposed has `found == 0`.
+  - No finding is about the drug proposed: every one answers `isAboutADrugOtherThanTheOneProposed`. Where one does not,
+    Decision 150 answers, and the line saying the check raised none is never written. A finding about another drug does
+    not keep the model call, whatever it withholds — Decision 150 records that choice.
+- **"Raised no finding" and never "does not interact"**: the line claims what the check reported. Below a raised floor a
+  rated row can stand under it, and the bottom line already scopes itself to the rated data.
+- **A finding about a listed drug is not stated.** It is not about the drug proposed, and since Decision 148 its chip is
+  not published either. It stays in the references a client reaches.
+
+### The gate
+
+Pre-registered, :8081, local E4B, the shipped prompt, 2026-10-06: `main` @ 0f531772 (omod f6ad786e) against this
+change (omod c9f0dd91) over 51 cells — the previous gate's 43, five list questions and three of their single-drug twins.
+**It failed as written, and was accepted by the maintainer.** Rules 3 and 4 asked each composed list cell's first line
+to equal its twin's byte for byte, and the twin's marker number is one lower: the list question's chart carries one more
+record before it. Each pair cites the same record — metformin's `drug_reference` 6809, mebendazole's 6672 — and is
+otherwise identical. Every other rule held:
+- Every non-list cell, and every list cell the model still answers, was byte-identical in answer and chips.
+- Four list cells became the module's: Susan's metformin under two wordings, Kamwara's metformin, and Susan's mebendazole.
+  Susan's metformin moved from *"The records do not address the safety of giving Metformin."* to *"The interaction data
+  gives no rated reason to withhold Metformin: none of its 4 rows against this patient's orders carries a severity or
+  mechanism. [46]"*, then the list line, the scope and the sentence that her chart holds none of the three. Kamwara holds
+  the three; the model had answered *"Metformin can be given, with one caution"* over her Unknown rows. Her composed
+  answer named the three again in the list line, though her first line had counted them among her orders; the list
+  line has left out a drug her orders resolve to since.
+- No composed cell's chips moved, and none carried a chip about the drug proposed.
+- Left to the model: Susan's clarithromycin after the list, whose question pairs raised a Moderate finding about
+  clarithromycin; "paracetamol", which the data does not resolve; and the list cells about amlodipine, fluconazole and
+  rifampicin, each with a finding about the drug proposed — since Decision 150, answered by the module.
+
+### Not pinned
+
+Deleting the `found == 0` guard on the drug-in-play arm's statement reddens nothing. Every pair that statement counts is
+a chip about the drug proposed, which routes the question to Decision 150 first. It is kept as the gate's statement of what it
+requires.
+
+Pinned by `LlmInferenceServiceAnswerFromFindingsContextTest.aProposalAfterAListIsAnsweredWithWhatTheCheckEstablishedAgainstHerOrdersAndTheList`,
+`.aCautionAboutAListedDrugDoesNotKeepTheModelCall`, `.aProposalAfterAListThatRelatesToNoneOfHerOrdersIsAnsweredWithWhatTheCheckEstablished`,
+`.aCautionBetweenTwoListedDrugsDoesNotKeepTheModelCall`, `.theListLineNamesOnlyTheListedDrugsHerChartDoesNotHold`,
+`.aWithholdingFindingAboutAListedDrugAloneDoesNotKeepTheModelCall`,
+`.aListQuestionWhosePairsTheCapTruncatedStillAsksTheModel` (the truncation guard),
+`.aListQuestionWithAClassFindingAboutTheDrugProposedStatesIt` (the routing to Decision 150, through a finding that counts
+no pair) and `.aListQuestionWhoseProposalTheDataRatesAgainstAListedDrugStatesThatFinding`.
+
+## Decision 150: A proposal after a list is answered from its findings about the drug proposed
+
+**Status: Accepted** (October 2026) — implemented, no issue. Extends
+[Decision 140](#decision-140-a-proposal-whose-findings-are-all-cautions-about-the-drug-is-answered-with-the-cautions-found) and
+[Decision 108](#decision-108-a-drug-safety-question-the-module-resolved-itself-is-answered-from-its-own-findings-and-the-model-is-not-asked-to-restate-them)
+to a question listing drugs before its proposal, beside
+[Decision 149](#decision-149-a-proposal-after-a-list-of-drugs-is-answered-with-what-the-check-established-for-the-drug-proposed).
+Takes up what the unmerged Decision 141 draft proposed for cautions, and its withholding case as well.
+
+### Context
+
+*"The patient is currently on Lamivudine / zidovudine, Efavirenz, Trimethoprim and sulfamethoxazole is it safe to give
+Fluconazole?"*, asked of Susan, whose chart holds none of them, was answered by the model *"Fluconazole can be given, with
+two cautions"* — zidovudine, Moderate, and sulfamethoxazole, Minor. It left out the finding the data rates Major, fluconazole
+with efavirenz (QT prolongation), and `cautionLedOverWithholding` reported it. Asked of rifampicin after a list carrying
+nevirapine, the model wrote *"No — Rifampicin should not be given"*, resting on nevirapine alone, a drug her chart does not
+hold, as the sentence the module appended then said.
+
+### The decision
+
+- **The module answers it**: `DrugReferenceInjector.composeListFindings`, reached from `composeAfterAList` wherever a
+  finding is about the drug proposed. One brief line per such finding (`briefDetail`), citing its record and, for one
+  against her order, that order's record. Strongest first; within a strength, her own orders before the drugs listed.
+- **The lead is the strongest call a line licenses**, and says whose drug it rests on:
+  - a finding the data rates a reason to withhold against one of HER orders: Decision 108's *"No — this module's
+    drug-safety check found a reason to withhold Ibuprofen."*;
+  - every such finding against a drug the question lists and her chart does not hold: *"No if she is on Efavirenz — this
+    module's drug-safety check found a reason to withhold Fluconazole against it."*;
+  - else Decision 140's *"2 interaction cautions for Amlodipine:"*.
+- **A finding about a drug other than the one proposed is neither stated nor a reason to keep the model call**, whatever
+  it withholds — in Decision 149's answer as in this one. The Major on the reported question that is not about
+  fluconazole, sulfamethoxazole with her lidocaine, is the one Decision 148 already took off the chips, naming it under
+  *What it costs*. Put to the maintainer, against stating it on a line apart or keeping the model call: ignore it.
+- **Fail-closed, as Decision 108 is for the drug asked alone**: the proposed rows are one substance she does not take,
+  and every finding about it is an INTERACTION stating a proposal clause, one that withholds being one the data rates a
+  reason to withhold (`licensesTheModulesNo`). A contraindication, an unrated rule or a referent clause keeps the model
+  call. So does a question-pair list the cap truncated, Decision 149's guard.
+
+### The gate
+
+Pre-registered, :8081, local E4B, the shipped prompt, 2026-10-06: PR #598 @ fa055f65 (omod 67d16d27) against this change
+(omod d5c4efbf) over 56 cells — the previous gate's 51 and five list questions. **It failed as written on one cell, and
+was accepted by the maintainer.** Susan's rifampicin after the efavirenz regimen stays with the model in both arms (the
+cap truncated its question pairs, 11 found and 10 reported), and the two arms' answers differ. This change cannot reach
+that cell, and arm B's answer is byte-identical to the one arm A's own build gave three times earlier the same day; arm A's
+fresh run, after its restart, worded it differently. Every other rule held:
+- Every non-list cell, every list cell the model still answers, and every list cell Decision 149 composed, was
+  byte-identical to arm A.
+- Twelve list cells became the module's. Each states exactly the findings about the drug proposed that arm A's chips
+  carried, strongest first, under the lead its strongest line licenses, and none says the drug can be given. The reported
+  question now opens *"No if she is on Efavirenz — this module's drug-safety check found a reason to withhold Fluconazole
+  against it."*, the Major first. Susan's rifampicin after the nevirapine list opens *"No if she is on Nevirapine"*;
+  Kamwara, who holds nevirapine, gets Decision 108's unconditional "No".
+- No chip about the drug proposed was lost. Five composed cells, each citing her lidocaine order on a line, gained the
+  chip of her recorded allergy to lidocaine — Decision 140's scoping, the trade the Decision 141 draft left open.
+
+### Not pinned
+
+Three guards refuse nothing on their own, each because another refuses first, and are kept as statements of what the
+composition requires. The INTERACTION-type test: a contraindication states the withholding clause, which it is not rated
+to license. The one-substance-not-hers test: a drug she takes raises a current-medication clause, which the clause test
+refuses (`.aListQuestionProposingADrugSheAlreadyTakesStillAsksTheModel` holds the outcome). And the sort key putting her
+own orders first within a strength: the drug-in-play arm's findings precede the question-pair arm's in the list it
+receives, so deleting the key moves no line today.
+
+Pinned by `LlmInferenceServiceAnswerFromFindingsContextTest.aListQuestionWithholdingOnlyAgainstAListedDrugIsAnsweredNoIfSheIsOnIt`,
+`.aListQuestionWithholdingAgainstHerOwnOrderIsAnsweredNo`, `.aListQuestionOfCautionsStatesHerOwnOrdersFirst`,
+`.aListQuestionWhoseProposalTheDataRatesAgainstAListedDrugStatesThatFinding`, `.aListQuestionWithAClassFindingAboutTheDrugProposedStatesIt`,
+`.aWithholdingFindingAboutAListedDrugAloneDoesNotKeepTheModelCall`, `.aListQuestionWhoseFindingIsAnUnratedRuleStillAsksTheModel`
+(the rating test), `.aListQuestionWithAContraindicationAboutTheDrugProposedStillAsksTheModel` and
+`.aListQuestionProposingADrugSheAlreadyTakesStillAsksTheModel`.
+
+## Decision 151: A question whether she has ever taken a drug publishes no chip about giving it
+
+**Status: Accepted** (October 2026) — implemented, no issue. Narrows what a response publishes, as
+[Decision 148](#decision-148-a-proposal-question-publishes-no-chip-about-a-listed-drug-she-is-not-on) did for a listed
+drug.
+
+### Context
+
+*"Has she ever taken fluconazole?"*, asked of Susan, whose chart has never held fluconazole, was answered *"The records do
+not address whether the patient has ever taken Fluconazole."* beside one chip: *"Fluconazole interacts with active order
+Lidocaine — Moderate."* — a warning about giving the drug now, on a question about her history with it. The drug-in-play
+arm runs on any question naming a drug, so every such question carried the chips of a proposal.
+
+### The decision
+
+- **A response to a question asking whether she has EVER taken one drug publishes no interaction chip about giving it**:
+  `LlmInferenceService.aboutTheDrugAsked`, where the chips are final, asking
+  `DrugReferenceInjector.isAboutGivingTheDrugAHistoryQuestionNames` of each — an interaction chip whose every subject row
+  is the named drug's, and not about a medication she takes.
+- **The question shape is a closed grammar**, `QueryScopeRouter.asksWhetherSheHasTakenADrug`: *"Has she ever taken /
+  been on / been prescribed X?"*, *"Did she ever take X?"*, *"Was she ever on X?"*, *"Has X ever been given to her?"*,
+  each optionally ending "before", "in the past" or "previously". Past tense only — *"Does she take X?"* asks about now.
+  Fail-closed: a phrasing it misses publishes the chips it did before.
+- **The injector names the drug's rows on the chart** (`PatientChart.getHistoryQuestionDrugRows()`), off the same marked
+  words `asksWhetherToGiveADrug` reads.
+- **What stays**: a chip about a medication she IS taking — its conflicts with her other orders are her chart's, not a
+  proposal's — and every contraindication, her recorded allergy to the drug being part of its history with her.
+- **Nor does the prompt carry those findings**: the injector puts the findings it receives to the same test before it
+  renders them (round 2). With the chips alone gone, the model still answered from them — see *Round 2* below.
+- **Not taken: answering such a question from the module.** "Her chart records no fluconazole order, active or ended"
+  would need her full order history, which the safety context does not read (it reads active orders), and would still
+  say nothing of a drug recorded only in a note or given outside this chart — which the model, reading the chart text,
+  can find. Put to the maintainer; chips only.
+
+### The gate
+
+Pre-registered, :8081, local E4B, the shipped prompt, 2026-10-06: `main` @ 2c40ad70 (omod d5c4efbf) against this change
+(omod 45028e8e) over 62 cells — gate 15's 56, five history questions and the present-tense *"Does she take
+fluconazole?"*. **It passed.** Every answer was byte-identical, and every chip of every other cell. Three history cells
+lost exactly the interaction chip about giving the drug asked about: both fluconazole wordings (*"…interacts with active
+order Lidocaine — Moderate"*) and Kamwara's *"Has the patient ever been on rifampicin?"* (*"…interacts with active order
+Nevirapine — Major"*). *"Has she ever taken lidocaine?"* kept its three chips: lidocaine is her own order.
+
+### Round 2: the findings leave the prompt too
+
+The first round took the chips off and left the findings in the prompt, and the model answered from them. On *"Was she
+ever on fluconazole?"*: *"Fluconazole is related to the active order Lidocaine, and it is a caution to note, a Moderate
+problem [46]."* On *"has she ever taken panadol?"*: *"The records indicate that Acetaminophen can be given, but there are
+cautions to note regarding its interaction with active medications…"* — a proposal's verdict on a question about her
+history, citing two findings whose chips the response no longer published. So the injector now drops the same findings
+before they reach the prompt (`DrugReferenceInjector.isAboutGivingTheDrugAHistoryQuestionNames`, asked of the findings
+the pre-answer pass returns), and the stamp the chips are filtered by is that same resolution.
+
+Gate 17, pre-registered, :8081, local E4B, the shipped prompt, 2026-10-06: round 1 (omod 45028e8e) against round 2 (omod
+cf9f86a7) over 65 cells — gate 16's 62 and three more history questions. **It failed as written, and was accepted by the
+maintainer.** Both failures are on *"Has she ever taken lidocaine?"*, whose drug is her own order:
+- Rule 2 asked that no history cell cite a finding about the drug asked about, and that cell's findings are about her
+  current medication, which this decision keeps by design. The rule omitted that exemption.
+- Rule 4 asked its answer to stay byte-identical, and its wording moved (*"Yes, the patient has records related to
+  Lidocaine use and allergy"* to *"Yes, the records address Lidocaine"*) while it carried and cited the same three findings.
+  All four runs of it across gates 16 and 17 report the same prompt size in the audit row — 4683 input tokens, 2066
+  reference characters over 4 records — so the move is read as the model's run-to-run variation after a restart.
+
+Every other rule held. All 57 non-history cells were byte-identical in answer and chips, and every history cell's chips
+were round 1's. Four history cells carried fewer findings and changed answer: *"has she ever taken panadol?"* moved from
+*"The records indicate that Acetaminophen can be given, but there are cautions…"* to *"The records do not address the
+patient's intake of Panadol."*; *"Was she ever on fluconazole?"* from the lidocaine caution to *"The records do not address
+whether the patient was ever on Fluconazole."*; the other two kept their sense. None states a proposal's verdict.
+
+Pinned by `LlmInferenceServiceListedMedicationsContextTest.aQuestionAskingWhetherSheHasTakenADrugPublishesNoInteractionChipAboutGivingIt`
+(one question per shape, each reddening when its shape is broken), `.aQuestionAboutHowADrugInteractsKeepsItsChips`,
+`LlmInferenceServiceAnswerFromFindingsContextTest.aHistoryQuestionCarriesNoFindingAboutGivingTheDrug` (the prompt),
+`LlmInferenceServiceAnswerFromFindingsContextTest.aHistoryQuestionAboutHerOwnMedicationKeepsItsChips` (the
+current-medication exception) and `.aHistoryQuestionKeepsHerAllergyToTheDrug` (the interaction-type test).
+
+## Decision 152: A question whose first word lost its leading letters is read as the word it was clipped from
+
+**Status: Accepted** (October 2026) — implemented, no issue. Widens the question grammars of
+[Decision 108](#decision-108-a-drug-safety-question-the-module-resolved-itself-is-answered-from-its-own-findings-and-the-model-is-not-asked-to-restate-them)
+and [Decision 151](#decision-151-a-question-whether-she-has-ever-taken-a-drug-publishes-no-chip-about-giving-it) by one
+reading.
+
+### Context
+
+*"s it safe to give metformin?"*, asked of Susan, was answered by the model *"The records do not address the safety of
+giving Metformin."* — the sentence Decisions 142 and 143 replaced — while *"Is it safe to give metformin?"* got the
+module's answer from the four Unknown rows relating metformin to her orders. The clipped "s" fitted no proposal shape,
+and the grammar is fail-closed by design, so the question fell to the model.
+
+### The decision
+
+- **`QueryScopeRouter.fitsAShape`, where a question fits no shape as written, reads its first word as the
+  `LEADING_WORDS` word it is the proper END of** — "s" of "is", "an" of "can", "hould" of "should", "as" of "has" — and
+  admits the question only where the rest then fits a shape exactly. One matcher, so the proposal, screen and history
+  grammars all read it.
+- **Clipping only.** A first word mistyped any other way — "Ts", "Cna" — or a question missing its first word entirely
+  — "it safe to give …" — is not guessed at, and keeps the model call. Every grammar stays fail-closed: the restored word
+  is one a shape already names, in the place it names it.
+- **Taken by the maintainer** over the recommendation to leave typos to the model, whose answer to the clipped question
+  was vaguer and not wrong.
+
+### The gate
+
+Pre-registered, :8081, local E4B, the shipped prompt, 2026-10-06: `main` @ c73d7941 (omod cf9f86a7) against this change
+(omod d7795791) over 73 cells — gate 17's 65, three clipped proposals with their full forms, one clipped history question
+and one mistyped control. **It passed.** All 65 earlier cells and the three full forms were byte-identical in answer and
+chips. Each clipped proposal became the module's, byte-identical to its full form: *"s it safe to give metformin?"* moved
+from *"The records do not address the safety of giving Metformin."* to the below-floor answer; *"an I give her
+fluconazole?"* from the model's *"Fluconazole can be given, with one caution"* to *"1 interaction caution for
+Fluconazole:"*; Kamwara's *"hould I give her rifampicin?"* from *"No — rifampicin should not be given"* to Decision 108's
+lead. *"as she ever taken panadol?"* carried no finding and moved from *"Acetaminophen can be given, with two cautions"*
+to *"The records do not address the patient's use of Acetaminophen."* *"Ts it safe to give metformin?"* stayed with the
+model.
+
+Pinned by `LlmInferenceServiceAnswerFromFindingsContextTest.aProposalWhoseFirstWordLostItsLeadingLettersGetsItsFullFormsAnswer`,
+`.aFirstWordMistypedOtherThanByClippingStillAsksTheModel` and `.aHistoryQuestionWhoseFirstWordLostItsLeadingLetterIsStillOne`.
+
+## Decision 153: A module's "No" states brief lines, keeping a folded class sentence
+
+**Status: Accepted** (October 2026) — implemented, no issue. Extends the brief line of
+[Decision 140](#decision-140-a-proposal-whose-findings-are-all-cautions-about-the-drug-is-answered-with-the-cautions-found)
+to [Decision 108](#decision-108-a-drug-safety-question-the-module-resolved-itself-is-answered-from-its-own-findings-and-the-model-is-not-asked-to-restate-them)'s
+"No", and corrects [Decision 150](#decision-150-a-proposal-after-a-list-is-answered-from-its-findings-about-the-drug-proposed)'s.
+
+### Context
+
+*"Is gentamicin appropriate for this patient?"*, asked of Susan, was answered with Decision 108's "No" and three findings,
+each stated in its record's whole words: the botulinum-toxin mechanism paragraph, five sentences on aminoglycoside
+nephrotoxicity and ototoxicity, and the lidocaine note, one carrying the data's own double space. The caution answers
+beside it state one line per finding.
+
+### The decision
+
+- **A proposal's composed answer states brief lines under its "No" too**: `DrugReferenceInjector.composeFromFindings`
+  passes `briefDetail` whenever the question is a proposal. A screen's answer, which has no lead, keeps the whole bodies.
+- **`briefDetail` keeps a folded class sentence**: for an interaction that folded a class relationship onto its rule
+  (`SafetyWarning.carriesUnratedRelationship()`, set where `DrugSafetyValidator.interactionWarning` appends that sentence
+  as the detail's last), the last sentence is kept beside the first. It is the relationship that made the finding
+  withhold — *"Gentamicin is in the same ATC class (J01GB) as active order Neomycin — possible duplicate therapy."* — and
+  not mechanism prose. `briefDetail` had said a folded sentence could not reach it, because a fold withholds and only
+  cautions were brief.
+- **Which corrects Decision 150**, whose brief lines were cut the same way and could carry a withholding fold: its
+  *"Ibuprofen interacts with active order Acetylsalicylic acid (aspirin) — Major."* had dropped *"Ibuprofen is in the same
+  cross-reactivity group (NSAID) as active order Acetylsalicylic acid (aspirin) — possible additive or duplicate-class
+  therapy."*, which its own test then pinned. Found by this decision's change, which reddened that test.
+- **A chip beside a brief "No" is no longer published `statedInTheAnswer`**, as beside a caution answer: the mechanism
+  is the chip's, and a client shows it there.
+
+### The gate
+
+Pre-registered, :8081, local E4B, the shipped prompt, 2026-10-06: `main` @ 3d44187c (omod d7795791) against this change
+(omod bfe87b92) over 75 cells — gate 18's 73 and two gentamicin questions. **It passed.** Every cell the model answers,
+and every composed answer not led by "No", was byte-identical in answer and chips. Each of the eleven single-drug "No"
+answers kept its lead, its lines and every line's markers, and every sentence it states is one its old line stated; they
+shrank from 451–1391 characters to 164–390. Gentamicin's now reads, after its lead: *"Gentamicin interacts with active
+order Botulinum toxin type A — Major. [47] [5]"*, *"Gentamicin interacts with active order Neomycin — Moderate. Gentamicin
+is in the same ATC class (J01GB) as active order Neomycin — possible duplicate therapy. [48] [7]"*, *"Gentamicin interacts
+with active order Lidocaine — Minor. [49] [6]"*. The three list answers led by "No" were unchanged, none of their lines
+carrying a fold.
+
+Pinned by `LlmInferenceServiceAnswerFromFindingsContextTest.aModulesNoStatesBriefLinesKeepingAFoldedClassSentence`,
+`.aProposedDrugTheModuleWithholdsIsAnsweredFromItsFindingsWithoutAskingTheModel`,
+`.theLineUnderTheNoIsTheInteractionThatLicensedIt`, `.findingsOfDifferentStrengthsAreLedByTheWithholdingCall`,
+`.aListQuestionWithholdingAgainstHerOwnOrderIsAnsweredNo` (the fold, on a list answer) and
+`.aChipBesideTheModulesBriefNoIsNotMarkedStated`; a screen's whole bodies and stated chips by
+`.everyChipTheComposedAnswerStatesIsPublishedAsStated`.
+
+## Decision 154: A question whether she has ever taken a drug no order of hers carried is answered by the module
+
+**Status: Accepted** (October 2026) — implemented, no issue. Takes up what
+[Decision 151](#decision-151-a-question-whether-she-has-ever-taken-a-drug-publishes-no-chip-about-giving-it) recorded as
+not taken.
+
+### Context
+
+*"has she ever taken aspirin?"*, asked of Susan, whose chart has never held aspirin, was answered by the model *"The records
+do not address aspirin."* — and *"Has she ever taken fluconazole?"* and the panadol question alike. The module could say
+more: her orders were read. But its safety context reads ACTIVE orders alone, so it could not say "never".
+
+### The decision
+
+- **`PatientClinicalContextBuilder.buildOrderHistory`** reads every drug order she ever had, voided ones excluded, each
+  through the one conversion an active order takes (`addDrugOrder`, extracted from `build` for it), into a context whose
+  order list is that history. So `DrugReferenceService.findForActiveOrders` and `DrugSafetyValidator.everyActiveOrderResolves`
+  answer over the history unchanged, and no order is resolved a second way. Read lazily, by `inject`, only for a question
+  `QueryScopeRouter.asksWhetherSheHasTakenADrug` admits.
+- **`DrugReferenceInjector.composeNoOrderEver`** answers only the negative: *"This patient's chart records no Mebendazole
+  order, active or ended."*, then *"A drug recorded only in a note, or given outside this chart, is not covered."* Where an
+  order did carry the drug, the model answers from that order's record, which it cites.
+- **Fail-closed**: one substance named; the history read in full; every order in it resolved, since one the data cannot
+  name may be the drug; none of their substances the drug's; and no record of the question's chart, outside the module's
+  own reference material, naming the drug — a note or observation that may record it given without an order.
+
+### Residue
+
+The record test reads the chart built for the question, which in query-scoped mode (the default) is a slice: a note the
+slice did not carry is not seen. The scope line states it. Medication recorded only as a free-text observation outside
+the slice, or dispensed outside this chart, is the same residue.
+
+### The gate
+
+Pre-registered, :8081, local E4B, the shipped prompt, 2026-10-06: `main` @ eb29e012 (omod bfe87b92) against this change
+(omod 87f2322a) over 80 cells — gate 19's 75 and five more history questions. **It passed.** All 66 non-history cells
+were byte-identical in answer and chips. Eleven history cells became the module's — fluconazole (two wordings),
+metformin, ibuprofen, gentamicin, mebendazole, aspirin and panadol (twice, one clipped) for Susan; rifampicin and
+metformin for Kamwara — and for each, the patient's orders table, every action and status with voided rows excluded,
+holds no order whose drug or concept name carries the drug asked about or the name the answer gives it, read by SQL
+after capture. *"has she ever taken aspirin?"* now reads *"This patient's chart records no Acetylsalicylic acid
+(aspirin) order, active or ended."* and the scope line. Lidocaine (Susan's order) and nevirapine (Kamwara's) stayed with
+the model, which cites the order; *"Has she ever been on paracetamol?"* stayed with it too — the data does not resolve
+"paracetamol" — and was byte-identical.
+
+### Not pinned
+
+The read guard: no fixture fails the order-history read, so deleting the `activeDrugOrdersRead()` conjunct reddens
+nothing. Kept as the composition's statement of what it requires.
+
+Pinned by `LlmInferenceServiceAnswerFromFindingsContextTest.aDrugNoOrderOfHersEverCarriedIsAnsweredWithThatScopedToOrders`,
+`.aHistoryQuestionAboutADrugSheTakesStillAsksTheModel` and `.aHistoryQuestionAboutADrugOnlyAnEndedOrderCarriedStillAsksTheModel`
+(the substance test), `.aHistoryQuestionWhoseDrugAChartRecordNamesStillAsksTheModel` (the record test) and
+`.aHistoryQuestionBesideAnOrderTheDataCannotNameStillAsksTheModel` (the resolution test).
+
+## Decision 155: A question whether she has ever taken a drug her orders carried states each order and whether it is in force
+
+**Status: Accepted** (October 2026) — implemented, no issue. The positive half of
+[Decision 154](#decision-154-a-question-whether-she-has-ever-taken-a-drug-no-order-of-hers-carried-is-answered-by-the-module),
+and a correction to its order-history read.
+
+### Context
+
+*"Has she ever taken Metoclopramide?"*, asked of Susan, who is on it, was answered by the model *"Yes — Metoclopramide was
+ordered on 2026-08-03 [8]."* It did not say she still is, though her chart's record of that order carries the module's own
+stamp that it is in force.
+
+### The decision
+
+- **`DrugReferenceInjector.composeOrdersCarrying`** answers where orders of hers carried the drug: *"This patient's chart
+  records 2 Acetylsalicylic acid (aspirin) orders:"*, then one line per order — *"ASPIRIN — ended 2008-08-15, ordered
+  2008-08-08. [3]"*, *"ASPIRIN — active, ordered 2008-08-15. [2]"* — each citing the order's `drug_order` record. Its
+  status is the record's `getOrderActive()`, its end `getOrderStopDate()`, its date the record's own; never a reading of
+  the record's text, and never a date the stamps do not carry.
+- **Which orders carried the drug is asked of each order alone**, through `findForActiveOrders` over a context of that one
+  order: the resolution Decision 154's negative test reads over the whole history. Not through
+  `DrugSafetyValidator.resolvesFrom`, whose name leg is deliberately wider than the candidate set.
+- **Fail-closed**: Decision 154's gates — one substance, the history read in full, every order resolved — and every order
+  that carried the drug must have a record in the question's chart whose in-force stamp is not `null`. An answer citing
+  some of her orders would read as all of them.
+
+### A defect in Decision 154's read, found here
+
+`buildOrderHistory` skipped an order core handed back as a Hibernate proxy of `Order`, which is no `instanceof
+DrugOrder`. An order the session has already loaded as another order's `previousOrder` comes back that way: patient 7's
+first aspirin order, the one order 111 revised, was left out of her history. So Decision 154's "no order, active or ended"
+could be false for a drug whose only order was so loaded. Each order is now unwrapped
+(`HibernateUtil.getRealObjectFromProxy`) before the type test. The active-order read in `build` asks the same type test of
+`getActiveOrders` and was not changed: an active order is not normally another order's `previousOrder`, and no case
+reproduced a proxy there.
+
+### The gate
+
+Pre-registered, :8081 (`chartMode` stored as `fullChart`), local E4B, the shipped prompt, 2026-10-06: `main` @ 6aa25193
+(omod 340a2266) against this change (omod 5f879de5) over 83 cells — gate 20's 80 and three history questions about drugs
+the patients hold. **It passed.** All 66 non-history cells were byte-identical, and so was every history answer Decision
+154 composed: the proxy fix moved none of them. Five history cells became the module's — Susan's lidocaine, metoclopramide
+and neomycin, Kamwara's nevirapine and lamivudine — each one order, each *"— active, ordered <day>. [n]"* citing its
+`drug_order` record. For each, the orders table, read by SQL after capture, holds exactly that many non-voided orders
+naming the drug, none stopped or expired. Their chips were arm A's. *"Has she ever taken Metoclopramide?"* now reads
+*"This patient's chart records 1 Metoclopramide order:"* / *"Metoclopramide — active, ordered 2026-08-03. [8]"*.
+
+Pinned by `LlmInferenceServiceAnswerFromFindingsContextTest.aHistoryQuestionAboutADrugSheIsOnStatesEveryOrderAndWhichIsInForce`
+(both statuses, and the proxied order), `.aHistoryQuestionAboutADrugOnlyAnEndedOrderCarriedStatesWhenItEnded`,
+`.aHistoryQuestionWhoseOrdersAreNotAllCitableStillAsksTheModel` (the record test) and
+`.aHistoryQuestionWhoseOrderRecordCarriesNoStampStillAsksTheModel` (the stamp test, which also asserts the injection still
+ran: without the guard a null stamp throws and the whole injection is dropped).
+
+## Decision 156: A response says whether its question asked if she has ever taken a drug
+
+**Status: Accepted** (October 2026) — implemented, no issue.
+
+### Context
+
+*"Has she ever taken Metoclopramide?"*, asked of Susan, who is on it, carried one chip: *"Metoclopramide interacts with active
+order Lidocaine — Major."* [Decision 151](#decision-151-a-question-whether-she-has-ever-taken-a-drug-publishes-no-chip-about-giving-it)
+keeps it — a conflict of a medication she is taking — and the reference client drew it in the red box of findings about
+the drug asked, since it is about that drug. Put to the maintainer: keep it as a warning, draw it neutral and collapsed,
+or drop it. Neutral and collapsed was chosen, which the client cannot do on its own: nothing on the response said the
+question was one of history.
+
+### The decision
+
+- **`ChartAnswer.asksWhetherSheHasTakenADrug()`**, published as the `asksWhetherSheHasTakenADrug` key on every surface
+  carrying the answer, written in exactly one place in `ChartSearchAiRestController`. It is read off the injector's own
+  stamp, `PatientChart.getHistoryQuestionDrugRows()` non-empty, and never re-asked of the question — so it is true exactly
+  where Decision 151's grammar admitted the question, whether the model or the module wrote the answer.
+- **The drawing is the client's.** The README tells a client to draw such a response's chips apart from the answer.
+
+### The gate
+
+Pre-registered, :8081, local E4B, the shipped prompt, 2026-10-06: this change (omod 333254b6) against the captures of
+gate 21's arm B, the code `main` carries since #604, over the same 83 cells. **It passed.** Every answer,
+`answeredByTheModule`, reference and chip was byte-identical. The key read `true` on exactly the 16 history questions
+whose drug the data resolves, `false` on *"Has she ever been on paracetamol?"* — "paracetamol" resolves to no drug, so
+no stamp is made — and `false` on every other cell.
+
+Pinned by `LlmInferenceServiceAnswerFromFindingsContextTest.aResponseSaysWhetherTheQuestionAskedIfSheHasEverTakenADrug`
+(the model's answer, the module's, the early done, and a proposal) and
+`ChartSearchAiAsksWhetherSheHasTakenADrugTest` (the wire, both SSE paths, XML, and the one write).
+
+## Decision 157: Every streaming query starts from the patient's saved chart prefix
+
+**Status: Accepted** (October 2026) — implemented, no issue.
+
+### Context
+
+On the demo (2026-10-06, `main` cb8451f9, local Gemma 4 E2B on a GPU-less host), *"Is warfarin safe for her?"* for patient
+`dd749903-1691-11df-97a5-7038c432aabf` was answered two ways with byte-identical request bodies, and which way followed
+one thing: whether `/warmup` had run first. The audit rows of that afternoon: the five `search/stream` calls with no
+warmup before them (rows 87, 88, 89, 91, 93) answered *"The records do not address the safety of warfarin for her."*; the
+four preceded by a warmup — two through the UI, which fires it on chart open, and two by REST — answered *"No — Warfarin
+has major interactions with ketoprofen, ketorolac, lepirudin, levofloxacin, and lomefloxacin [87]."* Row 93 came straight
+after a UI run and still gave the first answer, so it was not leftover state alone. The server log showed every warmup
+restoring the patient's entry from disk (`Warmup restored KV cache from disk`) and no query ever doing so: a query whose
+chart key was in `ramResidentKeys` skipped the restore and answered from whatever the slot held.
+
+Two claims in this module were false, and the code rested on them: that a restored KV "is byte-for-byte what a fresh
+prefill would produce, so answer quality is unchanged" (the `kvCacheDir` GP description, `ChartSearchAiConstants`, the
+warmup's own comment), and that the cache-reuse flip on borderline questions is a trade-off "fundamental to llama-server's
+design" (`LocalLlmEngine.buildServerCommand`'s javadoc). Decision 80's own note had it right — the flips are prefix-cache
+state, "removable by resetting the slot at a latency cost that wants a measurement first".
+
+### What was measured
+
+A scratch script driving llama-server b8850 (`4eac5b4`, `publish-natives.yml`'s default tag) directly over HTTP, with
+the production flags plus `--device none`, `gemma-4-E2B-it-Q4_K_M.gguf`, a 5,302-token prompt built from
+`TestDatasetHelper.FULL_PATIENT_DATASET`'s 153 records and a warfarin question. Each row is three runs, each on a freshly
+started server; the figure is the first answer token's log-probability, and all three runs of every row agreed to the
+fourth decimal:
+
+| How the slot reached the question | log p(first token) |
+|---|---|
+| a fresh prefill of the whole prompt | −0.5877 |
+| the chart prefix restored from a saved entry, then the question | −0.3039 |
+| the chart prefix primed in RAM, then the question | −0.4332 |
+
+Deterministic per path, different across paths, by up to 0.28 in probability: on a borderline question that is the
+answer. Then five histories, each followed by *restore the saved entry, then the question* — nothing before it, the same
+question before it, a different question before it, a fresh full prefill before it, and a prime plus two questions before
+it. **All five gave −0.3039**, token for token. Restoring took 8–10 ms for the 51.2 MB entry, from the page cache, on an
+Apple M-series CPU; it is not measured on the demo, whose RAM pressure may send it to disk.
+
+Tried and not adopted:
+
+- **Re-priming the prefix before each query instead of restoring it.** It re-evaluates the prefix's last token on its own,
+  and that moves the state too: −0.3293 against −0.4242 for the first question in the same series (that series ran
+  with `--swa-full`, below; the five-history result above held with and without it).
+- **`--swa-full`** (Gemma 4's sliding-window layers kept at full size). It made *primed* and *restored* agree, but not
+  *fresh*, and it changes what a fresh prefill answers — so it is a model-behaviour change with a memory cost, and
+  restoring before every query is enough without it.
+
+### The decision
+
+- **A streaming query restores the patient's saved entry before it answers — always, not only when the server's RAM is
+  cold for the chart.** `LocalLlmEngine.kvQueryAction` takes no RAM-residency input, so nothing can bring the skip back;
+  `ramResidentKeys` is gone.
+- **The entry is the chart warmup primes, never the prompt's records.** A drug question's prompt carries reference records
+  `DrugReferenceInjector` appended after the chart, so `LlmInferenceService.searchStreaming` hands
+  `LlmProvider.searchStreaming` the chart as it stood before injection (`cacheSeedRecords`) and the KV is keyed on that.
+  The query restores the entry a chart-open warmup made and computes the appended records and the question on top.
+  Keyed on the injected chart, as before this decision, every drug question needed an entry of its own; made from
+  whatever the slot held it depended on history, and made from scratch it would cost a full chart prefill per question.
+- **An entry is made from scratch, in one place.** `LocalLlmEngine.primeAndPersist` makes it for `warmup` and for a
+  query that found none, with `cache_prompt=false`: priming the same prefix after three different slot histories saved
+  three byte-identical files that way, and a different file with reuse on. It is then restored like any other, and the
+  query no longer saves the slot after it answers. The from-scratch prefill costs the system prompt's tokens once per
+  chart version, mostly inside the background warmup.
+- **The cost:** one restore per streaming query, and an exact repeat of the previous question re-processes its question
+  tail rather than one token. The answer cache (`chartsearchai.cacheTtlMinutes`) is the lever for repeats.
+
+### Not covered, said rather than implied
+
+- **The non-streaming `/search` path** passes no cache scope (`LlmProvider.search`), so it still answers from whatever
+  the slot holds. Giving it one changes a signature the suite's test doubles override, which is its own change.
+- **`chartsearchai.llm.kvCacheDir=off`, and `chartMode=queryScoped`** (which supplies no seed) have nothing to restore,
+  and keep the history dependence.
+- **A restore that fails** is logged at WARN and the query proceeds from whatever the slot holds.
+- **On a GPU** (Metal, measured locally) the same histories happened to agree before this change; nothing here says a GPU
+  backend cannot diverge.
+
+### The gate
+
+`LocalEngineAnswerHistoryIndependenceTest`, opt-in, drives `LlmInferenceService.warmup` and
+`LlmInferenceService.searchStreaming` — the real `ChartBuildingStrategy` over a chart `QueryStoreChartBuilder` builds from
+`FULL_PATIENT_DATASET`, the real injector over the DDInter excerpt (`DrugReferenceTestSupport.ddinterInjector`), and the
+Spring-wired `LlmProvider` and `LocalLlmEngine`, which starts the bundled llama-server CPU-only. It asks a question after
+five histories — a chart-open warmup, a different question, the same question, its entry evicted and remade with another
+answer in the slot, a server restart — and compares the whole streamed output with the same question on a cold engine
+with nothing saved. It does so for *"Is warfarin safe for her?"*, whose prompt carries the injector's records, and for a
+question the module appends nothing to; each case first asserts which of the two it is.
+
+- **Before this decision it failed**, at the warmup history: *"…the records do not address the safety of warfarin."*
+  against *"…the records do not address warfarin safety."*, with different reasoning. That was an earlier form of the
+  test, driving `LlmProvider` directly with no injected records.
+- **After it, it passed**: that earlier form three runs out of three, the final form on the one run made of it.
+- **Mutated, it reddens where each half is pinned.** Restoring nothing when an entry exists (the slot answers): both
+  questions, at the different-question history. `cache_prompt=true` in `primeAndPersist`: the eviction history, measured
+  on the `LlmProvider`-driven form. The seed taken off the prompt's records: not this test — from-scratch entries keep
+  the answers equal at a prefill per question — but
+  `LlmProviderTest.searchStreaming_seedsTheKvOffTheChartBeforeInjection_notOffThePromptsRecords` in `LlmProvider` and
+  `FindingEnumerationClauseContextTest.theCommittedPassSeedsItsKvOffTheChartBeforeInjection` in `LlmInferenceService`.
+
+The restore policy is pinned in CI by `LocalLlmEngineTest.kvQueryAction_aSavedEntryIsRestoredBeforeEveryQuery` and
+`kvQueryAction_noSavedEntryIsMadeTheWayWarmupMakesItThenRestored`, which replace the spec this decision reverses
+(`kvQueryAction_ramResidentYieldsNone_soWarmRepeatsAndAlternatingPatientsNeverReRestore`).
+
+## Decision 158: A proposal for a patient with no active medication orders is answered with what the check had to compare
+
+**Status: Accepted** (October 2026) — implemented, no issue. Extends
+[Decision 143](#decision-143-a-proposal-related-to-none-of-her-orders-is-answered-with-what-the-interaction-check-established)
+to the patient it declined for.
+
+### Context
+
+On the demo (2026-10-06, `main` ed513ee1, local E2B), *"Is warfarin safe for her?"* for patient
+`dd749903-1691-11df-97a5-7038c432aabf`, who has no drug orders, was answered by the model *"No — Warfarin has major
+interactions with ketoprofen, ketorolac, lepirudin, levofloxacin, and lomefloxacin [87]."*, with no chip and record 87
+— warfarin's `drug_reference` record — its one citation. None of those five drugs is hers: they are the dataset's partners
+for warfarin, rendered under `DATASET_TAIL_LEAD`, the prefix the system prompt says marks material that is not this
+patient's. Decision 143's sentence would have answered had she had orders; its own conjunct — her orders resolve at least
+one substance — declined, and with no order the drug-in-play arm states no extent either. Every module branch declined,
+and the model read the dataset's list as hers.
+
+### The decision
+
+- **The module answers it**: `DrugReferenceInjector.composeFromNoActiveOrders`, tried where `composeFromNoPair` declines:
+  *"This patient has no active medication orders, so the interaction check had none to relate Warfarin to. [87]"*, citing
+  the drug's reference record alone.
+- **A statement about the CHECK, as Decision 143's is**: what it had to compare the drug against. Never "can be given",
+  never "safe", never that the patient has no interactions. "Medication orders" rather than "medications": a
+  medication the chart records only as an observation is not one the check reads.
+- **Fail-closed on Decision 143's conjuncts that still apply**: no finding, on a chart read for safety — so her orders
+  were READ and none is active, not unread; the contraindication arms on, so "no finding" includes her allergy records;
+  one drug, proposed, whose reference record is in the chart (`proposedDrugsRecord`, shared). And the context carries
+  no active drug in any form — no order, and no flattened name or code (issue #118's shape), which still records a
+  medication.
+
+### The gate
+
+`LlmInferenceServiceAnswerFromFindingsContextTest`, over the real injector and validator and the shipped knowledge
+base, patient 6 (no active order):
+`.aProposalForAPatientWithNoActiveOrdersIsAnsweredWithWhatTheCheckEstablished` and its streaming twin failed before the
+change — the model was asked — and pass after it; `.aQuestionNamingADrugWithoutProposingItForAPatientWithNoOrdersStillAsksTheModel`
+and `.aProposalForAPatientWithNoOrdersAsksTheModelWhereContraindicationsAreNotChecked` pin the refusals.
+`NoActiveOrdersProposalAnswerTest` drives the injector with the flattened shape the database cannot build. Mutated, each
+conjunct reddens its own case: the contraindication reading, the proposal, and the flattened names and codes — the last
+only once the case's co-medication was one the data does not relate to warfarin (with metformin a caution finding was
+raised and another branch answered, so the case could not see the conjunct).
+
+## Decision 159: Her own orders sharing a substance do not stop the answer to a proposal
+
+**Status: Accepted** (October 2026) — implemented, no issue. Widens the branch
+[Decisions 142](#decision-142-a-proposal-related-to-her-orders-only-below-the-severity-floor-is-answered-with-those-rows),
+[143](#decision-143-a-proposal-related-to-none-of-her-orders-is-answered-with-what-the-interaction-check-established) and
+[158](#decision-158-a-proposal-for-a-patient-with-no-active-medication-orders-is-answered-with-what-the-check-had-to-compare)
+answer from.
+
+### Context
+
+On the demo (2026-10-07, `main` efcb6bf3, `answerFromFindings` on), *"Can I give her ibuprofen?"* for patient
+`dda99123-1691-11df-97a5-7038c432aabf` — lamivudine, stavudine, nevirapine and isoniazid, each ordered twice — was
+answered by the model *"The records do not address the safety of giving ibuprofen."*, citing nothing, beside four chips
+*"Lamivudine is in active orders Lamivudine (2 orders) — possible duplicate therapy"* and their three siblings. The
+response's `interactionPairs` read `found: 0` with ibuprofen's four rows against her orders all below the floor: the
+shape Decision 142 answers. Its branch ran only where the injection raised NO finding, and #477's finding that her own
+orders share a substance — raised on any question that resolves a drug — is one, though it says nothing about ibuprofen.
+So every proposal for a patient with a duplicated order reached the model.
+
+### The decision
+
+- **That finding does not stop the branch.** `DrugReferenceInjector.onlyHerOwnOrdersSharingASubstance` replaces the
+  empty-findings test: the no-finding compositions run where every finding is
+  `SafetyWarning.statesOrdersSharingASubstance()`. Any other finding — about the drug proposed, a contraindication, a
+  condition — still takes the branches it took.
+- **It is stated after the answer**, one line per finding, through `findingLine` — the rendering `composeFromFindings`
+  uses, now extracted so the two cannot drift — as a "No" states it after the drug's own findings
+  ([Decision 116](#decision-116-a-question-about-a-drug-states-which-of-her-orders-share-a-substance-too)'s ordering).
+  Left to the chip alone, the answer would say nothing of a finding shown beside it.
+
+### The gate
+
+`LlmInferenceServiceAnswerFromFindingsContextTest`, patient 7 with two rifampicin orders, the shipped knowledge base:
+`.aProposalTheCheckRelatesToNoneOfHerOrdersIsAnsweredBesideHerOwnOrdersSharingASubstance` (mebendazole, Decision 143's
+sentence then the finding) and `.aProposalRelatedToHerOrdersOnlyBelowTheFloorIsAnsweredBesideHerOwnOrdersSharingASubstance`
+(nystatin, Decision 142's) each first assert that the prompt carries exactly that one finding, failed before the change
+— the model was asked — and pass after it. Mutated back to the empty-findings test, both redden; with the line
+dropped, both redden.
+
+## Decision 160: Her own orders sharing a substance do not stop a caution-only answer either
+
+**Status: Accepted** (October 2026) — implemented, no issue. Extends
+[Decision 159](#decision-159-her-own-orders-sharing-a-substance-do-not-stop-the-answer-to-a-proposal) to
+[Decision 140](#decision-140-a-proposal-whose-findings-are-all-cautions-about-the-drug-is-answered-with-the-cautions-found)'s
+answer.
+
+### Context
+
+Decision 159 let #477's finding — two of her own orders carry one substance — stand beside the answers to a proposal
+that raised no finding of its own. A proposal that did raise one was still exposed. Probed 2026-10-07 on patient 7
+with two rifampicin orders, the shipped knowledge base: *"Can I give her clarithromycin?"* raised a Moderate
+interaction with her rifampicin — a caution, which Decision 140 answers — and the duplicate. `cautionsOnlyAbout`
+requires EVERY finding to be a caution about the drug proposed, the duplicate is not one, and the model answered, the
+module appending the caution it left unstated. The withholding "No" was not exposed: one finding licensing it is
+enough, and `composeFromFindings` already states the duplicate after the drug's own findings.
+
+### The decision
+
+- **`cautionsOnlyAbout` is asked of the findings without her own orders sharing a substance**
+  (`DrugReferenceInjector.notHerOwnOrdersSharingASubstance`), so at least one real caution about the drug is still
+  required, and any other finding still refuses.
+- **The lead counts the cautions alone**: *"1 interaction caution for Clarithromycin:"*, not 2 — the duplicate is not a
+  caution about the drug proposed. It follows the cautions as a line, where `composeFromFindings` already orders it.
+
+### The gate
+
+`LlmInferenceServiceAnswerFromFindingsContextTest.aCautionOnlyProposalIsAnsweredBesideHerOwnOrdersSharingASubstance`
+asserts its premise (the prompt carries a caution about clarithromycin and the duplicate), failed before the change —
+the model was asked — and passes after it, the answer exactly three lines. Mutated back to asking every finding, it
+reddens on the model call; with the lead counting every line, it reddens on "2 interaction cautions".
+`.aWithholdingProposalIsAnsweredBesideHerOwnOrdersSharingASubstance` pins the "No" that already held.

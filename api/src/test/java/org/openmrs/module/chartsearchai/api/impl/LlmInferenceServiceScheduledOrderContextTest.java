@@ -122,7 +122,7 @@ public class LlmInferenceServiceScheduledOrderContextTest extends BaseModuleCont
 		ChartAnswer answer = serviceAnswering(modelAnswer).service.search(patient, AMLODIPINE_QUESTION);
 
 		assertEquals(modelAnswer + " Also covered by those findings and not named above: scheduled order "
-				+ "Rifampicin (rifampin) (" + STARTS + ").", answer.getAnswer(),
+				+ "Rifampicin (rifampin) (" + STARTS + ").", OwnOrderFindingStatementTestSupport.withoutTheOwnOrderStatement(answer.getAnswer()),
 				"the module names the partner as a scheduled order, with its date");
 	}
 
@@ -229,7 +229,7 @@ public class LlmInferenceServiceScheduledOrderContextTest extends BaseModuleCont
 		@Override
 		public LlmResponse searchStreaming(String numberedRecords, List<Integer> focusIndices,
 				String question, Consumer<String> tokenConsumer, Consumer<String> reasoningConsumer,
-				String cacheScope, boolean enumerateFindings, LlmEngine.ReferenceRecords referenceRecords,
+				String cacheScope, String cacheSeedRecords, boolean enumerateFindings, LlmEngine.ReferenceRecords referenceRecords,
 				List<PatientChartSerializer.AlreadyOrderedDrug> drugsAlreadyOrdered) {
 			tokenConsumer.accept(answer);
 			return search(numberedRecords, focusIndices, question, enumerateFindings, referenceRecords,

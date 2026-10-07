@@ -1137,6 +1137,10 @@ public class DrugSafetyValidator {
 		// What the same screen related below the floor (ADR Decision 127), stated beside the count and
 		// over the same population: the question's substances, never the answer's.
 		List<PairChipExtent.BelowFloorPair> questionDrugBelowFloor = new ArrayList<PairChipExtent.BelowFloorPair>();
+		// The same screen per question substance, whichever arm states the field (ADR Decision 149): a question
+		// listing drugs opens the question-pair arm, which then speaks for the question, while what the drug it
+		// proposes relates to among her orders is still this arm's to say.
+		Map<Object, PairChipExtent> questionDrugExtents = new LinkedHashMap<Object, PairChipExtent>();
 
 		// The substances in play the drug-in-play arm states the CURRENT-medication referent for, asked
 		// per drug in play below (issue #402, ADR Decision 123): those her active orders establish she
@@ -1219,8 +1223,10 @@ public class DrugSafetyValidator {
 				if (questionSubstances.contains(substance)) {
 					questionDrugScreened = true;
 					questionDrugPairs += related;
-					questionDrugBelowFloor.addAll(belowFloorPairs(rows, subjects, context, severityFloor,
-						orderEntries, bridgedOrders));
+					List<PairChipExtent.BelowFloorPair> belowFloor = belowFloorPairs(rows, subjects, context,
+						severityFloor, orderEntries, bridgedOrders);
+					questionDrugBelowFloor.addAll(belowFloor);
+					questionDrugExtents.put(substance, PairChipExtent.of(related, related, belowFloor));
 				}
 			}
 			if (dosePending.remove(substance)) {
@@ -1351,6 +1357,11 @@ public class DrugSafetyValidator {
 			log.info("Drug-safety validator raised {} warning(s)", warnings.size());
 		}
 		recordPairExtent(pairExtentSink, pairExtent);
+		// On the condition the fallback above states its own on, for the same reason: on a chart recording no
+		// medication there is no population the screen ran over.
+		if (pairExtentSink != null && hasActiveMedicationRecords(context)) {
+			pairExtentSink.recordPerQuestionSubstance(questionDrugExtents);
+		}
 		return warnings;
 	}
 
@@ -7388,7 +7399,8 @@ public class DrugSafetyValidator {
 				}
 			}
 			pairs.add(new PairChipExtent.BelowFloorPair(drug, partnerLabel(i),
-					ChartSearchAiUtils.firstNonBlank(i.getSeverity()), herOrders, started && !herOrders.isEmpty()));
+					ChartSearchAiUtils.firstNonBlank(i.getSeverity()), herOrders, started && !herOrders.isEmpty(),
+					i.mechanismOnFile()));
 		}
 		return pairs;
 	}
@@ -8236,6 +8248,27 @@ public class DrugSafetyValidator {
 		}
 		String atc = DrugReference.normalizeAtcToken(rule.getAtc());
 		return atc != null && other.normalizedAtcCodes().contains(atc);
+	}
+
+	/**
+	 * @return whether any interaction rule of {@code rows} identifies one of {@code others} ({@link #identifies}) — the
+	 *         direction the drug-in-play arm does not read, since it walks the PROPOSED drug's rows alone. The
+	 *         {@code ddinter} loader files every pair under both of its drugs, so there it is not expected to move an
+	 *         answer (ADR Decision 143's re-run moved none); a curated file need not, and a pair filed only under one
+	 *         of her orders' entries is the case this answers for {@code DrugReferenceInjector.composeFromNoPair}
+	 *         (issue #592). At any rating: the question is whether the data relates the two at all.
+	 */
+	static boolean anyRuleIdentifiesAny(List<DrugReference> rows, List<DrugReference> others) {
+		for (DrugReference row : rows) {
+			for (DrugReference.Interaction rule : row.getInteractions()) {
+				for (DrugReference other : others) {
+					if (identifies(rule, other)) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
 	}
 
 	/** @return true when {@code token} is, case-folded, one of {@code other}'s own aliases. Through
@@ -10323,7 +10356,7 @@ public class DrugSafetyValidator {
 	}
 
 	/** @return whether any of {@code orders} has not started — see {@link #scheduledStartOf} */
-	private static boolean anyHasNotStarted(Collection<PatientClinicalContext.ActiveDrugOrder> orders) {
+	static boolean anyHasNotStarted(Collection<PatientClinicalContext.ActiveDrugOrder> orders) {
 		for (PatientClinicalContext.ActiveDrugOrder order : orders) {
 			if (!order.hasStarted()) {
 				return true;

@@ -2555,6 +2555,10 @@ public class ChartSearchAiRestController {
 		// ADR Decision 136: the cited findings whose unknown-significance qualifier the answer drops.
 		List<Integer> qualifiers = answer.getUnstatedSignificanceQualifiers();
 		target.put("unstatedSignificanceQualifiers", qualifiers == null ? null : new ArrayList<Integer>(qualifiers));
+		// ADR Decision 147: the findings the module's own sentence after the answer states, which cites no marker.
+		List<Integer> statedByTheModule = answer.getFindingsStatedByTheModule();
+		target.put("findingsStatedByTheModule",
+			statedByTheModule == null ? null : new ArrayList<Integer>(statedByTheModule));
 		target.put("unstatedDosingCeilings",
 			serializeUnstatedDosingCeilings(answer.getUnstatedDosingCeilings()));
 		target.put("orderStopDates", serializeOrderStopDates(answer.getOrderStopDates()));
@@ -2580,6 +2584,9 @@ public class ChartSearchAiRestController {
 		// and on every surface they reach, the early done included. ChartAnswer.isAnsweredByTheModule
 		// is canonical for what it does and does not assert.
 		target.put("answeredByTheModule", Boolean.valueOf(answer.isAnsweredByTheModule()));
+		// ADR Decision 156: whether the question asked if she has ever taken one drug, so a client can draw the chips
+		// beside such an answer apart from it. ChartAnswer.asksWhetherSheHasTakenADrug is canonical for it.
+		target.put("asksWhetherSheHasTakenADrug", Boolean.valueOf(answer.asksWhetherSheHasTakenADrug()));
 		// Issue #515: the withholding findings about the drug the answer's caution lead gives.
 		// ChartAnswer.getCautionLedOverWithholding() is canonical for null and for what [] does not say.
 		target.put("cautionLedOverWithholding",
