@@ -13,7 +13,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -28,8 +30,9 @@ import org.openmrs.module.querystore.model.QueryDocument;
  * Pure unit tests for {@link QueryStoreChartBuilder}.
  *
  * <p>Focus-hint mode contract: the builder always calls
- * {@code QueryStoreService.getPatientChart} so the chart bytes are a function of the
- * patient only (the property llama-server's KV-cache reuse needs). When
+ * {@code QueryStoreService.getPatientChart} so the chart bytes do not vary with the
+ * question (the property llama-server's KV-cache reuse needs; since issue #317 they do vary with
+ * the patient's order status, which no question can change). When
  * {@code preFilter=true} with a non-blank question, it additionally calls
  * {@code QueryStoreService.searchByPatient} to get a relevance ranking; the matching
  * record UUIDs flow through {@code PatientChart.getFocusIndices()} for rendering as a
@@ -52,13 +55,13 @@ public class QueryStoreChartBuilderTest {
 	@BeforeEach
 	public void setUp() {
 		queryStore = new CountingQueryStoreStub();
-		builder = new TestableQueryStoreChartBuilder(queryStore);
+		builder = new TestableQueryStoreChartBuilder(queryStore.asService());
 		builder.setChartSerializer(new PatientChartSerializer());
 	}
 
 	@Test
 	public void build_shouldStillCallGetPatientChartAndSkipSearch_whenQuestionIsBlank() {
-		// Focus-hint contract: the chart bytes are a function of the patient only, so a blank
+		// Focus-hint contract: the chart bytes do not vary with the question, so a blank
 		// question still produces the full chart — that's exactly what warmup needs (warmup
 		// calls buildChart(patient, "") to prime the prefix llama-server will reuse on real
 		// queries). The blank-question short-circuit is now scoped to the focus-hint side
@@ -583,6 +586,46 @@ public class QueryStoreChartBuilderTest {
 	}
 
 	@Test
+	public void build_shouldStampTheChartWithThePreFilterDispatchItActuallyTook() {
+		// Issue #178: the audit row's search mode is read off the chart's own stamps rather than a
+		// later GP read, so this is where the two full-chart shapes become distinguishable at all.
+		// Taken from the same boolean the dispatch and the [timing] mode= label use, so the row and
+		// the log line cannot disagree about which one ran.
+		builder.usePreFilter = true;
+		assertTrue(builder.build(patient(1), "any allergies?").isPreFiltered(),
+				"a focus-hint build must say so on the chart it returns");
+
+		builder.usePreFilter = false;
+		assertFalse(builder.build(patient(1), "any allergies?").isPreFiltered(),
+				"a plain full chart must not claim a focus hint");
+	}
+
+	@Test
+	public void build_shouldStampDegradedChartsToo_soAFailedBuildStillNamesItsMode() {
+		// An empty chart from an unreachable querystore is still a chart assembled in preFilter
+		// mode, and its audit row has to say which mode was in force — a request that degraded is
+		// exactly the one a maintainer will come back to read.
+		builder.usePreFilter = true;
+		builder.queryStoreUnavailable = true;
+
+		PatientChart chart = builder.build(patient(1), "any allergies?");
+
+		assertEquals(0, chart.getMappings().size(), "the degraded path must have been taken");
+		assertTrue(chart.isPreFiltered(),
+				"a degraded build must not lose the mode it was dispatched in");
+	}
+
+	@Test
+	public void buildScoped_shouldNeverClaimAFocusHint() {
+		// The slice IS the scope and renders no focus hint, so the two stamps are mutually
+		// exclusive in practice — which is what lets searchModeLabel answer queryScoped first.
+		builder.usePreFilter = true;
+
+		assertFalse(builder.buildScoped(patient(1), "any allergies?").isPreFiltered(),
+				"a scoped slice carries no focus hint whatever the preFilter GP says");
+	}
+
+	@Test
 	public void buildFocused_shouldReturnEmptyChart_whenSearchByPatientThrows() {
 		// A focus-RPC failure must degrade to an empty focused chart (the caller treats that as
 		// "no preview") and NEVER propagate — the authoritative full-chart answer must not be
@@ -595,6 +638,165 @@ public class QueryStoreChartBuilderTest {
 				"a focus-RPC failure degrades to an empty focused chart, not a propagated throw");
 		assertEquals(1, queryStore.searchByPatientCalls,
 				"the failure happened inside searchByPatient — it was reached, then swallowed");
+	}
+
+	@Test
+	public void theTimingModeLabelsAreAnOpsContract_soTheirSpellingsArePinnedAsLiterals() {
+		// Issue #232. Every other use of these constants either interpolates one into a log line or
+		// compares a constant to a constant, and neither can notice a change to the VALUE — which is
+		// the whole of what the consumer sees, since a dashboard or saved log query greps
+		// `mode=fullChart` out of the [timing] querystoreBuild lines. Measured by mutation: renaming
+		// MODE_FULL_CHART's value to "TYPO_fullChart" makes THIS the only failing test in the api
+		// module; omod cannot see these package-private constants and no omod test asserts on the
+		// labels (the "fullChart" in omod's config.xml is the chartsearchai.chartMode GP token, a
+		// different contract). So before this assertion existed the re-spelling shipped green, as a
+		// metric going quietly to zero.
+		//
+		// Literals, deliberately — the same shape as ChartSearchAiAuditSearchModeTest's
+		// theColumnsVocabularyIsAWireContract_soItsSpellingsArePinnedAsLiterals, and allowed to be
+		// brittle for the same reason: it should fail the moment a spelling moves, and its failure
+		// is the notification that an ops contract is being changed rather than a constant renamed.
+		//
+		// These are deliberately NOT the audit column's spellings (full-chart / pre-filter, pinned
+		// in that other test). Two contracts, two audiences; unifying them was considered and
+		// declined during #178 — so a change that made these agree with those fails here.
+		assertEquals("preFilter", QueryStoreChartBuilder.MODE_PRE_FILTER);
+		assertEquals("fullChart", QueryStoreChartBuilder.MODE_FULL_CHART);
+		assertEquals("unknown", QueryStoreChartBuilder.MODE_UNKNOWN);
+	}
+
+	// ---- issue #528: every record of a whole chart carries its own date ----
+	// The chart below is the shape of the ticket's capture: two same-date runs, newest first, with the
+	// record each temporal question is about (the newest weight, the last visit) sitting further down a
+	// run than its first record. With date-run compression those lines rendered no date at all, so they
+	// read exactly like the allergy records that have none, and the model answered "when was her last
+	// visit?" with "no date is recorded" and "when was her weight last measured?" with the older weight.
+
+	/** The ticket's two runs: 2026-06-14 (a Home Visit and a 74 kg weight, neither first in its run)
+	 *  and 2025-12-06 (the older 64 kg weight), below an undated allergy and the patient record. */
+	private static List<QueryDocument> aChartWhoseNewestWeightAndLastVisitAreSameDateFollowOns() {
+		List<QueryDocument> docs = new ArrayList<>();
+		docs.add(chartDoc("patient", "p-1", "Patient: Jane Doe. Sex: F", LocalDate.of(2026, 1, 2)));
+		docs.add(chartDoc("allergy", "al-1", "Allergy: Penicillin. Severity: Severe", LocalDate.of(2026, 1, 2)));
+		docs.add(chartDoc("condition", "c-1", "Condition: Memory Loss. Status: ACTIVE", LocalDate.of(2026, 6, 14)));
+		docs.add(chartDoc("diagnosis", "d-1", "Diagnosis: Memory Loss. Certainty: PROVISIONAL", LocalDate.of(2026, 6, 14)));
+		docs.add(chartDoc("obs", "w-new", "Weight (kg): 74 kg", LocalDate.of(2026, 6, 14)));
+		docs.add(chartDoc("visit", "v-new", "Visit: Home Visit at Site 42", LocalDate.of(2026, 6, 14)));
+		docs.add(chartDoc("condition", "c-2", "Condition: Complication of anesthesia. Status: ACTIVE", LocalDate.of(2025, 12, 6)));
+		docs.add(chartDoc("obs", "w-old", "Weight (kg): 64 kg", LocalDate.of(2025, 12, 6)));
+		docs.add(chartDoc("visit", "v-old", "Visit: OPD Visit at Site 42", LocalDate.of(2025, 12, 6)));
+		return docs;
+	}
+
+	private static QueryDocument chartDoc(String type, String uuid, String text, LocalDate date) {
+		QueryDocument doc = new QueryDocument();
+		doc.setResourceType(type);
+		doc.setResourceUuid(uuid);
+		doc.setText(text);
+		doc.setDate(date);
+		return doc;
+	}
+
+	/**
+	 * What the model reads for each record must be what the grounding verifier holds for it: the
+	 * {@code RecordMapping} text always carries the record's date, so a chart line that equals
+	 * {@code "[i] " + mapping text} is a line that shows the model that same date. Holds line for line
+	 * only with the obs-group label left un-deduped (the builder's default here) and with a patient
+	 * record present (so no un-numbered demographics header precedes {@code [1]}).
+	 */
+	private static void assertEveryLineCarriesItsRecordsOwnDate(PatientChart chart, int expectedRecords) {
+		String[] lines = chart.getText().split("\n");
+		assertEquals(expectedRecords, chart.getMappings().size(), "chart:\n" + chart.getText());
+		assertEquals(expectedRecords, lines.length, "chart:\n" + chart.getText());
+		for (int i = 0; i < lines.length; i++) {
+			assertEquals("[" + (i + 1) + "] " + chart.getMappings().get(i).getText(), lines[i],
+					"record [" + (i + 1) + "] must read to the model with the date the grounding view gives it;"
+							+ " chart:\n" + chart.getText());
+		}
+	}
+
+	@Test
+	public void build_datesEverySameDateFollowOn_soTheNewestWeightAndLastVisitAreNotReadAsUndated() {
+		builder.usePreFilter = false;
+		queryStore.stubChart = aChartWhoseNewestWeightAndLastVisitAreSameDateFollowOns();
+
+		PatientChart chart = builder.build(patient(1), "when was her weight last measured?");
+
+		assertEveryLineCarriesItsRecordsOwnDate(chart, 9);
+		String text = chart.getText();
+		assertTrue(text.contains("[5] (2026-06-14) Weight (kg): 74 kg\n"),
+				"the newest weight must carry its date on its own line:\n" + text);
+		assertTrue(text.contains("[6] (2026-06-14) Visit: Home Visit at Site 42\n"),
+				"the last visit must carry its date on its own line:\n" + text);
+		assertTrue(text.contains("[2] Allergy: Penicillin"),
+				"an allergy still renders undated (its querystore date is administrative):\n" + text);
+	}
+
+	@Test
+	public void build_datesEverySameDateFollowOn_inPreFilterModeToo() {
+		builder.usePreFilter = true;
+		queryStore.stubChart = aChartWhoseNewestWeightAndLastVisitAreSameDateFollowOns();
+		// A focus hit on the last visit, so the focus-hint path is the one serializing.
+		queryStore.stubHits = new ArrayList<>();
+		queryStore.stubHits.add(chartDoc("visit", "v-new", "Visit: Home Visit at Site 42", LocalDate.of(2026, 6, 14)));
+
+		PatientChart chart = builder.build(patient(1), "when was her last visit?");
+
+		assertEquals(Collections.singletonList(6), chart.getFocusIndices(), "the focus hint must be engaged");
+		assertEveryLineCarriesItsRecordsOwnDate(chart, 9);
+		assertTrue(chart.getText().contains("[6] (2026-06-14) Visit: Home Visit at Site 42\n"),
+				"the last visit must carry its date on its own line:\n" + chart.getText());
+	}
+
+	@Test
+	public void buildFocused_datesEverySameDateFollowOn() {
+		queryStore.stubHits = aChartWhoseNewestWeightAndLastVisitAreSameDateFollowOns();
+
+		PatientChart chart = builder.buildFocused(patient(1), "when was her last visit?");
+
+		assertEveryLineCarriesItsRecordsOwnDate(chart, 9);
+		assertTrue(chart.getText().contains("[6] (2026-06-14) Visit: Home Visit at Site 42\n"),
+				"the last visit must carry its date on its own line:\n" + chart.getText());
+	}
+
+	/**
+	 * The same property on a real chart rather than the nine-record fixture above: the full patient
+	 * dataset through {@code build()}, whose long same-date runs (the 2025-10-30 visit alone is eleven
+	 * consecutive records) are the shape #66's token argument was about. A compression gated on chart
+	 * size would leave the fixture above dated and this chart not. The dataset carries no patient
+	 * record, so the computed demographics header precedes {@code [1]}; only the numbered lines are
+	 * compared.
+	 */
+	@Test
+	public void build_datesEverySameDateFollowOn_onTheFullPatientDataset() {
+		builder.usePreFilter = false;
+		queryStore.stubChart = TestDatasetHelper.toQueryDocuments(TestDatasetHelper.FULL_PATIENT_DATASET);
+
+		PatientChart chart = builder.build(patient(1), "when was his weight last measured?");
+
+		List<String> numbered = new ArrayList<>();
+		for (String line : chart.getText().split("\n")) {
+			if (line.startsWith("[")) {
+				numbered.add(line);
+			}
+		}
+		assertEquals(TestDatasetHelper.FULL_PATIENT_DATASET.length, chart.getMappings().size());
+		assertEquals(chart.getMappings().size(), numbered.size(), "chart:\n" + chart.getText());
+		int sameDateFollowOns = 0;
+		for (int i = 0; i < numbered.size(); i++) {
+			PatientChartSerializer.RecordMapping mapping = chart.getMappings().get(i);
+			assertEquals("[" + (i + 1) + "] " + mapping.getText(), numbered.get(i),
+					"record [" + (i + 1) + "] must read to the model with the date the grounding view gives it");
+			if (i > 0 && mapping.getDate() != null && mapping.getText().startsWith("(")
+					&& mapping.getDate().equals(chart.getMappings().get(i - 1).getDate())) {
+				sameDateFollowOns++;
+			}
+		}
+		assertTrue(sameDateFollowOns > 20,
+				"the dataset must hand the builder long dated same-date runs, or this test pins nothing: "
+						+ sameDateFollowOns);
+		assertTrue(chart.getText().contains("] (2025-10-30) Test — Weight (kg): 94 kg\n"),
+				"the last record of the 2025-10-30 run must carry its own date:\n" + chart.getText());
 	}
 
 	/**
@@ -613,6 +815,10 @@ public class QueryStoreChartBuilderTest {
 
 		boolean usePreFilter = true;
 
+		/** Makes {@code resolveQueryStoreService} answer null, which is how the builder's
+		 *  querystore-unavailable degradation is reached without a live module registry. */
+		boolean queryStoreUnavailable = false;
+
 		boolean dedupGroupLabels = false;
 
 		int progressiveTopK = 5;
@@ -623,7 +829,7 @@ public class QueryStoreChartBuilderTest {
 
 		@Override
 		protected QueryStoreService resolveQueryStoreService() {
-			return stub;
+			return queryStoreUnavailable ? null : stub;
 		}
 
 		@Override

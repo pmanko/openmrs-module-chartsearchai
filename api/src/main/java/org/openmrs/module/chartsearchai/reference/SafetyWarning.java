@@ -9,6 +9,20 @@
  */
 package org.openmrs.module.chartsearchai.reference;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+
+import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer;
+import org.openmrs.module.chartsearchai.util.DateFormatUtil;
+
 /**
  * A non-blocking advisory raised by {@link DrugSafetyValidator} after the LLM
  * answers. A warning <em>annotates</em> the answer — it never rewrites or
@@ -39,8 +53,44 @@ public class SafetyWarning {
 	 */
 	public static final String TYPE_INTERACTION = "interaction";
 
-	/** Contraindication: a drug named in the answer is contraindicated by an active allergy or condition. */
+	/**
+	 * Contraindication: a drug is contraindicated by an active allergy or condition. Two joins — a drug
+	 * IN PLAY (asked about in the question, or named by the answer on its own authority), and the
+	 * patient's OWN ACTIVE ORDERS, scoped to what the response is about — either the drug or the
+	 * recorded finding must be named by the question, the answer or a cited record. (Enumerated for the same
+	 * reason {@link #TYPE_INTERACTION} enumerates its three: which joins a chip type can come from is
+	 * what a renderer needs to know about it.)
+	 *
+	 * <p>The first is keyed off the question, not ONLY the answer: the headline case is a recorded
+	 * allergy to the very drug the clinician asked about, where the answer may never write the drug's
+	 * name at all (issue #135). The second exists because the in-play framing could not ask "is the
+	 * patient allergic to something they are TAKING?" — a prescribing error the chart already contains,
+	 * which the ANSWER's wording alone must not be able to hide (issue #143): a prescribed drug appears
+	 * in a cited {@code drug_order} record, so echo scoping read the answer's mention of it as a
+	 * recitation. What that join is bounded by instead is the whole response — question, answer and
+	 * cited records, either side of the chip counting — because this module annotates answers and an
+	 * annotation owing nothing to what was asked is an alert it has no machinery to carry. So a
+	 * contraindication chip does NOT imply that anything proposed the drug; it may be reporting a
+	 * medication the patient is already on. See {@code DrugSafetyValidator}.
+	 */
 	public static final String TYPE_CONTRAINDICATION = "contraindication";
+
+	/**
+	 * Condition-mediated: the knowledge base's DERIVED tier links a drug in play and an active order
+	 * through a drug-disease CONDITION — one drug's DDInter drug-disease note names the condition in a
+	 * sentence the knowledge base reads as causal, and the other is rated {@code Major} for it (issues
+	 * #391 Part B, #473). One join: a drug IN PLAY against the patient's active orders, in either
+	 * direction. The active orders linked through one condition in one direction are named in ONE chip,
+	 * with the other orders on the drug in play's own side of it, so one pair can still raise a chip per
+	 * condition in each direction. Raised only where {@code chartsearchai.drugSafety.derivedFindings} is
+	 * {@code major}, which a stock install is not.
+	 *
+	 * <p>A type of its own so it is never confused with, folded into or ranked against a DDInter
+	 * pairwise rating: it carries no {@code severity} (the chain is not a rating of the pair), it is a caution and
+	 * never a reason to withhold ({@code DrugSafetyValidator.licensesWithholding}, ADR Decision 111), and
+	 * its detail says it is derived. See {@code DrugSafetyValidator.addConditionMediatedWarnings}.
+	 */
+	public static final String TYPE_CONDITION_MEDIATED = "condition-mediated";
 
 	private final String type;
 
@@ -48,32 +98,1831 @@ public class SafetyWarning {
 
 	private final String detail;
 
+	private final String severity;
+
+	private final boolean unratedRelationship;
+
+	private final boolean uncorroboratedChartMatch;
+
+	/** The rule {@link #reconciledPartnerNoteName} was decided on — see that accessor. Null for every
+	 *  warning that carries no reconciled name, which since issue #339 is every warning but an
+	 *  INTERACTION chip whose partner was reconciled — folded or not, and in either active-order arm.
+	 *  A chip whose reconciliation refused, or whose partner the ladder never reached, answers null
+	 *  here too, deliberately, so that a refusal and an absent answer are one answer to the record. */
+	private final DrugReference.Interaction reconciledRule;
+
+	/** @see #namedPartners() */
+	private final List<String> namedPartners;
+
+	private final String reconciledNoteName;
+
+	/** @see #chartOrderBridges() */
+	private final List<ChartOrderBridge> chartOrderBridges;
+
+	/** @see #orderNamesOf(SafetyWarning) */
+	private final List<String> matchedOrderNames;
+
+	/** @see #isAboutACurrentMedication() */
+	private final boolean aboutACurrentMedication;
+
+	/** @see #restsOnSharedClassificationAlone() */
+	private final boolean restsOnSharedClassificationAlone;
+
+	/** @see #isAboutAnEndedOrder() */
+	private final boolean aboutAnEndedOrder;
+
+	/** @see #getEndedOrderStopDate() */
+	private final String endedOrderStopDate;
+
+	/** @see #endedOrderRows() */
+	private final List<DrugReference> endedOrderRows;
+
+	/** @see #statesOrdersSharingASubstance() */
+	private final boolean ordersSharingASubstance;
+
+	/** @see #subjectRows() */
+	private final List<DrugReference> subjectRows;
+
+	/** @see #currentOrderDisplays(), and {@link #orderDisplayPrintedAs} for each one's value. */
+	private final Map<String, String> currentOrderDisplays;
+
+	/** @see #currentMedicationOrders() */
+	private final List<CurrentMedicationOrder> currentMedicationOrders;
+
+	/** @see #isStatedInTheAnswer() */
+	private final boolean statedInTheAnswer;
+
+	/** @see #alreadyOrdered() */
+	private final PatientChartSerializer.AlreadyOrderedDrug alreadyOrdered;
+
+	/** @see #isAboutAnotherOfHerMedications() */
+	private final boolean aboutAnotherOfHerMedications;
+
+	/** @see #isAboutADrugOtherThanTheOneProposed() */
+	private final boolean aboutADrugOtherThanTheOneProposed;
+
+	/** @see #getFindingCitation() */
+	private final Integer findingCitation;
+
+	/** @see #isARecordedAllergyToItsOwnDrug() */
+	private final boolean aRecordedAllergyToItsOwnDrug;
+
+	/** @see #partnerScheduledStarts() */
+	private final Map<String, String> partnerScheduledStarts;
+
+	/** @see #orderScheduledStart() */
+	private final String orderScheduledStart;
+
+	/** @see #rowsOfPartner(String) */
+	private final Map<String, List<DrugReference>> partnerRows;
+
+	/**
+	 * The chart records this finding fired on — see {@link #chartRecords()} (issue #305), which is
+	 * where what empty covers is said. Never null.
+	 */
+	private final Set<String> chartRecords;
+
+	/** A warning raised from something the reference data assigns no severity to — see
+	 *  {@link #getSeverity()} for which joins those are. */
 	public SafetyWarning(String type, String drug, String detail) {
+		this(type, drug, detail, null);
+	}
+
+	/**
+	 * As the constructor above, with the dataset's rating.
+	 *
+	 * <p>{@link #restsOnAnUncorroboratedChartMatch()} is false here BY CONSTRUCTION rather than as a
+	 * default, and since issue #374 that false is a published value: a chip assembled through a public
+	 * constructor has no curated rule to have matched against the chart, so it is one of the
+	 * populations that accessor and {@code README.md} enumerate as answering false without having been
+	 * asked. Only {@link #contraindication} may set it, and it is the arm that raised the finding which
+	 * decides it — never whoever assembles a chip. The same argument the 5-argument constructor below
+	 * makes of {@link #isAboutACurrentMedication()}.
+	 */
+	public SafetyWarning(String type, String drug, String detail, String severity) {
+		this(type, drug, detail, severity, false, false, null, null,
+				Collections.<ChartOrderBridge> emptyList(), false);
+	}
+
+	/**
+	 * As the constructor above, for a chip that also states which of the patient's own orders its
+	 * substances were resolved from — see {@link #chartOrderBridges()}, which is published as this
+	 * chip's {@code chartOrderBridges} wire key (issue #347).
+	 *
+	 * <p>Public for the reason the shorter constructors above are: the wire-facing shape is public,
+	 * and since issue #347 the bridges are part of it. (Neither of those carries that reason in its
+	 * own javadoc, so it is given here rather than cross-referenced.) (What made it NECESSARY is
+	 * narrower — the test that pins their serialization lives in {@code web.rest} and cannot reach
+	 * {@code interaction(..)} below, which already answers "build a chip carrying bridges" but is
+	 * package-private here. Stated second because the policy sentence is the stronger reason and the
+	 * neighbouring factory's javadoc gives it for the others.) It is not the production path: {@code DrugSafetyValidator.interactionWarning}
+	 * builds a chip that also carries a reconciled partner name and a folded relationship, so it takes
+	 * the private constructor below. Nothing here is an impossible pair — the reason issue #298 gave a
+	 * FACTORY to the contraindication shape rather than widening a constructor does not reach this
+	 * one, since a chip of any type may in principle have been resolved from an order.
+	 *
+	 * <p>{@link #isAboutACurrentMedication()} is false here, as it is for the two shorter
+	 * constructors, and for the same reason rather than as a default: the arms that answer true to it
+	 * build their chips through this class's package-private factories instead (see that accessor for
+	 * which arms they are), so no caller of this constructor is one of them — and since issue #527 that
+	 * false is a published value. A caller here is stating a chip's wire-facing shape, and issue #348's
+	 * clause is decided by the arm that raised the finding, never by whoever assembles one.
+	 */
+	public SafetyWarning(String type, String drug, String detail, String severity,
+			List<ChartOrderBridge> chartOrderBridges) {
+		this(type, drug, detail, severity, false, false, null, null, chartOrderBridges, false);
+	}
+
+	/**
+	 * A contraindication chip's warning, and the only shape that can carry
+	 * {@link #restsOnAnUncorroboratedChartMatch()} (issue #308). A FACTORY rather than a wider PUBLIC
+	 * constructor, for the reason issue #298 states of a label and its source: the two flags
+	 * describe relationships that cannot both hold — an interaction never matches a rule against the
+	 * chart's allergy list, and a contraindication carries no rating for a fold to outrun — so a
+	 * constructor taking both would offer a caller a pair that has no meaning. Naming the type here
+	 * also keeps {@link #TYPE_CONTRAINDICATION} out of the call site, which is where a chip arm would
+	 * otherwise repeat it.
+	 *
+	 * <p>Package-private, and since issue #374 that is no longer "matching the accessor", which is
+	 * PUBLIC — see {@link #restsOnAnUncorroboratedChartMatch()} for why a public read over a
+	 * package-private write is what this flag wants. The one
+	 * caller is {@code DrugSafetyValidator.addContraindications} — the curated-rule arm, the only arm
+	 * whose warning is derived from a rule matched against the chart at all. The allergen arm's own
+	 * three sentences go through {@link #recordedAllergenContraindication} instead, which hardcodes
+	 * this flag false rather than taking it, so they still answer false by construction rather than
+	 * by remembering to. They used the public three-argument constructor until issue #348 gave them a
+	 * fact of their own to carry.
+	 *
+	 * @param uncorroboratedChartMatch see {@link #restsOnAnUncorroboratedChartMatch()}
+	 * @param aboutACurrentMedication see {@link #isAboutACurrentMedication()} — true where the arm
+	 *        walking the patient's own active orders raised it (issue #348), and where the drug-in-play
+	 *        arm states that referent for its drug (issue #402)
+	 * @param chartRecords see {@link #chartRecords()} — the recorded allergies or conditions this
+	 *        rule's token matched, from the list {@code recordedContraindicationKind}'s own leg names
+	 */
+	static SafetyWarning contraindication(String drug, String detail,
+			boolean uncorroboratedChartMatch, boolean aboutACurrentMedication,
+			Collection<String> chartRecords) {
+		return new SafetyWarning(TYPE_CONTRAINDICATION, drug, detail, null, false,
+				uncorroboratedChartMatch, null, null, Collections.<ChartOrderBridge> emptyList(),
+				aboutACurrentMedication, chartRecords);
+	}
+
+	/**
+	 * A recorded-allergen contraindication chip's warning — the allergen arm's three sentences, which
+	 * are built from a {@code RecordedAllergen} rather than from a curated rule matched against the
+	 * chart (issue #348).
+	 *
+	 * <p>A FACTORY rather than the public three-argument constructor those sentences used before,
+	 * and it hardcodes {@code uncorroboratedChartMatch} false rather than taking it: that arm has no
+	 * rule to have matched by containment, so it answered false BY CONSTRUCTION, and the whole point
+	 * of naming it here is to keep answering false by construction while the one fact it does have to
+	 * carry — whether its subject is one of the patient's own prescriptions — becomes settable. A
+	 * fourth argument on {@link #contraindication} would have offered that arm a flag it can never
+	 * legitimately set.
+	 *
+	 * <p>Package-private, for {@link #contraindication}'s reason rather than for accessor symmetry: the
+	 * flag it hardcodes false is published, so what a public factory here would offer is a caller
+	 * asserting a provenance answer the module never made. Its one
+	 * caller is {@code DrugSafetyValidator.addAllergyContraindications}, which is reached from BOTH
+	 * the drug-in-play loop (the referent that arm states for its drug — issue #402) and
+	 * {@code addActiveOrderContraindications} (true — the subject is an active order).
+	 *
+	 * @param aboutACurrentMedication see {@link #isAboutACurrentMedication()}
+	 * @param chartRecords see {@link #chartRecords()} — the records the {@code RecordedAllergen} this
+	 *        sentence was built from was read off, unioned across the spellings its merge folded in
+	 * @param aRecordedAllergyToItsOwnDrug see {@link #isARecordedAllergyToItsOwnDrug()}
+	 */
+	static SafetyWarning recordedAllergenContraindication(String drug, String detail,
+			boolean aboutACurrentMedication, Collection<String> chartRecords, boolean aRecordedAllergyToItsOwnDrug) {
+		return new SafetyWarning(TYPE_CONTRAINDICATION, drug, detail, null, false, false, null, null,
+				Collections.<ChartOrderBridge> emptyList(), aboutACurrentMedication, chartRecords, false, null, false,
+				null, null, false, null, null, null, null, false, null, null, null, null, false, false, null,
+				aRecordedAllergyToItsOwnDrug);
+	}
+
+	/**
+	 * A CONDITION-MEDIATED chip's warning (see {@link #TYPE_CONDITION_MEDIATED}). The one construction
+	 * site is {@code DrugSafetyValidator.addConditionMediatedWarnings}. A factory for the reason
+	 * {@link #classOnlyInteraction} is one: no rating, no rule to reconcile, no folded relationship and
+	 * no chart record the join fired on, BY CONSTRUCTION. It names active orders, so it carries the
+	 * partners it names ({@link #namedPartners()}) and the prescriptions they came from
+	 * ({@link #chartOrderBridges()}); it is about the drug in play, and its referent is the one the
+	 * drug-in-play arm states for that drug (issue #402).
+	 */
+	static SafetyWarning conditionMediated(String drug, String detail, List<ChartOrderBridge> bridges,
+			List<String> namedPartners, boolean aboutACurrentMedication) {
+		return new SafetyWarning(TYPE_CONDITION_MEDIATED, drug, detail, null, false, false, null, null,
+				bridges, aboutACurrentMedication, null, false, namedPartners);
+	}
+
+	/**
+	 * A CLASS-ONLY interaction chip's warning: two of the patient's co-prescribed drugs share an ATC
+	 * subgroup or a curated cross-reactivity group, and no rule of any kind relates them (issue #400).
+	 * The one construction site is {@code DrugSafetyValidator.addInteractionWarnings}' {@code classOnly}
+	 * loop — see {@link #restsOnSharedClassificationAlone()} for what the flag it sets decides.
+	 *
+	 * <p><b>A FACTORY rather than a flag on the public three-argument constructor</b>, for the reason
+	 * {@link #recordedAllergenContraindication} gives of its own: every other field of this shape is
+	 * false or empty BY CONSTRUCTION — there is no rule to reconcile a partner name against, no rating,
+	 * no folded relationship, no chart record the join fired on — and naming the shape here keeps them
+	 * that way rather than offering a caller a set of flags it can never legitimately combine. In
+	 * particular a caller must not be able to set this flag on a chip that DOES carry a rule: that is
+	 * the folded chip, whose strength {@code FoldedFindingStrengthTest} pins to the stronger claim.
+	 *
+	 * @param aboutACurrentMedication the referent the drug-in-play arm states for the drug in play —
+	 *        {@link #isAboutACurrentMedication()} (issue #402)
+	 */
+	static SafetyWarning classOnlyInteraction(String drug, String detail, boolean aboutACurrentMedication) {
+		return new SafetyWarning(TYPE_INTERACTION, drug, detail, null, false, false, null, null,
+				Collections.<ChartOrderBridge> emptyList(), aboutACurrentMedication, null, true);
+	}
+
+	/**
+	 * The warning that the drug in play is already in two or more of the patient's own active orders
+	 * (issue #477), or in one where the question proposes it (issue #548). The one construction site is
+	 * {@code DrugSafetyValidator.alreadyInSeveralOrders}, which is canonical for why the finding exists and
+	 * why its referent is what it is.
+	 *
+	 * <p>A FACTORY for {@link #classOnlyInteraction}'s reason: every field of this shape but its type
+	 * and the five it takes is false or empty BY CONSTRUCTION — no rule, no rating, no fold, no chart
+	 * record, no bridge (the sentence names each order itself: by the display that names the substance,
+	 * or, on a proposal, by a display that establishes it). {@link
+	 * #restsOnSharedClassificationAlone()} is false: this is an identity claim, so {@code
+	 * DrugSafetyValidator.licensesWithholding} answers by the unrated default — except where
+	 * {@link #restsOnTheProposalAlone()}.
+	 *
+	 * @param orders the displays of the active orders the detail names, in the order it names them —
+	 *        {@link #namedPartners()}, which every interaction chip states
+	 * @param aboutACurrentMedication the referent the drug-in-play arm states for the drug in play, at
+	 *        every site it builds a finding at: a finding here stating another would be the one-site
+	 *        shape issue #402 recorded and reverted (ADR Decisions 112, 123)
+	 * @param alreadyOrdered where the question proposes the drug and it is hers, the drug and the orders
+	 *        as the detail names them — {@link #alreadyOrdered()} (issue #548); otherwise null
+	 */
+	static SafetyWarning substanceInSeveralActiveOrders(String drug, String detail, List<String> orders,
+			boolean aboutACurrentMedication, PatientChartSerializer.AlreadyOrderedDrug alreadyOrdered) {
+		return new SafetyWarning(TYPE_INTERACTION, drug, detail, null, false, false, null, null,
+				Collections.<ChartOrderBridge> emptyList(), aboutACurrentMedication, null, false, orders, false,
+				null, null, false, null, null, null, null, false, null, null, null, alreadyOrdered, false, false, null,
+				false);
+	}
+
+	/**
+	 * The warning that two or more of the patient's own active orders carry the same substances, raised
+	 * on a screen of her medications and on a question that resolves a drug (issue #477). The one construction site is
+	 * {@code DrugSafetyValidator.addOrdersSharingASubstance}, canonical for why it exists and when.
+	 *
+	 * <p>{@link #substanceInSeveralActiveOrders}' shape, with these differences: both sides are her own
+	 * prescriptions, so {@link #isAboutACurrentMedication()} is TRUE by construction rather than the
+	 * drug-in-play arm's answer for a drug in play; it answers {@link #statesOrdersSharingASubstance()};
+	 * and it never answers {@link #statesAProposedDrugIsAlreadyOrdered()}, since no question proposes what
+	 * it is about.
+	 *
+	 * @param drug the substances the detail names, as it names them
+	 * @param orders the displays of the orders the detail names — {@link #namedPartners()}
+	 */
+	static SafetyWarning ordersSharingASubstance(String drug, String detail, List<String> orders) {
+		return new SafetyWarning(TYPE_INTERACTION, drug, detail, null, false, false, null, null,
+				Collections.<ChartOrderBridge> emptyList(), true, null, false, orders, false, null, null, true,
+				null, null);
+	}
+
+	/**
+	 * An OVERDOSE chip's warning — the dose check's daily-ceiling or per-dose sentence. The one
+	 * construction site is {@code DrugSafetyValidator.addOverdose}, which runs in the drug-in-play loop
+	 * and so states that arm's referent for the drug in play (issue #402, ADR Decision 123). A factory
+	 * rather than the public three-argument constructor it used until then, for
+	 * {@link #classOnlyInteraction}'s reason: every other field of this shape is false or empty BY
+	 * CONSTRUCTION, and the one fact it carries is the arm's to decide.
+	 *
+	 * @param aboutACurrentMedication see {@link #isAboutACurrentMedication()} — the drug-in-play arm's
+	 *        referent for the drug in play
+	 */
+	static SafetyWarning overdose(String drug, String detail, boolean aboutACurrentMedication) {
+		return new SafetyWarning(TYPE_OVERDOSE, drug, detail, null, false, false, null, null,
+				Collections.<ChartOrderBridge> emptyList(), aboutACurrentMedication);
+	}
+
+	private SafetyWarning(String type, String drug, String detail, String severity,
+			boolean unratedRelationship, boolean uncorroboratedChartMatch,
+			DrugReference.Interaction reconciledRule, String reconciledNoteName,
+			List<ChartOrderBridge> chartOrderBridges, boolean aboutACurrentMedication) {
+		this(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch, reconciledRule,
+				reconciledNoteName, chartOrderBridges, aboutACurrentMedication, null);
+	}
+
+	private SafetyWarning(String type, String drug, String detail, String severity,
+			boolean unratedRelationship, boolean uncorroboratedChartMatch,
+			DrugReference.Interaction reconciledRule, String reconciledNoteName,
+			List<ChartOrderBridge> chartOrderBridges, boolean aboutACurrentMedication,
+			Collection<String> chartRecords) {
+		this(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch, reconciledRule,
+				reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords, false);
+	}
+
+	private SafetyWarning(String type, String drug, String detail, String severity,
+			boolean unratedRelationship, boolean uncorroboratedChartMatch,
+			DrugReference.Interaction reconciledRule, String reconciledNoteName,
+			List<ChartOrderBridge> chartOrderBridges, boolean aboutACurrentMedication,
+			Collection<String> chartRecords, boolean restsOnSharedClassificationAlone) {
+		this(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch, reconciledRule,
+				reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords,
+				restsOnSharedClassificationAlone, null);
+	}
+
+	private SafetyWarning(String type, String drug, String detail, String severity,
+			boolean unratedRelationship, boolean uncorroboratedChartMatch,
+			DrugReference.Interaction reconciledRule, String reconciledNoteName,
+			List<ChartOrderBridge> chartOrderBridges, boolean aboutACurrentMedication,
+			Collection<String> chartRecords, boolean restsOnSharedClassificationAlone,
+			List<String> namedPartners) {
+		this(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch, reconciledRule,
+				reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords,
+				restsOnSharedClassificationAlone, namedPartners, false, null, null, false, null, null);
+	}
+
+	private SafetyWarning(String type, String drug, String detail, String severity,
+			boolean unratedRelationship, boolean uncorroboratedChartMatch,
+			DrugReference.Interaction reconciledRule, String reconciledNoteName,
+			List<ChartOrderBridge> chartOrderBridges, boolean aboutACurrentMedication,
+			Collection<String> chartRecords, boolean restsOnSharedClassificationAlone,
+			List<String> namedPartners, boolean aboutAnEndedOrder, String endedOrderStopDate,
+			List<DrugReference> endedOrderRows, boolean ordersSharingASubstance,
+			Collection<String> matchedOrderNames, List<DrugReference> subjectRows) {
+		this(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch, reconciledRule,
+				reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords,
+				restsOnSharedClassificationAlone, namedPartners, aboutAnEndedOrder, endedOrderStopDate,
+				endedOrderRows, ordersSharingASubstance, matchedOrderNames, subjectRows, null, null, false, null, null, null, null, false, false, null, false);
+	}
+
+	private SafetyWarning(String type, String drug, String detail, String severity,
+			boolean unratedRelationship, boolean uncorroboratedChartMatch,
+			DrugReference.Interaction reconciledRule, String reconciledNoteName,
+			List<ChartOrderBridge> chartOrderBridges, boolean aboutACurrentMedication,
+			Collection<String> chartRecords, boolean restsOnSharedClassificationAlone,
+			List<String> namedPartners, boolean aboutAnEndedOrder, String endedOrderStopDate,
+			List<DrugReference> endedOrderRows, boolean ordersSharingASubstance,
+			Collection<String> matchedOrderNames, List<DrugReference> subjectRows,
+			List<CurrentMedicationOrder> currentMedicationOrders, Map<String, String> currentOrderDisplays,
+			boolean statedInTheAnswer, Map<String, List<DrugReference>> partnerRows,
+			Map<String, String> partnerScheduledStarts, String orderScheduledStart,
+			PatientChartSerializer.AlreadyOrderedDrug alreadyOrdered, boolean aboutAnotherOfHerMedications,
+			boolean aboutADrugOtherThanTheOneProposed, Integer findingCitation, boolean aRecordedAllergyToItsOwnDrug) {
+		this.aRecordedAllergyToItsOwnDrug = aRecordedAllergyToItsOwnDrug;
+		this.alreadyOrdered = alreadyOrdered;
+		this.findingCitation = findingCitation;
+		this.aboutADrugOtherThanTheOneProposed = aboutADrugOtherThanTheOneProposed;
+		this.aboutAnotherOfHerMedications = aboutAnotherOfHerMedications;
+		// Copied and wrapped for the reason chartOrderBridges is; never null.
+		this.partnerScheduledStarts = partnerScheduledStarts == null || partnerScheduledStarts.isEmpty()
+				? Collections.<String, String> emptyMap()
+				: Collections.unmodifiableMap(new LinkedHashMap<String, String>(partnerScheduledStarts));
+		this.orderScheduledStart = orderScheduledStart;
+		// Copied and wrapped for the reason chartOrderBridges is; never null. Not de-duplicated: the stamp's
+		// one writer lists each order once, and two prescriptions under one display are two entries.
+		this.currentMedicationOrders = currentMedicationOrders == null || currentMedicationOrders.isEmpty()
+				? Collections.<CurrentMedicationOrder> emptyList()
+				: Collections.unmodifiableList(new ArrayList<CurrentMedicationOrder>(currentMedicationOrders));
+		// Copied and wrapped for the reason chartOrderBridges is, each partner's list too; never null.
+		Map<String, List<DrugReference>> rowsByPartner = new LinkedHashMap<String, List<DrugReference>>();
+		if (partnerRows != null) {
+			for (Map.Entry<String, List<DrugReference>> partner : partnerRows.entrySet()) {
+				if (partner.getKey() != null && partner.getValue() != null && !partner.getValue().isEmpty()) {
+					rowsByPartner.put(partner.getKey(),
+							Collections.unmodifiableList(new ArrayList<DrugReference>(partner.getValue())));
+				}
+			}
+		}
+		this.partnerRows = Collections.unmodifiableMap(rowsByPartner);
+		// Copied and wrapped for the reason chartOrderBridges is; never null.
+		this.currentOrderDisplays = currentOrderDisplays == null || currentOrderDisplays.isEmpty()
+				? Collections.<String, String> emptyMap()
+				: Collections.unmodifiableMap(new LinkedHashMap<String, String>(currentOrderDisplays));
+		this.statedInTheAnswer = statedInTheAnswer;
+		this.ordersSharingASubstance = ordersSharingASubstance;
+		// Copied and wrapped for the reason chartOrderBridges is; never null.
+		this.matchedOrderNames = matchedOrderNames == null || matchedOrderNames.isEmpty()
+				? Collections.<String> emptyList()
+				: Collections.unmodifiableList(new ArrayList<String>(new LinkedHashSet<String>(matchedOrderNames)));
+		this.subjectRows = subjectRows == null || subjectRows.isEmpty() ? Collections.<DrugReference> emptyList()
+				: Collections.unmodifiableList(new ArrayList<DrugReference>(subjectRows));
+		this.aboutAnEndedOrder = aboutAnEndedOrder;
+		this.endedOrderStopDate = aboutAnEndedOrder ? endedOrderStopDate : null;
+		this.endedOrderRows = !aboutAnEndedOrder || endedOrderRows == null || endedOrderRows.isEmpty()
+				? Collections.<DrugReference> emptyList()
+				: Collections.unmodifiableList(new ArrayList<DrugReference>(endedOrderRows));
+		// Copied and wrapped for the reason chartOrderBridges is. Never null, so no reader branches on
+		// absence; namedPartners()'s javadoc is the one place that says what empty covers.
+		this.namedPartners = namedPartners == null || namedPartners.isEmpty()
+				? Collections.<String> emptyList()
+				: Collections.unmodifiableList(new ArrayList<String>(namedPartners));
+		this.restsOnSharedClassificationAlone = restsOnSharedClassificationAlone;
+		// Copied and wrapped for the reason chartOrderBridges is, one field along. Never null, so no
+		// reader branches on absence — chartRecords()'s javadoc is the one place that says what empty
+		// covers.
+		this.chartRecords = chartRecords == null || chartRecords.isEmpty()
+				? Collections.<String> emptySet()
+				: Collections.unmodifiableSet(new LinkedHashSet<String>(chartRecords));
 		this.type = type;
 		this.drug = drug;
 		this.detail = detail;
+		this.severity = severity;
+		this.unratedRelationship = unratedRelationship;
+		this.uncorroboratedChartMatch = uncorroboratedChartMatch;
+		this.reconciledRule = reconciledRule;
+		this.reconciledNoteName = reconciledNoteName;
+		// Copied and wrapped rather than stored as handed: this list travels to
+		// DrugReferenceInjector.renderFinding, so a caller that went on filling its own builder would
+		// change what a record already published. Never null, so no reader branches on absence — an
+		// empty list is the honest answer wherever the module attributed nothing.
+		// chartOrderBridges()'s javadoc is the one place that says what empty covers.
+		this.chartOrderBridges = chartOrderBridges == null || chartOrderBridges.isEmpty()
+				? Collections.<ChartOrderBridge> emptyList()
+				: Collections.unmodifiableList(new ArrayList<ChartOrderBridge>(chartOrderBridges));
+		this.aboutACurrentMedication = aboutACurrentMedication;
 	}
 
-	/** One of {@link #TYPE_OVERDOSE}, {@link #TYPE_INTERACTION}, {@link #TYPE_CONTRAINDICATION}. */
+	/**
+	 * An INTERACTION chip's warning, and the only shape that can carry
+	 * {@link #reconciledPartnerNoteName} (issue #297). A FACTORY rather than a wider PUBLIC
+	 * constructor, for the reason {@link #contraindication} states of its own flag: these facts travel
+	 * together only for an interaction chip, and a constructor offering them beside
+	 * {@code uncorroboratedChartMatch} would offer a caller a combination that has no meaning. No
+	 * ordinal is given for the argument it replaces — the private constructor's width moves whenever a
+	 * fact is added (it did at issue #349), and the point is which SHAPE may set what. They are
+	 * not the same fact and do not arrive together: only the drug-in-play arm can FOLD, so only its
+	 * chips carry {@code unratedRelationship}, while since issue #339 both active-order arms set a
+	 * reconciled name. Only the drug-in-play arm's is READ today — {@code DrugReferenceInjector}
+	 * reaches this accessor from the loop over the entries a question put in play, and a screening
+	 * question puts none in play by its own gate — so the screening arm's is set for the shape rather
+	 * than for a consumer, which is what stops a later reader having to remember to set it.
+	 *
+	 * <p>Package-private, matching the accessors: a caller may set only what it may read back. The
+	 * public constructors above are public because the wire-facing shape is, and
+	 * neither of these two facts is part of it — public here would offer an outside caller a way to
+	 * govern the injected record's strength, and the name of a partner in it, with no way to observe
+	 * either assertion from where it was made. The one caller is
+	 * {@code DrugSafetyValidator.interactionWarning} — which is <b>not</b> the only place an interaction
+	 * chip is built, and saying so would be false: the class-only chip inside
+	 * {@code addInteractionWarnings} itself is built by {@link #classOnlyInteraction}, and
+	 * {@code addQuestionPairInteractions} builds one from a public constructor. Neither can fold, so
+	 * neither has either of these facts to carry, and both
+	 * answer false/null by construction rather than by remembering to — the same argument
+	 * {@link #contraindication} makes for the allergen arm's three sentences. This factory replaced a
+	 * five-argument package-private CONSTRUCTOR that carried {@code unratedRelationship} alone; that
+	 * constructor is gone rather than left unreachable beside this, because a second way in is a second
+	 * way for the two facts to be set apart.
+	 *
+	 * @param unratedRelationship whether this warning also asserts a relationship the source rates
+	 *        nothing for — see {@link #carriesUnratedRelationship()}
+	 * @param reconciledRule the rule this chip's partner was reconciled on, or null when nothing
+	 *        reconciled
+	 * @param reconciledNoteName see {@link #reconciledPartnerNoteName} — null when the reconciliation
+	 *        refused or reached no co-medication, so that a refusal and an absent answer are one answer
+	 *        here, as they are for the chip
+	 * @param chartOrderBridges see {@link #chartOrderBridges()}, which is canonical for what empty
+	 *        covers — empty is not a degraded state, and no rule about which chips are empty belongs
+	 *        here or anywhere else; every draft of one has been measured false
+	 * @param aboutACurrentMedication see {@link #isAboutACurrentMedication()} — true from the screening
+	 *        arm, whose two drugs are both the patient's own active orders (issue #348), and from the
+	 *        drug-in-play arm where it states that referent for its drug (issue #402)
+	 */
+	// The paragraphs above are worded for the PAIR issue #297 added, and facts have been put beside
+	// them since — issue #349's bridge, issue #348's referent. Read the @param list rather than any
+	// count in the prose; a count here has already gone stale once.
+	static SafetyWarning interaction(String drug, String detail, String severity,
+			boolean unratedRelationship, DrugReference.Interaction reconciledRule,
+			String reconciledNoteName, List<ChartOrderBridge> chartOrderBridges,
+			boolean aboutACurrentMedication) {
+		return interaction(drug, detail, severity, unratedRelationship, reconciledRule,
+			reconciledNoteName, chartOrderBridges, aboutACurrentMedication, null);
+	}
+
+	/**
+	 * As above, additionally carrying the active orders this chip NAMES — one for an ordinary chip,
+	 * several for {@code collapseSharedMechanisms}' merged statement. Every interaction chip states
+	 * them, so a reader never has to tell "this chip carries no list" from "this chip is the merged
+	 * kind": see {@link #namedPartners()}.
+	 */
+	static SafetyWarning interaction(String drug, String detail, String severity,
+			boolean unratedRelationship, DrugReference.Interaction reconciledRule,
+			String reconciledNoteName, List<ChartOrderBridge> chartOrderBridges,
+			boolean aboutACurrentMedication, List<String> namedPartners) {
+		return new SafetyWarning(TYPE_INTERACTION, drug, detail, severity, unratedRelationship, false,
+				reconciledRule, reconciledNoteName, chartOrderBridges, aboutACurrentMedication, null,
+				false, namedPartners);
+	}
+
+	/**
+	 * The active orders this ONE chip names, where it names several — the population a reader asks
+	 * "did the answer state all of them?" of.
+	 *
+	 * <p><b>Every INTERACTION chip states it</b> — one name for an ordinary chip, several for a merged
+	 * one or for the two findings that a substance is in several of her orders (issue #477), where a
+	 * display several orders carry appears once (and one name where a question proposes a drug one order
+	 * carries, issue #548) — and so does every CONDITION-MEDIATED chip, one name
+	 * per active order it links; so a reader never has to tell a chip that carries no list from a chip
+	 * that covers no order. It is the structural answer to "which of her orders is this chip about",
+	 * and the reason nothing downstream recovers that by matching a phrase in prose.
+	 *
+	 * <p><b>Empty is the chip types that list no order here</b>: a contraindication (which, where it lists them,
+	 * lists the orders it is about in {@link #currentMedicationOrders()} instead), an overdose,
+	 * and the class-only interaction chip, whose partner is a class rather than an order. So empty is
+	 * "outside this population", never "covers no order" — and it must not be summed across a response
+	 * expecting a partner total, which is {@code interactionPairs}' question over a different
+	 * population.
+	 */
+	public List<String> namedPartners() {
+		return namedPartners;
+	}
+
+	/** One of {@link #TYPE_OVERDOSE}, {@link #TYPE_INTERACTION}, {@link #TYPE_CONTRAINDICATION},
+	 *  {@link #TYPE_CONDITION_MEDIATED}. */
 	public String getType() {
 		return type;
 	}
 
-	/** The reference drug the warning is about — its display label, which may carry a
-	 *  parenthesized generic synonym when the dataset's display name diverges from it,
-	 *  e.g. {@code "Acetylsalicylic acid (aspirin)"} (see {@link DrugReference#displayLabel()}). */
+	/**
+	 * The reference drug the warning is about — its display label, which may carry a parenthesized
+	 * generic synonym when the dataset's display name diverges from it, e.g.
+	 * {@code "Acetylsalicylic acid (aspirin)"} (see {@link DrugReference#displayLabel()}). On
+	 * {@link #ordersSharingASubstance(String, String, List)}' finding it is every substance the
+	 * finding names, listed as its detail lists them (issue #477).
+	 *
+	 * <p>Since issue #206 this names a SUBSTANCE, not a finding, and not the dataset row an arm
+	 * happened to match. Several warnings about one substance therefore carry the same string by
+	 * construction: issue #238 records a live patient with seven hydrocortisone chips that all do.
+	 *
+	 * <p><b>So it is not a deduplication key.</b> A client collapsing on {@code (type, drug)} would
+	 * discard six of those seven distinct findings — #238's second item exists because this class's
+	 * javadoc invited exactly that, saying the field was for "grouping/sorting/deduping" (it said so
+	 * on {@link #getDetail()}, where a reader is least likely to look). Nor is it a stable substance
+	 * name to group on: which arms share one subject and which resolve their own is
+	 * {@code DrugSafetyValidator}'s to state, and {@code SubstanceSubjects}' javadoc states it,
+	 * exemptions and residues included. Do not re-derive that list here — it has moved.
+	 *
+	 * <p>What distinguishes one warning from another is {@link #getDetail()}: of the fields a
+	 * client receives, it is the one that tells warnings about a single substance apart, because it
+	 * names the interacting order, the allergen or the ceiling that particular finding is about. Since
+	 * issue #340 {@link #getSeverity()} travels beside it on the wire and may differ too —
+	 * that issue's own capture has a Major and a Minor chip of one drug — but it is no more a key than
+	 * this field is: two findings about one substance commonly share a rating, and every unrated one
+	 * shares null. Key per-finding identity on {@code detail}, or on the whole warning.
+	 */
 	public String getDrug() {
 		return drug;
 	}
 
-	/** The warning as one complete, standalone sentence naming the drug — e.g. "The stated
-	 *  Ibuprofen dose ~2400 mg/day exceeds the 1200 mg/day maximum for ages 2-11" or
-	 *  "Warfarin interacts with active order aspirin — Major. …". <b>Renderers should display
-	 *  this alone</b>; prefixing {@link #getDrug()} duplicates the subject, because every
-	 *  detail already leads with it. The drug field exists for grouping/sorting/deduping, not
-	 *  as a display prefix. */
+	/**
+	 * The warning as complete, standalone prose naming its own drug — e.g. "The stated
+	 * Ibuprofen dose ~2400 mg/day exceeds the 1200 mg/day maximum for ages 2-11", or
+	 * "Warfarin interacts with active order aspirin — Major. …".
+	 *
+	 * <p><b>How many SENTENCES it runs to is not part of the contract, and no rule about that
+	 * belongs here.</b> This javadoc read "one complete, standalone sentence" while illustrating it
+	 * with the two-sentence second example above, and a first attempt to correct that put a rule in
+	 * its place ("one for a contraindication, two for a rated interaction, three when folded") which
+	 * measurement refuted as well. What the composition depends on is authored TEXT — a dataset's
+	 * mechanism description is whatever its author wrote — so measure it over the dataset you ship if
+	 * you need a number. {@link #getSeverity()} is canonical for how the dataset builds a rated rule's
+	 * NOTE, which is the part of a detail this field's own contract turns on, and it is not restated
+	 * here. A renderer that splits or truncates at a
+	 * sentence boundary drops the mechanism text, which is the chip's clinical content — and on a
+	 * folded chip the class sentence after it. Render the whole string.
+	 *
+	 * <p><b>Renderers should display this alone</b>; prefixing {@link #getDrug()} duplicates the
+	 * subject, because every detail already names it. It is also this field, not
+	 * {@link #getDrug()}, that tells one warning from another — see {@link #getDrug()} for why.
+	 */
 	public String getDetail() {
 		return detail;
+	}
+
+	/**
+	 * The severity the reference data assigns the rule this warning was raised from — {@code Major},
+	 * {@code Moderate}, {@code Minor} or {@code Unknown} for a rule the shipped DDInter dataset rates,
+	 * though that is what one dataset publishes and not a closed set (see the wire paragraph below) —
+	 * ranked by {@code DrugSafetyValidator.severityPriority}, which is also what all three interaction
+	 * arms order their chips on — the two pairwise arms directly, and the drug-in-play arm within each
+	 * side of the withholds/cautions split it orders on first (issue #346).
+	 *
+	 * <p><b>Null means the source rates nothing here</b>, which is a real distinction rather than a
+	 * missing value: a hand-authored curated rule is deliberately UNRATED (and outranks {@code Major}
+	 * in that same ordering — unrated is not low-rated), an ATC-subgroup or cross-reactivity join
+	 * carries no rating at all, and neither a contraindication nor an overdose has one. Callers must
+	 * not read null as "no severity was determined".
+	 *
+	 * <p>Exposed for issue #207. The chip arms order themselves by this value and then discarded it,
+	 * so the ONLY remaining trace of the key they sorted on was a word inside the rendered
+	 * {@link #getDetail()} prose — which meant the ordering could only be asserted by parsing
+	 * clinician-facing text, anchored on a clause the module rewords freely. Measured: rewording that
+	 * clause left {@code thePairChipsAreOrderedBySeverityAndBounded} green while it asserted nothing at
+	 * all.
+	 *
+	 * <p><b>Published on the wire since issue #340</b>, as the {@code severity} key of every chip this
+	 * module serializes — the blocking {@code /search} response and both SSE events that carry
+	 * chips, which reach {@code ChartSearchAiRestController.serializeSafetyWarnings} through the one
+	 * {@code putSafetyChips} payload writer, and since issue #280 the {@code alerts} array of
+	 * {@code GET /chartsearchai/chartalerts}, which reaches that same serializer WITHOUT
+	 * {@code putSafetyChips} because it carries no answer to state an interaction extent about.
+	 * The field is therefore read the same way on every surface — always present, {@code null} on a
+	 * contraindication, which is what every standing alert is. Verbatim and UNNORMALIZED, which is
+	 * deliberate rather than lazy: the field is the dataset's rating, and coercing it would put the
+	 * wire at odds with the very prose a client is being told to stop parsing. What it publishes is the
+	 * SOURCE's rating, not this module's judgment about what may be done — which is the separate thing
+	 * issue #283 keeps off the wire ({@code DrugSafetyValidator.licensesWithholding} and the
+	 * {@code DrugReferenceInjector.STRENGTH_*} clauses are prompt-facing only).
+	 *
+	 * <p><b>A non-null value is NOT a guarantee the module recognises it, so it does not mean "the
+	 * source rated this".</b> {@code DrugSafetyValidator.severityRank} trims and lower-cases, and maps
+	 * every value it does not recognise — including null — to the same answer, UNRATED: exempt from
+	 * {@code clearsSeverityFloor}, sorted above {@code Major} by {@code severityPriority}, and
+	 * licensing withholding in {@code ratingLicensesWithholding}. So there are three classes on the
+	 * wire and not two, and the third is reachable: {@code DrugReference.Interaction}'s severity is a
+	 * plain Jackson-bound string with no vocabulary check and no {@code DrugReferenceValidity} rule
+	 * over it, so an operator's {@code json} dataset supplies its own words. A reader comparing this
+	 * value should trim and case-fold as {@code severityRank} does, and treat anything it does not
+	 * recognise as unrated rather than as a floor. The shipped DDInter dataset publishes exactly
+	 * {@code Major}, {@code Moderate}, {@code Minor} and {@code Unknown}, none null and none blank,
+	 * and the bundled curated seed rates none of its rules; ADR Decision 62 carries that census and
+	 * the production method that produced it, and is not restated here.
+	 *
+	 * <p><b>Read this field; do not fall back to parsing {@link #getDetail()}.</b> On the bundled
+	 * DDInter dataset the rating is somewhere in that prose: {@code DdiDrugReferenceSource.noteFor}
+	 * builds every note as {@code severity + ". " + mechanism}, or as
+	 * {@code severity + " severity interaction (… no mechanism description on file)."} where the row
+	 * has none, and {@code DrugSafetyValidator.interactionWarning} appends that note. Measured
+	 * 2026-08-30 over the shipped KB's 590,312 links: no note is null or blank, no rated rule carries
+	 * none, and none fails to start with its own severity word.
+	 *
+	 * <p><b>That measurement is about the NOTE, and no claim about where the rating sits in the
+	 * rendered detail follows from it.</b> Three attempts to state one have been refuted, which is why
+	 * none is made here. The detail is assembled from chart text as well as dataset text, and the
+	 * chart's half goes in unquoted — a free-text prescription display can carry the very delimiter
+	 * the chip appends its note after, which
+	 * {@code NonCodedDrugOrderNameTest.aFreeTextDisplayIsPrintedIntoTheChipUnquoted} pins as current
+	 * behaviour. What is left, and is enough, is that {@code detail} is prose this module rewords
+	 * freely and holds out as no contract. And on an operator {@code sourceFormat=json} dataset the
+	 * rating need not be in the detail at all: note and severity are independently authored fields
+	 * there, so a rule may carry no note, in which case {@code interactionWarning} appends none, or
+	 * carry one whose leading word is a different rating.
+	 * {@code ChartSearchAiSafetyWarningSeverityWireTest.theRatingIsPublishedEvenWhereTheProseNamesItNowhere}
+	 * drives both of those.
+	 *
+	 * <p>Since issue #283 this value has a second reader, and it decides more than an order:
+	 * {@code DrugSafetyValidator.ratingLicensesWithholding} splits it into "a reason to withhold" and
+	 * "a caution to note", {@code licensesWithholding(SafetyWarning)} composes that with
+	 * {@link #carriesUnratedRelationship()} for the whole finding, and
+	 * {@code DrugReferenceInjector.renderFinding} states the answer in the record the model reads — so
+	 * how strongly a safety answer opens now rests on this field, for an INTERACTION finding — and on
+	 * it for EVERY such finding the answer addresses rather than for one: where several name the drug
+	 * and their clauses disagree, the prompt ranks withholding above a caution, so one Major among
+	 * Minors still decides the lead. Only for one TYPE, though: a CONTRAINDICATION states withholding
+	 * unconditionally and never consults this value (it carries none — the arms that raise one use the
+	 * three-argument constructor), because a recorded allergy is not a caution at any rating. The null
+	 * rule above is what carries the most weight where the value IS read: unrated is not low-rated,
+	 * and reading it as a caution would soften a curated rule an implementation authored deliberately.
+	 *
+	 * <p><b>Since issue #337's third round there is a further reader whose answer reaches a
+	 * clinician-facing published key</b> — not the only one, this value having reached the wire as
+	 * each chip's own {@code severity} since issue #340 — #207 exposed the field for the api-side
+	 * ordering and scoped itself to that, as the paragraph above says — raw and untrimmed where that
+	 * reader trims:
+	 * {@code DrugSafetyValidator.statableRating},
+	 * through {@code DrugReferenceInjector.ratingThisRecordStates}, which carries the rating onto the
+	 * injected record's mapping so a check can ask whether the ANSWER stated it
+	 * ({@code unstatedFindingSeverities}). It asks a different question from every reader above —
+	 * whether there is a WORD whose absence means something, rather than how strongly the finding
+	 * licenses a call — so do not fold it into the withholding split. Note what the paragraph above
+	 * refuses to claim about WHERE the rating sits in the rendered detail: that reader is exactly the
+	 * thing that now asks it per record, and it answers by scanning rather than by assuming.
+	 */
+	public String getSeverity() {
+		return severity;
+	}
+
+	/**
+	 * Whether this warning asserts, beside whatever {@link #getSeverity()} rates, a relationship the
+	 * source rates nothing for — today exactly the folded chip of issue #171: a co-medication that is
+	 * both a rated interaction partner and class-related yields ONE warning carrying the rule's note
+	 * and the class arm's duplicate-therapy or cross-reactivity sentence together.
+	 *
+	 * <p>It exists because {@link #getSeverity()} deliberately keeps reporting the RULE's rating on a
+	 * folded warning — folding must not raise or lower what the pair is rated, which is what the chip
+	 * ordering depends on — so the rating alone cannot say how strong the whole finding is. Reading it
+	 * as the rating did made the fold LOWER a claim: a Minor rule folded with duplicate therapy read as
+	 * a caution, while that same relationship on its own licenses withholding (issue #283).
+	 *
+	 * <p><b>It is scoped to the arm that can fold, and only one of the three can.</b>
+	 * {@code DrugSafetyValidator.classRelationships} runs per IN-PLAY substance, so the interaction
+	 * SCREEN (issue #113), which answers a question naming no drug, builds through the narrow
+	 * {@code interactionWarning} and never sets this flag. One Minor-rated pair therefore states
+	 * withholding from the drug-in-play arm and a caution from the screen, on the same two active
+	 * orders: measured through the real {@code injectRecords} over
+	 * {@code chartsearchai-test/ddi-folded-minor-class-pair.json}, whose two drugs share {@code N06BA}.
+	 * That is a property of which arm ran rather than of the pair. It is left there deliberately —
+	 * giving the screen the class arm's sentence would change the DETAIL of a published
+	 * {@code safetyWarnings} chip, which issues #113 and #171 would both have to re-measure — and
+	 * pinned by {@code FoldedFindingStrengthTest
+	 * .theScreeningArmStatesTheWeakerClaimForTheSamePairBecauseItRunsNoClassArm} so that moving either
+	 * arm is visible. The question-pair arm does not set it either — its warning is built at its own
+	 * call site — so a question-pair finding always states the strength its RATING licenses. This
+	 * javadoc read "there it is no asymmetry: that arm's two drugs need not be on the chart at all,
+	 * so there is no co-medication for a class relationship to hold against", and the second half
+	 * does not follow from the first: the patient CAN be on one of a question-named pair. What holds
+	 * without it is narrower and is all this flag needs — the fold happens only inside
+	 * {@code addInteractionWarnings}, so a class relationship that does hold for one of those drugs
+	 * is never folded into the pair finding; it reaches the model as its own unrated warning, which
+	 * licenses withholding on the rating leg. Whether the two arms can report one pair at once was
+	 * not established here — {@code coveredByActiveOrderArm} asks {@code hasActiveDrug} where the
+	 * pair walk asks {@code identifies}, and the two are different questions.
+	 *
+	 * <p>Not serialized; the wire shape is unchanged.
+	 */
+	boolean carriesUnratedRelationship() {
+		return unratedRelationship;
+	}
+
+	/**
+	 * Whether this finding's ONLY evidence is that two drugs share a classification — issue #400. True
+	 * for a chip the class arm raised with no rule of any kind behind it, and false for everything
+	 * else, including the FOLDED chip that carries a class relationship BESIDE a rated rule
+	 * ({@link #carriesUnratedRelationship()}), which still states the stronger of its two claims.
+	 *
+	 * <p><b>Set by the arm, never read off the detail</b>, which is the rule
+	 * {@link #isAboutACurrentMedication()} follows for the same kind of provenance fact. The sentence
+	 * a class-only chip renders is not a reliable witness of it: the same "same ATC class (…)" wording
+	 * is the second sentence of a folded chip, so a detail scan would answer true for a finding that
+	 * carries a rated rule.
+	 *
+	 * <p><b>What it decides is STRENGTH, and only strength.</b>
+	 * {@code DrugSafetyValidator.licensesWithholding} answers false for such a finding, so
+	 * {@code DrugReferenceInjector.renderFinding} appends the caution clause and the prompt's caution
+	 * branch opens by stating that the drug can be given. Nothing else moves: the chip's sentence, its
+	 * {@code null} severity, the floor it is exempt from, its position after the rule chips and the
+	 * pair ledger's count of it are all as they were.
+	 *
+	 * <p><b>Why the claim is graded down.</b> An unrated finding covers two different things and they
+	 * are not equally strong — {@code DrugSafetyValidator.ratingLicensesWithholding}'s javadoc
+	 * separates them and reserved this change for its own evidence. A CURATED rule is unrated because
+	 * an implementation authored it deliberately. A shared-classification JOIN is unrated because
+	 * nobody authored it at all: the reference data states that two drugs sit in one subgroup and says
+	 * nothing about giving them together. Read as a reason to withhold, that refused a standard
+	 * two-NRTI antiretroviral regimen on the 3.7.1 standalone — <i>"No — Stavudine and Lamivudine
+	 * should not be given together: they are in the same ATC class (J05AF) — possible duplicate
+	 * therapy"</i> — because same-class co-prescription is the design of that regimen rather than an
+	 * error in it. The module encodes no clinical knowledge and cannot know which classes those are,
+	 * so what it grades is its own evidence and never the drugs. → ADR Decision 86;
+	 * {@code ClassOnlyFindingStrengthTest}.
+	 *
+	 * <p>Not serialized; the wire shape is unchanged.
+	 */
+	boolean restsOnSharedClassificationAlone() {
+		return restsOnSharedClassificationAlone;
+	}
+
+	/**
+	 * Whether nothing corroborates the chart match behind the CLAUSE this warning's sentence belongs to
+	 * — as a record of this drug for an allergy rule, and since issue #309 as a whole WORD of the matched
+	 * record for a condition rule. The fourth question of CLAUDE.md's injected-record rule, asked once so
+	 * the two injected channels cannot answer it differently (issue #308).
+	 *
+	 * <p><b>Of the collapsed CLAUSE, not of the one rule this sentence came from</b>, and the
+	 * difference is reachable rather than pedantic. {@code DrugSafetyValidator.contraindicationFinding}
+	 * keys two self-named allergy rules of one entry alike (issue #146), so they are one chip and one
+	 * rendered clause while each is put to the chart on its own token — and one corroborated rule
+	 * carries the key, which is the fold {@code DrugSafetyValidator.addContraindications} resolves and
+	 * the same fold the injected {@code drug_reference} record makes. So this can answer false of a
+	 * sentence whose OWN rule nothing corroborates, because a sibling rule of its clause is
+	 * corroborated; {@code corroboratedByTheChart} is the per-rule primitive underneath that fold and
+	 * is not this. Reading this as the negation of that primitive is the first cut ADR Decision 44
+	 * refutes, and it reddens
+	 * {@code UncorroboratedFindingProvenanceTest.oneCorroboratedRuleOfACollapsedKeyClearsTheClauseForTheWholeKey}.
+	 *
+	 * <p>It can also answer false because ANOTHER key of this entry states the identical clause TEXT as
+	 * recorded, which is the record's own second stage ({@code uncorroborated.removeAll(recorded)}) and
+	 * not a second rule about this key: an allergy rule and a condition rule may carry one note, and a
+	 * record cannot both state a string as this chart's reading and hedge it — nor may a finding beside
+	 * it. Pinned by
+	 * {@code UncorroboratedFindingProvenanceTest.aClauseAnotherKeyOfThisEntryStatesAsRecordedIsNotHedged}.
+	 *
+	 * <p><b>And that stage is asked of TWO strings</b>, because the clause a key renders and the
+	 * sentence this warning carries are not always one string: {@code contraindicationClauses} JOINS the
+	 * distinct notes of the rules a key collapses, while the sentence prints the winning rule's own note
+	 * alone. Asked only of the joined clause, the guard cannot see that another key states this
+	 * sentence's own words as recorded, and the finding hedges words the record beside it asserts.
+	 * Pinned by
+	 * {@code UncorroboratedFindingProvenanceTest.theWordsTheFindingPrintsAreNotHedgedWhereAnotherKeyStatesThemAsRecorded}.
+	 *
+	 * <p>It changes what the injected {@code safety_finding} SAYS and never how strongly it speaks.
+	 * {@code DrugReferenceInjector.renderFinding} appends
+	 * {@code DrugReferenceInjector.FINDING_UNCORROBORATED_MATCH} for it; the strength clause is still
+	 * {@code STRENGTH_WITHHOLD}, {@code getSeverity()} is still null and
+	 * {@code DrugSafetyValidator.licensesWithholding} still answers true — one definition of how
+	 * strongly a finding licenses a clinical call, and this is not a second one. Do not key a strength
+	 * on this flag; <b>ADR Decision 44 is canonical for what that costs</b> and the measurements are
+	 * not restated here, because three copies of a rejected-alternative argument is how this repo has
+	 * come to contradict itself before.
+	 *
+	 * <p>True for a SELF-NAMED allergy rule the corroborating union does not redeem, and — since issue
+	 * #309 — for a CONDITION rule whose matched record carries the token only inside a longer word
+	 * ({@code DrugSafetyValidator.aMatchedConditionCarriesTheToken}). A class-token rule and every
+	 * allergen-arm sentence still answer false.
+	 *
+	 * <p><b>So this is no longer scoped as the chip's own demotion is, and the divergence is
+	 * deliberate</b>: {@code DrugSafetyValidator.contraindicationRank} stays allergy-typed, because
+	 * issue #223 scoped it to the fold whose premise is that a self-named rule reports the allergen
+	 * arm's fact — a premise a condition rule has no part in. Stated here because this accessor is
+	 * where a reader would come to learn the two scopes had parted. ADR Decision 73's trade-offs carry
+	 * the reproduction and why tightening the match is not the remedy.
+	 *
+	 * <p><b>Published VERBATIM since issue #374, as each chip's {@code restsOnAnUncorroboratedChartMatch}
+	 * wire key — so this accessor's name IS the key</b>, the rule {@link #chartOrderBridges()} carries
+	 * for its own. Public for that reason and no other: the wire-facing shape is public, and since #374
+	 * this fact is part of it. The SETTER is not: {@link #contraindication} is the only caller that may
+	 * set it, and it stays package-private, since a provenance answer is a measurement this module made
+	 * and not a value an outside caller may assert. The class's setter/accessor symmetry rule is
+	 * one-directional, so a public read over a package-private write does not breach it.
+	 *
+	 * <p><b>What the published {@code false} does NOT say is that the chart corroborates the finding.</b>
+	 * This is the ONE home of what it covers, and no count of those readings is published — it was, and
+	 * the count went stale inside two cycles. A {@code false} arises from: either fold above; a chip
+	 * that answers by construction, never having had a rule to match (each interaction, class-only and
+	 * overdose chip, and the allergen arm's own three sentences); and — the reading easiest to miss,
+	 * because it is a curated contraindication chip like the corroborated one —
+	 * {@code DrugSafetyValidator.corroboratedByTheChart} answering true UNCONDITIONALLY for a curated
+	 * allergy rule that is not self-named, so a CLASS-token rule's chip publishes false without the
+	 * chart having been asked. That last is reachable on the module's own bundled seed, whose
+	 * class-token rules are {@code nsaid}, {@code penicillin} and {@code aminoglycoside} — one
+	 * {@code sourceFormat=json} flip away, and not only on an operator's file. No ranking of these
+	 * readings against each other is offered: nothing has measured one. {@code README.md} carries this
+	 * for a client.
+	 * Before #374 this read "not serialized; the wire shape is unchanged", and the hazard case was the
+	 * chip asserting the contraindication while the two records beside it hedged — the chip now states
+	 * this answer, while its {@code detail} is still the string it was, so a client that does not render
+	 * the key still shows the categorical. ADR Decision 92.
+	 */
+	public boolean restsOnAnUncorroboratedChartMatch() {
+		return uncorroboratedChartMatch;
+	}
+
+	/**
+	 * The one name the injected {@code drug_reference} record's interaction-note list must call this
+	 * chip's partner by, when the note in hand is about {@code rule} — else null, meaning "keep
+	 * {@link DrugSafetyValidator#partnerLabel}", which is what that list has always printed.
+	 *
+	 * <p><b>Issue #297.</b> Issue #292's fold reconciles a folded chip's two sentences, and the chip
+	 * reaches the prompt verbatim as a citable {@code safety_finding}
+	 * ({@code DrugReferenceInjector.renderFinding}) — while the {@code drug_reference} note kept
+	 * {@code partnerLabel}. So the prompt carried one prescription under two names, which is the
+	 * property {@code CLAUDE.md} states {@code partnerLabel} exists to hold. The name travels HERE, on
+	 * the chip that decided it, rather than being re-derived by the injector, because
+	 * {@code DrugReferenceInjector.injectRecords} already runs the whole fold once through
+	 * {@code preAnswerFindings}: a second walk is the two-resolutions-that-agree shape issue #151
+	 * forbids, and its failure mode is silent and one-directional.
+	 *
+	 * <p><b>It is the RECORD's own vocabulary</b> — the dataset's {@code getName()} where the dataset has
+	 * a name for the partner it has PROVED is the rule's, the rule's own token everywhere else — and never
+	 * {@link DrugReference#displayLabel()}. On the rung where the ladder found no name the two surfaces
+	 * do end up on one string, which is not a counterexample: they agree there because both take the
+	 * rule's token, not because this one took the chip's. The chip's name can be
+	 * {@code displayLabel()}, which may not enter this record's prose
+	 * ({@code DrugSafetyChipLabelTest.displayLabelNeverLeaksIntoTheRenderedRecordText}), so the two
+	 * surfaces name one SUBSTANCE in each one's own vocabulary rather than sharing one string —
+	 * {@code Acetylsalicylic acid} in the note beside {@code Acetylsalicylic acid (aspirin)} in the
+	 * chip. Which name that is, per reconciliation outcome, is stated on
+	 * {@code DrugSafetyValidator.reconciledPartnerName} — which since issue #339 answers for every rule
+	 * chip and not only for a folded one, so this field is non-null on chips that carry no class
+	 * sentence at all.
+	 *
+	 * <p><b>The rule is an argument and not a convenience.</b> A note may take this name only where it
+	 * is about the very rule the fold was decided on: the record collapses its notes to one per partner
+	 * over ONE row ({@code DrugReferenceInjector.onePerPartner}) while the chip chose its rule across
+	 * every row of the substance ({@code DrugSafetyValidator.bestRulePerPartner}), so the two can elect
+	 * different rules for one partner. Answering null there leaves the note exactly where it was, so
+	 * this can only REMOVE a divergence and never create one. Asked here rather than left to the
+	 * caller for the reason issue #298 gives of {@code OrderPartner.recordNameSource}: a reader that
+	 * had to remember the check is a reader that can forget it.
+	 *
+	 * <p><b>It does TWO jobs and only the second is a fail-safe.</b> Its first is to scope the name to
+	 * the note it was decided for at all: {@code DrugReferenceInjector.reconciledPartnerNoteName} is a
+	 * linear scan that asks every finding of this response, so weakened to {@code rule != null} the
+	 * FIRST reconciled name in that list answers for every note in the record. The ticket's own
+	 * reproducer then renders lisinopril's Moderate interaction as
+	 * {@code Acetylsalicylic acid (Moderate)} — one partner's interaction under another's name, in text
+	 * the prompt carries as a citable record, with nothing thrown and no count changed.
+	 * {@code OneNameAcrossChipAndInjectedRecordTest.aReconciledNameReachesOnlyTheNoteItWasDecidedFor}
+	 * pins it, and was the one api case to redden on that weakening when it was made — mutate the
+	 * conjunct and read the failures rather than trusting this sentence.
+	 *
+	 * <p>Its second job is the fail-safe, and THAT is what nothing pins: the record collapses over ONE
+	 * row while the chip chose across every row of the substance, so where the two elect different
+	 * rules for one partner this answers null and the note stays where it was. No fixture reaches that
+	 * shape ({@code ddinter} writes every rule's token and ATC from one partner row, so a label group's
+	 * rows do not differ on either field — the same premise
+	 * {@code DrugReferenceInjector.onePerPartner} records) and a hand-authored {@code json} dataset
+	 * reaches it immediately. Whoever fixtures it should assert this condition, not assume it.
+	 *
+	 * <p>Not serialized — the note name is the injected record's, and no key
+	 * {@code ChartSearchAiRestController.serializeSafetyWarnings} writes carries it; the chip's own
+	 * detail is unchanged by this. Unlike {@link #chartOrderBridges()}, which since issue #347 IS
+	 * published, for the reason that accessor gives.
+	 */
+	String reconciledPartnerNoteName(DrugReference.Interaction rule) {
+		return rule != null && rule == reconciledRule ? reconciledNoteName : null;
+	}
+
+	/**
+	 * Which of this patient's own active orders each substance this chip NAMES was resolved from, where
+	 * the name that order DISPLAYS does not name it — the bridge
+	 * {@code DrugReferenceInjector.renderFinding} states in the injected {@code safety_finding} (issue
+	 * #349; the silence test became the display at issue #347, and
+	 * {@code DrugSafetyValidator.displaysANameOfAny} records why). Empty, never null, and <b>empty says
+	 * "no attribution to show" rather than "the chart records these substances"</b>. <b>Read the
+	 * MECHANISM off the code; no rule about which chips are empty is offered here, and that is
+	 * deliberate</b> — every draft of one has been measured false, the later ones against the real
+	 * pipeline. No count of those drafts is published here or anywhere else: counts were, they
+	 * disagreed with each other, and they went stale. {@code DrugSafetyValidator.chartOrderBridges} walks the SUBJECT against every active
+	 * order and the PARTNER against the orders its arm allowed to witness it, and each item
+	 * additionally needs {@code resolvesFromAny} and a display that does not already name the
+	 * substance. That clause is the whole of it: nothing is claimed here about what a chip's
+	 * contribution depends on, and in particular not that it is arm-independent — the partner witness
+	 * set is the CALLER's, and the two arms hand down different ones.
+	 * {@code InteractionFindingChartOrderBridgeTest.theDrugInPlayArmsPartnerIsBridgedToo} is one
+	 * arrangement of that — a partner side that bridges beside a subject side that does not — and is
+	 * an arrangement rather than a rule. Empty is also the answer for: a chip whose substances their own orders already display; a chip that is not
+	 * an interaction; an interaction chip built from a public constructor here rather than through
+	 * {@code DrugSafetyValidator.interactionWarning} (the class-only and question-pair chips, whose
+	 * residue ADR Decision 64 records); an order the module could read no name for; and a chart with
+	 * no active medication. Not offered as exhaustive, and the client contract in README's
+	 * {@code safetyWarnings} section says why an exhaustive reading of it is the costly mistake.
+	 *
+	 * <p><b>Why it travels here.</b> The finding's text is rendered from the chip, and the answer
+	 * decides which of {@code DrugSafetyValidator}'s arms resolved each side; the injector holds
+	 * neither. Deriving it there would mean a second walk over the same orders reaching the same
+	 * answer, which is the two-resolutions-that-agree shape issue #151 forbids — and its failure mode
+	 * is silent and one-directional. Resolved by ONE shared method
+	 * ({@code DrugSafetyValidator.chartOrderBridges}) called at each arm's chip-wording site — not
+	 * inside {@code interactionWarning}, which takes the list as a parameter, so nothing structural
+	 * stops an ARM being wrong or empty. Each arm resolves once and needs its own cases:
+	 * {@code InteractionFindingChartOrderBridgeTest.aFoldedChipsPartnerIsBridgedToo},
+	 * {@code .theDrugInPlayArmsPartnerIsBridgedToo} and
+	 * {@code .aCombinationOrderCarryingBOTHSubstancesBridgesBothSides} all redden TOGETHER on the
+	 * drug-in-play arm, because its folded and unfolded branches share one resolution; the screening
+	 * arm reddens several more. Neuter an arm and read the failures. No count of the sites is given —
+	 * an earlier draft published one and a later fix in the same change falsified it by merging two.
+	 *
+	 * <p><b>It is a RESOLUTION and not an identity</b>, which is what keeps it clear of #339's reverted
+	 * rounds 5-6: {@code DrugReferenceInjector.FINDING_CHART_ORDER_LEAD} carries that argument, and the
+	 * scoping argument — attribution to the orders the PASS used and not to every carrier of the code —
+	 * lives on {@code DrugSafetyValidator.chartOrderBridges}. Not restated here.
+	 *
+	 * <p><b>Serialized since issue #347, as each chip's own {@code chartOrderBridges} key</b> — named
+	 * for this accessor because the wire guard requires it, see
+	 * {@code ChartSearchAiRestController.serializeSafetyWarnings} — and that
+	 * issue is why: a prompt record reaches a client only if the MODEL cites it, so the correspondence
+	 * between the name a chip prints and the prescription it came from has to be stated
+	 * deterministically as well — the settlement issue #354 reached for the class note, one step
+	 * along. The chip's own {@code detail} is untouched, which is #283's and #339's scoping;
+	 * {@code InteractionFindingChartOrderBridgeTest.theChipDetailIsTheWordsItAlwaysWas} pins it.
+	 *
+	 * <p><b>{@code DrugSafetyValidator.StatedInteractionChips} still does NOT key on it, and the reason
+	 * is not that this is unpublished.</b> That key decides which chips are EMITTED and, through
+	 * {@code ChartSearchAiUtils.resourceKey}, whether two injected findings share one resource uuid —
+	 * so a bridge must not be able to change which chips exist, whether or not a client can read it.
+	 * The consequence is that a COLLAPSED chip publishes the survivor's bridge, which is the same
+	 * residue ADR Decision 63 already accepts for that collapse ("what it gives up is WHICH
+	 * constituent"). See that class's javadoc and ADR Decisions 64 and 69 — not 68, which is issue
+	 * #353's bridged-concept leg and says nothing about this key. This pointer said 68 until review
+	 * round 1: issue #347's decision was renumbered from 68 to 69 when #353 merged first.
+	 */
+	public List<ChartOrderBridge> chartOrderBridges() {
+		return chartOrderBridges;
+	}
+
+	/**
+	 * Whether this warning is about a medication the patient is ALREADY TAKING rather than about a
+	 * drug something proposed (issue #348) — which decides which COLUMN of the strength clauses
+	 * {@code DrugReferenceInjector.strengthClause} states, and so which call the answer opens with.
+	 *
+	 * <p><b>Established by the arm that raised the warning, never re-derived.</b> The two
+	 * ORDER-DRIVEN arms answer true: {@code DrugSafetyValidator.addActiveOrderPairInteractions}
+	 * (issue #113), whose subject is drawn from the resolved active-order entries and whose partner is
+	 * admitted only by {@code hasActiveDrug} against a DIFFERENT active order, and
+	 * {@code addActiveOrderContraindications} (issue #143), which walks those same entries — and that
+	 * second arm answers true only where no SIBLING ROW put the substance in play, because its chips
+	 * fold on the substance while its own skip is row-scoped. See that arm for the reproduction.
+	 * {@link #ordersSharingASubstance(String, String, List)} (issue #477) answers true too: every order
+	 * it names is hers. That holds on a question that resolves a drug as well as on a screen, so there it
+	 * is a current-medication finding beside the drug-in-play arm's proposal findings where the drug in
+	 * play is not hers, which the issue's decision accepted (ADR Decision 116). The DRUG-IN-PLAY arm
+	 * answers true where the drug the question or the answer named is one her own active orders ESTABLISH
+	 * she takes — a recorded name of hers names its substance, or puts it in play alone; a code of hers the
+	 * data files under it alone; or a concept of hers the dataset's bridge files it under by a name naming
+	 * it — and false where they do not (issue #402, ADR Decision 123). That includes a substance her orders
+	 * resolve to only as one of several readings: her {@code Nexium 40mg} resolves to omeprazole and
+	 * esomeprazole and establishes neither. It is false too where every order of hers establishing it is
+	 * coded only as a locally applied presentation of a drug the data also files outside those groups, the
+	 * question then possibly proposing that other presentation, unless the question lists the drug as one
+	 * she is on ({@code DrugSafetyValidator.currentMedicationsInPlay}). That one answer per drug in play is stated
+	 * at EVERY site the arm builds a finding at, {@link #substanceInSeveralActiveOrders} (issue #477) and
+	 * the dose check's {@link #overdose} included: one finding in the other column beside the rest is the
+	 * one-site shape issue #402 recorded and reverted. A drug her
+	 * chart holds only as an ended order is not in that resolution, so it answers false and carries
+	 * {@link #isAboutAnEndedOrder()}'s referent instead (issue #472). The QUESTION-PAIR arm answers false
+	 * by construction: both its drugs are ones the question named.
+	 *
+	 * <p><b>It can answer differently in the two {@code validate} passes of one request, and the wire
+	 * publishes the second.</b> The pre-answer pass validates with an EMPTY answer, so the drugs in play
+	 * there are the QUESTION's — the base for the record the model reads before it answers, and the only
+	 * pass a clause is rendered from ({@code DrugReferenceInjector.renderFinding} has one caller,
+	 * {@code injectRecords}, and it uses the pre-answer findings). The chips an answer carries come from
+	 * the second pass, which is not the same on every path. {@code LlmInferenceService.search} and
+	 * {@code searchStreaming} hand it the MODEL's answer, and a drug the answer names is in play there
+	 * beside the question's unless a record the answer is attributable to already names it
+	 * ({@code DrugSafetyValidator.isEchoOfAttributableRecord}); the injected record of every finding the
+	 * first pass raised names that finding's drug, and the attributable records include the module's own
+	 * reference records, cited or not. {@code answerFromTheModule} hands it the EMPTY answer, as the pass
+	 * that raised the findings had. The ways the two passes' answers can still differ are not listed here:
+	 * two lists written here were each found incomplete. Nothing compares the two passes' warnings; ADR
+	 * Decision 118 records the divergence as a residue.
+	 * Said here because a reader checking for pass-stability will look for it.
+	 *
+	 * <p>It is not derivable from anything else the warning carries, which is why it travels. In
+	 * particular it is NOT {@link #chartOrderBridges()}, which answers a RESOLUTION question — which of
+	 * the patient's own orders each named substance was resolved from, and whether the sentence naming
+	 * one may be printed at all. Do not read the two as near-neighbours on the strength of both being
+	 * about active orders: that list is empty wherever the order's own recorded names reach the
+	 * substance, which is the common case and is this issue's own reproduction, where both orders are
+	 * named as the reference data names them. So a finding about a current medication routinely
+	 * carries no bridge at all. See {@code DrugSafetyValidator.chartOrderBridges} for what it
+	 * withholds and why — it has more than one silence, and since issue #353 more than it had when
+	 * this paragraph was written — rather than any summary of it here.
+	 *
+	 * <p><b>Published VERBATIM since issue #527, as each chip's {@code aboutACurrentMedication} wire key
+	 * — so this accessor's name IS the key</b>, the rule {@link #restsOnAnUncorroboratedChartMatch()}
+	 * states for its own. Until then this paragraph read "prompt-facing only". Public for that reason and
+	 * no other: the factories that SET it stay package-private, for the one-directional reason that
+	 * accessor gives. The chip's own detail is untouched, so
+	 * {@code DrugSafetyValidator.StatedInteractionChips} still does NOT key on it — for the reason stated
+	 * at {@link #chartOrderBridges()}, which is NOT that this is unpublished: that key decides which
+	 * chips are EMITTED and, through {@code ChartSearchAiUtils.resourceKey}, whether two
+	 * injected findings share one resource uuid, so a fact like this must not be able to change which
+	 * chips exist, whether or not a client can read it. The published-versus-prompt-facing reading of
+	 * it was falsified by issue #347 and again by #374, and the key's own membership contradicts it in
+	 * both directions — {@code carriesUnratedRelationship()} is in the key and unpublished, while
+	 * {@link #restsOnAnUncorroboratedChartMatch()} is in it and published. That membership says what the
+	 * key is NOT sorted by and nothing about this ledger's behaviour: every chip it sees comes from
+	 * {@link #interaction}, which hardcodes that flag false, so the term is constant there. Leaving it out costs nothing
+	 * observable, and that is worth saying rather than leaving to be re-derived: the flag is constant
+	 * within an arm for one subject, and where the two interaction arms can both run in one pass — the POST-answer
+	 * pass, where a drug the ANSWER named is in play beside a screening question —
+	 * {@code InteractionPairs.alreadyReported} already stops the screening arm restating a pair the
+	 * drug-in-play arm reported, before this ledger sees it. So no two chips of one pass can differ by
+	 * this flag alone.
+	 *
+	 * <p><b>What the published {@code false} does NOT say is that she is off the drug.</b> It is the
+	 * answer of every arm named above as answering false, whatever her chart holds — for a drug in play
+	 * her orders do not resolve to, which includes a prescription recorded under a name the reference
+	 * data does not carry, for one every order of which is coded only as a locally applied presentation
+	 * of a drug the data also files outside those groups, and for one she holds only as orders that have
+	 * not started where the question proposes it (issue #553), and for the question-pair arm's findings —
+	 * and of every chip built through a public constructor. This is the
+	 * one home of that list; {@code README.md} carries it for a client,
+	 * with how to render {@code true}.
+	 */
+	public boolean isAboutACurrentMedication() {
+		return aboutACurrentMedication;
+	}
+
+	/**
+	 * Whether this finding is about a drug this patient's CHART records only as an order no longer in
+	 * force — the third REFERENT beside a proposal and {@link #isAboutACurrentMedication()} (issue
+	 * #472). Set by {@code DrugSafetyValidator}'s drug-in-play and question-pair arms, through
+	 * {@link #asAboutAnEndedOrder}, and never read off the detail. It never answers true beside
+	 * {@link #isAboutACurrentMedication()}: {@link #asAboutAnEndedOrder}'s guard refuses it, a defence the arms do not
+	 * need today, since none states both of one chip.
+	 *
+	 * <p><b>{@code false} is not a certificate that the drug is current.</b> It is also the answer for
+	 * a drug the question proposes giving, for every arm but those two, and wherever the
+	 * module could not rule out that she is on it — the conditions are {@code DrugSafetyValidator}'s
+	 * {@code EndedOrders} javadoc's to enumerate, not this one's. Published verbatim as the chip's
+	 * {@code aboutAnEndedOrder} key.
+	 */
+	public boolean isAboutAnEndedOrder() {
+		return aboutAnEndedOrder;
+	}
+
+	/**
+	 * This warning, stated as about a drug the chart records only as an ended order (issue #472), its
+	 * order having stopped on {@code stopDate} ({@code null} where no ended record naming it carries a
+	 * date) — or this very warning, unchanged, where it is already about a current medication, which no
+	 * caller hands it today: a question-driven chip is about a current medication only where its
+	 * substance is one of her active orders (issue #402), and the order-driven arm's subjects are her
+	 * active substances — and {@code DrugSafetyValidator.EndedOrders} holds neither.
+	 * Kept so the two referents cannot both be stated whatever a later caller does. Package-private:
+	 * {@code EndedOrders.stamp} is its only caller, and {@code rows} are every row of the substance it
+	 * held as ended — see {@link #endedOrderRows()}.
+	 */
+	SafetyWarning asAboutAnEndedOrder(Date stopDate, List<DrugReference> rows) {
+		if (aboutACurrentMedication) {
+			return this;
+		}
+		return new SafetyWarning(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch,
+				reconciledRule, reconciledNoteName, chartOrderBridges, false, chartRecords,
+				restsOnSharedClassificationAlone, namedPartners, true,
+				stopDate == null ? null : DateFormatUtil.formatDate(stopDate), rows, ordersSharingASubstance,
+				matchedOrderNames, subjectRows, currentMedicationOrders, currentOrderDisplays, statedInTheAnswer,
+				partnerRows, partnerScheduledStarts, orderScheduledStart, alreadyOrdered, aboutAnotherOfHerMedications,
+				aboutADrugOtherThanTheOneProposed, findingCitation, aRecordedAllergyToItsOwnDrug);
+	}
+
+	/**
+	 * This warning, carrying {@code names} as the displays of the active orders its arm matched its
+	 * substances against and the labels of the substances those orders resolve — see
+	 * {@link #orderNamesOf(SafetyWarning)}. Package-private: written only by {@code DrugSafetyValidator},
+	 * off the same walk {@code chartOrderBridges} makes, at each site that resolves bridges. Changes
+	 * nothing this warning prints or publishes.
+	 */
+	SafetyWarning withMatchedOrderNames(Collection<String> names) {
+		return new SafetyWarning(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch,
+				reconciledRule, reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords,
+				restsOnSharedClassificationAlone, namedPartners, aboutAnEndedOrder, endedOrderStopDate,
+				endedOrderRows, ordersSharingASubstance, names, subjectRows, currentMedicationOrders, currentOrderDisplays,
+				statedInTheAnswer, partnerRows, partnerScheduledStarts, orderScheduledStart, alreadyOrdered, aboutAnotherOfHerMedications,
+				aboutADrugOtherThanTheOneProposed, findingCitation, aRecordedAllergyToItsOwnDrug);
+	}
+
+	/** @return the names {@link #withMatchedOrderNames} set, never null */
+	List<String> matchedOrderNames() {
+		return matchedOrderNames;
+	}
+
+	/**
+	 * Every name {@code finding}'s drugs go by through this patient's own active orders, each once: the
+	 * substances and order displays of its {@link #chartOrderBridges()}, then the display of every active
+	 * order its arm matched a substance it names against (issue #514, round 4 of its review) — including
+	 * an order whose display already names the substance, which states no bridge — each followed by the
+	 * label this response names every substance that order resolves by (round 4 of the fourth review).
+	 * The display is what lets a sentence naming her order as the chart's own record prints it
+	 * (<em>"Rifampicin 300mg capsule"</em>) be read as about the finding's partner, where the finding
+	 * prints the knowledge base's label (<em>"Rifampicin (rifampin)"</em>) and the display does not
+	 * contain it; the label is the mirror, a sentence naming her order <em>"Isoniazid / pyrazinamide /
+	 * rifampin"</em> by the label <em>"Rifampicin (rifampin)"</em> the prompt's other findings print.
+	 *
+	 * <p>Read by {@code InteractionClaimPairFidelityCheck} off a chip, and carried onto the finding's
+	 * record by {@code DrugReferenceInjector} as {@code RecordMapping.getFindingBridgeNames()} — one
+	 * projection, so a record and its chip cannot go by different names. Static rather than an
+	 * accessor: it is NOT published, and prints nothing — the chip's {@code detail}, its
+	 * {@code chartOrderBridges} key and the finding's rendered text are unchanged by it.
+	 */
+	public static List<String> orderNamesOf(SafetyWarning finding) {
+		Set<String> names = new LinkedHashSet<String>(ChartOrderBridge.namesOf(finding.chartOrderBridges));
+		names.addAll(finding.matchedOrderNames);
+		return new ArrayList<String>(names);
+	}
+
+	/**
+	 * This warning, carrying {@code orders} as this patient's own active orders a CONTRAINDICATION about a
+	 * medication she already takes is about — see {@link #currentMedicationOrders()} — and {@code displays}
+	 * as the ones of those a sentence may print, each with the order's own display it prints — see
+	 * {@link #currentOrderDisplays()} and {@link #orderDisplayPrintedAs}. Package-private:
+	 * written only by {@code DrugSafetyValidator.currentMedicationOrdersOn}, which production reaches from
+	 * {@code DrugSafetyValidator.ContraindicationChips} alone, off the orders either contraindication arm
+	 * recorded for the chip's substance. Changes nothing this warning prints.
+	 */
+	SafetyWarning withCurrentMedicationOrders(List<CurrentMedicationOrder> orders, Map<String, String> displays) {
+		return new SafetyWarning(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch,
+				reconciledRule, reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords,
+				restsOnSharedClassificationAlone, namedPartners, aboutAnEndedOrder, endedOrderStopDate,
+				endedOrderRows, ordersSharingASubstance, matchedOrderNames, subjectRows, orders, displays,
+				statedInTheAnswer, partnerRows, partnerScheduledStarts, orderScheduledStart, alreadyOrdered, aboutAnotherOfHerMedications,
+				aboutADrugOtherThanTheOneProposed, findingCitation, aRecordedAllergyToItsOwnDrug);
+	}
+
+	/**
+	 * Every one of this patient's own active orders this finding is about, in her chart's order, by its
+	 * display and its uuid (issue #552) — so her <em>Advil 400mg</em> is named on a chip whose
+	 * {@link #getDrug()} is the substance <em>Ibuprofen</em> the module resolved it to, and a client can
+	 * link to the order without resolving {@code drug} against her orders itself, a second resolution that
+	 * could disagree with this one (#151). Published VERBATIM as each chip's {@code currentMedicationOrders}
+	 * wire key, so this accessor's name IS the key.
+	 *
+	 * <p>Set on a contraindication about a medication she already takes, by either arm that raises one, and
+	 * stamped once where the ledger adds the chip ({@code DrugSafetyValidator.ContraindicationChips}), so a
+	 * chip that replaces another of its substance carries them too: for {@code addActiveOrderContraindications},
+	 * every order any row of its substance {@code resolvesFromAny}; for the drug-in-play arm (issue #402), the
+	 * orders that ESTABLISH she takes it ({@code DrugSafetyValidator.currentMedicationsInPlay}), the ones its
+	 * {@link #isAboutACurrentMedication()} was decided on. Never re-derived at a consumer. An order known only
+	 * by its codes is listed by the stand-in display {@link PatientClinicalContext.ActiveDrugOrder#getDisplay()}
+	 * gives it, which is not a name. <b>Empty is not a claim that no order is behind the finding</b>: it
+	 * is, among others, the answer on every chip of another type, and on a contraindication over a context
+	 * carrying no per-order list (issue #118's flattened fallback), which has no order to name.
+	 */
+	public List<CurrentMedicationOrder> currentMedicationOrders() {
+		return currentMedicationOrders;
+	}
+
+	/**
+	 * The displays of this patient's own active orders this finding is about, each once, as her chart spells
+	 * them (<em>"Advil 400mg"</em>, where {@link #getDrug()} is the substance <em>"Ibuprofen"</em> the module
+	 * resolved it to). Set only on a contraindication raised by {@code addActiveOrderContraindications}
+	 * about a medication she already takes, from the orders any row of its substance
+	 * {@code resolvesFromAny}, and only an order whose display {@code displayNamesADrug} — the orders of
+	 * {@link #currentMedicationOrders()} a sentence may print. Empty everywhere else, and empty there too
+	 * where no such order has a printable display — so empty is never a claim that no order is behind the
+	 * finding. Not published: {@link ConflictingOrderStatement} is its reader.
+	 */
+	List<String> currentOrderDisplays() {
+		return Collections.unmodifiableList(new ArrayList<String>(currentOrderDisplays.keySet()));
+	}
+
+	/**
+	 * @return the order's own display that {@code printed}, one of {@link #currentOrderDisplays()}, prints —
+	 *         the same string but for an order that has not started, which is printed with its start date (issue
+	 *         #553) — so a reader can look the order up by the display her chart records (ADR Decision 168);
+	 *         {@code null} for a string this chip does not print. Not published.
+	 */
+	String orderDisplayPrintedAs(String printed) {
+		return currentOrderDisplays.get(printed);
+	}
+
+	/**
+	 * This warning, stating that each order {@code starts} keys, among those it names as its partners
+	 * ({@link #namedPartners()}), has not started and is scheduled to start on the date it maps to (issue
+	 * #553). Package-private: written by {@code DrugSafetyValidator.interactionWarning}, from the same
+	 * answer that worded the detail's "scheduled order", and by issue #477's two duplicate-therapy
+	 * findings, from the carriers whose displays they name — so a finding and its detail cannot disagree.
+	 * Changes nothing this warning prints.
+	 */
+	SafetyWarning withPartnerScheduledStarts(Map<String, Date> starts) {
+		if ((starts == null || starts.isEmpty()) && partnerScheduledStarts.isEmpty()) {
+			return this;
+		}
+		Map<String, String> spelled = new LinkedHashMap<String, String>();
+		if (starts != null) {
+			for (Map.Entry<String, Date> start : starts.entrySet()) {
+				spelled.put(start.getKey(), DateFormatUtil.formatDate(start.getValue()));
+			}
+		}
+		return new SafetyWarning(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch,
+				reconciledRule, reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords,
+				restsOnSharedClassificationAlone, namedPartners, aboutAnEndedOrder, endedOrderStopDate,
+				endedOrderRows, ordersSharingASubstance, matchedOrderNames, subjectRows, currentMedicationOrders,
+				currentOrderDisplays, statedInTheAnswer, partnerRows, spelled, orderScheduledStart, alreadyOrdered, aboutAnotherOfHerMedications,
+				aboutADrugOtherThanTheOneProposed, findingCitation, aRecordedAllergyToItsOwnDrug);
+	}
+
+	/**
+	 * For each partner this chip names ({@link #namedPartners()}) that has not started, keyed by that
+	 * name, when it is scheduled to start, spelled as {@code DateFormatUtil.formatDate} spells every date
+	 * this module publishes; a partner that has started is not a key, and a chip naming no such partner
+	 * maps nothing (issue #553). Never null. {@code DrugSafetyValidator.collapseSharedMechanisms} reads it
+	 * to keep such a chip out of a merge. Package-private and not a getter, so it reaches no wire;
+	 * {@code DrugReferenceInjector} carries it onto the finding's record for {@code FindingPartnerCoverageCheck}.
+	 */
+	Map<String, String> partnerScheduledStarts() {
+		return partnerScheduledStarts;
+	}
+
+	/**
+	 * When the order this CONTRAINDICATION is about is scheduled to start, spelled as
+	 * {@link #partnerScheduledStarts()} does — set by {@link #statingItsOrderHasNotStarted} alone, in the
+	 * step that writes the detail's "has not started" sentence, and {@code null} on every chip that step
+	 * did not build (issue #553, review round 2 of PR #559). Package-private and not a getter, so it
+	 * reaches no wire: {@code DrugReferenceInjector.composeFromFindings} reads it to leave out the
+	 * referent that says she is already taking the drug, a sentence the detail's own "has not started"
+	 * contradicts.
+	 */
+	String orderScheduledStart() {
+		return orderScheduledStart;
+	}
+
+	/**
+	 * This contraindication about a medication she already takes, its detail ending with the sentence that
+	 * the order it is about has not started and is scheduled to start on {@code start} (issue #553, review
+	 * round 1 of PR #559) — in the words {@code PatientChartSerializer.scheduledToStart} gives the order's
+	 * own chart record. Package-private: written only by {@code DrugSafetyValidator.ContraindicationChips},
+	 * for a substance she holds only as orders that have not started. Changes the detail and {@link
+	 * #orderScheduledStart()}, and nothing else.
+	 */
+	SafetyWarning statingItsOrderHasNotStarted(Date start) {
+		String stated = DrugSafetyValidator.endSentence(detail.trim()) + " Her order for " + drug
+				+ " has not started: it is " + PatientChartSerializer.scheduledToStart(start) + ".";
+		return new SafetyWarning(type, drug, stated, severity, unratedRelationship, uncorroboratedChartMatch,
+				reconciledRule, reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords,
+				restsOnSharedClassificationAlone, namedPartners, aboutAnEndedOrder, endedOrderStopDate,
+				endedOrderRows, ordersSharingASubstance, matchedOrderNames, subjectRows, currentMedicationOrders,
+				currentOrderDisplays, statedInTheAnswer, partnerRows, partnerScheduledStarts,
+				DateFormatUtil.formatDate(start), alreadyOrdered, aboutAnotherOfHerMedications,
+				aboutADrugOtherThanTheOneProposed, findingCitation, aRecordedAllergyToItsOwnDrug);
+	}
+
+	/**
+	 * Whether this chip says the chart records an allergy to the very drug it is about — the allergen arm's
+	 * identity sentence where the recorded name NAMES the row ({@code RecordedAllergen.identitySentence}'s
+	 * first form). False for its second form, which the module wrote because it could not say that, for the
+	 * two cross-reactivity sentences, whose allergy is to another drug, and for every other arm. Fixed at
+	 * construction by {@link #recordedAllergenContraindication}, the only writer. Package-private and
+	 * unpublished: {@link ConflictingOrderStatement} is its reader, and states such an order as one short
+	 * line (ADR Decision 167).
+	 */
+	boolean isARecordedAllergyToItsOwnDrug() {
+		return aRecordedAllergyToItsOwnDrug;
+	}
+
+	/** This warning, stated as one the answer states in its own words — see {@link #isStatedInTheAnswer()}.
+	 *  Package-private: {@link ConflictingOrderStatement} and {@link ModuleAnswerStatement} call it. */
+	SafetyWarning asStatedInTheAnswer() {
+		return new SafetyWarning(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch,
+				reconciledRule, reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords,
+				restsOnSharedClassificationAlone, namedPartners, aboutAnEndedOrder, endedOrderStopDate,
+				endedOrderRows, ordersSharingASubstance, matchedOrderNames, subjectRows, currentMedicationOrders,
+				currentOrderDisplays, true, partnerRows, partnerScheduledStarts, orderScheduledStart, alreadyOrdered, aboutAnotherOfHerMedications,
+				aboutADrugOtherThanTheOneProposed, findingCitation, aRecordedAllergyToItsOwnDrug);
+	}
+
+	/**
+	 * Whether the module has stated this finding in the ANSWER itself — {@link ConflictingOrderStatement},
+	 * which names the order it is about on a question asking only for the patient's allergies, carrying this
+	 * chip's own {@link #getDetail()} verbatim except where the finding is an allergy to the order's own drug
+	 * ({@link #isARecordedAllergyToItsOwnDrug()}, ADR Decision 167), and {@link ModuleAnswerStatement}, for an
+	 * answer the module composed from its own findings, carrying it verbatim. Published VERBATIM as each chip's {@code statedInTheAnswer}
+	 * wire key, so this accessor's name IS the key. The chip is published either way: {@code true} tells a
+	 * client the clinician has already read this finding in the answer, so rendering it again beside a list
+	 * the clinician asked for repeats it. {@code false} says nothing about the answer's prose, which may
+	 * mention the drug in words of its own.
+	 */
+	public boolean isStatedInTheAnswer() {
+		return statedInTheAnswer;
+	}
+
+	/**
+	 * This warning, stated as about another of her medications — see {@link #isAboutAnotherOfHerMedications()}.
+	 * Package-private: written only by {@code DrugSafetyValidator.ContraindicationChips}, where it stamps the
+	 * orders the check of her own prescriptions recorded for the chip's substance. Changes nothing this
+	 * warning prints.
+	 */
+	SafetyWarning asAboutAnotherOfHerMedications() {
+		return new SafetyWarning(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch,
+				reconciledRule, reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords,
+				restsOnSharedClassificationAlone, namedPartners, aboutAnEndedOrder, endedOrderStopDate,
+				endedOrderRows, ordersSharingASubstance, matchedOrderNames, subjectRows, currentMedicationOrders,
+				currentOrderDisplays, statedInTheAnswer, partnerRows, partnerScheduledStarts, orderScheduledStart,
+				alreadyOrdered, true, aboutADrugOtherThanTheOneProposed, findingCitation, aRecordedAllergyToItsOwnDrug);
+	}
+
+	/**
+	 * Whether this finding is about one of her OWN medications other than the drug the response is about: a
+	 * contraindication the check of her own prescriptions against her own allergy and condition records
+	 * raised ({@code DrugSafetyValidator.addActiveOrderContraindications}, issue #143), for a substance no
+	 * drug the question or the answer put in play is of, on a response that put one in play. Published
+	 * VERBATIM as each chip's {@code aboutAnotherOfHerMedications} wire key, so this accessor's name IS the
+	 * key.
+	 *
+	 * <p>It travels because {@link #isAboutACurrentMedication()} cannot say it: that answers true both here
+	 * and for a drug the question names that her orders establish she takes (issue #402), which IS what was
+	 * asked. Asked "Can I give her ibuprofen?", an answer naming her lidocaine order as an interaction partner
+	 * puts it in the response's subject matter, and her lidocaine allergy is then raised beside the answer —
+	 * a finding about her lidocaine, not about ibuprofen.
+	 *
+	 * <p><b>{@code false} is not a claim the chip is about the drug in play.</b> It is the answer on every chip
+	 * another arm raised — the screen of her orders against each other among them — on a response that put no
+	 * drug in play, which includes every standing alert, and on a chip of a substance a drug in play is of,
+	 * whichever arm's sentence the ledger kept for it.
+	 */
+	public boolean isAboutAnotherOfHerMedications() {
+		return aboutAnotherOfHerMedications;
+	}
+
+	/**
+	 * This warning, stated as about a drug other than the one the question proposes, or not — see
+	 * {@link #isAboutADrugOtherThanTheOneProposed()}. Package-private: written only by
+	 * {@code DrugSafetyValidator.EndedOrders}, the step every question-driven chip passes through. Changes nothing
+	 * this warning prints.
+	 */
+	SafetyWarning withAboutADrugOtherThanTheOneProposed(boolean other) {
+		return new SafetyWarning(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch,
+				reconciledRule, reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords,
+				restsOnSharedClassificationAlone, namedPartners, aboutAnEndedOrder, endedOrderStopDate,
+				endedOrderRows, ordersSharingASubstance, matchedOrderNames, subjectRows, currentMedicationOrders,
+				currentOrderDisplays, statedInTheAnswer, partnerRows, partnerScheduledStarts, orderScheduledStart,
+				alreadyOrdered, aboutAnotherOfHerMedications, other, findingCitation, aRecordedAllergyToItsOwnDrug);
+	}
+
+	/**
+	 * Whether this finding is about a drug OTHER than the one the question proposes (ADR Decision 137): the
+	 * question proposes a drug ({@code DrugSafetyValidator.proposedByTheQuestion}), and this finding's subject is not
+	 * of it — and, for a question-pair finding, neither is its partner. Asked <em>"The patient is currently on
+	 * Lamivudine, Nevirapine, Stavudine, is it safe to give Fluconazole?"</em>, the listed nevirapine screened
+	 * against her lidocaine order is a finding about nevirapine, beside two about fluconazole. Published VERBATIM
+	 * as each chip's {@code aboutADrugOtherThanTheOneProposed} wire key, so this accessor's name IS the key.
+	 *
+	 * <p>It differs from {@link #isAboutAnotherOfHerMedications()}, which says the subject is one of HER
+	 * prescriptions: a drug only the question lists is not, and a chip of hers on a question proposing nothing is
+	 * one of these false. <b>{@code false} is not a claim the chip is about the proposed drug</b>: it is the answer on
+	 * every chip of a question that proposes no drug, and on every chip the steps that bypass the stamp raise — the
+	 * screen of her orders against each other, and the finding that several of her orders carry one substance.
+	 */
+	public boolean isAboutADrugOtherThanTheOneProposed() {
+		return aboutADrugOtherThanTheOneProposed;
+	}
+
+	/**
+	 * This warning, naming {@code citation} as its finding's record number — see {@link #getFindingCitation()}.
+	 * Package-private: written only by {@code DrugReferenceInjector.withFindingCitations}. Changes nothing this warning
+	 * prints.
+	 */
+	SafetyWarning withFindingCitation(Integer citation) {
+		return new SafetyWarning(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch,
+				reconciledRule, reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords,
+				restsOnSharedClassificationAlone, namedPartners, aboutAnEndedOrder, endedOrderStopDate,
+				endedOrderRows, ordersSharingASubstance, matchedOrderNames, subjectRows, currentMedicationOrders,
+				currentOrderDisplays, statedInTheAnswer, partnerRows, partnerScheduledStarts, orderScheduledStart,
+				alreadyOrdered, aboutAnotherOfHerMedications, aboutADrugOtherThanTheOneProposed, citation,
+				aRecordedAllergyToItsOwnDrug);
+	}
+
+	/**
+	 * The record number this finding has in the prompt — the {@code index} of the {@code safety_finding} record the
+	 * module injected for it, which an answer's {@code [n]} marker cites — or {@code null} where no single record is
+	 * it (ADR Decision 138). Published VERBATIM as each chip's {@code findingCitation} wire key, so this accessor's
+	 * name IS the key.
+	 *
+	 * <p>It travels because a finding's {@code resourceUuid} is {@code <type>:<drug>}, which several findings of one
+	 * type about one drug share: two fluconazole interactions are two records under one key, and nothing else on the
+	 * chip said which record was its own. Joined by {@code DrugReferenceInjector.withFindingCitations}, by the
+	 * record's own opening — the finding's prefix, drug and detail, which the record is written from — and only
+	 * where exactly one record opens that way. <b>{@code null} is not a claim the finding has no record</b>: it is
+	 * every chip a pass raised for a drug only the answer named, a chip whose words two records open with, and every
+	 * standing alert.
+	 */
+	public Integer getFindingCitation() {
+		return findingCitation;
+	}
+
+	/**
+	 * This warning, stated as about the substance {@code rows} are every reference row of — the finding's
+	 * SUBJECT, decided where the arm named it (issue #515). Package-private: {@code EndedOrders.aboutTheSubject}
+	 * is its caller for a drug in play — through {@code EndedOrders.stamp}, the step every other question-driven
+	 * arm's chip and every contraindication chip passes through, and directly for
+	 * {@code alreadyInSeveralOrders}' finding, which takes no ended-order referent — and
+	 * {@code EndedOrders.stampPair} for a question-pair finding, which is about both of its drugs;
+	 * {@code addOrdersSharingASubstance} states every row of every substance its finding names. The
+	 * screening arm's pair chips carry no subject rows. See {@link #subjectRows()}.
+	 */
+	SafetyWarning aboutSubstance(List<DrugReference> rows) {
+		return new SafetyWarning(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch,
+				reconciledRule, reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords,
+				restsOnSharedClassificationAlone, namedPartners, aboutAnEndedOrder, endedOrderStopDate,
+				endedOrderRows, ordersSharingASubstance, matchedOrderNames, rows, currentMedicationOrders,
+				currentOrderDisplays, statedInTheAnswer, partnerRows, partnerScheduledStarts, orderScheduledStart, alreadyOrdered, aboutAnotherOfHerMedications,
+				aboutADrugOtherThanTheOneProposed, findingCitation, aRecordedAllergyToItsOwnDrug);
+	}
+
+	/**
+	 * Every reference row of the substance this finding is about, as the arm that raised it named that
+	 * substance — issue <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/515">#515</a> —
+	 * and, for a question-pair finding, of its partner's substance too: that arm's subject is the drug the
+	 * question proposes only where it proposes one of the two, and the dataset's order otherwise (ADR
+	 * Decision 133), so the finding is about both. For
+	 * {@link #ordersSharingASubstance(String, String, List)}' finding, of every substance it names.
+	 * Empty on a chip {@link #aboutSubstance} was never asked of, never null. Package-private and not a getter, so it
+	 * reaches no wire: {@code DrugReferenceInjector} carries it onto the finding's record, as each row's id,
+	 * so a check of the answer asks which findings are about a drug of the rows that were decided rather
+	 * than of the {@link #getDrug()} label, which is not a substance name to group on.
+	 */
+	List<DrugReference> subjectRows() {
+		return subjectRows;
+	}
+
+	/**
+	 * This warning, carrying {@code rows} as the reference rows each of its {@link #namedPartners()} was
+	 * resolved to where the chip was decided — see {@link #rowsOfPartner}. Package-private: written by
+	 * {@code DrugSafetyValidator} at the chip sites that hold the partner's ENTRIES — both active-order
+	 * arms' rule chips, and {@code conditionMediatedWarning} — and unioned across the members of a merged
+	 * chip by {@code collapseSharedMechanisms}. Changes nothing this warning prints or publishes.
+	 */
+	SafetyWarning withPartnerRows(Map<String, List<DrugReference>> rows) {
+		return new SafetyWarning(type, drug, detail, severity, unratedRelationship, uncorroboratedChartMatch,
+				reconciledRule, reconciledNoteName, chartOrderBridges, aboutACurrentMedication, chartRecords,
+				restsOnSharedClassificationAlone, namedPartners, aboutAnEndedOrder, endedOrderStopDate,
+				endedOrderRows, ordersSharingASubstance, matchedOrderNames, subjectRows, currentMedicationOrders,
+				currentOrderDisplays, statedInTheAnswer, rows, partnerScheduledStarts, orderScheduledStart, alreadyOrdered, aboutAnotherOfHerMedications,
+				aboutADrugOtherThanTheOneProposed, findingCitation, aRecordedAllergyToItsOwnDrug);
+	}
+
+	/**
+	 * The reference rows the partner {@code partner} — one of {@link #namedPartners()}, as printed — was
+	 * resolved to where this chip was decided (issue #555), so that a check of the answer
+	 * can ask whether the PROSE writes the name of one of those rows —
+	 * {@code DrugSafetyValidator.namesThePartner}, which reads a row's {@link DrugReference#getName()} and
+	 * never its other names, since those include everyday words — rather than only containment of the
+	 * printed name: a finding printing her order by the knowledge base's label
+	 * <em>"Rifampicin (rifampin)"</em> is named by an answer writing <em>"Rifampicin"</em>, which no
+	 * containment of the label can see. {@code DrugReferenceInjector} carries it onto the finding's
+	 * record, as each row's id, beside {@code RecordMapping.getFindingPartners()}. The rows of ONE
+	 * substance on an interaction rule chip; on a merged chip, and on a {@link #conditionMediated} chip
+	 * whose name for a prescription stands for several of its substances, the union of theirs, so an answer
+	 * writing the name of any one of those rows states that partner.
+	 *
+	 * <p>Empty, never null, for a partner no {@link #withPartnerRows} site resolved to an entry — the
+	 * orders {@link #substanceInSeveralActiveOrders} and {@link #ordersSharingASubstance} name among them,
+	 * and a rule whose partner the dataset identifies by no entry. Such a partner is stated only where the
+	 * answer contains its printed name. Package-private and not a getter, so it reaches no wire.
+	 */
+	List<DrugReference> rowsOfPartner(String partner) {
+		List<DrugReference> rows = partnerRows.get(partner);
+		return rows == null ? Collections.<DrugReference> emptyList() : rows;
+	}
+
+	/** @return every partner's rows as {@link #withPartnerRows} took them, never null — for a merged chip
+	 *          to union its members' */
+	Map<String, List<DrugReference>> partnerRows() {
+		return partnerRows;
+	}
+
+	/**
+	 * Whether this is {@link #ordersSharingASubstance(String, String, List)}' finding — that two or
+	 * more of her own orders carry the same substances — rather than a relationship between two. An INTERACTION finding that
+	 * relates no PAIR, so {@code DrugReferenceInjector.answersFromFindings} asks this to keep a screen
+	 * the module answers itself one that related at least one pair (ADR Decision 108), and
+	 * {@code composeFromFindings} asks it to put the finding after the drug proposed's own findings
+	 * (ADR Decision 116). Package-private,
+	 * matching the factory: it is on neither the wire nor either collapse key.
+	 */
+	boolean statesOrdersSharingASubstance() {
+		return ordersSharingASubstance;
+	}
+
+	/**
+	 * Whether this is the finding that a drug the QUESTION PROPOSES is already in the patient's own active
+	 * orders — {@link #substanceInSeveralActiveOrders}' finding, raised where the question proposes the
+	 * drug and her orders establish it, on one order as on several (issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/548">#548</a>). Set by the arm
+	 * and never read off the detail. {@code DrugReferenceInjector} reads it to stamp the chart the
+	 * user-message clause is written from, so the clause is stated exactly where this finding is.
+	 * Package-private and not a getter, so it reaches no wire.
+	 */
+	boolean statesAProposedDrugIsAlreadyOrdered() {
+		return alreadyOrdered != null;
+	}
+
+	/**
+	 * The drug and the orders this finding names, as its detail names them — each order label once, with
+	 * the count of orders carrying it where that is more than one, and the number of orders in all — where
+	 * {@link #statesAProposedDrugIsAlreadyOrdered()}, otherwise null (issue #548). Written where the
+	 * sentence is, so what {@code DrugReferenceInjector} stamps on the chart cannot count the orders
+	 * another way than the finding does. Package-private, so it reaches no wire.
+	 */
+	PatientChartSerializer.AlreadyOrderedDrug alreadyOrdered() {
+		return alreadyOrdered;
+	}
+
+	/**
+	 * Whether this finding says a drug the question proposes is already in ONE of her active orders, so
+	 * that the only duplication it reports is the proposal's (issue
+	 * <a href="https://github.com/openmrs/openmrs-module-chartsearchai/issues/548">#548</a>, review round 1
+	 * of PR #554). {@code DrugSafetyValidator.licensesWithholding} answers a caution for it: nothing about
+	 * the order she is on needs changing, and stated in the unrated default's withholding class, the record
+	 * would tell the model it is a reason to change her medication, and the prompt's ranking sentence would
+	 * hand it the lead over her other findings' cautions. Several orders of hers duplicate one another, so
+	 * that finding keeps the default. Set by the arm, through {@link #alreadyOrdered()}'s count, and never
+	 * read off the detail. Package-private, so it reaches no wire.
+	 */
+	boolean restsOnTheProposalAlone() {
+		return alreadyOrdered != null && alreadyOrdered.getOrderCount() == 1;
+	}
+
+	/**
+	 * Every reference row of the substance {@link #isAboutAnEndedOrder()} is about — empty on every
+	 * other chip, never null. Package-private and not a getter, so it reaches no wire: its one reader
+	 * is {@code DrugSafetyValidator.namesTheEndedOrderDrug}, which asks an answer's prose whether it
+	 * names this drug by any of its names rather than by the {@link #getDrug()} label (issue #472).
+	 */
+	List<DrugReference> endedOrderRows() {
+		return endedOrderRows;
+	}
+
+	/**
+	 * The date the ended order behind {@link #isAboutAnEndedOrder()} stopped being in force, spelled as
+	 * {@code DateFormatUtil.formatDate} spells every date this module publishes ({@code yyyy-MM-dd},
+	 * UTC), or {@code null} (issue #472). The latest {@code RecordMapping.getOrderStopDate()} among the
+	 * ended records naming the drug, read off the chart and never off a record's text; {@code null} on
+	 * every chip that is not about an ended order, and on one whose ended records carry no date, which
+	 * {@code SerializedRecord.orderStopDate}'s javadoc says a record not in force may do. Held as the
+	 * published string rather than a {@code Date}, so what a client reads as the chip's
+	 * {@code endedOrderStopDate} key and what the module states in the answer (ADR Decision 110) are one
+	 * spelling.
+	 */
+	public String getEndedOrderStopDate() {
+		return endedOrderStopDate;
+	}
+
+	/**
+	 * @return the uuids of the chart records this finding FIRED ON — the recorded allergy or condition
+	 *         whose match raised it (issue #305). Empty is the honest answer wherever the module
+	 *         attributed nothing, and it is not a denial. THIS layer is empty for three reasons — the
+	 *         finding is not a contraindication (an interaction's evidence is an ORDER, which issue
+	 *         #379 attributes on its own path), the context states no provenance, or the module could
+	 *         read no allergy or condition rows — and the injector's own refusals add more. The whole
+	 *         list is enumerated in one place, {@code RecordMapping.getDerivedFrom()}; a non-empty
+	 *         answer here does NOT mean a non-empty one there.
+	 *
+	 *         <p>Read by {@code DrugReferenceInjector}, which resolves each uuid to the number of the
+	 *         chart record it IS and puts those numbers on the injected {@code safety_finding} mapping,
+	 *         so a client reaches the source record whether or not the model cited it.
+	 *
+	 *         <p><b>Fixed when the warning is built, and deliberately NOT unioned over the collapsed
+	 *         contraindication key.</b> A key can collapse two rules and only the ledger's rank winner's
+	 *         SENTENCE is printed ({@code ContraindicationChips}, issue #146), so the records named here
+	 *         have to be evidence for the sentence this finding actually states rather than for one that
+	 *         was discarded. What IS unioned is the other direction — two chart rows spelling one
+	 *         allergy, which {@code DrugSafetyValidator.resolvedAlike} folds into one recorded
+	 *         allergen — {@code RecordedAllergen.alsoRecordedIn} being what carries the records across
+	 *         that fold, as {@code alsoNames} carries the naming — and either row is a record of the
+	 *         fact the surviving sentence states.
+	 *
+	 *         <p>Package-private, matching the two factories that set it: a caller may set only what it
+	 *         may read back. Not part of the wire-facing chip shape, unlike
+	 *         {@link #chartOrderBridges()} — that one is prose the model reads and so needs a
+	 *         deterministic wire home of its own, while this is a pointer the citation list publishes.
+	 *         ADR Decision 80 carries that argument.
+	 */
+	Set<String> chartRecords() {
+		return chartRecords;
+	}
+
+	/**
+	 * One substance this chip names, and one active order of this patient's that the module resolved it
+	 * from — the pair {@code DrugReferenceInjector.FINDING_CHART_ORDER_LEAD}'s items are rendered from.
+	 *
+	 * <p>A value class with {@link #equals} and {@link #hashCode}. <b>{@code equals} has TWO readers,
+	 * both exercised.</b> The first is {@code DrugSafetyValidator.addChartOrderBridge}'s
+	 * {@code out.contains(bridge)} — an {@code ArrayList}, so that resolves to {@code equals} and never
+	 * to {@code hashCode}. Since issue #347 published this list there is a SECOND exercised reader,
+	 * {@code ChartSearchAiSafetyWarningSeverityWireTest}'s accessor-versus-key comparison, whose
+	 * {@code Objects.equals} falls through to {@code AbstractList.equals} and walks the elements of
+	 * that fixture's bridged chip. It was not exercised when this list was first published — every
+	 * chip in that fixture bridged nothing, so two empty lists compared equal without touching an
+	 * element — and the chip that closed it was added for exactly that reason; ADR Decision 70 is the
+	 * record. {@code hashCode} has NO reader (Jackson serializes
+	 * through the getters below, not through either) and is here only to hold the contract with
+	 * {@code equals}. The first of those two readers is the
+	 * de-duplication that makes two orders of one display state their substance once, pinned by
+	 * {@code InteractionFindingChartOrderBridgeTest.twoOrdersOfTheSameDisplayAreNamedOnce}. Said
+	 * precisely because an earlier draft named the chip COLLAPSE as the reason and that is false (it
+	 * does not key on this list): a maintainer checking that reason, finding it false and deleting these
+	 * methods would leave the list identity-compared and print one substance twice inside a citable
+	 * record. That is also NOT a licence to give {@link SafetyWarning} itself an {@code equals}: it has
+	 * none so that nothing DOWNSTREAM can collapse chips this module meant to keep apart
+	 * ({@code InteractionRouteVariantTest}).
+	 *
+	 * <p>Both fields are strings a record PRINTS. {@code substance} is the name the chip already
+	 * says — never a second answer to which name to print — and {@code orderDisplay} is the order's own
+	 * display, which is the string a chart record of that order carries wherever the order has a drug
+	 * row WITH A NON-BLANK NAME — querystore falls back to the concept where it does not, and
+	 * {@code DrugSafetyValidator.displaysANameOfAny} records the shapes that diverge there.
+	 *
+	 * <p><b>{@link #toString()} is the only reader that PRINTS them as one string</b>, and the
+	 * PROMPT-side renderer must keep taking that spelling, so that the pair a debug dump prints and
+	 * the pair a model reads cannot differ. <b>Since issue #379 the model can read one thing MORE</b>: on an
+	 * install that sets {@code chartsearchai.drugSafety.citeOrderRecords},
+	 * {@code DrugReferenceInjector.chartOrderClause} appends the number of the chart record the order
+	 * is, to this string rather than into it, which is why that issue changed nothing here. So there the
+	 * two agree about the PAIR and no longer about the whole item — do not close that gap by moving the
+	 * number in, which would put a prompt-side index on the wire keys issue #347 fixed. The two getters beside it are the WIRE's (issue #347) and
+	 * exist so that a client is handed two fields rather than a sentence to parse — the same reason
+	 * issue #340 publishes {@code severity} instead of leaving a client to substring-match
+	 * {@link SafetyWarning#getDetail()}. They are named {@code getSubstance} rather than
+	 * {@code getSubstanceName} deliberately: the latter would shadow
+	 * {@link DrugReference#getSubstanceName()}, which means the dataset's substance-name FIELD and not
+	 * a printed label.
+	 */
+	public static final class ChartOrderBridge {
+
+		private final String substance;
+
+		private final String orderDisplay;
+
+		/** Both arguments are required: {@link #equals} and {@link #hashCode} dereference them, and a
+		 *  bridge with nothing to name is the absence of one. {@code DrugSafetyValidator} refuses that
+		 *  case before reaching here rather than by a check in this constructor, so a caller building
+		 *  one by hand owes the same.
+		 *
+		 *  <p>The two fields are NAMED for their getters rather than for what they hold
+		 *  ({@code substance}, not {@code substanceName}) so that this class serializes to the same two
+		 *  keys under a getter-based mapper and under a field-based one — those key names are issue
+		 *  #347's contract, documented in README, and the {@code /search} payload carries this object
+		 *  for a mapper the module does not configure. */
+		public ChartOrderBridge(String substance, String orderDisplay) {
+			this.substance = substance;
+			this.orderDisplay = orderDisplay;
+		}
+
+		/**
+		 * Every substance and order display {@code bridges} state, each once, in the order they state
+		 * them — the names a finding's chart-order clause gives its drugs besides
+		 * {@link SafetyWarning#getDrug()} and {@link SafetyWarning#namedPartners()} (issue #514), and the
+		 * first part of {@link SafetyWarning#orderNamesOf}, the one projection both of its readers take.
+		 * Static and taking the list, not an accessor of the warning: it states nothing the chip's own
+		 * {@code chartOrderBridges} key does not already carry.
+		 */
+		public static List<String> namesOf(List<ChartOrderBridge> bridges) {
+			Set<String> names = new LinkedHashSet<String>();
+			for (ChartOrderBridge bridge : bridges) {
+				names.add(bridge.getSubstance());
+				names.add(bridge.getOrderDisplay());
+			}
+			return new ArrayList<String>(names);
+		}
+
+		/** @return the substance name the chip prints — the {@code substance} half of the wire pair. */
+		public String getSubstance() {
+			return substance;
+		}
+
+		/** @return the patient's own order it was resolved from, as that order displays — the
+		 *          {@code orderDisplay} half of the wire pair. */
+		public String getOrderDisplay() {
+			return orderDisplay;
+		}
+
+		@Override
+		public boolean equals(Object other) {
+			if (this == other) {
+				return true;
+			}
+			if (!(other instanceof ChartOrderBridge)) {
+				return false;
+			}
+			ChartOrderBridge that = (ChartOrderBridge) other;
+			return substance.equals(that.substance) && orderDisplay.equals(that.orderDisplay);
+		}
+
+		@Override
+		public int hashCode() {
+			return 31 * substance.hashCode() + orderDisplay.hashCode();
+		}
+
+		@Override
+		public String toString() {
+			return substance + " from " + orderDisplay;
+		}
+	}
+
+	/**
+	 * One of this patient's own active orders a finding is about — an entry of
+	 * {@link SafetyWarning#currentMedicationOrders()} (issue #552). The two fields are NAMED for their
+	 * getters for {@link ChartOrderBridge}'s reason: Jackson reads the getters and XStream the fields, and
+	 * the key names are a README contract. {@code orderDisplay} is the name {@code chartOrderBridges}' own
+	 * entries give the same string.
+	 */
+	public static final class CurrentMedicationOrder {
+
+		private final String orderDisplay;
+
+		private final String orderUuid;
+
+		/** Either argument may be null: an order's uuid is null where the module could not read it
+		 *  ({@link PatientClinicalContext.ActiveDrugOrder#getUuid()}), and the order is listed regardless. */
+		public CurrentMedicationOrder(String orderDisplay, String orderUuid) {
+			this.orderDisplay = orderDisplay;
+			this.orderUuid = orderUuid;
+		}
+
+		/** @return the order as her chart displays it — {@link PatientClinicalContext.ActiveDrugOrder#getDisplay()} */
+		public String getOrderDisplay() {
+			return orderDisplay;
+		}
+
+		/** @return the {@code Order} uuid, or null where it is unknown */
+		public String getOrderUuid() {
+			return orderUuid;
+		}
+
+		@Override
+		public boolean equals(Object other) {
+			if (this == other) {
+				return true;
+			}
+			if (!(other instanceof CurrentMedicationOrder)) {
+				return false;
+			}
+			CurrentMedicationOrder that = (CurrentMedicationOrder) other;
+			return Objects.equals(orderDisplay, that.orderDisplay) && Objects.equals(orderUuid, that.orderUuid);
+		}
+
+		@Override
+		public int hashCode() {
+			return Objects.hash(orderDisplay, orderUuid);
+		}
+
+		@Override
+		public String toString() {
+			return orderDisplay + " (" + orderUuid + ")";
+		}
 	}
 
 	@Override

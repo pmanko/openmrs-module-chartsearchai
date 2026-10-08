@@ -147,6 +147,44 @@ public class LocalLlmEngineTest {
 	}
 
 	@Test
+	public void buildRequestBody_sendsNoDrySamplerForAPromptCarryingReferenceRecords() throws IOException {
+		for (boolean stream : new boolean[] { false, true }) {
+			ObjectNode present = (ObjectNode) MAPPER.readTree(
+				engine.buildRequestBody("sys", "usr", stream, LlmEngine.ReferenceRecords.PRESENT));
+
+			JsonNode samplers = present.get("samplers");
+			assertEquals(1, samplers.size(),
+				"issue #512: an answer over the module's reference records restates them, and DRY "
+						+ "penalises every copy longer than dry_allowed_length out of a prompt it counts "
+						+ "whole (dry_penalty_last_n=-1) — the measured 'riframpin', 'zidovudeine'. So "
+						+ "the chain is temperature alone. Was: " + samplers);
+			assertEquals("temperature", samplers.get(0).asText());
+			List<String> dryFields = new java.util.ArrayList<String>();
+			present.fieldNames().forEachRemaining(name -> {
+				if (name.startsWith("dry")) {
+					dryFields.add(name);
+				}
+			});
+			assertEquals(java.util.Collections.emptyList(), dryFields,
+				"and no dry_* field is sent, the decision being to send no DRY sampler at all");
+
+			ObjectNode absent = (ObjectNode) MAPPER.readTree(
+				engine.buildRequestBody("sys", "usr", stream, LlmEngine.ReferenceRecords.ABSENT));
+			assertEquals(engine.buildRequestBody("sys", "usr", stream),
+				engine.buildRequestBody("sys", "usr", stream, LlmEngine.ReferenceRecords.ABSENT),
+				"the arities that carry no value send the ABSENT body, DRY and all");
+			assertEquals(engine.buildRequestBody("sys", "usr", stream),
+				engine.buildRequestBody("sys", "usr", stream, (LlmEngine.ReferenceRecords) null),
+				"and a null value is read as absent, which is that same request");
+			absent.remove(java.util.Arrays.asList("samplers", "dry_multiplier", "dry_base",
+				"dry_allowed_length", "dry_penalty_last_n"));
+			present.remove("samplers");
+			assertEquals(absent, present,
+				"and the sampler chain is the ONLY thing the value changes (stream=" + stream + ")");
+		}
+	}
+
+	@Test
 	public void buildServerCommand_shouldPinCacheReuseToZero() {
 		// --cache-reuse pinned to 0 (llama.cpp's default). The previous value of 256 enabled
 		// KV shifting (re-applying RoPE to cached K blocks for fuzzy prefix matching when the
@@ -155,9 +193,9 @@ public class LocalLlmEngineTest {
 		// fuzzy matching adds nothing — we only pay the per-token RoPE re-application cost.
 		// Note: this flag is NOT the determinism lever — cache_prompt in the request body
 		// is the real cause of the borderline-argmax flip ("is she pregnant?" alternating
-		// between Gravida and Self-Induced Abortion). The flip is fundamental to llama-server's
-		// cache_prompt design (reused-vs-fresh KV is numerically close but not bit-identical)
-		// and cache_prompt stays on because the latency win is the whole point.
+		// between Gravida and Self-Induced Abortion). cache_prompt stays on because the latency
+		// win is the whole point; what removes the history dependence is restoring the saved
+		// prefix before every streaming query (kvQueryAction, ADR Decision 157).
 		List<String> cmd = LocalLlmEngine.buildServerCommand(
 				"/bin/llama-server", "/data/model.gguf", 9999, 32768);
 
@@ -273,45 +311,31 @@ public class LocalLlmEngineTest {
 	@Test
 	public void kvQueryAction_disabledYieldsNone() {
 		// KV persistence off (no slot-save-path or no seed) -> the query path must do nothing
-		// special, regardless of RAM/disk state. This preserves the pre-feature behavior exactly.
+		// special, whatever is on disk. This preserves the pre-feature behavior exactly.
 		assertEquals(LocalLlmEngine.KvQueryAction.NONE,
-				LocalLlmEngine.kvQueryAction(false, false, false));
+				LocalLlmEngine.kvQueryAction(false, false));
 		assertEquals(LocalLlmEngine.KvQueryAction.NONE,
-				LocalLlmEngine.kvQueryAction(false, false, true));
-		assertEquals(LocalLlmEngine.KvQueryAction.NONE,
-				LocalLlmEngine.kvQueryAction(false, true, true));
+				LocalLlmEngine.kvQueryAction(false, true));
 	}
 
 	@Test
-	public void kvQueryAction_ramResidentYieldsNone_soWarmRepeatsAndAlternatingPatientsNeverReRestore() {
-		// The chart's prefix was already loaded into this server's RAM prompt-cache pool earlier
-		// this lifetime (a prior warmup/query). llama-server's cache_prompt will reuse it, so a
-		// disk restore would be pure wasted I/O — and on an alternating-patient workload where both
-		// charts fit the RAM pool, restoring on every switch would REGRESS the warm 0.6-0.8s path.
-		// Must be NONE even when a disk file also exists.
-		assertEquals(LocalLlmEngine.KvQueryAction.NONE,
-				LocalLlmEngine.kvQueryAction(true, true, false));
-		assertEquals(LocalLlmEngine.KvQueryAction.NONE,
-				LocalLlmEngine.kvQueryAction(true, true, true));
-	}
-
-	@Test
-	public void kvQueryAction_coldRamButDiskHitYieldsRestore() {
-		// The exact gap this feature closes: the RAM pool is cold for this chart (e.g. after a
-		// server restart / idle-unload, or warmup never fired) but its prefilled KV is on disk.
-		// Restore (tens of ms) instead of a full chart re-prefill (tens of seconds on a GPU-less host).
+	public void kvQueryAction_aSavedEntryIsRestoredBeforeEveryQuery() {
+		// Not only when the server's RAM is cold for the chart: whatever the slot holds — a warmup's
+		// prefill, an earlier question, this question a moment ago — moved a borderline answer on the
+		// demo and locally, so every query starts from the saved entry (ADR Decision 157). The policy
+		// takes no RAM-residency input at all, so no caller can reintroduce the skip.
 		assertEquals(LocalLlmEngine.KvQueryAction.RESTORE,
-				LocalLlmEngine.kvQueryAction(true, false, true));
+				LocalLlmEngine.kvQueryAction(true, true));
 	}
 
 	@Test
-	public void kvQueryAction_coldEverywhereYieldsPrefillAndSave() {
-		// First-ever visit (or a chart that changed, hashing to a new file): nothing to restore, so
-		// the query prefills as before — but its KV must then be PERSISTED so the next visit (even
-		// after a restart) restores it instead of re-paying the prefill. Without the save, a cold
-		// query without a preceding warmup would throw its expensive prefill away (the observed gap).
-		assertEquals(LocalLlmEngine.KvQueryAction.PREFILL_AND_SAVE,
-				LocalLlmEngine.kvQueryAction(true, false, false));
+	public void kvQueryAction_noSavedEntryIsMadeTheWayWarmupMakesItThenRestored() {
+		// First-ever visit (or a chart that changed, hashing to a new file): the query makes the entry
+		// exactly as warmup does — prefill the question-independent prefix, save it — and then restores
+		// it, because a just-primed slot is a different path from a restored one and the answer would
+		// otherwise differ from the same question asked after a chart-open warmup (ADR Decision 157).
+		assertEquals(LocalLlmEngine.KvQueryAction.PRIME_SAVE_AND_RESTORE,
+				LocalLlmEngine.kvQueryAction(true, false));
 	}
 
 	@Test

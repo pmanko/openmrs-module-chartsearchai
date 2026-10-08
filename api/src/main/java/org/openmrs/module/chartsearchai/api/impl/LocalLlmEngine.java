@@ -14,7 +14,10 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.net.URI;
+import java.net.ConnectException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -26,14 +29,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -70,7 +72,7 @@ import org.springframework.stereotype.Component;
  *       prefixes would thrash the KV cache and erase the warmup gain.</li>
  *   <li>Subprocess and HTTP-client lifecycle state ({@code serverProcess},
  *       {@code loadedModelPath}, {@code loadedContextSize}, {@code httpClient},
- *       {@code idleUnloadFuture}) is shared mutable state that
+ *       {@code endpoint}, {@code idleUnloadFuture}) is shared mutable state that
  *       {@link #ensureServerRunning} and the idle timer mutate; without the
  *       monitor, callers could race on start/stop or tear down the
  *       {@code HttpClient} mid-request.</li>
@@ -90,9 +92,51 @@ public class LocalLlmEngine implements LlmEngine {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
 
+	/**
+	 * How long {@link #waitForServerReady} polls {@code /health}. It bounds the POLL and not the
+	 * whole of {@code startServer}: the deadline is tested at the top of each iteration, so the
+	 * final health request, the two readiness probes after it, the wait
+	 * {@link #CHILD_BIND_SETTLE_MS} bounds and any teardown on a refusal are all spent past it —
+	 * and all of it under the engine monitor. Do not read this as a ceiling on how long a start can
+	 * hold the lock.
+	 */
 	private static final int SERVER_STARTUP_TIMEOUT_SECONDS = 120;
 
 	private static final int HEALTH_POLL_INTERVAL_MS = 500;
+
+	/**
+	 * How long after the child was launched its bind attempt has been decided, one way or the
+	 * other — and so the earliest moment at which the child's liveness distinguishes a child that
+	 * HOLDS the port from one that has not yet tried for it. Only one process can hold
+	 * {@code 127.0.0.1:<port>}, so a child still alive past this point is the listener answering
+	 * there; a child that lost the port is gone by it.
+	 *
+	 * <p>{@code docs/adr.md} Decision 107 row 7 measured the bind 0.138 s after exec — before the
+	 * model is touched — and row 9 the exit ~0.06 s after losing it, so this is about two and a
+	 * half times what a doomed child needs to announce itself by dying. A host slow enough to
+	 * exceed it is the residue, which that decision names rather than claims away.
+	 *
+	 * <p>It is counted from the launch and not from the health reply, which is what keeps it off
+	 * the ordinary start path: {@code /health} answers {@code ok} only once the model is loaded, so
+	 * on any start that actually loaded one the window has long since passed and
+	 * {@link #requireListenerMayBeServed} waits no further. The wait it can cost is therefore
+	 * bounded by this value and paid only by a start whose first healthy reply arrives inside the
+	 * window — which is the impostor case.
+	 */
+	static final long CHILD_BIND_SETTLE_MS = 500;
+
+	/** How long {@link #requireLoopbackPortFree} waits for its connection. Loopback refuses
+	 *  immediately when nothing listens, so this bounds only a pathological case. */
+	private static final int PORT_PROBE_TIMEOUT_MS = 250;
+
+	/** How many of the child's last output lines a startup failure quotes. */
+	private static final int RECENT_SERVER_OUTPUT_LINES = 5;
+
+	/** How long {@link #stopServer()} waits for a forcibly-destroyed child to be reaped, so the
+	 *  next start's port check does not meet it still listening. Short because this is held under
+	 *  the engine monitor. */
+	private static final int REAP_WAIT_SECONDS = 2;
+
 
 	private Process serverProcess;
 
@@ -114,15 +158,43 @@ public class LocalLlmEngine implements LlmEngine {
 
 	private int serverPort;
 
-	/** The KV-cache keys whose chart prefix has been loaded into THIS server process's RAM
-	 *  prompt-cache pool (by a warmup or query) since it last started. llama-server's
-	 *  {@code cache_prompt} pool retains many prefixes at once, so a key present here will be
-	 *  reused from RAM without a disk restore; a key absent here (a fresh process after a restart /
-	 *  idle-unload, or one the pool evicted) is the only case where a disk restore avoids a full
-	 *  re-prefill. Tracking residency this way keeps the warm and alternating-patient paths free of
-	 *  any extra disk I/O. Mutated only under the instance monitor (all callers are synchronized);
-	 *  cleared on {@link #stopServer()} because the RAM pool dies with the process. */
-	private final Set<String> ramResidentKeys = new HashSet<>();
+	/** How the running server is addressed and authenticated: the loopback URLs plus the secret
+	 *  minted for THIS start. Every request the engine sends is built by this object — see
+	 *  {@link LlamaServerEndpoint} for why there is exactly one. Cleared by {@link #stopServer()},
+	 *  but do NOT read it as "a server is running": the crash path reaches {@code startServer}
+	 *  without {@code stopServer}, so a dead child's endpoint can still be here. Nothing reads it
+	 *  in that state, because {@code startServer} replaces it before any request is built. */
+	private LlamaServerEndpoint endpoint;
+
+	/**
+	 * The last lines the child wrote before it died, so a startup failure can say WHY. What it
+	 * catches is an ARGUMENT this build does not accept — {@code error: invalid argument: …},
+	 * which llama-server prints directly rather than through its log system, so it survives the
+	 * {@code --log-disable} the launch passes. That is the shape #445 introduced, by adding two
+	 * flags an older or operator-supplied build may reject. It does NOT catch a failed bind or a
+	 * missing model file: measured, those go through the log system and {@code --log-disable}
+	 * suppresses them, leaving the backend's startup banner instead, which is why the failure
+	 * message says so rather than presenting the banner as a cause. Guarded by its own lock — see
+	 * {@link #rememberServerOutput}.
+	 *
+	 * <p>Replaced per start rather than cleared, and each start's drain thread closes over ITS
+	 * deque: the predecessor's thread is never joined, so a line it had not yet read would
+	 * otherwise land after a clear and be quoted as the new child's.
+	 */
+	private java.util.Deque<String> recentServerOutput = new java.util.ArrayDeque<>();
+
+	/**
+	 * A child this engine gave up on without seeing it reaped — the forcible-destroy and interrupt
+	 * paths. Kept so that {@link #startServer} can try again rather than leave an orphan holding
+	 * the port with nothing in the module able to kill it.
+	 *
+	 * <p>Cleared only by {@link #reapAbandonedProcess()}, which only a start reaches, so
+	 * {@code close()} and {@code shutdown()} leave it set and a second abandonment overwrites the
+	 * first. Both are tolerable rather than tidy, and the reason is that every setter has ALREADY
+	 * sent {@code destroyForcibly}: what is held is a handle to something being killed, not a
+	 * running server, and it is not read for any purpose except that one retry.
+	 */
+	private Process abandonedProcess;
 
 	private HttpClient httpClient;
 
@@ -138,8 +210,65 @@ public class LocalLlmEngine implements LlmEngine {
 	@Override
 	public synchronized InferenceResult infer(String systemPrompt, String userMessage,
 			int timeoutSeconds) {
+		return infer(systemPrompt, userMessage, timeoutSeconds, ReferenceRecords.ABSENT);
+	}
+
+	@Override
+	public synchronized InferenceResult infer(String systemPrompt, String userMessage,
+			int timeoutSeconds, final ReferenceRecords referenceRecords) {
 		ensureServerRunning();
-		return postForResult(buildRequestBody(systemPrompt, userMessage, false), timeoutSeconds);
+		return postForResult(buildRequestBody(systemPrompt, userMessage, false, referenceRecords),
+				timeoutSeconds);
+	}
+
+	/**
+	 * As {@link #infer(String, String, int, ReferenceRecords)}, starting from the patient's saved chart prefix as
+	 * {@link #inferStreaming} does, so a {@code /search} answer depends on its prompt and not on what this server
+	 * ran before it (ADR Decisions 157, 164).
+	 */
+	@Override
+	public synchronized InferenceResult infer(String systemPrompt, String userMessage, int timeoutSeconds,
+			String cacheScope, String cacheSeed, final ReferenceRecords referenceRecords) {
+		ensureServerRunning();
+		startFromSavedPrefix(systemPrompt, timeoutSeconds, cacheScope, cacheSeed);
+		return postForResult(buildRequestBody(systemPrompt, userMessage, false, referenceRecords),
+				timeoutSeconds);
+	}
+
+	/**
+	 * Restores the patient's saved chart prefix into the slot before an answer, making the entry first where there is
+	 * none — the ONE place the rule lives for both answer paths ({@link #inferStreaming} and the scoped
+	 * {@link #infer}). A null {@code cacheSeed}, or KV persistence off, does nothing.
+	 */
+	private void startFromSavedPrefix(String systemPrompt, int timeoutSeconds, String cacheScope, String cacheSeed) {
+		// Every query starts from the patient's SAVED chart prefix, restored into the slot, and never
+		// from whatever the slot last held — ADR Decision 157. llama-server's prefix reuse is
+		// deterministic per path but not equal across paths, so a slot left by a warmup, by an earlier
+		// question, by this question a moment ago or by a fresh prefill each moved a borderline answer
+		// (measured on the demo and locally). The seed is the question-INDEPENDENT prefix #warmup
+		// primes, so warmup-saved and query-saved entries share one filename per patient+chart; a
+		// missing entry is made the way warmup makes it, and then restored like any other, because a
+		// slot that has just been primed is itself a different path from one restored from disk.
+		String cacheDir = loadedSlotSavePath;
+		String cacheKey = (cacheDir != null && cacheSeed != null)
+				? kvCacheKey(cacheScope, systemPrompt, cacheSeed,
+						modelDiscriminator(loadedModelPath, loadedContextSize))
+				: null;
+		KvQueryAction action = kvQueryAction(cacheKey != null,
+				cacheKey != null && new File(cacheDir, cacheKey).isFile());
+		if (action == KvQueryAction.PRIME_SAVE_AND_RESTORE) {
+			primeAndPersist(systemPrompt, cacheSeed, timeoutSeconds, cacheKey, cacheScope, cacheDir, false);
+		}
+		if (action != KvQueryAction.NONE) {
+			if (restoreSlot(cacheKey, timeoutSeconds)) {
+				log.debug("Query restored KV cache from disk: {}", cacheKey);
+			}
+			else {
+				log.warn("Query could not restore the saved KV prefix {}; this answer starts from "
+						+ "whatever the server last held, so the same question may be answered "
+						+ "differently next time", cacheKey);
+			}
+		}
 	}
 
 	@Override
@@ -155,16 +284,11 @@ public class LocalLlmEngine implements LlmEngine {
 
 	/**
 	 * Sends a pre-built request body to the local llama-server and parses the (non-streaming)
-	 * result. Shared by the default-schema and custom-{@code response_format} {@link #infer}
-	 * overloads. Called only from {@code synchronized} methods, so it runs under the engine lock.
+	 * result. Shared by every {@link #infer} overload. Called only from {@code synchronized}
+	 * methods, so it runs under the engine lock.
 	 */
 	private InferenceResult postForResult(String requestBody, int timeoutSeconds) {
-		HttpRequest request = HttpRequest.newBuilder()
-				.uri(URI.create(getCompletionsUrl()))
-				.timeout(Duration.ofSeconds(timeoutSeconds))
-				.header("Content-Type", "application/json")
-				.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
-				.build();
+		HttpRequest request = completionsRequest(requestBody, timeoutSeconds);
 
 		try {
 			HttpResponse<String> response = getHttpClient().send(request,
@@ -173,6 +297,7 @@ public class LocalLlmEngine implements LlmEngine {
 			if (response.statusCode() < 200 || response.statusCode() >= 300) {
 				log.error("Local llama-server returned HTTP {}: {}", response.statusCode(),
 						truncate(response.body()));
+				rejectIfUnauthorized(response.statusCode());
 				if (response.statusCode() == 400 && LlmResponseParser.isContextOverflowError(response.body())) {
 					throw new ChartTooLargeException(
 							"Patient chart exceeds the LLM context window of "
@@ -204,38 +329,21 @@ public class LocalLlmEngine implements LlmEngine {
 	@Override
 	public synchronized InferenceResult inferStreaming(String systemPrompt, String userMessage,
 			int timeoutSeconds, Consumer<String> tokenConsumer, String cacheScope, String cacheSeed) {
+		return inferStreaming(systemPrompt, userMessage, timeoutSeconds, tokenConsumer, cacheScope,
+				cacheSeed, ReferenceRecords.ABSENT);
+	}
+
+	@Override
+	public synchronized InferenceResult inferStreaming(String systemPrompt, String userMessage,
+			int timeoutSeconds, Consumer<String> tokenConsumer, String cacheScope, String cacheSeed,
+			final ReferenceRecords referenceRecords) {
 		ensureServerRunning();
 
-		// Disk-persisted KV cache on the QUERY path (mirrors what warmup already does, see
-		// #warmup). The seed is the question-INDEPENDENT prefix, so warmup-saved and query-saved
-		// entries share one filename per patient+chart and the restored KV is byte-for-byte what a
-		// fresh prefill would produce — answer quality is unchanged; cache_prompt then re-prefills
-		// only the cheap focus-hint + question tail. The decision is gated so the warm and
-		// alternating-patient paths (the chart already resident in this process's RAM prompt-cache
-		// pool) do NO extra disk I/O — only a genuinely cold chart with a disk hit restores.
-		String cacheDir = loadedSlotSavePath;
-		String cacheKey = (cacheDir != null && cacheSeed != null)
-				? kvCacheKey(cacheScope, systemPrompt, cacheSeed,
-						modelDiscriminator(loadedModelPath, loadedContextSize))
-				: null;
-		boolean ramResident = cacheKey != null && ramResidentKeys.contains(cacheKey);
-		boolean fileExists = cacheKey != null && !ramResident && new File(cacheDir, cacheKey).isFile();
-		KvQueryAction action = kvQueryAction(cacheKey != null, ramResident, fileExists);
-		boolean restored = false;
-		if (action == KvQueryAction.RESTORE && restoreSlot(cacheKey, timeoutSeconds)) {
-			restored = true;
-			ramResidentKeys.add(cacheKey);
-			log.warn("Query restored KV cache from disk: {}", cacheKey);
-		}
+		startFromSavedPrefix(systemPrompt, timeoutSeconds, cacheScope, cacheSeed);
 
-		String requestBody = buildRequestBody(systemPrompt, userMessage, true);
+		String requestBody = buildRequestBody(systemPrompt, userMessage, true, referenceRecords);
 
-		HttpRequest request = HttpRequest.newBuilder()
-				.uri(URI.create(getCompletionsUrl()))
-				.timeout(Duration.ofSeconds(timeoutSeconds))
-				.header("Content-Type", "application/json")
-				.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
-				.build();
+		HttpRequest request = completionsRequest(requestBody, timeoutSeconds);
 
 		try {
 			HttpResponse<InputStream> response = getHttpClient().send(request,
@@ -245,6 +353,7 @@ public class LocalLlmEngine implements LlmEngine {
 				String body = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
 				log.error("Local llama-server returned HTTP {}: {}", response.statusCode(),
 						truncate(body));
+				rejectIfUnauthorized(response.statusCode());
 				if (response.statusCode() == 400 && LlmResponseParser.isContextOverflowError(body)) {
 					throw new ChartTooLargeException(
 							"Patient chart exceeds the LLM context window of "
@@ -258,16 +367,6 @@ public class LocalLlmEngine implements LlmEngine {
 			InferenceResult result = LlmResponseParser.parseStreamingResponse(
 					response.body(), tokenConsumer, log);
 
-			// The chart prefix is now resident in the RAM pool. If this was a genuinely cold prefill
-			// (not resident, not restored), persist it so the next visit — even after a restart —
-			// restores from disk instead of re-paying the prefill; replace the patient's prior entry
-			// and apply the global cap, exactly as warmup does.
-			if (cacheKey != null) {
-				ramResidentKeys.add(cacheKey);
-				if (!ramResident && !restored) {
-					persistKvEntry(cacheKey, cacheScope, cacheDir, timeoutSeconds);
-				}
-			}
 			resetIdleTimer();
 			return result;
 		}
@@ -281,30 +380,34 @@ public class LocalLlmEngine implements LlmEngine {
 	}
 
 	/**
-	 * The disk-KV action a query should take, given whether KV persistence is active for this call
-	 * ({@code kvEnabled}: a slot-save-path is configured and a cache seed was supplied), whether the
-	 * chart's prefix is already resident in this process's RAM prompt-cache pool ({@code ramResident}),
-	 * and whether a persisted entry exists on disk ({@code fileExists}). Pure so the policy is unit
-	 * tested without a live server.
+	 * The disk-KV action a query takes, given whether KV persistence is active for this call
+	 * ({@code kvEnabled}: a slot-save-path is configured and a cache seed was supplied) and whether
+	 * the chart's prefix is saved on disk ({@code fileExists}). Pure so the policy is unit tested
+	 * without a live server.
+	 *
+	 * <p>Whether the prefix is already in the server's RAM is deliberately NOT an input: a query
+	 * restores even then, because what the slot holds depends on what ran before, and the answer
+	 * must not (ADR Decision 157). The restore is the price — measured at about 9 ms for a 51 MB
+	 * entry from the page cache.
 	 *
 	 * <ul>
-	 *   <li>{@code NONE} — KV off, OR the chart is RAM-resident: {@code cache_prompt} reuses it with
-	 *       zero disk I/O. Returning RESTORE here would regress the warm / alternating-patient paths.</li>
-	 *   <li>{@code RESTORE} — RAM-cold but a disk entry exists: load it (tens of ms) to skip a full
-	 *       re-prefill (tens of seconds on a GPU-less host). This is the gap the feature closes.</li>
-	 *   <li>{@code PREFILL_AND_SAVE} — cold everywhere: prefill as before, then persist so the next
-	 *       visit (even after a restart) is fast.</li>
+	 *   <li>{@code NONE} — KV off: the query starts from whatever the slot holds, and so can still
+	 *       depend on it.</li>
+	 *   <li>{@code RESTORE} — the entry exists: load it, then answer.</li>
+	 *   <li>{@code PRIME_SAVE_AND_RESTORE} — no entry: make it exactly as {@link #warmup} does,
+	 *       then restore it like any other, since a just-primed slot is not the same path as a
+	 *       restored one.</li>
 	 * </ul>
 	 */
 	enum KvQueryAction {
-		NONE, RESTORE, PREFILL_AND_SAVE
+		NONE, RESTORE, PRIME_SAVE_AND_RESTORE
 	}
 
-	static KvQueryAction kvQueryAction(boolean kvEnabled, boolean ramResident, boolean fileExists) {
-		if (!kvEnabled || ramResident) {
+	static KvQueryAction kvQueryAction(boolean kvEnabled, boolean fileExists) {
+		if (!kvEnabled) {
 			return KvQueryAction.NONE;
 		}
-		return fileExists ? KvQueryAction.RESTORE : KvQueryAction.PREFILL_AND_SAVE;
+		return fileExists ? KvQueryAction.RESTORE : KvQueryAction.PRIME_SAVE_AND_RESTORE;
 	}
 
 	@Override
@@ -326,11 +429,12 @@ public class LocalLlmEngine implements LlmEngine {
 		// Disk-persisted KV cache (on by default). When enabled, a patient's prefilled chart KV is
 		// restored from disk (I/O-bound, tens of ms) instead of recomputed (CPU-bound, tens of
 		// seconds to minutes on a GPU-less host). The key is the exact prompt prefix scoped by the
-		// patient UUID, so a restore only ever reuses the right patient's state; the restored KV is
-		// byte-for-byte what a fresh prefill would produce, so answer quality is unchanged. On a miss
-		// we prefill as before and then save, so the next visit (or the next process lifetime) is
-		// fast — and the save replaces this patient's previous entry so a changed chart leaves no
-		// orphan.
+		// patient UUID, so a restore only ever reuses the right patient's state. The restored KV is
+		// NOT what a fresh prefill of the whole question would produce — close, and different enough
+		// to move a borderline answer — which is why every query now restores the same entry before
+		// it answers (ADR Decision 157) rather than only a cold one. On a miss we prefill as before
+		// and then save, so the next visit (or the next process lifetime) is fast — and the save
+		// replaces this patient's previous entry so a changed chart leaves no orphan.
 		String cacheDir = loadedSlotSavePath;
 		// Bind the key to the model + context the server is actually running (set by
 		// ensureServerRunning above), so a KV saved under one model is never restored under
@@ -347,24 +451,32 @@ public class LocalLlmEngine implements LlmEngine {
 			if (pin) {
 				writePinMarker(new File(cacheDir), cacheKey);
 			}
-			// Record residency so a query right after this warmup reuses the RAM pool rather than
-			// redundantly restoring from disk again.
-			ramResidentKeys.add(cacheKey);
 			resetIdleTimer();
 			return;
 		}
 
-		// max_tokens=1 forces llama-server to do the prompt prefill (loading the system+user
-		// message into the KV cache) without spending time on real generation. The prefix
-		// cached this way is what a real query reuses via cache_prompt=true + --cache-reuse.
-		String requestBody = buildRequestBody(systemPrompt, userMessage, false, 1);
+		if (primeAndPersist(systemPrompt, userMessage, timeoutSeconds, cacheKey, cacheScope, cacheDir, pin)) {
+			resetIdleTimer();
+		}
+	}
 
-		HttpRequest request = HttpRequest.newBuilder()
-				.uri(URI.create(getCompletionsUrl()))
-				.timeout(Duration.ofSeconds(timeoutSeconds))
-				.header("Content-Type", "application/json")
-				.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
-				.build();
+	/**
+	 * Prefills the question-independent chart prefix and, when {@code cacheKey} is non-null, saves
+	 * it as the patient's entry. The ONE way an entry is made — by {@link #warmup} and by a query
+	 * that found none — so every entry a query restores was computed the same way (ADR Decision 157).
+	 * Returns whether the prefill succeeded; a failure is logged, never thrown, except a refused key.
+	 */
+	private boolean primeAndPersist(String systemPrompt, String userMessage, int timeoutSeconds,
+			String cacheKey, String cacheScope, String cacheDir, boolean pin) {
+		// max_tokens=1 forces llama-server to do the prompt prefill (loading the system+user
+		// message into the KV cache) without spending time on real generation. cache_prompt=false
+		// makes it a prefill from scratch: reusing whatever prefix the slot shared — another
+		// patient's system prompt, this patient's last question — makes the saved bytes depend on
+		// that history (measured: three histories, three identical files only without reuse).
+		String requestBody = buildRequestBody(systemPrompt, userMessage, false, 1, defaultResponseFormat(),
+				ReferenceRecords.ABSENT, false);
+
+		HttpRequest request = completionsRequest(requestBody, timeoutSeconds);
 
 		try {
 			HttpResponse<String> response = getHttpClient().send(request,
@@ -373,7 +485,10 @@ public class LocalLlmEngine implements LlmEngine {
 			if (response.statusCode() < 200 || response.statusCode() >= 300) {
 				log.warn("Warmup returned HTTP {}: {}", response.statusCode(),
 						truncate(response.body()));
-				return;
+				// A 401 here is not a warm-cache miss to shrug off: it says this server is
+				// rejecting the key this start minted, which no re-prefill addresses.
+				rejectIfUnauthorized(response.statusCode());
+				return false;
 			}
 
 			InferenceResult result = LlmResponseParser.parseResponse(response.body(), log);
@@ -381,22 +496,21 @@ public class LocalLlmEngine implements LlmEngine {
 			// the cached-token count is the only direct evidence the warmup primed the KV.
 			log.warn("Warmup primed KV cache: {} input ({} cached)",
 					result.getInputTokens(), result.getCachedTokens());
-			// The chart prefix is now resident in this process's RAM prompt-cache pool (so a query
-			// right after this warmup reuses it directly, no disk restore), and is persisted to disk
-			// so the next visit is fast even after a server restart or an eviction by another
-			// patient's query.
+			// Persisted so the next query — even after a server restart — restores this entry
+			// instead of re-paying the prefill.
 			if (cacheKey != null) {
-				ramResidentKeys.add(cacheKey);
 				persistKvEntry(cacheKey, cacheScope, cacheDir, timeoutSeconds, pin);
 			}
-			resetIdleTimer();
+			return true;
 		}
 		catch (IOException e) {
 			log.warn("Warmup failed: {}", e.getMessage());
+			return false;
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			log.debug("Warmup interrupted");
+			return false;
 		}
 	}
 
@@ -572,15 +686,14 @@ public class LocalLlmEngine implements LlmEngine {
 
 	/** POSTs a {@code /slots/0} save/restore action, returning true on a 2xx response. The slot id
 	 *  is fixed at 0 because the server runs {@code --parallel 1}. Failures (missing file, disabled
-	 *  endpoint, I/O) are logged and treated as a miss so warmup degrades to a plain prefill. */
+	 *  endpoint, I/O, a rejected key) are logged and treated as a miss so warmup degrades to a
+	 *  plain prefill — see the comment on the non-2xx branch for why a 401 does not throw here. */
 	private boolean slotAction(String action, String filename, int timeoutSeconds) {
-		String url = "http://127.0.0.1:" + serverPort + "/slots/0?action=" + action;
 		ObjectNode body = MAPPER.createObjectNode();
 		body.put("filename", filename);
 		try {
-			HttpRequest request = HttpRequest.newBuilder()
-					.uri(URI.create(url))
-					.timeout(Duration.ofSeconds(timeoutSeconds))
+			HttpRequest request = endpoint.request(endpoint.slotUrl(action),
+							Duration.ofSeconds(timeoutSeconds))
 					.header("Content-Type", "application/json")
 					.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body),
 							StandardCharsets.UTF_8))
@@ -590,7 +703,14 @@ public class LocalLlmEngine implements LlmEngine {
 			if (response.statusCode() >= 200 && response.statusCode() < 300) {
 				return true;
 			}
-			log.warn("KV-cache slot {} returned HTTP {}: {}", action, response.statusCode(),
+			// Logged and treated as a miss, 401 included. A 401 here says the key is being
+			// rejected, which is worth naming — but it must not throw: saveSlot runs AFTER the
+			// answer has been streamed to the client, so a throw would discard a delivered
+			// answer over a cache write. The inference paths fail loudly on 401 already, so
+			// nothing about a rejected key is silent.
+			log.warn("KV-cache slot {} returned HTTP {}{}: {}", action, response.statusCode(),
+					LlamaServerEndpoint.refusesCredentials(response.statusCode())
+							? " (this module's key was rejected)" : "",
 					truncate(response.body()));
 			return false;
 		}
@@ -615,19 +735,12 @@ public class LocalLlmEngine implements LlmEngine {
 	/**
 	 * Persists the current slot's KV under {@code cacheKey}, then drops this scope's superseded
 	 * entries (a changed chart hashes to a new filename, so its old file would otherwise orphan) and
-	 * applies the global count cap. Shared by {@link #warmup} and the streaming query path so both
-	 * persist identically. No-op when the save itself fails. Caller guarantees KV persistence is
-	 * active ({@code cacheKey} and {@code cacheDir} non-null).
-	 */
-	private void persistKvEntry(String cacheKey, String cacheScope, String cacheDir, int timeoutSeconds) {
-		persistKvEntry(cacheKey, cacheScope, cacheDir, timeoutSeconds, false);
-	}
-
-	/**
-	 * As {@link #persistKvEntry(String, String, String, int)} but, when {@code pin} is true, marks the
-	 * saved entry as pinned (prewarm-bootstrap corpus) BEFORE the cap is applied, so it is exempt from
-	 * eviction. The pin write precedes {@link #evictOldestKvEntries} so the just-saved entry cannot be
-	 * reclaimed by the same call.
+	 * applies the global count cap. Called only by {@link #primeAndPersist}, so every entry is made
+	 * one way. No-op when the save itself fails. Caller guarantees KV persistence is active
+	 * ({@code cacheKey} and {@code cacheDir} non-null). When {@code pin} is true, marks the saved
+	 * entry as pinned (prewarm-bootstrap corpus) BEFORE the cap is applied, so it is exempt from
+	 * eviction — the pin write precedes {@link #evictOldestKvEntries} so the just-saved entry cannot
+	 * be reclaimed by the same call.
 	 */
 	private void persistKvEntry(String cacheKey, String cacheScope, String cacheDir, int timeoutSeconds,
 			boolean pin) {
@@ -768,6 +881,15 @@ public class LocalLlmEngine implements LlmEngine {
 	 *
 	 * <p>Flag rationale:
 	 * <ul>
+	 *   <li>{@code --host 127.0.0.1} and {@code --no-webui} — the two security-relevant flags
+	 *       (#445). The first pins the bind rather than resting on llama.cpp's default, which reads
+	 *       {@code LLAMA_ARG_HOST} from the environment the child inherits from this JVM; the
+	 *       second closes the Web UI root. It is not the only route that answers a caller with no
+	 *       credential — {@code /health} and {@code /v1/models} are public by design, which is
+	 *       measured in ADR Decision 107 row 5 and which the readiness probe depends on — it is
+	 *       the only one this module can close, and it needs none of it. Both flags are pinned in
+	 *       {@code LocalLlmServerAuthTest}; read the nested {@code CLAUDE.md} in this package
+	 *       before changing either.</li>
 	 *   <li>{@code -ngl 99} — offload all layers to GPU when a GPU build is in use; no-op on CPU build.</li>
 	 *   <li>{@code -fa on} — flash attention; cuts attention compute on long-context chart prompts.</li>
 	 *   <li>{@code --parallel 1} — single decode slot. Chart-search is one request at a time per
@@ -780,17 +902,23 @@ public class LocalLlmEngine implements LlmEngine {
 	 *   <li>{@code --cache-reuse 0} + {@code cache_prompt=true} (in request body) — reuse the
 	 *       chart prefix's KV cache across successive queries on the same patient via the
 	 *       request-body flag (exact-prefix match). The CLI flag is pinned to 0 (llama.cpp's
-	 *       default) because the focus-hint prompt structure has byte-identical prefix bytes
+	 *       default) because the focus-hint prompt structure keeps the prefix bytes identical
 	 *       across successive queries on the same patient — KV shifting (the {@code N>0}
-	 *       behavior) is for fuzzy prefix matching when the prefix bytes drift slightly, and
-	 *       that case doesn't arise on this prompt shape. Note that cache_prompt itself
-	 *       introduces a low-level non-determinism on borderline argmax decisions because the
-	 *       reused-vs-fresh KV path is numerically close but not bit-identical — observed as
-	 *       "is she pregnant?" alternating between Gravida and Self-Induced Abortion on
-	 *       successive identical requests for patient 4acc0b80. The trade-off (latency win
-	 *       from cache_prompt vs. determinism on borderline questions) is fundamental to
-	 *       llama-server's design; cache_prompt stays on because the latency win is the
-	 *       whole point.</li>
+	 *       behavior) is for fuzzy prefix matching when the prefix bytes drift slightly.
+	 *       <strong>Since issue #317 that drift case does arise</strong>, and this justification no
+	 *       longer covers it: a drug-order record states whether its order is in force, so an order
+	 *       lapsing changes bytes mid-chart between one query and the next. Whether {@code N>0}
+	 *       recovers anything there is UNMEASURED on this prompt shape, and no mechanism argument is
+	 *       offered either way: the server's loop re-aligns after a mid-prompt edit and shifts as
+	 *       many chunks as it finds, so this is the case it is built for, but "built for it" is not
+	 *       a measurement. The value is left at 0 as the known-safe default rather than tuned on a
+	 *       guess. What has changed is that the trade-off is now open instead of settled. Note that cache_prompt itself
+	 *       makes the output depend on the slot's history — deterministic per path, different
+	 *       across paths — observed as "is she pregnant?" alternating between Gravida and
+	 *       Self-Induced Abortion for patient 4acc0b80, and as a warmup flipping "Is warfarin safe
+	 *       for her?" on the demo. cache_prompt stays on because the latency win is the whole
+	 *       point; the history is taken out instead, by restoring the saved prefix before every
+	 *       streaming query ({@link #kvQueryAction}, ADR Decision 157).</li>
 	 *   <li>{@code --reasoning-budget 0} — disable reasoning channel; json_schema does not
 	 *       constrain it and Gemma 4 burns thousands of tokens before the answer.</li>
 	 * </ul>
@@ -820,6 +948,11 @@ public class LocalLlmEngine implements LlmEngine {
 		cmd.add(modelPath);
 		cmd.add("--port");
 		cmd.add(String.valueOf(port));
+		// Both flags are load-bearing; the rationale is this method's own javadoc, the
+		// measurements are ADR Decision 107 rows 4 and 6, and the rule is the nested CLAUDE.md.
+		cmd.add("--host");
+		cmd.add(LlamaServerEndpoint.LOOPBACK_HOST);
+		cmd.add("--no-webui");
 		cmd.add("-ngl");
 		cmd.add("99");
 		cmd.add("-fa");
@@ -846,11 +979,10 @@ public class LocalLlmEngine implements LlmEngine {
 	}
 
 	private void startServer(String modelPath) {
-		// A freshly launched llama-server starts with an EMPTY RAM prompt-cache pool, so no chart is
-		// resident. Clear here (not only in stopServer): when the server process is killed externally
-		// or crashes, ensureServerRunning restarts it WITHOUT going through stopServer, and a stale
-		// residency record would make a cold query wrongly skip the disk restore and re-prefill.
-		ramResidentKeys.clear();
+		// A child this engine could not confirm dead still holds the port, and the port check
+		// below would blame it on a stranger. Try once more before probing.
+		reapAbandonedProcess();
+		java.util.Deque<String> startOutput = beginServerOutputCapture();
 
 		String serverBinaryPath = LlamaServerBinary.resolve();
 		serverPort = getServerPort();
@@ -874,7 +1006,15 @@ public class LocalLlmEngine implements LlmEngine {
 		List<String> command = buildServerCommand(serverBinaryPath, modelPath, serverPort,
 				getContextSize(), slotSavePath);
 
+		// Nothing may already be listening on the port we are about to hand a patient's chart to
+		// (issue #445). Without this, a local process that bound the port while the server was
+		// down — which it is at Tomcat boot and after every idle unload — is ADOPTED by the
+		// readiness poll below, and receives the system prompt and the serialized chart.
+		requireLoopbackPortFree(serverPort);
+
 		log.info("Starting llama-server on port {} with model {}", serverPort, modelPath);
+
+		endpoint = LlamaServerEndpoint.open(serverPort);
 
 		try {
 			ProcessBuilder pb = new ProcessBuilder(command);
@@ -884,16 +1024,22 @@ public class LocalLlmEngine implements LlmEngine {
 				pb.environment().put("DYLD_LIBRARY_PATH", binDir);
 				pb.environment().put("LD_LIBRARY_PATH", binDir);
 			}
+			// The key goes into the child's environment, never onto its command line, which is
+			// world-readable through ps. Before start(), so the child parses it at launch.
+			endpoint.handOverTo(pb);
 			serverProcess = pb.start();
 
-			// Drain server output in a daemon thread to prevent buffer blocking
+			// Drain server output in a daemon thread to prevent buffer blocking. The process and
+			// the deque are captured as LOCALS: reading the fields would give a thread outliving
+			// its own child either a stranger's stream or an NPE after stopServer nulled it.
+			Process child = serverProcess;
 			Thread outputDrain = new Thread(() -> {
 				try (BufferedReader reader = new BufferedReader(
-						new InputStreamReader(serverProcess.getInputStream(),
-								StandardCharsets.UTF_8))) {
+						new InputStreamReader(child.getInputStream(), StandardCharsets.UTF_8))) {
 					String line;
 					while ((line = reader.readLine()) != null) {
 						log.debug("llama-server: {}", line);
+						rememberServerOutput(startOutput, line);
 					}
 				}
 				catch (IOException e) {
@@ -917,22 +1063,261 @@ public class LocalLlmEngine implements LlmEngine {
 		}
 	}
 
+	/**
+	 * Refuses to launch onto a port something is already listening on, so that a local process
+	 * which bound it while the server was down fails the start LOUDLY instead of being adopted as
+	 * the server (issue #445). The port is unbound at Tomcat boot and after every
+	 * {@code chartsearchai.llm.idleTimeoutMinutes} unload, so that window arises by default rather
+	 * than having to be raced for.
+	 *
+	 * <p>It CONNECTS rather than trying to bind, because the engine's question is <em>does a
+	 * connection to the address I am about to dial reach somebody?</em> and a bind answers a
+	 * different one — wrongly in both directions, measured over four socket shapes in
+	 * {@code docs/adr.md} Decision 107 row 11. Only {@link ConnectException} reads as a free port;
+	 * every other {@link IOException} establishes no refusal and refuses the start, because
+	 * treating one as "nothing listening" is how this check fails OPEN — including a listener whose
+	 * accept backlog is full, which answers with a timeout and is refused HERE rather than passed
+	 * on to a later gate. That shape is what the branch is TESTED through, being the one reachable
+	 * on a healthy host:
+	 * {@code LocalLlmServerAuthTest.aPortHeldByAListenerThatAcceptsNothingFailsTheStart}. It is not
+	 * the only path in: a connect that SUCCEEDS and then fails to close lands here too, where the
+	 * message says nothing could be established about a probe that established a listener. The
+	 * verdict is still right — refuse — and only the wording misdiagnoses, which is why this
+	 * branch reports the exception it caught rather than guessing.
+	 *
+	 * <p>A review round proposed that a socket bound but never LISTENING is the shape this check
+	 * passes over, its connect being refused. Measured on macOS 14 (driving this method against a
+	 * {@code Socket} bound to a loopback port and left unlistened), it is not: the SYN is dropped
+	 * rather than reset, the probe ends in {@code SocketTimeoutException}, and it is refused by
+	 * the branch above like any other listener that answers nothing. Only the platform it was
+	 * measured on is claimed — a kernel that answers such a port with a reset would read it as
+	 * free — so no test pins it in either direction, and README describes the BRANCH rather than
+	 * enumerating shapes.
+	 */
+	static void requireLoopbackPortFree(int port) {
+		// Proxy.NO_PROXY, not new Socket(): the no-arg constructor is proxy-aware, and a proxied
+		// probe answers about the proxy rather than about the port. The trigger is NOT
+		// socksProxyHost alone — measured, that is a no-op here, because the JDK's default
+		// selector appends its own loopback bypass to any NON-EMPTY socksNonProxyHosts. It is
+		// socksProxyHost together with an EMPTY socksNonProxyHosts, which drops that bypass; on
+		// the proxy-aware form a genuinely free port then reads "could not establish" and the
+		// engine can never start. Pinned by
+		// LocalLlmServerAuthTest.theProbeIsNotRoutedThroughAConfiguredProxy, which sets exactly
+		// that pair. (The cost is bounded by PORT_PROBE_TIMEOUT_MS even through a SOCKS handshake
+		// — measured 252 ms against an unroutable proxy, not the seconds an earlier form of this
+		// comment claimed, which were this class's one-time loading.)
+		try (Socket probe = new Socket(java.net.Proxy.NO_PROXY)) {
+			// getByName(LOOPBACK_HOST), not getLoopbackAddress(): the latter is ::1 on a JVM
+			// started with -Djava.net.preferIPv6Addresses, which would probe an address the
+			// engine never dials and the child never binds — reporting a real 127.0.0.1 squatter
+			// as free, and a ::1 listener that can never receive the chart as a conflict.
+			probe.connect(new InetSocketAddress(
+					InetAddress.getByName(LlamaServerEndpoint.LOOPBACK_HOST), port),
+					PORT_PROBE_TIMEOUT_MS);
+		}
+		catch (ConnectException refused) {
+			// The ONE exception that means nothing is listening, and the only one that may read as
+			// a free port — a port whose previous socket is still in TIME_WAIT refuses this way
+			// too, which is what keeps the restart path working. An earlier form caught
+			// IOException here and set a flag; that was a measured no-op, because the catch
+			// reassigned the flag, so a close() or a getByName failure still read as "free".
+			return;
+		}
+		catch (IOException e) {
+			// Anything else — a resolution failure, a timeout against a listener that accepts
+			// nothing — establishes NO refusal, so it must not be read as a free port. That is the
+			// one direction this check exists to prevent. Note what this does NOT cover: when the
+			// connect is refused and the close then fails, the ConnectException handler above wins
+			// and the close failure is suppressed. That is the right answer (the port IS free) but
+			// it is not this branch, and an earlier comment claimed it was.
+			throw new APIException("Could not establish whether anything is listening on "
+					+ LlamaServerEndpoint.authority(port)
+					+ " (" + e.getClass().getSimpleName() + ": " + e.getMessage()
+					+ "). Refusing to start rather than launch onto a port that may already be"
+					+ " serving another process.", e);
+		}
+		throw new APIException("Something is already listening on "
+				+ LlamaServerEndpoint.authority(port)
+				+ ", the port configured for the local LLM server ("
+				+ ChartSearchAiConstants.GP_LLM_SERVER_PORT
+				+ "). Refusing to start: a foreign listener on this port would receive the "
+				+ "system prompt and the patient's chart. Stop it, or configure another port — and "
+				+ "note it may be this module's own previous llama-server, if that one outlived "
+				+ "being shut down, in which case the next attempt will succeed.");
+	}
+
+	/**
+	 * Whether the listener that has just reported itself healthy may be served. Named for what it
+	 * DECIDES rather than for what it proves: its three questions cannot establish that the
+	 * listener is the process this engine spawned, and
+	 * {@link LlamaServerEndpoint}'s class javadoc says why no bearer token can.
+	 *
+	 * <p>Four things are asked, and the LAST is the one the ticket (#445) turns on.
+	 * <ul>
+	 *   <li>{@code childAlive} — the spawned process's liveness, asked before anything is sent to
+	 *       the listener so that a child already gone is reported as that rather than as whatever
+	 *       the probes then say about a stranger. On its own this leg establishes nothing about
+	 *       who holds the port: {@link #waitForServerReady} sends its first health request a few
+	 *       milliseconds after {@code pb.start()}, and Decision 107 row 7 measured the child's
+	 *       bind 0.138 s after exec — so at a reply that early the child is alive and has not yet
+	 *       tried for the port, whoever is answering.</li>
+	 *   <li>An unauthenticated call must be REFUSED. See
+	 *       {@link LlamaServerEndpoint#unauthenticatedProbeStatus}: without this the module
+	 *       cannot tell an enforcing server from one that ignored the key and would take the
+	 *       chart from anyone.</li>
+	 *   <li>This start's key must not be REFUSED, so a rejected key surfaces here rather than as
+	 *       a refusal on a clinician's query. Not "accepted": see
+	 *       {@link LlamaServerEndpoint#doesNotRefuseThisModulesKey} for why anything
+	 *       {@link LlamaServerEndpoint#refusesCredentials} does not name passes, and why this leg
+	 *       alone is fail-open.</li>
+	 *   <li>And liveness AGAIN, not before {@link #CHILD_BIND_SETTLE_MS} has passed since
+	 *       {@code launchedAtNanos} — a {@link System#nanoTime} reading taken as readiness began,
+	 *       which is the child's launch plus one thread construction. This is the leg that ties
+	 *       this listener to the child, and what a child alive by then establishes about the port
+	 *       is that constant's javadoc. A child that lost the port has exited before the window
+	 *       closes, so the start fails loudly instead. The two probes above are spent inside the
+	 *       same window and pay part of it.</li>
+	 * </ul>
+	 *
+	 * <p>Two ways to reach that were on the table. Sleeping past the bind latency before the FIRST
+	 * health poll would delay every poll on the grid, including the "exited during startup" report
+	 * that an ordinary failure — a missing model file — reaches first, and it would still accept
+	 * the first healthy reply, leaving nothing that observes the child a second time. Re-asking
+	 * liveness here, after a delay counted from the launch, was taken instead: it is the last thing
+	 * before {@code loadedModelPath} is set, it says in its own message what refused the start, and
+	 * counting from the launch rather than from the reply is what makes it free on every start that
+	 * loaded a model. It does not accept the first healthy reply; it accepts a healthy reply beside
+	 * a child that has already survived its bind.
+	 *
+	 * <p>The wait interrupts rather than swallowing, so a cancelled start unwinds through
+	 * {@link #waitForServerReady}'s own handler, which stops the child BEFORE re-setting the flag.
+	 *
+	 * <p>Package-private and static, taking everything it reads, because llama-server itself cannot
+	 * be launched under test — the convention {@link #buildServerCommand},
+	 * {@link #serverNeedsRestart} and {@link #kvQueryAction} already follow in this class. Liveness
+	 * arrives as a supplier rather than a {@link Process} for the same reason: production passes
+	 * {@code serverProcess::isAlive}, and a test can then pass the liveness of a REAL OS process
+	 * (an exited child, or the running JVM) instead of standing one in.
+	 */
+	static void requireListenerMayBeServed(LlamaServerEndpoint endpoint,
+			HttpClient client, BooleanSupplier childAlive, long launchedAtNanos)
+			throws InterruptedException {
+		if (!childAlive.getAsBoolean()) {
+			throw new APIException("A listener on " + endpoint.authority()
+					+ " reported itself healthy but the llama-server this module spawned has "
+					+ "exited, so that listener is another process. Refusing to serve it.");
+		}
+		int unauthenticated = endpoint.unauthenticatedProbeStatus(client);
+		if (!LlamaServerEndpoint.refusesCredentials(unauthenticated)) {
+			throw new APIException("The listener on " + endpoint.authority()
+					+ " did not refuse an inference request carrying no credential"
+					+ (unauthenticated < 0
+							? " — the probe could not be completed at all"
+							: " — it answered HTTP " + unauthenticated)
+					+ ". Refusing to send it a patient's chart.");
+		}
+		if (!endpoint.doesNotRefuseThisModulesKey(client)) {
+			throw new APIException("The listener on " + endpoint.authority()
+					+ " rejected this module's own key. Refusing to serve it.");
+		}
+		long remaining = CHILD_BIND_SETTLE_MS - millisSince(launchedAtNanos);
+		if (remaining > 0) {
+			Thread.sleep(remaining);
+		}
+		if (!childAlive.getAsBoolean()) {
+			throw new APIException("A listener on " + endpoint.authority()
+					+ " reported itself healthy but the llama-server this module spawned was no "
+					+ "longer alive when readiness re-checked it, " + millisSince(launchedAtNanos)
+					+ " ms into this start, past the point its bind attempt was decided. Either "
+					+ "that listener took the port and the child died of losing it, or the child "
+					+ "died after the reply; this module cannot tell, and neither may be served a "
+					+ "patient's chart. Refusing to serve it.");
+		}
+	}
+
+	/**
+	 * Milliseconds elapsed since a {@link System#nanoTime} reading. That clock and not
+	 * {@code currentTimeMillis}, because this measures a DURATION on the start path: a wall clock
+	 * stepped backwards by an NTP correction or a suspended VM would leave
+	 * {@link #requireListenerMayBeServed} sleeping for the size of the step, with the engine
+	 * monitor held and every query behind it.
+	 */
+	private static long millisSince(long nanos) {
+		return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - nanos);
+	}
+
+	/**
+	 * Opens the capture for one server start: a FRESH deque, published as the one
+	 * {@link #lastServerOutput()} reads, and returned so that start's drain thread can close over
+	 * it. Fresh rather than cleared — the predecessor's drain thread is never joined, so a line it
+	 * had not yet read would otherwise land after a clear and be quoted as the new child's. One
+	 * method because the two halves are the property: a test that only wrote through the field
+	 * would not exercise what the drain thread does.
+	 */
+	java.util.Deque<String> beginServerOutputCapture() {
+		java.util.Deque<String> output = new java.util.ArrayDeque<>();
+		recentServerOutput = output;
+		return output;
+	}
+
+	/**
+	 * Keeps the last {@code RECENT_SERVER_OUTPUT_LINES} lines the child wrote, under the deque's
+	 * OWN lock and never the engine's. That is the whole point: every entry point into this class
+	 * is {@code synchronized}, and the monitor is held unbroken from there through
+	 * {@code startServer} and the whole of {@link #waitForServerReady} — so a ring guarded by the
+	 * engine would block the drain thread on its FIRST line and still be empty when the failure
+	 * message read it. Package-private so that behaviour can be tested with the monitor held, the
+	 * way production holds it.
+	 */
+	static void rememberServerOutput(java.util.Deque<String> output, String line) {
+		synchronized (output) {
+			output.addLast(line);
+			while (output.size() > RECENT_SERVER_OUTPUT_LINES) {
+				output.removeFirst();
+			}
+		}
+	}
+
+	String lastServerOutput() {
+		java.util.Deque<String> output = recentServerOutput;
+		synchronized (output) {
+			return output.isEmpty() ? "(none captured)" : String.join(" | ", output);
+		}
+	}
+
+	/**
+	 * Polls {@code /health} until the listener on the port answers {@code ok}, then puts that
+	 * listener through {@link #requireListenerMayBeServed} before the caller adopts it.
+	 */
 	private void waitForServerReady() {
-		long deadline = System.currentTimeMillis()
-				+ (SERVER_STARTUP_TIMEOUT_SECONDS * 1000L);
-		String healthUrl = "http://127.0.0.1:" + serverPort + "/health";
+		// The moment CHILD_BIND_SETTLE_MS is counted from, stamped HERE rather than passed in from
+		// startServer: all that separates this line from pb.start() is the construction of one
+		// daemon thread, while a value handed in from startServer can be taken ahead of the port
+		// probe, silently and fail-open. No behavioural case sees which moment the gate is handed —
+		// every test of it supplies that value directly — so
+		// ArchitectureGuardTest.theBindSettleWindowIsCountedFromTheFirstThingReadinessDoes reads
+		// this stamp, its finality and the call below. Erring a millisecond late only lengthens the
+		// window.
+		final long launchedAtNanos = System.nanoTime();
+		long deadline = System.currentTimeMillis() + (SERVER_STARTUP_TIMEOUT_SECONDS * 1000L);
 
 		while (System.currentTimeMillis() < deadline) {
 			if (!serverProcess.isAlive()) {
+				// With the child's own last words — see the recentServerOutput field for which
+				// failures those actually name and which --log-disable hides. The hint is not
+				// decoration: measured, a failed bind and a missing model file leave only the
+				// backend's startup banner here, which reads to an operator as the cause.
 				throw new APIException(
 						"llama-server process exited during startup with code "
-								+ serverProcess.exitValue());
+								+ serverProcess.exitValue() + ". Its last output: "
+								+ lastServerOutput()
+								+ " — note the launch passes --log-disable, which suppresses this "
+								+ "build's own bind and model-loading diagnostics, so those lines "
+								+ "may be its startup banner rather than the cause.");
 			}
 			try {
 				HttpResponse<String> response = getHttpClient().send(
-						HttpRequest.newBuilder()
-								.uri(URI.create(healthUrl))
-								.timeout(Duration.ofSeconds(2))
+						endpoint.request(endpoint.healthUrl(), LlamaServerEndpoint.PROBE_TIMEOUT)
 								.GET()
 								.build(),
 						HttpResponse.BodyHandlers.ofString());
@@ -940,17 +1325,49 @@ public class LocalLlmEngine implements LlmEngine {
 					JsonNode json = MAPPER.readTree(response.body());
 					String status = json.has("status") ? json.get("status").asText() : "";
 					if ("ok".equals(status)) {
+						// stopServer() before the refusal propagates, exactly as the timeout path
+						// below does, and for a sharper reason: a refusal leaves a LIVE child
+						// whose listener we have just declined to serve, and the next call's
+						// ensureServerRunning sees a live process needing no restart, returns, and
+						// sends the chart to it — the refusal undone one call later.
+						try {
+							requireListenerMayBeServed(endpoint, getHttpClient(),
+									serverProcess::isAlive, launchedAtNanos);
+						}
+						catch (APIException refused) {
+							stopServer();
+							throw refused;
+						}
 						return;
 					}
 				}
 			}
-			catch (IOException | InterruptedException e) {
+			catch (IOException e) {
 				// Server not ready yet
+			}
+			catch (InterruptedException e) {
+				// NOT "not ready yet": swallowing this would clear the cancellation and keep
+				// polling for the rest of the deadline with a child mid-launch. Same handling as
+				// the sleep below, and for the same reason. The readiness gate's own wait unwinds
+				// here too, and must: it is this handler that stops the child before the flag is
+				// re-set.
+				stopServer();
+				Thread.currentThread().interrupt();
+				throw new APIException("Interrupted while waiting for llama-server to start");
 			}
 			try {
 				Thread.sleep(HEALTH_POLL_INTERVAL_MS);
 			}
 			catch (InterruptedException e) {
+				// stopServer() BEFORE re-setting the flag, and that order is load-bearing:
+				// Process.waitFor throws immediately on an already-interrupted thread, so
+				// re-setting it first would SIGKILL the child and return without ever waiting for
+				// the reap — leaving an mlock'd orphan on the port that nothing here has a handle
+				// to. Measured both orderings. stopServer at all because this child never reached
+				// requireListenerMayBeServed and loadedModelPath is still null, so
+				// serverNeedsRestart would say no restart is needed and the next query would send
+				// the chart to a listener readiness never examined.
+				stopServer();
 				Thread.currentThread().interrupt();
 				throw new APIException("Interrupted while waiting for llama-server to start");
 			}
@@ -960,6 +1377,31 @@ public class LocalLlmEngine implements LlmEngine {
 				+ SERVER_STARTUP_TIMEOUT_SECONDS + " seconds");
 	}
 
+	/**
+	 * Gives a child this engine could not confirm dead one more chance to be reaped, so the port
+	 * check that follows is not told a stranger holds the port. Best effort and bounded, and it
+	 * promises nothing beyond the retry: an entry that outlives it is left for the port check,
+	 * which refuses the start only if something is actually listening on the port configured NOW —
+	 * a survivor on a port the global property has since changed is neither reaped nor refused.
+	 */
+	private void reapAbandonedProcess() {
+		if (abandonedProcess == null) {
+			return;
+		}
+		if (abandonedProcess.isAlive()) {
+			abandonedProcess.destroyForcibly();
+			try {
+				abandonedProcess.waitFor(REAP_WAIT_SECONDS, TimeUnit.SECONDS);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		}
+		if (!abandonedProcess.isAlive()) {
+			abandonedProcess = null;
+		}
+	}
+
 	private void stopServer() {
 		if (serverProcess != null) {
 			log.info("Stopping llama-server");
@@ -967,10 +1409,27 @@ public class LocalLlmEngine implements LlmEngine {
 			try {
 				if (!serverProcess.waitFor(10, TimeUnit.SECONDS)) {
 					serverProcess.destroyForcibly();
+					// destroyForcibly() returns before the process is reaped, and the listening
+					// socket is released only when it is. Without this wait, the NEXT start's
+					// requireLoopbackPortFree finds a still-listening child and refuses the start,
+					// accusing our own dying child of squatting the port — on the restart path,
+					// which ensureServerRunning takes on any model, context or KV-directory
+					// change. SECONDS rather than the ten above: a SIGKILLed process is reaped in
+					// milliseconds unless it is stuck in uninterruptible I/O, and this wait is
+					// taken under the engine monitor, where a clinician's query and a container
+					// shutdown both queue behind it.
+					if (!serverProcess.waitFor(REAP_WAIT_SECONDS, TimeUnit.SECONDS)) {
+						log.warn("llama-server survived being forcibly destroyed; keeping its "
+								+ "handle so the next start can try again rather than leave an "
+								+ "orphan holding port {}", serverPort);
+						abandonedProcess = serverProcess;
+					}
 				}
 			}
 			catch (InterruptedException e) {
 				serverProcess.destroyForcibly();
+				// Nothing waited for the reap, so this child is not known to be gone.
+				abandonedProcess = serverProcess;
 				Thread.currentThread().interrupt();
 			}
 			serverProcess = null;
@@ -978,11 +1437,10 @@ public class LocalLlmEngine implements LlmEngine {
 			loadedContextSize = -1;
 			loadedKvCacheDir = null;
 			loadedSlotSavePath = null;
-			// The RAM prompt-cache pool dies with the process, so its residency record must too —
-			// otherwise the next process would wrongly believe a chart is RAM-resident and skip the
-			// disk restore that now actually avoids a re-prefill.
-			ramResidentKeys.clear();
 		}
+		// Outside the block above, beside the HttpClient: a start that minted a secret and then
+		// failed to launch leaves an endpoint with no process, and that stamp must clear too.
+		endpoint = null;
 		httpClient = null;
 	}
 
@@ -991,14 +1449,29 @@ public class LocalLlmEngine implements LlmEngine {
 	}
 
 	String buildRequestBody(String systemPrompt, String userMessage, boolean stream) {
+		return buildRequestBody(systemPrompt, userMessage, stream, ReferenceRecords.ABSENT);
+	}
+
+	/**
+	 * The chart-answer request, for a prompt whose chart does or does not carry the module's
+	 * reference records — the one input that decides whether the DRY sampler is sent (issue #512,
+	 * ADR Decision 117).
+	 */
+	String buildRequestBody(String systemPrompt, String userMessage, boolean stream,
+			ReferenceRecords referenceRecords) {
 		return buildRequestBody(systemPrompt, userMessage, stream,
-				ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS);
+				ChartSearchAiConstants.DEFAULT_LLM_MAX_OUTPUT_TOKENS, defaultResponseFormat(),
+				referenceRecords);
 	}
 
 	String buildRequestBody(String systemPrompt, String userMessage, boolean stream,
 			int maxTokens) {
-		return buildRequestBody(systemPrompt, userMessage, stream, maxTokens,
-				ChartAnswerResponseFormat.build(MAPPER, resolveReasoningMaxChars()));
+		return buildRequestBody(systemPrompt, userMessage, stream, maxTokens, defaultResponseFormat());
+	}
+
+	/** The chart-answer schema, built in this one place for the answer and the warmup alike. */
+	private ObjectNode defaultResponseFormat() {
+		return ChartAnswerResponseFormat.build(MAPPER, resolveReasoningMaxChars());
 	}
 
 	/** Test seam wrapping {@link ChartSearchAiUtils#getReasoningMaxChars()} (fail-safe 0). */
@@ -1015,6 +1488,28 @@ public class LocalLlmEngine implements LlmEngine {
 	 */
 	String buildRequestBody(String systemPrompt, String userMessage, boolean stream,
 			int maxTokens, ObjectNode responseFormat) {
+		return buildRequestBody(systemPrompt, userMessage, stream, maxTokens, responseFormat,
+				ReferenceRecords.ABSENT);
+	}
+
+	/**
+	 * The one body every chat-completions request to the spawned server is built from — warmup
+	 * included, the slot save and restore calls not. {@code referenceRecords} decides the sampler
+	 * chain and nothing else.
+	 */
+	String buildRequestBody(String systemPrompt, String userMessage, boolean stream,
+			int maxTokens, ObjectNode responseFormat, ReferenceRecords referenceRecords) {
+		return buildRequestBody(systemPrompt, userMessage, stream, maxTokens, responseFormat,
+				referenceRecords, true);
+	}
+
+	/**
+	 * As above, with {@code cachePrompt} false only for {@link #primeAndPersist}, whose saved entry
+	 * must not depend on what the slot held before it (ADR Decision 157). Every answer reuses.
+	 */
+	String buildRequestBody(String systemPrompt, String userMessage, boolean stream,
+			int maxTokens, ObjectNode responseFormat, ReferenceRecords referenceRecords,
+			boolean cachePrompt) {
 		ObjectNode root = MAPPER.createObjectNode();
 		root.put("temperature", 0.0);
 		root.put("max_tokens", maxTokens);
@@ -1028,8 +1523,20 @@ public class LocalLlmEngine implements LlmEngine {
 		// of date+finding blocks — without penalizing single-token repetition,
 		// which is required for legitimate extraction of dates and identifiers
 		// from the chart) and temperature.
+		//
+		// Except for a prompt carrying the module's reference records (issue #512,
+		// ADR Decision 117), which gets temperature alone and no dry_* field. An
+		// answer over those records is expected to restate them — an order name
+		// like "Isoniazid / pyrazinamide / rifampin", a mechanism sentence — and
+		// with the whole context in DRY's window every such copy past eight
+		// tokens is penalised mid-word: "riframpin", "zidovudeine", and a script
+		// switch ("Efavirenز", ending in an Arabic letter) of the kind recorded
+		// below. Null is read as absent, which is the request as it was before.
+		boolean dry = referenceRecords != ReferenceRecords.PRESENT;
 		ArrayNode samplers = MAPPER.createArrayNode();
-		samplers.add("dry");
+		if (dry) {
+			samplers.add("dry");
+		}
 		samplers.add("temperature");
 		root.set("samplers", samplers);
 		// DRY parameters tuned for extractive QA over patient charts: penalize
@@ -1042,11 +1549,16 @@ public class LocalLlmEngine implements LlmEngine {
 		// to neighboring digits (2023-05-04 -> 2023-05-03, 2026-02-28 ->
 		// 2026-02-18) or switch scripts to dodge ("Serum potassium" -> "Serum
 		// पोटेशियम"). allowed_length=8 keeps the loop-catching margin while
-		// letting date and identifier n-grams pass through unchanged.
-		root.put("dry_multiplier", 0.8);
-		root.put("dry_base", 1.75);
-		root.put("dry_allowed_length", 8);
-		root.put("dry_penalty_last_n", -1);
+		// letting date and identifier n-grams pass through unchanged. Raising it
+		// moved where the penalty starts and left copying from the prompt
+		// penalised, which is what the reference-records carve-out above is for;
+		// every other request still sends exactly these values.
+		if (dry) {
+			root.put("dry_multiplier", 0.8);
+			root.put("dry_base", 1.75);
+			root.put("dry_allowed_length", 8);
+			root.put("dry_penalty_last_n", -1);
+		}
 		// llama.cpp-specific extension. Without it, each request reprocesses the
 		// whole prompt from scratch, so successive queries on the same patient
 		// pay full prefill cost every time. With it set, llama-server reuses
@@ -1054,7 +1566,7 @@ public class LocalLlmEngine implements LlmEngine {
 		// prompt + chart text are byte-identical between queries on one patient,
 		// so only the new question's tokens need processing. Order-of-magnitude
 		// latency win for repeat queries.
-		root.put("cache_prompt", true);
+		root.put("cache_prompt", cachePrompt);
 		if (stream) {
 			ObjectNode streamOptions = MAPPER.createObjectNode();
 			streamOptions.put("include_usage", true);
@@ -1072,8 +1584,34 @@ public class LocalLlmEngine implements LlmEngine {
 		}
 	}
 
-	private String getCompletionsUrl() {
-		return "http://127.0.0.1:" + serverPort + "/v1/chat/completions";
+	/**
+	 * The one chat-completions request shape the three inference paths share, built by
+	 * {@link LlamaServerEndpoint} so it carries this start's key. The paths differ in how they read
+	 * the RESPONSE, never in how the request is addressed or authenticated.
+	 */
+	private HttpRequest completionsRequest(String requestBody, int timeoutSeconds) {
+		return endpoint.request(endpoint.completionsUrl(), Duration.ofSeconds(timeoutSeconds))
+				.header("Content-Type", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
+				.build();
+	}
+
+	/**
+	 * Turns a refused credential — {@link LlamaServerEndpoint#refusesCredentials} — into a named
+	 * failure rather than a generic HTTP error. Used
+	 * by the three INFERENCE branches; {@code slotAction} deliberately does not call it, and the
+	 * comment on its non-2xx branch says why. It means the listener on the port is not
+	 * accepting the key this start minted — either a foreign process holds it, or the launched
+	 * build did not read {@link LlamaServerEndpoint#API_KEY_ENV} — and no retry or re-prefill
+	 * recovers from either.
+	 */
+	private void rejectIfUnauthorized(int statusCode) {
+		if (LlamaServerEndpoint.refusesCredentials(statusCode)) {
+			throw new APIException("The local llama-server rejected this module's key (HTTP "
+					+ statusCode + "). Whatever is listening on "
+					+ LlamaServerEndpoint.authority(serverPort)
+					+ " is not the server this module authenticated to.");
+		}
 	}
 
 	private String resolveModelPath() {
@@ -1159,10 +1697,27 @@ public class LocalLlmEngine implements LlmEngine {
 		}
 	}
 
-	private synchronized HttpClient getHttpClient() {
+	/**
+	 * The client every call to the local server goes through, built with proxying OFF.
+	 *
+	 * <p>{@code NO_PROXY} is the security-relevant part, not tidiness. {@link HttpClient} defaults
+	 * to {@code ProxySelector.getDefault()}, which honours {@code http.proxyHost} — and although
+	 * that selector's default {@code http.nonProxyHosts} excludes loopback, a deployment that
+	 * overrides the property can put loopback back in scope. Measured, with a control in the same
+	 * run: with {@code http.proxyHost} set and {@code http.nonProxyHosts} emptied, the production
+	 * {@code /health} request reached the PROXY and not the server, carrying
+	 * {@code Authorization: Bearer <this start's secret>} — so the credential minted to keep a
+	 * local process out was handed to a third party, and the completions POST on the same client
+	 * would have taken the patient's chart with it. Off unconditionally, because there is no
+	 * deployment in which a loopback subprocess should be reached through a proxy.
+	 *
+	 * <p>Package-private so {@code LocalLlmServerAuthTest} can ask the real client what it selects.
+	 */
+	synchronized HttpClient getHttpClient() {
 		if (httpClient == null) {
 			httpClient = HttpClient.newBuilder()
 					.connectTimeout(Duration.ofSeconds(5))
+					.proxy(HttpClient.Builder.NO_PROXY)
 					.build();
 		}
 		return httpClient;
