@@ -236,7 +236,7 @@ public class HttpHubStreamTransportTest {
 		Patient patient = new Patient(7);
 		patient.setUuid("patient-1");
 		return new TurnRequest(patient, "question", "conversation-1", "request-1",
-				ProviderMode.QUERY_SCOPED, "profile", Collections.emptyList());
+				ProviderMode.QUERY_SCOPED, "profile", Collections.emptyList(), AccountContext.unavailable());
 	}
 
 	private static final class CloseTrackingInputStream extends ByteArrayInputStream {
@@ -367,7 +367,7 @@ public class HttpHubStreamTransportTest {
 		HttpHubStreamTransport transport = new HttpHubStreamTransport();
 		HubCallRequest request = new HubCallRequest(
 				"http://127.0.0.1:" + server.getAddress().getPort() + "/stream", "product-a",
-				"patient-1", "conversation-1", "request-1", "question", Collections.emptyList());
+				"patient-1", "conversation-1", "request-1", "question", Collections.emptyList(), AccountContext.unavailable());
 		TurnCancellation cancellation = new TurnCancellation();
 		List<HubWireEvent> received = Collections.synchronizedList(new ArrayList<>());
 
@@ -422,7 +422,7 @@ public class HttpHubStreamTransportTest {
 		server.start();
 		HubCallRequest request = new HubCallRequest(
 				"http://127.0.0.1:" + server.getAddress().getPort() + "/stream", "product-a",
-				"patient-1", "conversation-1", "request-1", "question", Collections.emptyList());
+				"patient-1", "conversation-1", "request-1", "question", Collections.emptyList(), AccountContext.unavailable());
 		List<HubWireEvent> received = Collections.synchronizedList(new ArrayList<>());
 		executor = Executors.newSingleThreadExecutor();
 		Future<?> completed = executor.submit(() -> new HttpHubStreamTransport()
@@ -457,7 +457,7 @@ public class HttpHubStreamTransportTest {
 		server.start();
 		HubCallRequest request = new HubCallRequest(
 				"http://127.0.0.1:" + server.getAddress().getPort() + "/stream", "product-a",
-				"patient-1", "conversation-1", "request-1", "question", Collections.emptyList());
+				"patient-1", "conversation-1", "request-1", "question", Collections.emptyList(), AccountContext.unavailable());
 		RuntimeException failure = assertThrows(RuntimeException.class,
 				() -> new HttpHubStreamTransport().stream(request, event -> { }, CancellationSignal.NONE));
 		if (status == 200) {

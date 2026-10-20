@@ -35,13 +35,6 @@ public final class HubCallRequest {
 
 	public HubCallRequest(String endpointUrl, String profileId, String patientUuid,
 			String conversationId, String requestId, String question,
-			List<PriorClinicalTurn> priorTurns) {
-		this(endpointUrl, profileId, patientUuid, conversationId, requestId, question, priorTurns,
-				AccountContext.unavailable());
-	}
-
-	public HubCallRequest(String endpointUrl, String profileId, String patientUuid,
-			String conversationId, String requestId, String question,
 			List<PriorClinicalTurn> priorTurns, AccountContext accountContext) {
 		this.endpointUrl = endpointUrl;
 		this.profileId = profileId;

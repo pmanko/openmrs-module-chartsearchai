@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.openmrs.api.context.Context;
 import org.openmrs.module.chartsearchai.api.InsufficientContextException;
+import org.openmrs.module.chartsearchai.api.provider.AccountContext;
 import org.openmrs.module.chartsearchai.api.provider.CancellationSignal;
 import org.openmrs.module.chartsearchai.serializer.PatientChartSerializer.AlreadyOrderedDrug;
 import org.openmrs.module.chartsearchai.api.provider.BundledClinicalAnswerProvider;
@@ -268,7 +269,7 @@ public class LlmInferenceServiceModuleBudgetContextTest extends BaseModuleContex
 		onChartRead = cancellation::cancel;
 		TurnResult result = new BundledClinicalAnswerProvider(service()).execute(
 				new TurnRequest(Context.getPatientService().getPatient(7), "Can I give her clarithromycin?",
-						"conversation", "request", null), event -> { }, cancellation).toCompletableFuture().join();
+						"conversation", "request", null, null, Collections.emptyList(), AccountContext.unavailable()), event -> { }, cancellation).toCompletableFuture().join();
 		assertFalse(chartReadInterrupted, "cancellation must never interrupt QueryStore's index read");
 		assertEquals("cancelled", result.getProblemCode());
 		onChartRead = () -> { };
@@ -326,7 +327,7 @@ public class LlmInferenceServiceModuleBudgetContextTest extends BaseModuleContex
 			long start = System.nanoTime();
 			TurnResult result = new BundledClinicalAnswerProvider(service).execute(
 					new TurnRequest(Context.getPatientService().getPatient(7), "Can I give her clarithromycin?",
-							"conversation", "request", null), event -> { }, cancellation).toCompletableFuture().join();
+							"conversation", "request", null, null, Collections.emptyList(), AccountContext.unavailable()), event -> { }, cancellation).toCompletableFuture().join();
 			assertTrue(reachedModel.get(), "exercise the real model transport after chart retrieval");
 			assertEquals("cancelled", result.getProblemCode());
 			assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start) < 4000,

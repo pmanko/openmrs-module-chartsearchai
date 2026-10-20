@@ -88,7 +88,7 @@ public class HubClinicalAnswerProviderTest {
 	private static TurnRequest request(String profileId) {
 		return new TurnRequest(patient(), "What medications is this patient on?", "conversation-1",
 				"request-1", ProviderMode.QUERY_SCOPED, profileId,
-				Collections.singletonList(new PriorClinicalTurn("prior q", "prior a")));
+				Collections.singletonList(new PriorClinicalTurn("prior q", "prior a")), AccountContext.unavailable());
 	}
 
 	private static class CollectingSink implements TurnEventSink {
@@ -317,7 +317,7 @@ public class HubClinicalAnswerProviderTest {
 		CollectingSink sink = new CollectingSink();
 		TurnRequest fullChartRequest = new TurnRequest(patient(),
 				"What medications is this patient on?", "conversation-1", "request-1",
-				ProviderMode.FULL_CHART_STABLE, "product-profile-a", Collections.emptyList());
+				ProviderMode.FULL_CHART_STABLE, "product-profile-a", Collections.emptyList(), AccountContext.unavailable());
 
 		TurnResult result = provider.execute(fullChartRequest, sink,
 				CancellationSignal.NONE).toCompletableFuture().get();
