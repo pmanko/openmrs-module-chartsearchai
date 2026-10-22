@@ -49,6 +49,8 @@ public class ChartSearchAiReferenceProvenanceTest {
 
 	private static final String DDINTER = "DDInter 2.0 (via openmrs-ddi-knowledge-base)";
 
+	private static final String ENTRY_TEXT = "Drug reference — Erythromycin: interacts with simvastatin (Major).";
+
 	private ChartSearchAiRestController controller;
 
 	private ByteArrayOutputStream out;
@@ -88,7 +90,7 @@ public class ChartSearchAiReferenceProvenanceTest {
 	@Test
 	public void doneEvent_carriesProvenanceAndWithheldCountForAnInjectedReference() throws Exception {
 		controller.streamAnswer(out, patient(), "can I prescribe erythromycin for this patient?",
-				new User(3), "full-chart", false);
+				new User(3), false);
 
 		// Chart evidence sorts first, so the reference record is last (see serializeReferences).
 		JsonNode drugRef = referencesOf("done").get(1);
@@ -111,7 +113,7 @@ public class ChartSearchAiReferenceProvenanceTest {
 		// The other half of the contract: a chart record's provenance is the patient's own record, so
 		// both keys must be present and empty rather than absent — a client reads them unconditionally.
 		controller.streamAnswer(out, patient(), "can I prescribe erythromycin for this patient?",
-				new User(3), "full-chart", false);
+				new User(3), false);
 
 		JsonNode chartRef = referencesOf("done").get(0);
 		assertEquals("allergy", chartRef.get("resourceType").asText(),
@@ -125,7 +127,7 @@ public class ChartSearchAiReferenceProvenanceTest {
 	@Test
 	public void referencesEvent_carriesTheSameCitationMetadataAsDone() throws Exception {
 		controller.streamAnswer(out, patient(), "can I prescribe erythromycin for this patient?",
-				new User(3), "full-chart", false);
+				new User(3), false);
 
 		// The early event is the one a client renders while Tier-2 verification is still running, so
 		// a citation chip that shows provenance only after the answer completes would flicker its
@@ -143,10 +145,30 @@ public class ChartSearchAiReferenceProvenanceTest {
 		// literals rather than a comparison, because "identical to done" would also be satisfied by
 		// both sites dropping the keys together.
 		controller.streamAnswer(out, patient(), "can I prescribe erythromycin for this patient?",
-				new User(3), "full-chart", true);
+				new User(3), true);
 
 		assertEquals(Arrays.asList("12:null:0", "75:" + DDINTER + ":824"), metadataOf("grounded"),
 				"the trailing grounded event must publish provenance and the withheld count as well");
+	}
+
+	/**
+	 * What a reference-group citation's record says reaches every event carrying references, and a chart citation carries
+	 * the key as {@code null} (ADR Decision 224): a client reads it unconditionally, and renders it to show what an answer
+	 * resting on the citation was checked against.
+	 */
+	@Test
+	public void everyEventCarriesTheReferenceTextOfAReferenceCitationAndNoneForAChartRecord() throws Exception {
+		for (boolean async : new boolean[] { false, true }) {
+			out = new ByteArrayOutputStream();
+			controller.streamAnswer(out, patient(), "can I prescribe erythromycin for this patient?", new User(3), async);
+			for (String event : async ? Arrays.asList("references", "done", "grounded") : Arrays.asList("references", "done")) {
+				List<JsonNode> refs = referencesOf(event);
+				assertTrue(refs.get(0).has("referenceText") && refs.get(0).get("referenceText").isNull(),
+					"a chart citation carries the key, null, on '" + event + "': " + refs.get(0));
+				assertEquals(ENTRY_TEXT, refs.get(1).path("referenceText").asText(null),
+					"the drug reference carries its record's text on '" + event + "': " + refs.get(1));
+			}
+		}
 	}
 
 	/**
@@ -173,7 +195,7 @@ public class ChartSearchAiReferenceProvenanceTest {
 		return new ChartSearchService.ChartAnswer("Erythromycin interacts with simvastatin [75].",
 				Arrays.asList(
 						new ChartSearchService.RecordReference(75, "drug_reference", "erythromycin", null,
-								null, DDINTER, 824),
+								null, DDINTER, 824, false, null, ENTRY_TEXT),
 						new ChartSearchService.RecordReference(12, "allergy", "u12", null, Boolean.TRUE)));
 	}
 

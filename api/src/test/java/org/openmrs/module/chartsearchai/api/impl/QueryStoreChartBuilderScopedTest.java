@@ -69,7 +69,7 @@ public class QueryStoreChartBuilderScopedTest {
 	@BeforeEach
 	public void setUp() {
 		queryStore = new CountingQueryStoreStub();
-		builder = new TestableScopedBuilder(queryStore);
+		builder = new TestableScopedBuilder(queryStore.asService());
 		builder.setChartSerializer(new PatientChartSerializer());
 		// A chart in date-desc order: patient record, then interleaved types.
 		queryStore.stubChart = new ArrayList<QueryDocument>(Arrays.asList(
@@ -202,8 +202,8 @@ public class QueryStoreChartBuilderScopedTest {
 
 	@Test
 	public void buildScoped_shouldRenderEveryRecordDate_withoutRunCompression() {
-		// Date-run compression saves tokens on 400-record charts; on a small slice it HIDES the
-		// date of the very records temporal questions need (measured: the anchored latest weight
+		// Date-run compression saves tokens; on a slice (and, issue #528, on the whole chart) it HIDES
+		// the date of the very records temporal questions need (measured: the anchored latest weight
 		// lost its date to the run above it and the model quoted an older, explicitly-dated one).
 		// Scoped slices are small enough to afford a date on every dated record.
 		builder.recencyAnchor = 4;

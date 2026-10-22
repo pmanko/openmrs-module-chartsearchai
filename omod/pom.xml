@@ -106,16 +106,66 @@
 					</execution>
 				</executions>
 			</plugin>
+			<!--
+				The unpack below writes the api module's classes into this module's own
+				target/classes, and Maven puts a module's output directory FIRST on its compile
+				classpath. So any api class left there by a previous packaging build shadows the
+				reactor's freshly built one at the next compile, and an api method added since
+				then cannot be found - a `mvn install` without `clean` fails, and worse, one that
+				does not fail is compiling against api code that is no longer in the tree.
+
+				Wiping target/classes at initialize costs this module a full recompile, which is
+				cheap here, and makes every build start from only its own sources. It is the
+				complement to the unpack's phase, not an alternative to it: the phase keeps
+				`mvn test` working, this keeps `mvn install` working without `clean`.
+			-->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-clean-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>Drop api classes unpacked by a previous packaging build</id>
+						<phase>initialize</phase>
+						<goals>
+							<goal>clean</goal>
+						</goals>
+						<configuration>
+							<excludeDefaultDirectories>true</excludeDefaultDirectories>
+							<filesets>
+								<fileset>
+									<directory>${project.build.outputDirectory}</directory>
+								</fileset>
+							</filesets>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-dependency-plugin</artifactId>
 				<executions>
+					<!--
+						Runs at prepare-package, NOT at generate-resources. unpack-dependencies needs a
+						PACKAGED artifact, and `mvn test` never packages the api module, so at an earlier
+						phase the reactor has no jar to offer and Maven falls back to whatever
+						chartsearchai-api happens to be installed in the local repository. That silently
+						unpacked STALE api classes into this module's own target/classes, ahead of the
+						reactor's fresh ones on the classpath: `mvn test` then failed to compile against
+						any api method added since the last `mvn install`, or worse, passed while testing
+						old api code. See MDEP-98.
+
+						At prepare-package the api jar exists (api builds before omod in the reactor) and
+						the unpacked content still lands in target/classes before `package` reads it, so
+						the .omod is byte-for-byte what it was. Compiling and testing this module never
+						needed the unpack: the ordinary chartsearchai-api dependency supplies those
+						classes, from the reactor when there is one. Do not move this earlier.
+					-->
 					<execution>
 						<id>Expand moduleApplicationContext and messages</id>
 						<goals>
 							<goal>unpack-dependencies</goal>
 						</goals>
-						<phase>generate-resources</phase>
+						<phase>prepare-package</phase>
 						<configuration>
 							<includeGroupIds>${project.parent.groupId}</includeGroupIds>
 							<includeArtifactIds>${project.parent.artifactId}-api</includeArtifactIds>

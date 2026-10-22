@@ -1,0 +1,330 @@
+/**
+ * This Source Code Form is subject to the terms of the Mozilla Public License,
+ * v. 2.0. If a copy of the MPL was not distributed with this file, You can
+ * obtain one at http://mozilla.org/MPL/2.0/. OpenMRS is also distributed under
+ * the terms of the Healthcare Disclaimer located at http://openmrs.org/license.
+ *
+ * Copyright (C) OpenMRS Inc. OpenMRS is a registered trademark and the OpenMRS
+ * graphic logo is a trademark of OpenMRS Inc.
+ */
+package org.openmrs.module.chartsearchai.web.rest;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.openmrs.api.AdministrationService;
+import org.openmrs.api.context.Context;
+import org.openmrs.api.context.ServiceContext;
+import org.openmrs.api.context.UserContext;
+import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
+import org.openmrs.module.chartsearchai.reference.DrugReferenceService;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+
+/**
+ * Wire contract of {@code GET /chartsearchai/drugreferencestatus} — the endpoint issue #149 adds so
+ * that "which drug-reference dataset is this module actually using?" can be answered from the
+ * running module instead of from a log line that, because the load is lazy, may belong to an earlier
+ * load or an earlier process.
+ *
+ * <p>It is pinned here rather than only live because the endpoint contributes one field of its own
+ * ({@code enabled}) that no API-level test can see, and because its privilege gate is the only thing
+ * standing between an unprivileged caller and both a filesystem path and a 19 MB parse. The
+ * controller is driven as a POJO with its {@link DrugReferenceService} set through the same
+ * package-private test seam the file already uses for its three other autowired collaborators.
+ */
+public class ChartSearchAiDrugReferenceStatusTest {
+
+	/**
+	 * Every key the endpoint documents, in the order it serializes them.
+	 *
+	 * <p>{@code findings} joined this list for the load-time validity check (issues
+	 * #150/#156/#196/#211). It belongs on the wire for the same reason the rest of this response does:
+	 * the endpoint answers "what is actually loaded?" after a lazy load, and "what was wrong with it, and
+	 * what did the loader do about it?" is that same question — retained in Java and withheld here, the
+	 * check would be visible to tests and invisible to the operator it protects.
+	 *
+	 * <p>{@code arms} joined it afterwards, for issue #285, and for that same reason: a dataset can load
+	 * 2283 entries and still leave the dosing and hand-authored-rule arms with nothing to act on. Prose
+	 * said so for the shipped DEFAULT in several places; what none of it can describe is the dataset a
+	 * given install configured for itself, which is what this field answers.
+	 *
+	 * <p>{@code crossReactivity} joined it for issue #266, and it is the first key describing a DIFFERENT
+	 * dataset. The curated cross-reactivity groups load from a global property of their own, alongside
+	 * whatever {@code sourceFormat} is in force, and their validity findings reached only the log — so
+	 * {@code configured-data-file-not-read} for that file was invisible on the one channel that can
+	 * answer after a lazy load. Its own subsection rather than rows in the top-level {@code findings},
+	 * because a finding naming a file has to be read beside the file it is about (ADR Decision 48).
+	 *
+	 * <p>A new key is APPENDED, never inserted — that is what keeps this an ORDERED assertion instead of
+	 * an order-insensitive one, and the rule is the append rather than whichever key is last today.
+	 */
+	private static final List<String> DOCUMENTED_FIELDS = Arrays.asList("enabled", "loaded", "inert",
+			"entryCount", "sourceFormat", "configuredSourceFormat", "configuredDataFilePath", "origin",
+			"findings", "arms", "crossReactivity");
+
+	/** Every key the {@code crossReactivity} subsection documents, in the order it serializes them. */
+	private static final List<String> DOCUMENTED_CROSS_REACTIVITY_FIELDS = Arrays.asList("loaded",
+			"groupCount", "configuredFilePath", "origin", "findings");
+
+	private AdministrationService priorAdministrationService;
+
+	private boolean administrationServiceReplaced;
+
+	@AfterEach
+	public void restoreContext() {
+		if (administrationServiceReplaced) {
+			ServiceContext.getInstance().setAdministrationService(priorAdministrationService);
+			administrationServiceReplaced = false;
+		}
+		Context.clearUserContext();
+	}
+
+	/**
+	 * A reader that answers every global-property read with the caller's own default — an
+	 * installation that has configured nothing. {@code drugReference.enabled} then reads
+	 * {@code false}, so the feature is off and nothing is loaded: the shape an operator sees before
+	 * configuring anything. Installed rather than left to ambient state so the expected values do not
+	 * depend on what an earlier test class in this JVM left in the {@link ServiceContext}.
+	 */
+	@Test
+	public void drugReferenceStatus_reportsEveryDocumentedFieldForADefaultInstallation() {
+		grantPrivileges(true);
+		installAdministrationService(new HashMap<String, String>());
+
+		Map<?, ?> body = statusBody(controllerWith(new DrugReferenceService()));
+
+		assertEquals(DOCUMENTED_FIELDS, new ArrayList<Object>(body.keySet()),
+				"the endpoint's fields are what an operator (and any source-flip check) reads; a "
+						+ "renamed or dropped key leaves that check silently reading null");
+		assertEquals(Boolean.FALSE, body.get("enabled"));
+		assertEquals(Boolean.FALSE, body.get("loaded"), "a disabled feature must report no load");
+		assertEquals(Boolean.FALSE, body.get("inert"),
+				"'nothing configured at all' is not 'a configured source yielded nothing'");
+		assertEquals(Integer.valueOf(0), body.get("entryCount"));
+	}
+
+	/**
+	 * {@code enabled} is a LIVE read of the master switch, while every other field describes the load
+	 * that is in force. They are therefore allowed to disagree, and the endpoint must keep them
+	 * separate: flipping the switch off after a load leaves the loaded entries in memory, and
+	 * reporting {@code loaded:false} there would claim the safety layer had no data when it has.
+	 *
+	 * <p>This is also the only automated coverage that the GET <em>performs</em> the lazy load: the
+	 * service handed in has loaded nothing, and the first call comes back {@code loaded:true}.
+	 */
+	@Test
+	public void drugReferenceStatus_reportsTheLiveSwitchAndTheRetainedLoadSeparately() {
+		grantPrivileges(true);
+		Map<String, String> globalProperties = new HashMap<String, String>();
+		globalProperties.put(ChartSearchAiConstants.GP_DRUG_REFERENCE_ENABLED, "true");
+		installAdministrationService(globalProperties);
+		ChartSearchAiRestController controller = controllerWith(new DrugReferenceService());
+
+		Map<?, ?> enabledBody = statusBody(controller);
+		assertEquals(Boolean.TRUE, enabledBody.get("enabled"));
+		assertEquals(Boolean.TRUE, enabledBody.get("loaded"),
+				"reading the status must perform the lazy load, not report 'not yet'");
+		assertEquals(Boolean.FALSE, enabledBody.get("inert"));
+		assertTrue(((Integer) enabledBody.get("entryCount")).intValue() > 0,
+				"the bundled curated dataset loads when no dataFilePath is configured");
+		assertTrue(String.valueOf(enabledBody.get("origin")).startsWith("classpath:"),
+				"origin must name the BUNDLED dataset when no operator file was read, since a "
+						+ "non-zero count alone cannot distinguish the two. Origin was: "
+						+ enabledBody.get("origin"));
+
+		// The crossReactivity subsection in its LOADED shape, and this is the only case that reads it
+		// that way. The case below drives the DISABLED state, where every value in that map equals
+		// false/0/""/none — so a toMap() that always returned the disabled shape passed, measured: four
+		// of its five keys hardcoded to those values left the whole suite green.
+		Map<?, ?> enabledGroups = (Map<?, ?>) enabledBody.get("crossReactivity");
+		assertEquals(Boolean.TRUE, enabledGroups.get("loaded"),
+				"reading the status performs the groups load too, and reports that it happened");
+		assertTrue(((Integer) enabledGroups.get("groupCount")).intValue() > 0,
+				"the bundled seed carries groups, and this count is the groups' own — not the entry "
+						+ "dataset's, which is the crossing a shared serializer could make silently");
+		assertTrue(String.valueOf(enabledGroups.get("origin")).contains("cross-reactivity-groups"),
+				"and the origin names the GROUPS file, which is what config.xml tells an operator to "
+						+ "compare against their own path. Origin was: " + enabledGroups.get("origin"));
+
+		globalProperties.put(ChartSearchAiConstants.GP_DRUG_REFERENCE_ENABLED, "false");
+		Map<?, ?> switchedOffBody = statusBody(controller);
+
+		assertEquals(Boolean.FALSE, switchedOffBody.get("enabled"), "the switch is read live");
+		// The same for the groups section, whose accessor documents that clause as "every clause of
+		// getLoadStatus()'s contract for the entry dataset, deliberately" — and until this line the
+		// entry side was pinned and the groups side was not: deleting its already-loaded early return
+		// left the whole suite green.
+		assertEquals(Boolean.TRUE,
+				((Map<?, ?>) switchedOffBody.get("crossReactivity")).get("loaded"),
+				"the groups in memory are still the ones the safety layer would use, so the section "
+						+ "describing them must not start saying nothing was loaded");
+		assertEquals(Boolean.TRUE, switchedOffBody.get("loaded"),
+				"the load that happened is still reported after the switch is turned off — the "
+						+ "entries are still in memory");
+		assertEquals(enabledBody.get("entryCount"), switchedOffBody.get("entryCount"),
+				"and the retained outcome does not change, so repeated calls do no further work");
+	}
+
+	/**
+	 * The status names the dataset file and the drug-reference global properties, and reading it can
+	 * perform a 19 MB parse. Both are reasons the gate must actually run: this call must be refused,
+	 * not answered.
+	 *
+	 * <p>Discriminating because the service IS set here — with the {@code requirePrivilege} gate
+	 * removed the call would succeed and return 200 rather than fail.
+	 */
+	@Test
+	public void drugReferenceStatus_refusesACallerWithoutTheGlobalPropertyPrivilege() {
+		grantPrivileges(false);
+		ChartSearchAiRestController controller = controllerWith(new DrugReferenceService());
+
+		assertThrows(RuntimeException.class, () -> controller.drugReferenceStatus(),
+				"an unprivileged caller must be refused before the drug-reference service is consulted");
+	}
+
+	/**
+	 * Every arm on the wire, and on a default installation every one of them {@code unloaded} — never
+	 * {@code absent}, which is a claim that a dataset was read and found to carry nothing for that arm.
+	 * That is the same distinction {@code inert} draws at whole-dataset scale, and the reason each arm
+	 * reports a verdict rather than only a count: {@code entriesPublishing} is 0 in both states, so a
+	 * caller reading the count alone cannot tell "nobody looked" from "we looked and there is none".
+	 */
+	@Test
+	public void drugReferenceStatus_reportsEveryArmAsUnloadedWhenNothingIsLoaded() {
+		grantPrivileges(true);
+		installAdministrationService(new HashMap<String, String>());
+
+		Map<?, ?> body = statusBody(controllerWith(new DrugReferenceService()));
+
+		Map<?, ?> arms = (Map<?, ?>) body.get("arms");
+		assertNotNull(arms, "the endpoint must report which safety arms the loaded dataset can serve");
+		assertEquals(Arrays.asList("doseCeilings", "handAuthoredRules", "atcCodes", "interactions",
+				"conditionRules"),
+				new ArrayList<Object>(arms.keySet()),
+				"the arm keys are what an operator reads; a renamed or dropped one leaves them reading "
+						+ "null, and a MISSING one is worse — an arm absent from this map reads as an "
+						+ "arm no dataset can withhold, which is what the map claims about the arms it "
+						+ "omits");
+		for (Object arm : arms.keySet()) {
+			Map<?, ?> reported = (Map<?, ?>) arms.get(arm);
+			assertEquals("unloaded", reported.get("coverage"),
+					arm + ": nothing was loaded, so this arm's coverage is unknown rather than empty");
+			assertEquals(Integer.valueOf(0), reported.get("entriesPublishing"),
+					arm + ": and the count is 0 in this state as well, which is why the verdict beside "
+							+ "it is what carries the meaning");
+		}
+	}
+
+	/**
+	 * The second dataset's own section, issue #266. On a default installation the feature is off, so the
+	 * groups load must report {@code loaded:false} and must not have happened — reading a status endpoint
+	 * cannot be what parses a file on an install that does not use the feature, which is the rule the
+	 * entry load already follows and the reason this section carries a {@code loaded} flag of its own
+	 * rather than leaving it to be inferred from the top-level one.
+	 *
+	 * <p>Pinned here and not at API level because the section is composed by the CONTROLLER — the entry
+	 * load's {@code toMap()} knows nothing about the groups file, deliberately, since the two are
+	 * independent loads with independent global properties.
+	 */
+	@Test
+	public void drugReferenceStatus_reportsTheCrossReactivityDatasetAsItsOwnSection() {
+		grantPrivileges(true);
+		installAdministrationService(new HashMap<String, String>());
+
+		Map<?, ?> body = statusBody(controllerWith(new DrugReferenceService()));
+
+		Map<?, ?> groups = (Map<?, ?>) body.get("crossReactivity");
+		assertNotNull(groups, "the curated cross-reactivity groups are a second dataset with a global "
+				+ "property and a lazy load of their own, and their findings have to reach this "
+				+ "endpoint like any others");
+		assertEquals(DOCUMENTED_CROSS_REACTIVITY_FIELDS, new ArrayList<Object>(groups.keySet()),
+				"the subsection's fields are what an operator reads; a renamed or dropped key leaves "
+						+ "them reading null");
+		assertEquals(Boolean.FALSE, groups.get("loaded"),
+				"a disabled feature must report no groups load, and must not have performed one");
+		assertEquals(Integer.valueOf(0), groups.get("groupCount"));
+		assertEquals("none", groups.get("origin"), "nothing was read, and the origin says so");
+		assertEquals(Collections.emptyList(), groups.get("findings"),
+				"no load happened, so there is nothing to have found — which is not the same as a load "
+						+ "that found nothing, and is why 'loaded' is reported beside this");
+	}
+
+	private static ChartSearchAiRestController controllerWith(DrugReferenceService service) {
+		ChartSearchAiRestController controller = new ChartSearchAiRestController();
+		controller.setDrugReferenceService(service);
+		return controller;
+	}
+
+	private static Map<?, ?> statusBody(ChartSearchAiRestController controller) {
+		ResponseEntity<Object> response = controller.drugReferenceStatus();
+		assertEquals(HttpStatus.OK, response.getStatusCode());
+		Map<?, ?> body = (Map<?, ?>) response.getBody();
+		assertNotNull(body, "the status endpoint returned no body");
+		return body;
+	}
+
+	private static void grantPrivileges(final boolean granted) {
+		Context.setUserContext(new UserContext(null) {
+
+			@Override
+			public boolean hasPrivilege(String privilege) {
+				return granted;
+			}
+		});
+	}
+
+	/**
+	 * Installs a global-property reader backed by {@code globalProperties}, so a test can change a
+	 * switch between two calls the way an operator does. Whatever was installed before is restored in
+	 * {@link #restoreContext()}: surefire runs this module in one reused JVM, so a leaked service
+	 * would silently alter the other test classes in this package rather than failing here.
+	 */
+	private void installAdministrationService(final Map<String, String> globalProperties) {
+		priorAdministrationService = currentAdministrationService();
+		administrationServiceReplaced = true;
+		AdministrationService reader = AdministrationService.class
+				.cast(Proxy.newProxyInstance(AdministrationService.class.getClassLoader(),
+						new Class<?>[] { AdministrationService.class }, new InvocationHandler() {
+
+							@Override
+							public Object invoke(Object proxy, Method method, Object[] args) {
+								if ("getGlobalProperty".equals(method.getName()) && args != null
+										&& args.length >= 1) {
+									String value = globalProperties.get(args[0]);
+									if (value != null) {
+										return value;
+									}
+									return args.length == 2 ? args[1] : null;
+								}
+								return null;
+							}
+						}));
+		ServiceContext.getInstance().setAdministrationService(reader);
+	}
+
+	/** Whatever reader was installed before this test, or null if none/unavailable. */
+	private static AdministrationService currentAdministrationService() {
+		try {
+			return AdministrationService.class
+					.cast(ServiceContext.getInstance().getService(AdministrationService.class));
+		}
+		catch (RuntimeException e) {
+			return null;
+		}
+	}
+}

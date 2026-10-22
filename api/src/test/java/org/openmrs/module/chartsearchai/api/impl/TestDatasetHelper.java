@@ -18,6 +18,7 @@ import java.util.Map;
 
 import org.openmrs.module.chartsearchai.ChartSearchAiConstants;
 import org.openmrs.module.chartsearchai.serializer.SerializedRecord;
+import org.openmrs.module.querystore.model.QueryDocument;
 
 /**
  * Shared helpers for tests that use the {@code FULL_PATIENT_DATASET} test
@@ -778,7 +779,29 @@ final class TestDatasetHelper {
 	private static final java.util.regex.Pattern DATE_PREFIX_PATTERN =
 			java.util.regex.Pattern.compile("^\\(\\d{4}-\\d{2}-\\d{2}\\)\\s*");
 
+	/** A dataset entry's date: the {@code (yyyy-MM-dd)} directly after its resource-type prefix. */
+	private static final java.util.regex.Pattern DATASET_DATE_PATTERN =
+			java.util.regex.Pattern.compile("^[A-Za-z ]+: \\((\\d{4}-\\d{2}-\\d{2})\\)");
+
 	private TestDatasetHelper() {
+	}
+
+	/**
+	 * A calendar date, for asserting against a dataset's own {@code yyyy-MM-dd} value.
+	 *
+	 * <p>Here rather than in each test because two of this package's order tests needed the same
+	 * parser at once and this is the package's helper home. It parses in the DEFAULT zone, which is
+	 * what {@code Order}'s own date fields are loaded in, so a value parsed here compares equal to
+	 * one dbunit inserted from the same literal — do not reach for it to assert a date the wire
+	 * published, which {@code ChartSearchAiRestController.formatDate} renders in UTC.
+	 */
+	static java.util.Date on(String yyyyMmDd) {
+		try {
+			return new java.text.SimpleDateFormat("yyyy-MM-dd").parse(yyyyMmDd);
+		}
+		catch (java.text.ParseException e) {
+			throw new IllegalArgumentException("not a yyyy-MM-dd date: " + yyyyMmDd, e);
+		}
 	}
 
 	/**
@@ -858,6 +881,36 @@ final class TestDatasetHelper {
 	}
 
 	/**
+	 * {@link #toSerializedRecords(String[])} with each record's DATE kept: the date the dataset string carries,
+	 * {@code null} where it carries none. The undated form stays the default because most callers compare a
+	 * record's text and a date prefix would move it; a test whose subject is how records recorded on different
+	 * dates read beside one another needs this one.
+	 */
+	static List<SerializedRecord> toDatedSerializedRecords(String[] dataset) {
+		List<SerializedRecord> undated = toSerializedRecords(dataset);
+		List<SerializedRecord> records = new ArrayList<>(undated.size());
+		for (int i = 0; i < dataset.length; i++) {
+			SerializedRecord record = undated.get(i);
+			records.add(new SerializedRecord(record.getResourceType(), record.getResourceUuid(), record.getText(),
+					datasetDate(dataset[i]), record.getCategoryHints()));
+		}
+		return records;
+	}
+
+	/** The {@code (yyyy-MM-dd)} date a dataset string carries after its prefix, or {@code null}. */
+	private static java.util.Date datasetDate(String datasetText) {
+		String text = datasetText;
+		for (String prefix : DATASET_PREFIXES) {
+			if (text.startsWith(prefix)) {
+				text = text.substring(prefix.length());
+				break;
+			}
+		}
+		java.util.regex.Matcher m = DATE_PREFIX_PATTERN.matcher(text);
+		return m.find() ? on(text.substring(1, 11)) : null;
+	}
+
+	/**
 	 * Deterministic UUID literal derived from a dataset index. Keeps fixture
 	 * identifiers sortable and recognizable in failure messages — the trailing
 	 * digits match the dataset index. Used in place of the old integer
@@ -875,6 +928,29 @@ final class TestDatasetHelper {
 	static int indexForUuid(String uuid) {
 		int dash = uuid.lastIndexOf('-');
 		return Integer.parseInt(uuid.substring(dash + 1));
+	}
+
+	/**
+	 * Converts a raw dataset array into the {@link QueryDocument}s querystore would hand the chart
+	 * builder, so a test can drive a real dataset through {@code QueryStoreChartBuilder.build()}
+	 * rather than through the serializer alone. Unlike {@link #toSerializedRecords(String[])}, which
+	 * drops the date, each document keeps the dataset's own {@code (yyyy-MM-dd)}, so the chart's
+	 * same-date runs are the dataset's. An entry with no date yields an undated document.
+	 */
+	static List<QueryDocument> toQueryDocuments(String[] dataset) {
+		List<QueryDocument> docs = new ArrayList<>();
+		for (int i = 0; i < dataset.length; i++) {
+			QueryDocument doc = new QueryDocument();
+			doc.setResourceType(inferResourceType(dataset[i]));
+			doc.setResourceUuid(uuidForIndex(i));
+			doc.setText(stripDatasetPrefixAndDate(dataset[i]));
+			java.util.regex.Matcher date = DATASET_DATE_PATTERN.matcher(dataset[i]);
+			if (date.find()) {
+				doc.setDate(java.time.LocalDate.parse(date.group(1)));
+			}
+			docs.add(doc);
+		}
+		return docs;
 	}
 
 	/**
