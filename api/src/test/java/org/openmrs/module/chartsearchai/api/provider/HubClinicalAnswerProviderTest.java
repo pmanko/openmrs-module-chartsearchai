@@ -846,4 +846,42 @@ public class HubClinicalAnswerProviderTest {
 		assertEquals("quick", qwenExecution.get("mode"));
 		assertEquals("qwen-3.5-9b", qwenExecution.get("preset_id"));
 	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void inDepthOverridePromotesQuickToStandardOrSetsFalseOnHubCall() throws Exception {
+		ScriptedHubTransport transport = new ScriptedHubTransport();
+		transport.events = Collections.singletonList(wire("done", answerPayload("Answer.")));
+		HubClinicalAnswerProvider provider = provider(transport, "http://hub.example/v1/chat/completions");
+
+		TurnRequest enableInDepth = new TurnRequest(patient(), "Summarize meds", "conversation-1",
+				"request-in-depth-on", ProviderMode.QUERY_SCOPED, "gemma-4-12b",
+				Collections.emptyList(), AccountContext.unavailable(), Boolean.TRUE);
+		provider.execute(enableInDepth, new CollectingSink(), CancellationSignal.NONE)
+				.toCompletableFuture().get();
+		Map<String, Object> onExecution = (Map<String, Object>) HubCallRequest.class
+				.getMethod("getExecution")
+				.invoke(transport.lastRequest);
+		assertEquals("standard", onExecution.get("mode"));
+		assertEquals(Boolean.TRUE, onExecution.get("indepth"));
+
+		transport.lastRequest = null;
+		TurnRequest disableInDepth = new TurnRequest(patient(), "Summarize meds", "conversation-1",
+				"request-in-depth-off", ProviderMode.QUERY_SCOPED, "gemma-4-12b",
+				Collections.emptyList(), AccountContext.unavailable(), Boolean.FALSE);
+		provider.execute(disableInDepth, new CollectingSink(), CancellationSignal.NONE)
+				.toCompletableFuture().get();
+		Map<String, Object> offExecution = (Map<String, Object>) HubCallRequest.class
+				.getMethod("getExecution")
+				.invoke(transport.lastRequest);
+		assertEquals("quick", offExecution.get("mode"));
+		assertEquals(Boolean.FALSE, offExecution.get("indepth"));
+
+		Map<String, Object> fastChecked = new LinkedHashMap<>();
+		fastChecked.put("mode", "fast_checked");
+		Map<String, Object> promotedFast = HubClinicalAnswerProvider.effectiveExecution(fastChecked, Boolean.TRUE);
+		assertEquals("verified", promotedFast.get("mode"));
+		assertEquals(Boolean.TRUE, promotedFast.get("indepth"));
+		assertNull(HubClinicalAnswerProvider.effectiveExecution(null, null));
+	}
 }
