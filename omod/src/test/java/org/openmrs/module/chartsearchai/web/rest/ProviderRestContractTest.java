@@ -866,9 +866,33 @@ public class ProviderRestContractTest {
 
 	@Test
 	public void chatStreamPassesOptionalInDepthFlagToTurnRequest() throws Exception {
-		RestControllerContext fixture = RestControllerContext.withPatientUser();
+		RestControllerContext fixture = new RestControllerContext();
+		fixture.install();
 		try {
-			ScriptedProvider provider = new ScriptedProvider("hub");
+			User user = new User(3);
+			user.setUuid("signed-in-account");
+			Context.setUserContext(new UserContext(null) {
+				@Override
+				public boolean hasPrivilege(String privilege) {
+					return true;
+				}
+
+				@Override
+				public User getAuthenticatedUser() {
+					return user;
+				}
+
+				@Override
+				public Set<Role> getAllRoles() {
+					return user.getAllRoles();
+				}
+
+				@Override
+				public Locale getLocale() {
+					return Locale.forLanguageTag("en");
+				}
+			});
+			ScriptedProvider provider = new ScriptedProvider("hub", true);
 			provider.mode = ProviderMode.QUERY_SCOPED;
 			AnswerEnvelope envelope = AnswerEnvelope.fromPayload(answerPayload("Answer"), null);
 			provider.events = Arrays.asList(TurnEvent.of(TurnEventType.TURN_STARTED, 0, "hub"),
@@ -876,7 +900,7 @@ public class ProviderRestContractTest {
 					TurnEvent.withAnswer(TurnEventType.TURN_DONE, 2, "hub", envelope));
 			provider.result = TurnResult.done("hub", ProviderMode.QUERY_SCOPED, envelope);
 			ChartSearchAiRestController controller = new ChartSearchAiRestController();
-			controller.setConversationService(new StubConversationService());
+			controller.setConversationService(new RecordingConversationService());
 			controller.setProviderRegistry(stubRegistry(provider));
 			controller.setAuditLogService(new StubAuditLogService());
 			controller.setPatientAccessCheck((actor, patient) -> true);
